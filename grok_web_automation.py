@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-import time
+import platform
+import sys
 from pathlib import Path
 
 
@@ -9,8 +10,12 @@ def _require_playwright():
     try:
         from playwright.sync_api import sync_playwright  # type: ignore
     except Exception as exc:  # noqa: BLE001
+        py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         raise RuntimeError(
-            "Playwright is required for web automation. Install dependencies and run 'playwright install chromium'."
+            "Playwright (Python) is required for web automation. "
+            "Install with: pip install -r requirements-web.txt && python -m playwright install chromium. "
+            f"Current Python: {py} on {platform.system()}. "
+            "If greenlet wheel build fails on Windows, use Python 3.11 or 3.12 (64-bit)."
         ) from exc
     return sync_playwright
 
@@ -24,6 +29,57 @@ def _get_selectors() -> dict[str, str]:
     }
 
 
+def _resolve_prompt_locator(page, preferred_selector: str, timeout_s: int):
+    candidates = [
+        preferred_selector,
+        "textarea",
+        "input[placeholder*='Type to imagine' i]",
+        "textarea[placeholder*='Type to imagine' i]",
+        "[contenteditable='true'][aria-label*='Type to imagine' i]",
+        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+        "[contenteditable='true']",
+        "input[type='text']",
+    ]
+
+    last_error = None
+    for selector in candidates:
+        locator = page.locator(selector).first
+        try:
+            locator.wait_for(state="visible", timeout=max(2000, int(timeout_s * 1000 / len(candidates))))
+            return locator, selector
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+
+    raise RuntimeError(
+        "Could not find Imagine prompt input. "
+        "Set GROK_IMAGINE_PROMPT_SELECTOR to the exact selector for your page "
+        "(e.g., input[placeholder*='Type to imagine'])."
+    ) from last_error
+
+
+def _fill_prompt(locator, prompt: str) -> None:
+    tag_name = (locator.evaluate("el => el.tagName") or "").lower()
+    is_editable = bool(locator.evaluate("el => !!el.isContentEditable"))
+
+    if tag_name in {"textarea", "input"}:
+        locator.fill(prompt)
+        return
+
+    if is_editable:
+        locator.click()
+        locator.evaluate("el => { el.innerHTML=''; el.textContent=''; }")
+        locator.type(prompt, delay=10)
+        return
+
+    # fallback: attempt generic fill then type
+    try:
+        locator.fill(prompt)
+    except Exception:  # noqa: BLE001
+        locator.click()
+        locator.type(prompt, delay=10)
+
+
 def manual_login_and_save(storage_state_path: Path, timeout_s: int = 300) -> None:
     sync_playwright = _require_playwright()
     selectors = _get_selectors()
@@ -34,7 +90,7 @@ def manual_login_and_save(storage_state_path: Path, timeout_s: int = 300) -> Non
         context = browser.new_context()
         page = context.new_page()
         page.goto(selectors["imagine_url"], wait_until="domcontentloaded")
-        page.wait_for_selector(selectors["prompt"], timeout=timeout_s * 1000)
+        _resolve_prompt_locator(page, selectors["prompt"], timeout_s=timeout_s)
         context.storage_state(path=str(storage_state_path))
         browser.close()
 
@@ -57,17 +113,21 @@ def generate_video_via_web(
         page = context.new_page()
         page.goto(selectors["imagine_url"], wait_until="domcontentloaded")
 
-        page.fill(selectors["prompt"], prompt)
+        prompt_locator, used_selector = _resolve_prompt_locator(page, selectors["prompt"], timeout_s=timeout_s)
+        _fill_prompt(prompt_locator, prompt)
+
         page.click(selectors["submit"])
 
         page.wait_for_selector(selectors["video"], timeout=timeout_s * 1000)
         video_el = page.locator(selectors["video"]).first
         video_url = video_el.get_attribute("src")
         if not video_url:
-            # try source child
             video_url = page.locator(f"{selectors['video']} source").first.get_attribute("src")
         if not video_url:
-            raise RuntimeError("Generated video element found but no source URL was discovered.")
+            raise RuntimeError(
+                "Generated video element found but no source URL was discovered. "
+                f"Prompt selector used: {used_selector}"
+            )
 
         response = context.request.get(video_url)
         if not response.ok:

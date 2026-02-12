@@ -18,7 +18,9 @@ A Flask GUI app that lets users:
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-playwright install chromium
+# Optional: only if using Web automation mode
+pip install -r requirements-web.txt
+python -m playwright install chromium
 python app.py
 ```
 
@@ -31,6 +33,14 @@ Open: `http://localhost:5000`
 3. A Chromium window opens; login manually and wait for Imagine prompt textbox to be visible.
 4. Session is saved under `sessions/grok_web_<username>.json`.
 5. Use **Generate Videos** with a manual prompt.
+
+If you still get prompt input timeout errors, set a specific selector for your page, for example:
+
+```powershell
+$env:GROK_IMAGINE_PROMPT_SELECTOR = "input[placeholder*='Type to imagine']"
+```
+
+You can inspect the page and override `GROK_IMAGINE_SUBMIT_SELECTOR` as needed as well.
 
 ## Environment overrides
 
@@ -49,3 +59,24 @@ Open: `http://localhost:5000`
 - YouTube OAuth token is persisted per user in `youtube_token_<username>.json`.
 - Video files are downloaded under `downloads/`.
 - Stitching and frame extraction require `ffmpeg` in your PATH.
+
+
+## Windows / greenlet build troubleshooting
+
+If you see errors like `Failed building wheel for greenlet` or `cl.exe failed with exit code 2`, it usually means your Python version does not have a prebuilt `greenlet` wheel for Playwright.
+
+Recommended fix on Windows:
+
+1. Install **Python 3.11 or 3.12 (64-bit)**.
+2. Recreate virtualenv and reinstall:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install -r requirements-web.txt
+python -m playwright install chromium
+```
+
+Important: `npm install playwright` / `npx playwright` installs Node Playwright, but this app uses **Python Playwright**.
