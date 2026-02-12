@@ -1,0 +1,3 @@
+# Optional dependencies for Web automation mode
+# Install only if you want browser-driven Imagine generation.
+playwright==1.48.0
