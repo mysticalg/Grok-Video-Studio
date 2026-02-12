@@ -24,7 +24,7 @@ def _get_selectors() -> dict[str, str]:
     return {
         "imagine_url": os.getenv("GROK_IMAGINE_URL", "https://grok.com/imagine"),
         "prompt": os.getenv("GROK_IMAGINE_PROMPT_SELECTOR", "textarea"),
-        "submit": os.getenv("GROK_IMAGINE_SUBMIT_SELECTOR", "button:has-text('Generate')"),
+        "submit": os.getenv("GROK_IMAGINE_SUBMIT_SELECTOR", "button[type='submit'][aria-label='Submit']"),
         "video": os.getenv("GROK_IMAGINE_VIDEO_SELECTOR", "video"),
     }
 
@@ -80,6 +80,34 @@ def _fill_prompt(locator, prompt: str) -> None:
         locator.type(prompt, delay=10)
 
 
+def _resolve_submit_locator(page, preferred_selector: str, timeout_s: int):
+    candidates = [
+        preferred_selector,
+        "button[type='submit'][aria-label='Submit']",
+        "form button[type='submit']",
+        "button[aria-label='Submit']",
+        "button:has(svg)",
+        "button:has-text('Generate')",
+    ]
+
+    last_error = None
+    for selector in candidates:
+        locator = page.locator(selector).first
+        try:
+            locator.wait_for(state="visible", timeout=max(2000, int(timeout_s * 1000 / len(candidates))))
+            locator.wait_for(state="attached", timeout=2000)
+            return locator, selector
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+
+    raise RuntimeError(
+        "Could not find Imagine submit button. "
+        "Set GROK_IMAGINE_SUBMIT_SELECTOR to the exact submit selector for your page "
+        "(e.g., button[type='submit'][aria-label='Submit'])."
+    ) from last_error
+
+
 def manual_login_and_save(storage_state_path: Path, timeout_s: int = 300) -> None:
     sync_playwright = _require_playwright()
     selectors = _get_selectors()
@@ -116,7 +144,8 @@ def generate_video_via_web(
         prompt_locator, used_selector = _resolve_prompt_locator(page, selectors["prompt"], timeout_s=timeout_s)
         _fill_prompt(prompt_locator, prompt)
 
-        page.click(selectors["submit"])
+        submit_locator, used_submit_selector = _resolve_submit_locator(page, selectors["submit"], timeout_s=timeout_s)
+        submit_locator.click()
 
         page.wait_for_selector(selectors["video"], timeout=timeout_s * 1000)
         video_el = page.locator(selectors["video"]).first
@@ -126,7 +155,7 @@ def generate_video_via_web(
         if not video_url:
             raise RuntimeError(
                 "Generated video element found but no source URL was discovered. "
-                f"Prompt selector used: {used_selector}"
+                f"Prompt selector used: {used_selector}. Submit selector used: {used_submit_selector}"
             )
 
         response = context.request.get(video_url)
