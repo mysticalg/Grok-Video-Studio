@@ -411,7 +411,14 @@ class MainWindow(QMainWindow):
             "Manual mode uses the embedded browser session (no API key). "
             "Make sure you are logged into grok.com in the right pane."
         )
+        self._append_log(
+            "Preparing manual generation workflow: load imagine page, prime input, then populate prompts."
+        )
         self._waiting_for_manual_page_load = True
+        try:
+            self.browser.loadFinished.disconnect(self._on_manual_page_load_finished)
+        except Exception:  # noqa: BLE001
+            pass
         self.browser.loadFinished.connect(self._on_manual_page_load_finished)
         self.browser.setUrl(QUrl("https://grok.com/imagine"))
 
@@ -429,6 +436,7 @@ class MainWindow(QMainWindow):
             self.generate_btn.setEnabled(True)
             return
 
+        self._append_log("Imagine page loaded. Priming input before prompt population.")
         self._prime_manual_imagine_input_and_submit()
 
     def _prime_manual_imagine_input_and_submit(self) -> None:
