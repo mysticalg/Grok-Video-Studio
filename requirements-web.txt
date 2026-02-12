@@ -1,3 +1,1 @@
-# Optional dependencies for Web automation mode
-# Install only if you want browser-driven Imagine generation.
-playwright==1.48.0
+# Legacy file kept for compatibility. Web-server automation mode is no longer used by app.py.
