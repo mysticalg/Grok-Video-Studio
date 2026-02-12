@@ -463,8 +463,17 @@ class MainWindow(QMainWindow):
                     if (input.isContentEditable) {{
                         document.execCommand("selectAll", false, null);
                         document.execCommand("insertText", false, prompt);
+                        const sanitize = (value) => value
+                            .replace(/&/g, "&amp;")
+                            .replace(/</g, "&lt;")
+                            .replace(/>/g, "&gt;");
+                        const escapedPrompt = sanitize(prompt);
+                        const emptyParagraph = input.querySelector("p.is-empty.is-editor-empty[data-placeholder='Type to imagine']");
+                        if (emptyParagraph) {{
+                            emptyParagraph.outerHTML = `<p>${{escapedPrompt}}</p>`;
+                        }}
                         if (!(input.textContent || "").trim()) {{
-                            input.innerHTML = `<p>${{prompt.replace(/&/g, "&amp;").replace(/</g, "&lt;")}}</p>`;
+                            input.innerHTML = `<p>${{escapedPrompt}}</p>`;
                         }}
                         input.dispatchEvent(new InputEvent("beforeinput", {{ bubbles: true, inputType: "insertText", data: prompt }}));
                         input.dispatchEvent(new InputEvent("input", {{ bubbles: true, inputType: "insertText", data: prompt }}));
