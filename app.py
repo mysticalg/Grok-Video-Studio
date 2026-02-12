@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import requests
-from PySide6.QtCore import QMimeData, QThread, QUrl, Signal
+from PySide6.QtCore import QMimeData, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -240,6 +240,10 @@ class MainWindow(QMainWindow):
         self.worker: GenerateWorker | None = None
         self.manual_generation_queue: list[dict] = []
         self.pending_manual_variant_for_download: int | None = None
+        self.manual_download_deadline: float | None = None
+        self.manual_download_poll_timer = QTimer(self)
+        self.manual_download_poll_timer.setSingleShot(True)
+        self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
         self._waiting_for_manual_page_load = False
         self._build_ui()
 
@@ -441,7 +445,7 @@ class MainWindow(QMainWindow):
 
         escaped_prompt = repr(prompt)
         script = rf"""
-            (async () => {{
+            (() => {{
                 try {{
                     const prompt = {escaped_prompt};
                     const promptSelectors = [
@@ -497,10 +501,6 @@ class MainWindow(QMainWindow):
                     const submit = submitCandidates.find((el) => isVisible(el));
                     if (!submit) return {{ ok: false, error: "Submit button not found" }};
 
-                    const waitUntil = Date.now() + 8000;
-                    while (submit.disabled && Date.now() < waitUntil) {{
-                        await new Promise((resolve) => setTimeout(resolve, 150));
-                    }}
                     if (submit.disabled) return {{ ok: false, error: "Submit button stayed disabled after prompt fill" }};
 
                     submit.dispatchEvent(new MouseEvent("click", {{ bubbles: true, cancelable: true, composed: true }}));
@@ -514,7 +514,8 @@ class MainWindow(QMainWindow):
         def after_submit(result):
             if not isinstance(result, dict) or not result.get("ok"):
                 self.pending_manual_variant_for_download = None
-                self._append_log(f"ERROR: Manual submit failed for variant {variant}: {result}")
+                error_detail = result.get("error") if isinstance(result, dict) else result
+                self._append_log(f"ERROR: Manual submit failed for variant {variant}: {error_detail!r}")
                 self.generate_btn.setEnabled(True)
                 return
             self._append_log(f"Submitted variant {variant}. Waiting for generated video and triggering browser download...")
@@ -523,38 +524,55 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after_submit)
 
     def _trigger_browser_video_download(self, variant: int) -> None:
-        script = f"""
-            (async () => {{
-                const timeoutMs = 420000;
-                const start = Date.now();
-                while (Date.now() - start < timeoutMs) {{
-                    const video = document.querySelector("video");
-                    const source = document.querySelector("video source");
-                    const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
-                    if (src) {{
-                        const a = document.createElement("a");
-                        a.href = src;
-                        a.download = `grok_manual_variant_{variant}_${{Date.now()}}.mp4`;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        return {{ ok: true, src }};
-                    }}
-                    await new Promise((resolve) => setTimeout(resolve, 3000));
-                }}
-                return {{ ok: false, error: "Timed out waiting for generated video" }};
-            }})()
+        self.manual_download_deadline = time.time() + 420
+        self.manual_download_poll_timer.start(0)
+
+    def _poll_for_manual_video(self) -> None:
+        variant = self.pending_manual_variant_for_download
+        if variant is None:
+            return
+
+        deadline = self.manual_download_deadline or 0
+        if time.time() > deadline:
+            self.pending_manual_variant_for_download = None
+            self._append_log(f"ERROR: Variant {variant} did not produce a downloadable video in time.")
+            self.generate_btn.setEnabled(True)
+            return
+
+        script = """
+            (() => {
+                const video = document.querySelector("video");
+                const source = document.querySelector("video source");
+                return (video && (video.currentSrc || video.src)) || (source && source.src) || "";
+            })()
         """
 
-        def after_download_trigger(result):
-            if isinstance(result, dict) and result.get("ok"):
-                self._append_log(f"Variant {variant} video detected; browser download requested.")
+        def after_poll(result):
+            current_variant = self.pending_manual_variant_for_download
+            if current_variant is None:
                 return
-            self.pending_manual_variant_for_download = None
-            self._append_log(f"ERROR: Variant {variant} did not produce a downloadable video in time: {result}")
-            self.generate_btn.setEnabled(True)
 
-        self.browser.page().runJavaScript(script, after_download_trigger)
+            src = result if isinstance(result, str) else ""
+            if not src:
+                self.manual_download_poll_timer.start(3000)
+                return
+
+            trigger_download_script = f"""
+                (() => {{
+                    const src = {src!r};
+                    const a = document.createElement("a");
+                    a.href = src;
+                    a.download = `grok_manual_variant_{current_variant}_${{Date.now()}}.mp4`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    return true;
+                }})()
+            """
+            self.browser.page().runJavaScript(trigger_download_script)
+            self._append_log(f"Variant {current_variant} video detected; browser download requested.")
+
+        self.browser.page().runJavaScript(script, after_poll)
 
     def _on_browser_download_requested(self, download) -> None:
         variant = self.pending_manual_variant_for_download
