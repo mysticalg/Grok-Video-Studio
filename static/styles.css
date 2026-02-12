@@ -6,7 +6,7 @@ body {
 }
 
 .container {
-  max-width: 900px;
+  max-width: 1100px;
   margin: 24px auto;
   padding: 16px;
 }
@@ -28,7 +28,7 @@ label {
   margin: 8px 0;
 }
 
-input, textarea {
+input, textarea, select {
   width: 100%;
   margin-top: 6px;
   background: #1f2937;
@@ -58,6 +58,10 @@ button.alt {
   align-items: center;
 }
 
+.row.wrap {
+  flex-wrap: wrap;
+}
+
 .spread {
   justify-content: space-between;
 }
@@ -83,4 +87,35 @@ button.alt {
 
 a {
   color: #93c5fd;
+}
+
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.video-card {
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 10px;
+  background: #0b1220;
+}
+
+.video-card video {
+  width: 100%;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.inner-form {
+  border-top: 1px dashed #334155;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.stitch-list {
+  max-height: 180px;
+  overflow: auto;
+  margin-bottom: 12px;
 }

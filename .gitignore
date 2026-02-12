@@ -4,3 +4,5 @@ __pycache__/
 users.db
 downloads/
 youtube_token_*.json
+
+sessions/
