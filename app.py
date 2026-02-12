@@ -10,6 +10,7 @@ from PySide6.QtCore import QMimeData, QThread, QUrl, Signal
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -206,6 +207,30 @@ class GenerateWorker(QThread):
         }
 
 
+class FilteredWebEnginePage(QWebEnginePage):
+    """Suppress noisy third-party console warnings from grok.com in the embedded browser."""
+
+    _IGNORED_CONSOLE_PATTERNS = (
+        "cdn-cgi/speculation",
+        "react-i18next:: useTranslation",
+        "Permissions-Policy header: Unrecognized feature: 'pointer-lock'",
+        "violates the following Content Security Policy directive",
+    )
+
+    def __init__(self, on_console_message, parent=None):
+        super().__init__(parent)
+        self._on_console_message = on_console_message
+
+    def javaScriptConsoleMessage(self, level, message, line_number, source_id):  # type: ignore[override]
+        if any(pattern in message for pattern in self._IGNORED_CONSOLE_PATTERNS):
+            return
+
+        if self._on_console_message:
+            self._on_console_message(f"Browser JS: {message} (source={source_id}:{line_number})")
+
+        super().javaScriptConsoleMessage(level, message, line_number, source_id)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -306,6 +331,7 @@ class MainWindow(QMainWindow):
         self.player.setVideoOutput(self.video_preview)
 
         self.browser = QWebEngineView()
+        self.browser.setPage(FilteredWebEnginePage(self._append_log, self.browser))
         self.browser.setUrl(QUrl("https://grok.com"))
         self.browser.page().profile().downloadRequested.connect(self._on_browser_download_requested)
 
