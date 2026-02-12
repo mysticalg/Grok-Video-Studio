@@ -1,11 +1,15 @@
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import requests
-from PySide6.QtCore import QThread, QUrl, Signal
+from PySide6.QtCore import QMimeData, QThread, QUrl, Signal
+from PySide6.QtGui import QGuiApplication, QImage
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -28,6 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
+OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 
 
 @dataclass
@@ -37,22 +42,31 @@ class GrokConfig:
     image_model: str
 
 
+@dataclass
+class PromptConfig:
+    source: str
+    concept: str
+    manual_prompt: str
+    openai_api_key: str
+    openai_chat_model: str
+
+
 class GenerateWorker(QThread):
     finished_video = Signal(dict)
     failed = Signal(str)
     status = Signal(str)
 
-    def __init__(self, config: GrokConfig, concept: str, count: int):
+    def __init__(self, config: GrokConfig, prompt_config: PromptConfig, count: int):
         super().__init__()
         self.config = config
-        self.concept = concept
+        self.prompt_config = prompt_config
         self.count = count
 
     def run(self) -> None:
         try:
             for idx in range(1, self.count + 1):
                 self.status.emit(f"Generating variant {idx}/{self.count}...")
-                video = self.generate_one_video(self.concept, idx)
+                video = self.generate_one_video(idx)
                 self.finished_video.emit(video)
             self.status.emit("Generation complete.")
         except Exception as exc:
@@ -82,6 +96,40 @@ class GenerateWorker(QThread):
         if not response.ok:
             raise RuntimeError(f"Chat request failed: {response.status_code} {self._api_error_message(response)}")
         return response.json()["choices"][0]["message"]["content"].strip()
+
+    def call_openai_chat(self, system: str, user: str) -> str:
+        headers = {"Authorization": f"Bearer {self.prompt_config.openai_api_key}", "Content-Type": "application/json"}
+        response = requests.post(
+            f"{OPENAI_API_BASE}/chat/completions",
+            headers=headers,
+            json={
+                "model": self.prompt_config.openai_chat_model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0.9,
+            },
+            timeout=90,
+        )
+        if not response.ok:
+            raise RuntimeError(f"OpenAI chat request failed: {response.status_code} {self._api_error_message(response)}")
+        return response.json()["choices"][0]["message"]["content"].strip()
+
+    def build_prompt(self, variant: int) -> str:
+        source = self.prompt_config.source
+        if source == "manual":
+            return self.prompt_config.manual_prompt
+
+        system = "You write highly visual prompts for short cinematic AI videos."
+        user = (
+            "Create one polished video prompt for a 10 second scene in 720p from this concept: "
+            f"{self.prompt_config.concept}. This is variant #{variant}."
+        )
+
+        if source == "openai":
+            return self.call_openai_chat(system, user)
+        return self.call_grok_chat(system, user)
 
     def start_video_job(self, prompt: str, resolution: str) -> str:
         response = requests.post(
@@ -127,11 +175,8 @@ class GenerateWorker(QThread):
                         handle.write(chunk)
         return file_path
 
-    def generate_one_video(self, concept: str, variant: int) -> dict:
-        prompt = self.call_grok_chat(
-            "You write highly visual prompts for short cinematic AI videos.",
-            f"Create one polished video prompt for a 10 second scene in 720p from this concept: {concept}. This is variant #{variant}.",
-        )
+    def generate_one_video(self, variant: int) -> dict:
+        prompt = self.build_prompt(variant)
 
         video_job_id = None
         chosen_resolution = None
@@ -176,7 +221,7 @@ class MainWindow(QMainWindow):
         left = QWidget()
         left_layout = QVBoxLayout(left)
 
-        left_layout.addWidget(QLabel("Grok API Key"))
+        left_layout.addWidget(QLabel("Grok API Key (required for video generation)"))
         self.api_key = QLineEdit()
         self.api_key.setEchoMode(QLineEdit.Password)
         self.api_key.setText(os.getenv("GROK_API_KEY", ""))
@@ -190,10 +235,33 @@ class MainWindow(QMainWindow):
         self.image_model = QLineEdit(os.getenv("GROK_VIDEO_MODEL", "grok-video-latest"))
         left_layout.addWidget(self.image_model)
 
+        left_layout.addWidget(QLabel("Prompt Source"))
+        self.prompt_source = QComboBox()
+        self.prompt_source.addItem("Manual prompt (no API)", "manual")
+        self.prompt_source.addItem("Grok API", "grok")
+        self.prompt_source.addItem("OpenAI API", "openai")
+        self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
+        left_layout.addWidget(self.prompt_source)
+
+        left_layout.addWidget(QLabel("OpenAI API Key (for OpenAI prompt generation)"))
+        self.openai_api_key = QLineEdit()
+        self.openai_api_key.setEchoMode(QLineEdit.Password)
+        self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
+        left_layout.addWidget(self.openai_api_key)
+
+        left_layout.addWidget(QLabel("OpenAI Chat Model"))
+        self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
+        left_layout.addWidget(self.openai_chat_model)
+
         left_layout.addWidget(QLabel("Concept"))
         self.concept = QPlainTextEdit()
         self.concept.setPlaceholderText("Describe the video idea...")
         left_layout.addWidget(self.concept)
+
+        left_layout.addWidget(QLabel("Manual Prompt (used only when source is Manual)"))
+        self.manual_prompt = QPlainTextEdit()
+        self.manual_prompt.setPlaceholderText("Paste or write an exact prompt to skip prompt APIs...")
+        left_layout.addWidget(self.manual_prompt)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Count"))
@@ -211,6 +279,10 @@ class MainWindow(QMainWindow):
         self.open_btn.clicked.connect(self.open_local_video)
         left_layout.addWidget(self.open_btn)
 
+        self.extract_frame_btn = QPushButton("Extract Last Frame + Copy Image")
+        self.extract_frame_btn.clicked.connect(self.extract_last_frame_from_selected)
+        left_layout.addWidget(self.extract_frame_btn)
+
         left_layout.addWidget(QLabel("Generated Videos"))
         self.video_picker = QComboBox()
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
@@ -221,8 +293,20 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         left_layout.addWidget(self.log)
 
+        left_layout.addWidget(QLabel("Video Preview"))
+        self.video_preview = QVideoWidget()
+        self.video_preview.setMinimumHeight(220)
+        left_layout.addWidget(self.video_preview)
+
+        self.player = QMediaPlayer(self)
+        self.audio_output = QAudioOutput(self)
+        self.player.setAudioOutput(self.audio_output)
+        self.player.setVideoOutput(self.video_preview)
+
         self.browser = QWebEngineView()
         self.browser.setUrl(QUrl("https://grok.com"))
+
+        self._toggle_prompt_source_fields()
 
         splitter.addWidget(left)
         splitter.addWidget(self.browser)
@@ -245,8 +329,17 @@ class MainWindow(QMainWindow):
         if not api_key:
             QMessageBox.warning(self, "Missing API Key", "Please enter a Grok API key.")
             return
-        if not concept:
+        source = self.prompt_source.currentData()
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+
+        if source != "manual" and not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
+            return
+        if source == "manual" and not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            return
+        if source == "openai" and not self.openai_api_key.text().strip():
+            QMessageBox.warning(self, "Missing OpenAI API Key", "Please enter an OpenAI API key.")
             return
 
         config = GrokConfig(
@@ -255,8 +348,16 @@ class MainWindow(QMainWindow):
             image_model=self.image_model.text().strip() or "grok-video-latest",
         )
 
+        prompt_config = PromptConfig(
+            source=source,
+            concept=concept,
+            manual_prompt=manual_prompt,
+            openai_api_key=self.openai_api_key.text().strip(),
+            openai_chat_model=self.openai_chat_model.text().strip() or "gpt-4o-mini",
+        )
+
         self.generate_btn.setEnabled(False)
-        self.worker = GenerateWorker(config, concept, self.count.value())
+        self.worker = GenerateWorker(config, prompt_config, self.count.value())
         self.worker.status.connect(self._append_log)
         self.worker.finished_video.connect(self.on_video_finished)
         self.worker.failed.connect(self.on_generation_error)
@@ -278,14 +379,78 @@ class MainWindow(QMainWindow):
         if index < 0 or index >= len(self.videos):
             return
         video = self.videos[index]
-        self.browser.setUrl(QUrl.fromLocalFile(video["video_file_path"]))
+        self._preview_video(video["video_file_path"])
+
+    def _preview_video(self, file_path: str) -> None:
+        self.player.setSource(QUrl.fromLocalFile(file_path))
+        self.player.play()
+        self._append_log(f"Previewing video: {file_path}")
 
     def open_local_video(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(self, "Select video", str(DOWNLOAD_DIR), "Videos (*.mp4 *.mov *.webm)")
         if not file_path:
             return
-        self.browser.setUrl(QUrl.fromLocalFile(file_path))
+        self._preview_video(file_path)
         self._append_log(f"Opened local file: {file_path}")
+
+    def _toggle_prompt_source_fields(self) -> None:
+        source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
+        is_manual = source == "manual"
+        is_openai = source == "openai"
+        self.manual_prompt.setEnabled(is_manual)
+        self.openai_api_key.setEnabled(is_openai)
+        self.openai_chat_model.setEnabled(is_openai)
+        self.chat_model.setEnabled(source == "grok")
+
+    def extract_last_frame_from_selected(self) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            QMessageBox.warning(self, "No Video Selected", "Select a generated video first.")
+            return
+
+        video_path = self.videos[index]["video_file_path"]
+        frame_path = DOWNLOAD_DIR / f"last_frame_{int(time.time() * 1000)}.png"
+
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-sseof",
+                    "-0.1",
+                    "-i",
+                    video_path,
+                    "-frames:v",
+                    "1",
+                    str(frame_path),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except FileNotFoundError:
+            QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
+            return
+        except subprocess.CalledProcessError as exc:
+            QMessageBox.critical(self, "Frame Extraction Failed", exc.stderr[-800:] or "ffmpeg failed.")
+            return
+
+        image = QImage(str(frame_path))
+        if image.isNull():
+            QMessageBox.critical(self, "Frame Extraction Failed", "Frame image could not be loaded.")
+            return
+
+        mime = QMimeData()
+        mime.setImageData(image)
+        mime.setText(str(frame_path))
+        QGuiApplication.clipboard().setMimeData(mime)
+
+        self.browser.setUrl(QUrl.fromLocalFile(str(frame_path)))
+        self._append_log(
+            "Extracted last frame and copied it to clipboard as an image. "
+            f"Saved to: {frame_path}. You can now paste it into Grok's 'Type to imagine' tab."
+        )
 
 
 if __name__ == "__main__":

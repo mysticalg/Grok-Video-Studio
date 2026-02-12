@@ -11,11 +11,16 @@ This project is now a **desktop Python GUI app** instead of a Flask web server.
 
 ## Features
 
-1. Enter Grok API key, chat model, and video model.
-2. Generate one or more video variants from a concept.
-3. Keep a generated-video list in the GUI session.
-4. Select any generated item to load/play it in the embedded browser pane.
-5. Open a local video file and view it in the same embedded browser pane.
+1. Enter Grok API key and video model.
+2. Choose prompt generation mode:
+   - Manual prompt (no prompt API call)
+   - Grok API prompt generation
+   - OpenAI API prompt generation
+3. Generate one or more video variants from a concept or manual prompt.
+4. Keep a generated-video list in the GUI session.
+5. Play selected videos in an in-app video preview player.
+6. Open a local video file and preview it in the same in-app player.
+7. Extract the last frame from a generated video, save it to `downloads/`, and copy it to clipboard for pasting into Grok's "Type to imagine" tab.
 
 ## Quick start
 
@@ -41,8 +46,13 @@ python app.py
 - `GROK_CHAT_MODEL` (default: `grok-3-mini`)
 - `GROK_VIDEO_MODEL` (default: `grok-video-latest`)
 - `XAI_API_BASE` (default: `https://api.x.ai/v1`)
+- `OPENAI_API_KEY`
+- `OPENAI_CHAT_MODEL` (default: `gpt-4o-mini`)
+- `OPENAI_API_BASE` (default: `https://api.openai.com/v1`)
 
 ## Notes
 
 - Downloaded videos are saved under `downloads/`.
-- The right-hand pane is always present and used for embedded browsing/video preview.
+- The right-hand pane is always present and opens `https://grok.com` so you can quickly use "Type to imagine".
+- The local video preview now uses Qt Multimedia (`QMediaPlayer` + `QVideoWidget`) for more reliable playback.
+- Last-frame extraction requires `ffmpeg` in `PATH`.
