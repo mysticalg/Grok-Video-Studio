@@ -458,7 +458,11 @@ class MainWindow(QMainWindow):
         prompt = item["prompt"]
         variant = item["variant"]
         self.pending_manual_variant_for_download = variant
-        self._append_log(f"Populating prompt for manual variant {variant} in browser and submitting...")
+        submit_delay_ms = 700
+        self._append_log(
+            f"Populating prompt for manual variant {variant} in browser, setting video options, "
+            f"then submitting after {submit_delay_ms}ms..."
+        )
 
         escaped_prompt = repr(prompt)
         script = rf"""
@@ -505,12 +509,22 @@ class MainWindow(QMainWindow):
                     const visibleTextElements = (root = document) => [...root.querySelectorAll(interactiveSelector)]
                         .filter((el) => isVisible(el) && (el.textContent || "").trim());
 
+                    const emulateClick = (el) => {{
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        const common = {{ bubbles: true, cancelable: true, composed: true }};
+                        el.dispatchEvent(new PointerEvent("pointerdown", common));
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        el.dispatchEvent(new PointerEvent("pointerup", common));
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        return true;
+                    }};
+
                     const clickByText = (patterns, root = document) => {{
                         const candidate = visibleTextElements(root).find((el) => matchesAny((el.textContent || "").trim(), patterns));
                         const target = clickableAncestor(candidate);
                         if (!target) return false;
-                        target.click();
-                        return true;
+                        return emulateClick(target);
                     }};
 
                     const composer = input.closest("form") || input.parentElement || document;
@@ -518,37 +532,51 @@ class MainWindow(QMainWindow):
                         const button = [...document.querySelectorAll(`button[aria-label='${{ariaLabel}}']`)]
                             .find((el) => isVisible(el) && !el.disabled);
                         if (!button) return false;
-                        button.click();
-                        return true;
+                        return emulateClick(button);
                     }};
 
                     const optionsRequested = [];
-                    if (clickByText([/^video$/i], composer) || clickByText([/^video$/i])) optionsRequested.push("video");
-                    if (clickVisibleButtonByAriaLabel("720p") || clickByText([/720\s*p/i, /1280\s*[x×]\s*720/i], composer) || clickByText([/720\s*p/i, /1280\s*[x×]\s*720/i])) optionsRequested.push("720p");
-                    if (clickVisibleButtonByAriaLabel("10s") || clickByText([/^10\s*s(ec(onds?)?)?$/i], composer) || clickByText([/^10\s*s(ec(onds?)?)?$/i])) optionsRequested.push("10s");
-                    if (clickVisibleButtonByAriaLabel("16:9") || clickByText([/^16\s*:\s*9$/i], composer) || clickByText([/^16\s*:\s*9$/i])) optionsRequested.push("16:9");
+                    const optionsApplied = [];
+                    const modelTrigger = document.querySelector("#model-select-trigger");
+                    if (modelTrigger && emulateClick(modelTrigger)) optionsRequested.push("model-menu-open");
+                    if (clickByText([/^video$/i], composer) || clickByText([/^video$/i])) optionsApplied.push("video");
+                    if (clickVisibleButtonByAriaLabel("720p") || clickByText([/720\s*p/i, /1280\s*[x×]\s*720/i], composer) || clickByText([/720\s*p/i, /1280\s*[x×]\s*720/i])) optionsApplied.push("720p");
+                    if (clickVisibleButtonByAriaLabel("10s") || clickByText([/^10\s*s(ec(onds?)?)?$/i], composer) || clickByText([/^10\s*s(ec(onds?)?)?$/i])) optionsApplied.push("10s");
+                    if (clickVisibleButtonByAriaLabel("16:9") || clickByText([/^16\s*:\s*9$/i], composer) || clickByText([/^16\s*:\s*9$/i])) optionsApplied.push("16:9");
 
+                    return {{ ok: true, filledLength: typedValue.length, optionsRequested, optionsApplied }};
+                }} catch (err) {{
+                    return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                }}
+            }})()
+        """
+
+        submit_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const submitSelectors = [
                         "button[type='submit'][aria-label='Submit']",
                         "button[type='submit']",
                         "button[aria-label='Submit']"
                     ];
-
                     const submitButton = submitSelectors
                         .flatMap((selector) => [...document.querySelectorAll(selector)])
-                        .find((el) => isVisible(el) && !el.disabled)
-                        || visibleTextElements(composer)
-                            .map((el) => clickableAncestor(el))
-                            .find((el) => el && isVisible(el) && !el.disabled && matchesAny((el.textContent || "").trim(), [/submit/i, /generate/i, /create/i]));
-                    if (!submitButton) return {{ ok: false, error: "Submit button not found or disabled" }};
+                        .find((el) => isVisible(el) && !el.disabled);
+                    if (!submitButton) return { ok: false, error: "Submit button not found or disabled" };
 
-                    submitButton.click();
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    submitButton.dispatchEvent(new PointerEvent("pointerdown", common));
+                    submitButton.dispatchEvent(new MouseEvent("mousedown", common));
+                    submitButton.dispatchEvent(new PointerEvent("pointerup", common));
+                    submitButton.dispatchEvent(new MouseEvent("mouseup", common));
+                    submitButton.dispatchEvent(new MouseEvent("click", common));
 
-                    return {{ ok: true, filledLength: typedValue.length, submitted: true, optionsRequested }};
-                }} catch (err) {{
-                    return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
-                }}
-            }})()
+                    return { ok: true, submitted: true };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
         """
 
         def after_submit(result):
@@ -558,12 +586,29 @@ class MainWindow(QMainWindow):
                 self._append_log(f"ERROR: Manual prompt fill failed for variant {variant}: {error_detail!r}")
                 self.generate_btn.setEnabled(True)
                 return
+
             options_requested = result.get("optionsRequested") if isinstance(result, dict) else []
-            options_summary = ", ".join(options_requested) if options_requested else "none detected"
+            options_applied = result.get("optionsApplied") if isinstance(result, dict) else []
+            requested_summary = ", ".join(options_requested) if options_requested else "none"
+            applied_summary = ", ".join(options_applied) if options_applied else "none detected"
             self._append_log(
-                f"Prompt populated for variant {variant}; requested options: {options_summary}; submitted and now waiting for generation to auto-download."
+                f"Prompt populated for variant {variant}; options requested: {requested_summary}; "
+                f"options applied: {applied_summary}."
             )
-            self._trigger_browser_video_download(variant)
+
+            def after_delayed_submit(submit_result):
+                if not isinstance(submit_result, dict) or not submit_result.get("ok"):
+                    self.pending_manual_variant_for_download = None
+                    error_detail = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
+                    self._append_log(f"ERROR: Manual submit failed for variant {variant}: {error_detail!r}")
+                    self.generate_btn.setEnabled(True)
+                    return
+                self._append_log(
+                    f"Submitted manual variant {variant} after {submit_delay_ms}ms delay; waiting for generation to auto-download."
+                )
+                self._trigger_browser_video_download(variant)
+
+            QTimer.singleShot(submit_delay_ms, lambda: self.browser.page().runJavaScript(submit_script, after_delayed_submit))
 
         self.browser.page().runJavaScript(script, after_submit)
 
