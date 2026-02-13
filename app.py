@@ -578,17 +578,14 @@ class MainWindow(QMainWindow):
             openai_chat_model=self.openai_chat_model.text().strip() or "gpt-4o-mini",
         )
 
-        self.generate_btn.setEnabled(False)
         self.worker = GenerateWorker(config, prompt_config, self.count.value())
         self.worker.status.connect(self._append_log)
         self.worker.finished_video.connect(self.on_video_finished)
         self.worker.failed.connect(self.on_generation_error)
-        self.worker.finished.connect(lambda: self.generate_btn.setEnabled(True))
         self.worker.start()
 
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
         self.manual_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
-        self.generate_btn.setEnabled(False)
         self._append_log(
             "Manual mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
@@ -600,18 +597,15 @@ class MainWindow(QMainWindow):
     def _start_continue_iteration(self) -> None:
         if not self.videos:
             self._append_log("ERROR: No videos available to continue from last frame.")
-            self.generate_btn.setEnabled(True)
             self.continue_from_frame_active = False
             return
 
         latest_video = self.videos[-1]["video_file_path"]
         frame_path = self._extract_last_frame(latest_video)
         if frame_path is None:
-            self.generate_btn.setEnabled(True)
             self.continue_from_frame_active = False
             return
         if not self._copy_image_to_clipboard(frame_path):
-            self.generate_btn.setEnabled(True)
             self.continue_from_frame_active = False
             return
 
@@ -621,12 +615,11 @@ class MainWindow(QMainWindow):
             f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: copied last frame {frame_path}"
         )
         self.show_browser_page()
-        QTimer.singleShot(800, self._paste_clipboard_image_into_grok)
-        QTimer.singleShot(1400, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
+        QTimer.singleShot(900, lambda: self._upload_frame_into_grok(frame_path))
+        QTimer.singleShot(2600, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
 
     def _submit_next_manual_variant(self) -> None:
         if not self.manual_generation_queue:
-            self.generate_btn.setEnabled(True)
             self._append_log("Manual browser generation complete.")
             return
 
@@ -1059,6 +1052,59 @@ class MainWindow(QMainWindow):
                 lambda: self.browser.page().runJavaScript(set_options_script, _continue_after_options_set),
             )
 
+        def _run_continue_mode_submit() -> None:
+            continue_submit_script = r"""
+                (() => {
+                    try {
+                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                        const common = { bubbles: true, cancelable: true, composed: true };
+                        const emulateClick = (el) => {
+                            if (!el || !isVisible(el) || el.disabled) return false;
+                            try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                            el.dispatchEvent(new MouseEvent("mousedown", common));
+                            try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                            el.dispatchEvent(new MouseEvent("mouseup", common));
+                            el.dispatchEvent(new MouseEvent("click", common));
+                            return true;
+                        };
+
+                        const buttons = [...document.querySelectorAll("button, [role='button']")].filter((el) => isVisible(el));
+                        const matchers = [
+                            /make\s*video/i,
+                            /generate/i,
+                            /submit/i,
+                        ];
+                        let actionButton = null;
+                        for (const matcher of matchers) {
+                            actionButton = buttons.find((btn) => matcher.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                            if (actionButton) break;
+                        }
+                        const clicked = actionButton ? emulateClick(actionButton) : false;
+                        return {
+                            ok: clicked,
+                            buttonText: actionButton ? (actionButton.textContent || "").trim() : "",
+                            buttonAriaLabel: actionButton ? (actionButton.getAttribute("aria-label") || "") : "",
+                            error: clicked ? "" : "Could not find/click Make video button",
+                        };
+                    } catch (err) {
+                        return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                    }
+                })()
+            """
+
+            def _after_continue_submit(submit_result):
+                if not isinstance(submit_result, dict) or not submit_result.get("ok"):
+                    error_detail = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
+                    self._append_log(
+                        f"WARNING: Continue-mode submit for variant {variant} reported an issue: {error_detail!r}."
+                    )
+                else:
+                    button_label = submit_result.get("buttonAriaLabel") or submit_result.get("buttonText") or "Make video"
+                    self._append_log(f"Continue-mode submit clicked '{button_label}' for variant {variant}.")
+                self._trigger_browser_video_download(variant)
+
+            QTimer.singleShot(action_delay_ms, lambda: self.browser.page().runJavaScript(continue_submit_script, _after_continue_submit))
+
         def after_submit(result):
             fill_ok = isinstance(result, dict) and bool(result.get("ok"))
             if not fill_ok:
@@ -1076,10 +1122,13 @@ class MainWindow(QMainWindow):
                         f"WARNING: Prompt fill verification did not confirm content for variant {variant}: {verify_error!r}. "
                         "Continuing with option selection and forced submit anyway."
                     )
-                QTimer.singleShot(
-                    action_delay_ms,
-                    lambda: self.browser.page().runJavaScript(open_options_script, _continue_after_options_open),
-                )
+                if self.continue_from_frame_active:
+                    _run_continue_mode_submit()
+                else:
+                    QTimer.singleShot(
+                        action_delay_ms,
+                        lambda: self.browser.page().runJavaScript(open_options_script, _continue_after_options_open),
+                    )
 
             if fill_ok:
                 _after_verify_prompt({"ok": True})
@@ -1108,7 +1157,6 @@ class MainWindow(QMainWindow):
             self.pending_manual_variant_for_download = None
             self.manual_download_click_sent = False
             self._append_log(f"ERROR: Variant {variant} did not produce a downloadable video in time.")
-            self.generate_btn.setEnabled(True)
             return
 
         script = """
@@ -1267,7 +1315,6 @@ class MainWindow(QMainWindow):
                         self.continue_from_frame_target_count = 0
                         self.continue_from_frame_completed = 0
                         self.continue_from_frame_prompt = ""
-                        self.generate_btn.setEnabled(True)
                 else:
                     self._submit_next_manual_variant()
             elif state == download.DownloadState.DownloadInterrupted:
@@ -1279,7 +1326,6 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_target_count = 0
                 self.continue_from_frame_completed = 0
                 self.continue_from_frame_prompt = ""
-                self.generate_btn.setEnabled(True)
 
         download.stateChanged.connect(on_state_changed)
 
@@ -1386,9 +1432,14 @@ class MainWindow(QMainWindow):
         QGuiApplication.clipboard().setMimeData(mime)
         return True
 
-    def _paste_clipboard_image_into_grok(self) -> None:
-        focus_script = r"""
+    def _upload_frame_into_grok(self, frame_path: Path) -> None:
+        import base64
+
+        frame_base64 = base64.b64encode(frame_path.read_bytes()).decode("ascii")
+        upload_script = r"""
             (() => {
+                const base64Data = __FRAME_BASE64__;
+                const fileName = __FRAME_NAME__;
                 const selectors = [
                     "textarea[placeholder*='Type to imagine' i]",
                     "input[placeholder*='Type to imagine' i]",
@@ -1401,21 +1452,50 @@ class MainWindow(QMainWindow):
                     const node = [...document.querySelectorAll(selector)].find((el) => isVisible(el));
                     if (node) {
                         node.focus();
-                        return { ok: true };
+                        const binary = atob(base64Data);
+                        const bytes = new Uint8Array(binary.length);
+                        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                        const file = new File([bytes], fileName, { type: "image/png" });
+
+                        const dt = new DataTransfer();
+                        dt.items.add(file);
+
+                        const fileInputs = [...document.querySelectorAll("input[type='file']")];
+                        for (const input of fileInputs) {
+                            try {
+                                Object.defineProperty(input, "files", { value: dt.files, configurable: true });
+                                input.dispatchEvent(new Event("input", { bubbles: true }));
+                                input.dispatchEvent(new Event("change", { bubbles: true }));
+                            } catch (_) {}
+                        }
+
+                        try {
+                            const pasteEvent = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
+                            node.dispatchEvent(pasteEvent);
+                        } catch (_) {}
+
+                        ["dragenter", "dragover", "drop"].forEach((eventName) => {
+                            try {
+                                node.dispatchEvent(new DragEvent(eventName, { bubbles: true, cancelable: true, dataTransfer: dt }));
+                            } catch (_) {}
+                        });
+
+                        return { ok: true, fileInputs: fileInputs.length };
                     }
                 }
                 return { ok: false, error: 'Type to imagine input not found for paste' };
             })()
         """
 
+        upload_script = upload_script.replace("__FRAME_BASE64__", repr(frame_base64)).replace("__FRAME_NAME__", repr(frame_path.name))
+
         def after_focus(result):
             if not isinstance(result, dict) or not result.get("ok"):
-                self._append_log("WARNING: Could not focus Grok prompt input before image paste.")
+                self._append_log("WARNING: Could not upload extracted frame into Grok prompt area.")
                 return
-            self.browser.triggerPageAction(QWebEnginePage.WebAction.Paste)
-            self._append_log("Pasted last frame image from clipboard into the browser prompt box.")
+            self._append_log("Uploaded last frame image into the browser prompt area.")
 
-        self.browser.page().runJavaScript(focus_script, after_focus)
+        self.browser.page().runJavaScript(upload_script, after_focus)
 
     def continue_from_last_frame(self) -> None:
         source = self.prompt_source.currentData()
@@ -1436,7 +1516,6 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_target_count = self.count.value()
         self.continue_from_frame_completed = 0
         self.continue_from_frame_prompt = manual_prompt
-        self.generate_btn.setEnabled(False)
         self._append_log(
             f"Continue-from-last-frame started for {self.continue_from_frame_target_count} iteration(s)."
         )
