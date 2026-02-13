@@ -1417,11 +1417,20 @@ class MainWindow(QMainWindow):
                             "input[placeholder*='Type to customize video' i]",
                             "textarea[placeholder*='Customize video' i]",
                             "input[placeholder*='Customize video' i]",
+                            "textarea[placeholder*='Describe your video' i]",
+                            "input[placeholder*='Describe your video' i]",
+                            "textarea[placeholder*='video prompt' i]",
+                            "input[placeholder*='video prompt' i]",
+                            "textarea[aria-label*='video' i]",
+                            "input[aria-label*='video' i]",
                             "[contenteditable='true'][aria-label*='Type to customize this video' i]",
                             "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
                             "[contenteditable='true'][aria-label*='Type to customize video' i]",
                             "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
-                            "[contenteditable='true'][aria-label*='Make a video' i]"
+                            "[contenteditable='true'][aria-label*='Make a video' i]",
+                            "[contenteditable='true'][aria-label*='Describe your video' i]",
+                            "[contenteditable='true'][data-placeholder*='Describe your video' i]",
+                            "[contenteditable='true'][data-placeholder*='video prompt' i]"
                         ];
 
                         const inputCandidates = [];
@@ -1448,10 +1457,24 @@ class MainWindow(QMainWindow):
                         input.dispatchEvent(new Event("change", {{ bubbles: true }}));
 
                         const buttons = [...document.querySelectorAll("button, [role='button']")].filter((el) => isVisible(el) && !el.disabled);
-                        const generateButton = buttons.find((btn) => /generate/i.test((btn.textContent || "").trim()) || /make\s*video/i.test((btn.textContent || "").trim()));
-                        if (!generateButton) return {{ ok: true, submitted: false, reason: "video-generate-button-not-found" }};
+                        const generateButton = buttons.find((btn) => {{
+                            const label = `${{(btn.textContent || "").trim()}} ${{(btn.getAttribute("aria-label") || "").trim()}} ${{(btn.getAttribute("title") || "").trim()}}`.toLowerCase();
+                            return /\bgenerate\b/.test(label) || /make\s*video/.test(label) || /create\s*video/.test(label);
+                        }});
+                        if (generateButton) return {{ ok: true, submitted: emulateClick(generateButton) }};
 
-                        return {{ ok: true, submitted: emulateClick(generateButton) }};
+                        const submitViaEnter = () => {{
+                            try {{
+                                input.focus();
+                                input.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", bubbles: true, cancelable: true }}));
+                                input.dispatchEvent(new KeyboardEvent("keyup", {{ key: "Enter", code: "Enter", bubbles: true, cancelable: true }}));
+                                return true;
+                            }} catch (_) {{
+                                return false;
+                            }}
+                        }};
+
+                        return {{ ok: true, submitted: submitViaEnter(), reason: "video-submit-via-enter" }};
                     }} catch (err) {{
                         return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
                     }}
