@@ -345,8 +345,8 @@ class MainWindow(QMainWindow):
         self.manual_prompt = QPlainTextEdit()
         self.manual_prompt.setPlaceholderText("Paste or write an exact prompt to skip prompt APIs...")
         self.manual_prompt.setPlainText(
-            "abstract surreal artistic photorealistic strange random dream like scifi slow moving camera, "
-            "slow moving morphing people, furniture, scenary, creatures,  50s style color tv 70mm film"
+            "abstract surreal artistic photorealistic strange random dream like scifi fast moving camera, "
+            "fast moving fractals morphing and intersecting, highly detailed"
         )
         left_layout.addWidget(self.manual_prompt)
 
@@ -715,7 +715,7 @@ class MainWindow(QMainWindow):
         variant = item["variant"]
         self.pending_manual_variant_for_download = variant
         self.manual_download_click_sent = False
-        action_delay_ms = 2000
+        action_delay_ms = 1000
         self._append_log(
             f"Populating prompt for manual variant {variant} in browser, setting video options, "
             f"then force submitting with {action_delay_ms}ms delays between each action. Remaining repeats after this: {remaining_count}."
