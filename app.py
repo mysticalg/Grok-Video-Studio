@@ -677,10 +677,29 @@ class MainWindow(QMainWindow):
                         after_submit({"ok": True, "optionsRequested": [], "optionsApplied": [], "optionsWindowClosed": False})
                         return
 
-                    self.pending_manual_variant_for_download = None
                     error_detail = result.get("error") if isinstance(result, dict) else result
-                    self._append_log(f"ERROR: Manual prompt fill failed for variant {variant}: {error_detail!r}")
-                    self.generate_btn.setEnabled(True)
+                    self._append_log(
+                        f"ERROR: Manual prompt fill failed for variant {variant}: {error_detail!r}. "
+                        "Attempting forced form submit anyway."
+                    )
+
+                    def after_forced_submit(submit_result):
+                        if not isinstance(submit_result, dict) or not submit_result.get("ok"):
+                            self.pending_manual_variant_for_download = None
+                            forced_error = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
+                            self._append_log(
+                                f"ERROR: Forced manual submit also failed for variant {variant}: {forced_error!r}"
+                            )
+                            self.generate_btn.setEnabled(True)
+                            return
+
+                        self._append_log(
+                            f"Forced submit triggered for manual variant {variant} after fill failure; "
+                            "waiting for generation to auto-download."
+                        )
+                        self._trigger_browser_video_download(variant)
+
+                    QTimer.singleShot(0, lambda: self.browser.page().runJavaScript(submit_script, after_forced_submit))
 
                 self.browser.page().runJavaScript(filled_prompt_check_script, after_fill_check)
                 return
