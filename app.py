@@ -244,8 +244,11 @@ class FilteredWebEnginePage(QWebEnginePage):
         "Play failed: [object DOMException]",
     )
 
-    def __init__(self, on_console_message, parent=None):
-        super().__init__(parent)
+    def __init__(self, on_console_message, profile: QWebEngineProfile | None = None, parent=None):
+        if profile is not None:
+            super().__init__(profile, parent)
+        else:
+            super().__init__(parent)
         self._on_console_message = on_console_message
 
     def javaScriptConsoleMessage(self, level, message, line_number, source_id):  # type: ignore[override]
@@ -269,11 +272,13 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download: int | None = None
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
+        self.manual_download_started_at: float | None = None
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
         self.video_playback_hack_timer = QTimer(self)
-        self.video_playback_hack_timer.setInterval(2500)
+        self.video_playback_hack_timer.setInterval(1800)
+        self.video_playback_hack_timer.setSingleShot(True)
         self.video_playback_hack_timer.timeout.connect(self._ensure_browser_video_playback)
         self._playback_hack_success_logged = False
         self._build_ui()
@@ -361,8 +366,9 @@ class MainWindow(QMainWindow):
         self.player.setAudioOutput(self.audio_output)
 
         self.browser = QWebEngineView()
-        self.browser.setPage(FilteredWebEnginePage(self._append_log, self.browser))
-        browser_profile = self.browser.page().profile()
+        self.browser_profile = QWebEngineProfile("grok-video-desktop-profile", self)
+        self.browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.browser))
+        browser_profile = self.browser_profile
         browser_profile.setPersistentStoragePath(str(CACHE_DIR / "profile"))
         browser_profile.setCachePath(str(CACHE_DIR / "cache"))
         browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
@@ -377,8 +383,7 @@ class MainWindow(QMainWindow):
 
         self.browser.setUrl(QUrl("https://grok.com"))
         self.browser.loadFinished.connect(self._on_browser_load_finished)
-        self.browser.page().profile().downloadRequested.connect(self._on_browser_download_requested)
-        self.video_playback_hack_timer.start()
+        self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
 
         self._toggle_prompt_source_fields()
 
@@ -400,6 +405,7 @@ class MainWindow(QMainWindow):
     def _on_browser_load_finished(self, ok: bool) -> None:
         if ok:
             self._playback_hack_success_logged = False
+            self.video_playback_hack_timer.start()
             self._ensure_browser_video_playback()
 
     def _ensure_browser_video_playback(self) -> None:
@@ -447,7 +453,6 @@ class MainWindow(QMainWindow):
                             video.setAttribute("webkit-playsinline", "");
                             video.controls = true;
                             video.preload = "auto";
-                            try { video.load(); } catch (_) {}
 
                             const st = getComputedStyle(video);
                             if (st.display === "none") video.style.display = "block";
@@ -1028,6 +1033,7 @@ class MainWindow(QMainWindow):
     def _trigger_browser_video_download(self, variant: int) -> None:
         self.manual_download_deadline = time.time() + 420
         self.manual_download_click_sent = False
+        self.manual_download_started_at = time.time()
         self.manual_download_poll_timer.start(0)
 
     def _poll_for_manual_video(self) -> None:
@@ -1065,9 +1071,22 @@ class MainWindow(QMainWindow):
                         }
                     }
                 };
+                const percentNode = [...document.querySelectorAll("div.text-xs.font-semibold.w-\\[4ch\\].mb-\\[1px\\].tabular-nums")]
+                    .find((el) => isVisible(el) && /^\\d{1,3}%$/.test((el.textContent || "").trim()));
+                if (percentNode) {
+                    return { status: "progress", progressText: (percentNode.textContent || "").trim() };
+                }
 
-                const downloadButton = [...document.querySelectorAll("button[aria-label='Download']")]
-                    .find((btn) => isVisible(btn) && !btn.disabled);
+                const redoButton = [...document.querySelectorAll("button")]
+                    .find((btn) => isVisible(btn) && !btn.disabled && /redo/i.test((btn.textContent || "").trim()));
+
+                const downloadButton = [...document.querySelectorAll("button[aria-label='Download'], button")]
+                    .find((btn) => isVisible(btn) && !btn.disabled && /download/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+
+                if (!redoButton) {
+                    return { status: "waiting-for-redo" };
+                }
+
                 if (downloadButton) {
                     return {
                         status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
@@ -1077,9 +1096,12 @@ class MainWindow(QMainWindow):
                 const video = document.querySelector("video");
                 const source = document.querySelector("video source");
                 const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
+                const enoughData = !!(video && video.readyState >= 3 && Number(video.duration || 0) > 0);
                 return {
-                    status: src ? "video-src-ready" : "waiting",
+                    status: src ? (enoughData ? "video-src-ready" : "video-buffering") : "waiting",
                     src,
+                    readyState: video ? video.readyState : 0,
+                    duration: video ? Number(video.duration || 0) : 0,
                 };
             })()
         """
@@ -1094,6 +1116,17 @@ class MainWindow(QMainWindow):
                 return
 
             status = result.get("status", "waiting")
+            progress_text = (result.get("progressText") or "").strip()
+
+            if status == "progress":
+                if progress_text:
+                    self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
+                self.manual_download_poll_timer.start(3000)
+                return
+
+            if status == "waiting-for-redo":
+                self.manual_download_poll_timer.start(3000)
+                return
 
             if status == "download-clicked":
                 if not self.manual_download_click_sent:
@@ -1103,7 +1136,12 @@ class MainWindow(QMainWindow):
                 return
 
             src = result.get("src") or ""
-            if status != "video-src-ready" or not src:
+            if status == "video-buffering":
+                self.manual_download_poll_timer.start(3000)
+                return
+
+            min_wait_elapsed = self.manual_download_started_at is not None and (time.time() - self.manual_download_started_at) >= 8
+            if status != "video-src-ready" or not src or not min_wait_elapsed:
                 self.manual_download_poll_timer.start(3000)
                 return
 
@@ -1156,11 +1194,13 @@ class MainWindow(QMainWindow):
                 self._append_log(f"Saved: {video_path}")
                 self.pending_manual_variant_for_download = None
                 self.manual_download_click_sent = False
+                self.manual_download_started_at = None
                 self._submit_next_manual_variant()
             elif state == download.DownloadState.DownloadInterrupted:
                 self._append_log(f"ERROR: Download interrupted for manual variant {variant}.")
                 self.pending_manual_variant_for_download = None
                 self.manual_download_click_sent = False
+                self.manual_download_started_at = None
                 self.generate_btn.setEnabled(True)
 
         download.stateChanged.connect(on_state_changed)
