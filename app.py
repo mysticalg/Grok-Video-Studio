@@ -1486,6 +1486,7 @@ class MainWindow(QMainWindow):
             def after_submit_video_prompt(result):
                 ok = isinstance(result, dict) and bool(result.get("ok", True))
                 submitted = isinstance(result, dict) and bool(result.get("submitted"))
+                reason = result.get("reason") if isinstance(result, dict) else None
                 if not ok:
                     error_detail = result.get("error") if isinstance(result, dict) else result
                     self._append_log(
@@ -1495,6 +1496,11 @@ class MainWindow(QMainWindow):
                     self.manual_video_prompt_submitted = True
                     self._append_log(
                         f"Variant {variant}: entered the video prompt on the generation page and clicked Generate Video."
+                    )
+                elif reason == "video-prompt-input-not-found":
+                    self.manual_image_make_video_clicked = False
+                    self._append_log(
+                        f"Variant {variant}: video prompt input is not visible yet; retrying image-pick step."
                     )
 
                 self.manual_download_poll_timer.start(3000)
