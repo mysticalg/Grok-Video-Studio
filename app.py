@@ -1291,7 +1291,11 @@ class MainWindow(QMainWindow):
 
                         const alreadyOnVideoComposer = videoPromptSelectors.some((selector) =>
                             [...document.querySelectorAll(selector)].some((node) => isVisible(node))
-                        );
+                        ) || [...document.querySelectorAll("button, [role='button']")].some((node) => {
+                            if (!isVisible(node)) return false;
+                            const label = `${(node.getAttribute?.("aria-label") || "")} ${(node.textContent || "")}`.toLowerCase();
+                            return /\bmake\s+video\b/.test(label);
+                        });
                         if (alreadyOnVideoComposer) {
                             return { ok: true, clicked: true, count: 0, skippedImagePick: true };
                         }
