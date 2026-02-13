@@ -1283,12 +1283,40 @@ class MainWindow(QMainWindow):
                             return true;
                         };
 
+                        const getClickableImageTarget = (listItem) => {
+                            if (!listItem) return null;
+
+                            const imageNodes = [
+                                ...listItem.querySelectorAll("img"),
+                                ...listItem.querySelectorAll("picture img"),
+                                ...listItem.querySelectorAll("canvas"),
+                            ].filter((node) => isVisible(node));
+
+                            const nonVideoImages = imageNodes.filter((node) => {
+                                const alt = (node.getAttribute?.("alt") || "").toLowerCase();
+                                const ariaLabel = (node.getAttribute?.("aria-label") || "").toLowerCase();
+                                return !/play|video/.test(`${alt} ${ariaLabel}`);
+                            });
+
+                            const targetImage = nonVideoImages[0] || imageNodes[0] || null;
+                            if (!targetImage) return null;
+
+                            const clickableAncestor = targetImage.closest("a, button, [role='button'], [tabindex], relative-group, media-post-masonry-card");
+                            if (clickableAncestor && isVisible(clickableAncestor) && clickableAncestor !== listItem) {
+                                const label = `${(clickableAncestor.getAttribute("aria-label") || "")} ${(clickableAncestor.textContent || "")}`.toLowerCase();
+                                if (!/play/.test(label)) return clickableAncestor;
+                            }
+
+                            return targetImage;
+                        };
+
                         const listItems = [...document.querySelectorAll("div[role='listitem']")]
                             .filter((item) => isVisible(item));
                         if (!listItems.length) return { ok: true, clicked: false, count: 0 };
 
                         const firstItem = listItems[0];
                         const cardTarget =
+                            getClickableImageTarget(firstItem) ||
                             firstItem.querySelector("relative-group") ||
                             firstItem.querySelector("media-post-masonry-card") ||
                             firstItem.querySelector("[data-testid*='media-post' i]") ||
