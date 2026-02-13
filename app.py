@@ -1155,6 +1155,8 @@ class MainWindow(QMainWindow):
                         const emulateClick = (el) => {
                             if (!el || !isVisible(el) || el.disabled) return false;
                             try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                            try { el.dispatchEvent(new MouseEvent("mouseover", common)); } catch (_) {}
+                            try { el.dispatchEvent(new MouseEvent("mousemove", common)); } catch (_) {}
                             el.dispatchEvent(new MouseEvent("mousedown", common));
                             try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
                             el.dispatchEvent(new MouseEvent("mouseup", common));
@@ -1276,6 +1278,8 @@ class MainWindow(QMainWindow):
                         const emulateClick = (el) => {
                             if (!el || !isVisible(el) || el.disabled) return false;
                             try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                            try { el.dispatchEvent(new MouseEvent("mouseover", common)); } catch (_) {}
+                            try { el.dispatchEvent(new MouseEvent("mousemove", common)); } catch (_) {}
                             el.dispatchEvent(new MouseEvent("mousedown", common));
                             try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
                             el.dispatchEvent(new MouseEvent("mouseup", common));
@@ -1315,7 +1319,28 @@ class MainWindow(QMainWindow):
                         if (!listItems.length) return { ok: true, clicked: false, count: 0 };
 
                         const firstItem = listItems[0];
+                        const findBestCardTarget = (listItem) => {
+                            if (!listItem) return null;
+                            const candidates = [
+                                ...listItem.querySelectorAll("[class*='cursor-pointer']"),
+                                ...listItem.querySelectorAll("[class*='pointer-events-auto']"),
+                                ...listItem.querySelectorAll("[class*='media-post-masonry-card']"),
+                                ...listItem.querySelectorAll("[class*='group/media-post-masonry-card']"),
+                                ...listItem.querySelectorAll("[data-testid*='media-post' i]"),
+                                ...listItem.querySelectorAll("a, button, [role='button']"),
+                            ].filter((node) => isVisible(node));
+
+                            const nonControl = candidates.find((node) => {
+                                if (!node) return false;
+                                const label = `${(node.getAttribute?.("aria-label") || "")} ${(node.textContent || "")}`.toLowerCase();
+                                return !/unsave|save|download|share|compose|post|redo|menu|more/.test(label);
+                            });
+
+                            return nonControl || candidates[0] || null;
+                        };
+
                         const cardTarget =
+                            findBestCardTarget(firstItem) ||
                             getClickableImageTarget(firstItem) ||
                             firstItem.querySelector(".relative.group") ||
                             firstItem.querySelector("[class~='relative'][class~='group']") ||
@@ -1447,6 +1472,8 @@ class MainWindow(QMainWindow):
                     if (!el || !isVisible(el) || el.disabled) return false;
                     try {
                         el.dispatchEvent(new PointerEvent("pointerdown", common));
+                        el.dispatchEvent(new MouseEvent("mouseover", common));
+                        el.dispatchEvent(new MouseEvent("mousemove", common));
                         el.dispatchEvent(new MouseEvent("mousedown", common));
                         el.dispatchEvent(new PointerEvent("pointerup", common));
                         el.dispatchEvent(new MouseEvent("mouseup", common));
@@ -1476,6 +1503,24 @@ class MainWindow(QMainWindow):
                 const mediaListItem = [...document.querySelectorAll("div[role='listitem']")]
                     .find((item) => isVisible(item) && (item.querySelector("video") || item.querySelector("img[alt*='Generated image' i]")));
 
+                const resolveMediaOpenTarget = (listItem) => {
+                    if (!listItem) return null;
+                    const clickableChildren = [
+                        ...listItem.querySelectorAll("[class*='cursor-pointer']"),
+                        ...listItem.querySelectorAll("[class*='pointer-events-auto']"),
+                        ...listItem.querySelectorAll("[class*='media-post-masonry-card']"),
+                        ...listItem.querySelectorAll("[class*='group/media-post-masonry-card']"),
+                        ...listItem.querySelectorAll("a, button, [role='button']"),
+                    ].filter((el) => isVisible(el));
+
+                    const preferred = clickableChildren.find((el) => {
+                        const label = `${(el.getAttribute("aria-label") || "")} ${(el.textContent || "")}`.toLowerCase();
+                        return !/unsave|save|download|share|compose|post|redo|menu|more/.test(label);
+                    });
+
+                    return preferred || clickableChildren[0] || listItem;
+                };
+
                 if (!redoButton) {
                     return { status: "waiting-for-redo" };
                 }
@@ -1487,8 +1532,9 @@ class MainWindow(QMainWindow):
                 }
 
                 if (mediaListItem) {
+                    const openTarget = resolveMediaOpenTarget(mediaListItem);
                     const clickedBefore = mediaListItem.getAttribute("data-manual-video-open-clicked") === "1";
-                    const clicked = clickedBefore ? false : emulateClick(mediaListItem);
+                    const clicked = clickedBefore ? false : emulateClick(openTarget);
                     if (clicked) {
                         mediaListItem.setAttribute("data-manual-video-open-clicked", "1");
                     }
