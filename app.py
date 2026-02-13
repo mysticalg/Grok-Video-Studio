@@ -1155,8 +1155,6 @@ class MainWindow(QMainWindow):
                         const emulateClick = (el) => {
                             if (!el || !isVisible(el) || el.disabled) return false;
                             try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                            try { el.dispatchEvent(new MouseEvent("mouseover", common)); } catch (_) {}
-                            try { el.dispatchEvent(new MouseEvent("mousemove", common)); } catch (_) {}
                             el.dispatchEvent(new MouseEvent("mousedown", common));
                             try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
                             el.dispatchEvent(new MouseEvent("mouseup", common));
@@ -1274,126 +1272,63 @@ class MainWindow(QMainWindow):
                 (() => {
                     try {
                         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-
-                        const videoPromptSelectors = [
-                            "textarea[placeholder*='Type to customize this video' i]",
-                            "input[placeholder*='Type to customize this video' i]",
-                            "textarea[placeholder*='Type to customize video' i]",
-                            "input[placeholder*='Type to customize video' i]",
-                            "textarea[placeholder*='Customize video' i]",
-                            "input[placeholder*='Customize video' i]",
-                            "[contenteditable='true'][aria-label*='Type to customize this video' i]",
-                            "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
-                            "[contenteditable='true'][aria-label*='Type to customize video' i]",
-                            "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
-                            "[contenteditable='true'][aria-label*='Make a video' i]"
-                        ];
-
-                        const alreadyOnVideoComposer = videoPromptSelectors.some((selector) =>
-                            [...document.querySelectorAll(selector)].some((node) => isVisible(node))
-                        ) || [...document.querySelectorAll("button, [role='button']")].some((node) => {
-                            if (!isVisible(node)) return false;
-                            const label = `${(node.getAttribute?.("aria-label") || "")} ${(node.textContent || "")}`.toLowerCase();
-                            return /\bmake\s+video\b/.test(label);
-                        });
-                        if (alreadyOnVideoComposer) {
-                            return { ok: true, clicked: true, count: 0, skippedImagePick: true };
-                        }
-
                         const common = { bubbles: true, cancelable: true, composed: true };
                         const emulateClick = (el) => {
                             if (!el || !isVisible(el) || el.disabled) return false;
-                            try {
-                                try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                                try { el.dispatchEvent(new MouseEvent("mouseover", common)); } catch (_) {}
-                                try { el.dispatchEvent(new MouseEvent("mousemove", common)); } catch (_) {}
-                                el.dispatchEvent(new MouseEvent("mousedown", common));
-                                try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
-                                el.dispatchEvent(new MouseEvent("mouseup", common));
-                                el.dispatchEvent(new MouseEvent("click", common));
-                                el.click?.();
-                                return true;
-                            } catch (_) {
-                                try {
-                                    el.click?.();
-                                    return true;
-                                } catch (__){
-                                    return false;
-                                }
-                            }
+                            try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                            el.dispatchEvent(new MouseEvent("mousedown", common));
+                            try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                            el.dispatchEvent(new MouseEvent("mouseup", common));
+                            el.dispatchEvent(new MouseEvent("click", common));
+                            return true;
                         };
 
-                        const safeClosest = (el, selector) => {
-                            try { return el.closest(selector); } catch (_) { return null; }
-                        };
+                        const getClickableImageTarget = (listItem) => {
+                            if (!listItem) return null;
 
-                        const generatedImageNodes = [...document.querySelectorAll("img[alt='Generated image'], img[alt*='Generated image' i]")]
-                            .filter((img) => isVisible(img));
+                            const imageNodes = [
+                                ...listItem.querySelectorAll("img"),
+                                ...listItem.querySelectorAll("picture img"),
+                                ...listItem.querySelectorAll("canvas"),
+                            ].filter((node) => isVisible(node));
 
-                        const preferredGeneratedImage = generatedImageNodes.find((img) => {
-                            const src = (img.getAttribute("src") || "").toLowerCase();
-                            return src.includes("/generated/") && src.includes("preview_image");
-                        }) || generatedImageNodes[0] || null;
+                            const nonVideoImages = imageNodes.filter((node) => {
+                                const alt = (node.getAttribute?.("alt") || "").toLowerCase();
+                                const ariaLabel = (node.getAttribute?.("aria-label") || "").toLowerCase();
+                                return !/play|video/.test(`${alt} ${ariaLabel}`);
+                            });
 
-                        if (preferredGeneratedImage) {
-                            const generatedCard =
-                                safeClosest(preferredGeneratedImage, "div[role='listitem']") ||
-                                safeClosest(preferredGeneratedImage, "article") ||
-                                safeClosest(preferredGeneratedImage, "li") ||
-                                preferredGeneratedImage.parentElement;
+                            const targetImage = nonVideoImages[0] || imageNodes[0] || null;
+                            if (!targetImage) return null;
 
-                            const generatedOpenTarget =
-                                safeClosest(preferredGeneratedImage, "a, button, [role='button'], [tabindex]") ||
-                                generatedCard ||
-                                preferredGeneratedImage;
-
-                            const clicked = emulateClick(generatedOpenTarget);
-                            if (clicked && generatedCard) {
-                                generatedCard.setAttribute("data-manual-image-open-clicked", "1");
+                            const clickableAncestor = targetImage.closest("a, button, [role='button'], [tabindex], .relative.group, [class~='relative'][class~='group'], media-post-masonry-card, [data-testid*='media-post' i]");
+                            if (clickableAncestor && isVisible(clickableAncestor) && clickableAncestor !== listItem) {
+                                const label = `${(clickableAncestor.getAttribute("aria-label") || "")} ${(clickableAncestor.textContent || "")}`.toLowerCase();
+                                if (!/play/.test(label)) return clickableAncestor;
                             }
 
-                            return {
-                                ok: true,
-                                clicked,
-                                count: generatedImageNodes.length,
-                                usedGeneratedImageSignal: true,
-                            };
+                            return targetImage;
+                        };
+
+                        const listItems = [...document.querySelectorAll("div[role='listitem']")]
+                            .filter((item) => isVisible(item));
+                        if (!listItems.length) return { ok: true, clicked: false, count: 0 };
+
+                        const firstItem = listItems[0];
+                        const cardTarget =
+                            getClickableImageTarget(firstItem) ||
+                            firstItem.querySelector(".relative.group") ||
+                            firstItem.querySelector("[class~='relative'][class~='group']") ||
+                            firstItem.querySelector("media-post-masonry-card") ||
+                            firstItem.querySelector("[data-testid*='media-post' i]") ||
+                            firstItem.querySelector("a") ||
+                            firstItem;
+
+                        const clicked = emulateClick(cardTarget);
+                        if (clicked) {
+                            firstItem.setAttribute("data-manual-image-open-clicked", "1");
                         }
-
-                        const images = [...document.querySelectorAll("img, picture img, canvas")]
-                            .filter((node) => isVisible(node));
-                        if (!images.length) return { ok: true, clicked: false, count: 0 };
-
-                        const scored = images
-                            .map((img) => {
-                                const card =
-                                    safeClosest(img, "div[role='listitem']") ||
-                                    safeClosest(img, "article") ||
-                                    safeClosest(img, "li") ||
-                                    safeClosest(img, "[class*='masonry']") ||
-                                    safeClosest(img, "[class*='media-post']") ||
-                                    img.parentElement;
-                                const text = `${(img.getAttribute("alt") || "")} ${(card && card.textContent) || ""}`.toLowerCase();
-                                const isNav = /history|library|settings|profile|menu/.test(text);
-                                const area = (img.clientWidth || 0) * (img.clientHeight || 0);
-                                return { img, card, isNav, area };
-                            })
-                            .filter((x) => !x.isNav)
-                            .sort((a, b) => b.area - a.area);
-
-                        const candidate = scored[0] || null;
-                        if (!candidate) return { ok: true, clicked: false, count: images.length };
-
-                        const clickTarget =
-                            (candidate.card && safeClosest(candidate.img, "a, button, [role='button'], [tabindex]")) ||
-                            candidate.card ||
-                            candidate.img;
-
-                        const clicked = emulateClick(clickTarget);
-                        if (clicked && candidate.card) {
-                            candidate.card.setAttribute("data-manual-image-open-clicked", "1");
-                        }
-                        return { ok: true, clicked, count: images.length, usedGeneratedImageSignal: false };
+                        return { ok: clicked, clicked, count: listItems.length };
                     } catch (err) {
                         return { ok: false, error: String(err && err.stack ? err.stack : err) };
                     }
@@ -1401,10 +1336,8 @@ class MainWindow(QMainWindow):
             """
 
             def after_pick_image(result):
-                ok = not isinstance(result, dict) or bool(result.get("ok", True))
+                ok = isinstance(result, dict) and bool(result.get("ok", True))
                 clicked = isinstance(result, dict) and bool(result.get("clicked"))
-                skipped_image_pick = isinstance(result, dict) and bool(result.get("skippedImagePick"))
-                used_generated_image_signal = isinstance(result, dict) and bool(result.get("usedGeneratedImageSignal"))
                 if not ok:
                     error_detail = result.get("error") if isinstance(result, dict) else result
                     self._append_log(
@@ -1412,19 +1345,9 @@ class MainWindow(QMainWindow):
                     )
                 elif clicked:
                     self.manual_image_make_video_clicked = True
-                    if skipped_image_pick:
-                        self._append_log(
-                            f"Variant {variant}: video generation prompt is already visible; skipping image-pick step."
-                        )
-                    else:
-                        if used_generated_image_signal:
-                            self._append_log(
-                                f"Variant {variant}: detected a 'Generated image' list item and opened it to load the video generation page."
-                            )
-                        else:
-                            self._append_log(
-                                f"Variant {variant}: opened the first generated image/list item to load the video generation page."
-                            )
+                    self._append_log(
+                        f"Variant {variant}: opened the first generated image/list item to load the video generation page."
+                    )
 
                 self.manual_download_poll_timer.start(3000)
 
@@ -1456,20 +1379,11 @@ class MainWindow(QMainWindow):
                             "input[placeholder*='Type to customize video' i]",
                             "textarea[placeholder*='Customize video' i]",
                             "input[placeholder*='Customize video' i]",
-                            "textarea[placeholder*='Describe your video' i]",
-                            "input[placeholder*='Describe your video' i]",
-                            "textarea[placeholder*='video prompt' i]",
-                            "input[placeholder*='video prompt' i]",
-                            "textarea[aria-label*='video' i]",
-                            "input[aria-label*='video' i]",
                             "[contenteditable='true'][aria-label*='Type to customize this video' i]",
                             "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
                             "[contenteditable='true'][aria-label*='Type to customize video' i]",
                             "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
-                            "[contenteditable='true'][aria-label*='Make a video' i]",
-                            "[contenteditable='true'][aria-label*='Describe your video' i]",
-                            "[contenteditable='true'][data-placeholder*='Describe your video' i]",
-                            "[contenteditable='true'][data-placeholder*='video prompt' i]"
+                            "[contenteditable='true'][aria-label*='Make a video' i]"
                         ];
 
                         const inputCandidates = [];
@@ -1496,24 +1410,10 @@ class MainWindow(QMainWindow):
                         input.dispatchEvent(new Event("change", {{ bubbles: true }}));
 
                         const buttons = [...document.querySelectorAll("button, [role='button']")].filter((el) => isVisible(el) && !el.disabled);
-                        const generateButton = buttons.find((btn) => {{
-                            const label = `${{(btn.textContent || "").trim()}} ${{(btn.getAttribute("aria-label") || "").trim()}} ${{(btn.getAttribute("title") || "").trim()}}`.toLowerCase();
-                            return /\bgenerate\b/.test(label) || /make\s*video/.test(label) || /create\s*video/.test(label);
-                        }});
-                        if (generateButton) return {{ ok: true, submitted: emulateClick(generateButton) }};
+                        const generateButton = buttons.find((btn) => /generate/i.test((btn.textContent || "").trim()) || /make\s*video/i.test((btn.textContent || "").trim()));
+                        if (!generateButton) return {{ ok: true, submitted: false, reason: "video-generate-button-not-found" }};
 
-                        const submitViaEnter = () => {{
-                            try {{
-                                input.focus();
-                                input.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", bubbles: true, cancelable: true }}));
-                                input.dispatchEvent(new KeyboardEvent("keyup", {{ key: "Enter", code: "Enter", bubbles: true, cancelable: true }}));
-                                return true;
-                            }} catch (_) {{
-                                return false;
-                            }}
-                        }};
-
-                        return {{ ok: true, submitted: submitViaEnter(), reason: "video-submit-via-enter" }};
+                        return {{ ok: true, submitted: emulateClick(generateButton) }};
                     }} catch (err) {{
                         return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
                     }}
@@ -1523,7 +1423,6 @@ class MainWindow(QMainWindow):
             def after_submit_video_prompt(result):
                 ok = isinstance(result, dict) and bool(result.get("ok", True))
                 submitted = isinstance(result, dict) and bool(result.get("submitted"))
-                reason = result.get("reason") if isinstance(result, dict) else None
                 if not ok:
                     error_detail = result.get("error") if isinstance(result, dict) else result
                     self._append_log(
@@ -1533,11 +1432,6 @@ class MainWindow(QMainWindow):
                     self.manual_video_prompt_submitted = True
                     self._append_log(
                         f"Variant {variant}: entered the video prompt on the generation page and clicked Generate Video."
-                    )
-                elif reason == "video-prompt-input-not-found":
-                    self.manual_image_make_video_clicked = False
-                    self._append_log(
-                        f"Variant {variant}: video prompt input is not visible yet; retrying image-pick step."
                     )
 
                 self.manual_download_poll_timer.start(3000)
@@ -1553,8 +1447,6 @@ class MainWindow(QMainWindow):
                     if (!el || !isVisible(el) || el.disabled) return false;
                     try {
                         el.dispatchEvent(new PointerEvent("pointerdown", common));
-                        el.dispatchEvent(new MouseEvent("mouseover", common));
-                        el.dispatchEvent(new MouseEvent("mousemove", common));
                         el.dispatchEvent(new MouseEvent("mousedown", common));
                         el.dispatchEvent(new PointerEvent("pointerup", common));
                         el.dispatchEvent(new MouseEvent("mouseup", common));
@@ -1584,24 +1476,6 @@ class MainWindow(QMainWindow):
                 const mediaListItem = [...document.querySelectorAll("div[role='listitem']")]
                     .find((item) => isVisible(item) && (item.querySelector("video") || item.querySelector("img[alt*='Generated image' i]")));
 
-                const resolveMediaOpenTarget = (listItem) => {
-                    if (!listItem) return null;
-                    const clickableChildren = [
-                        ...listItem.querySelectorAll("[class*='cursor-pointer']"),
-                        ...listItem.querySelectorAll("[class*='pointer-events-auto']"),
-                        ...listItem.querySelectorAll("[class*='media-post-masonry-card']"),
-                        ...listItem.querySelectorAll("[class*='group/media-post-masonry-card']"),
-                        ...listItem.querySelectorAll("a, button, [role='button']"),
-                    ].filter((el) => isVisible(el));
-
-                    const preferred = clickableChildren.find((el) => {
-                        const label = `${(el.getAttribute("aria-label") || "")} ${(el.textContent || "")}`.toLowerCase();
-                        return !/unsave|save|download|share|compose|post|redo|menu|more/.test(label);
-                    });
-
-                    return preferred || clickableChildren[0] || listItem;
-                };
-
                 if (!redoButton) {
                     return { status: "waiting-for-redo" };
                 }
@@ -1613,9 +1487,8 @@ class MainWindow(QMainWindow):
                 }
 
                 if (mediaListItem) {
-                    const openTarget = resolveMediaOpenTarget(mediaListItem);
                     const clickedBefore = mediaListItem.getAttribute("data-manual-video-open-clicked") === "1";
-                    const clicked = clickedBefore ? false : emulateClick(openTarget);
+                    const clicked = clickedBefore ? false : emulateClick(mediaListItem);
                     if (clicked) {
                         mediaListItem.setAttribute("data-manual-video-open-clicked", "1");
                     }
