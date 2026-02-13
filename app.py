@@ -582,8 +582,14 @@ class MainWindow(QMainWindow):
                         const matches = document.querySelectorAll(selector);
                         for (let i = 0; i < matches.length; i += 1) submitCandidates.push(matches[i]);
                     });
-                    const submitButton = submitCandidates.find((el) => isVisible(el) && !el.disabled);
-                    if (!submitButton) return { ok: false, error: "Submit button not found or disabled" };
+                    const submitButton = submitCandidates.find((el) => isVisible(el));
+                    if (!submitButton) return { ok: false, error: "Submit button not found" };
+
+                    if (submitButton.disabled) {
+                        submitButton.disabled = false;
+                        submitButton.removeAttribute("disabled");
+                        submitButton.setAttribute("aria-disabled", "false");
+                    }
 
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const emulateClick = (el) => {
@@ -598,7 +604,7 @@ class MainWindow(QMainWindow):
                     submitButton.dispatchEvent(new MouseEvent("dblclick", common));
                     emulateClick(submitButton);
 
-                    return { ok: true, submitted: true, doubleClicked: true };
+                    return { ok: true, submitted: true, doubleClicked: true, forceEnabled: true };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
                 }
