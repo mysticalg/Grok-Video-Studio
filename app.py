@@ -280,6 +280,10 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
+        self.continue_from_frame_active = False
+        self.continue_from_frame_target_count = 0
+        self.continue_from_frame_completed = 0
+        self.continue_from_frame_prompt = ""
         self.video_playback_hack_timer = QTimer(self)
         self.video_playback_hack_timer.setInterval(1800)
         self.video_playback_hack_timer.setSingleShot(True)
@@ -360,7 +364,7 @@ class MainWindow(QMainWindow):
         self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
         left_layout.addWidget(self.continue_frame_btn)
 
-        self.show_browser_btn = QPushButton("Show Browser (grok.com)")
+        self.show_browser_btn = QPushButton("Show Browser (grok.com/imagine)")
         self.show_browser_btn.clicked.connect(self.show_browser_page)
         left_layout.addWidget(self.show_browser_btn)
 
@@ -402,7 +406,7 @@ class MainWindow(QMainWindow):
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
 
-        self.browser.setUrl(QUrl("https://grok.com"))
+        self.browser.setUrl(QUrl("https://grok.com/imagine"))
         self.browser.loadFinished.connect(self._on_browser_load_finished)
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
 
@@ -592,6 +596,33 @@ class MainWindow(QMainWindow):
         self._append_log(f"Manual mode queued with repeat count={count}.")
         self._append_log("Attempting to populate the visible 'Type to imagine' prompt box on the current page...")
         self._submit_next_manual_variant()
+
+    def _start_continue_iteration(self) -> None:
+        if not self.videos:
+            self._append_log("ERROR: No videos available to continue from last frame.")
+            self.generate_btn.setEnabled(True)
+            self.continue_from_frame_active = False
+            return
+
+        latest_video = self.videos[-1]["video_file_path"]
+        frame_path = self._extract_last_frame(latest_video)
+        if frame_path is None:
+            self.generate_btn.setEnabled(True)
+            self.continue_from_frame_active = False
+            return
+        if not self._copy_image_to_clipboard(frame_path):
+            self.generate_btn.setEnabled(True)
+            self.continue_from_frame_active = False
+            return
+
+        self.last_extracted_frame_path = frame_path
+        iteration = self.continue_from_frame_completed + 1
+        self._append_log(
+            f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: copied last frame {frame_path}"
+        )
+        self.show_browser_page()
+        QTimer.singleShot(800, self._paste_clipboard_image_into_grok)
+        QTimer.singleShot(1400, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
 
     def _submit_next_manual_variant(self) -> None:
         if not self.manual_generation_queue:
@@ -1226,12 +1257,28 @@ class MainWindow(QMainWindow):
                 self.pending_manual_variant_for_download = None
                 self.manual_download_click_sent = False
                 self.manual_download_started_at = None
-                self._submit_next_manual_variant()
+                if self.continue_from_frame_active:
+                    self.continue_from_frame_completed += 1
+                    if self.continue_from_frame_completed < self.continue_from_frame_target_count:
+                        QTimer.singleShot(800, self._start_continue_iteration)
+                    else:
+                        self._append_log("Continue-from-last-frame workflow complete.")
+                        self.continue_from_frame_active = False
+                        self.continue_from_frame_target_count = 0
+                        self.continue_from_frame_completed = 0
+                        self.continue_from_frame_prompt = ""
+                        self.generate_btn.setEnabled(True)
+                else:
+                    self._submit_next_manual_variant()
             elif state == download.DownloadState.DownloadInterrupted:
                 self._append_log(f"ERROR: Download interrupted for manual variant {variant}.")
                 self.pending_manual_variant_for_download = None
                 self.manual_download_click_sent = False
                 self.manual_download_started_at = None
+                self.continue_from_frame_active = False
+                self.continue_from_frame_target_count = 0
+                self.continue_from_frame_completed = 0
+                self.continue_from_frame_prompt = ""
                 self.generate_btn.setEnabled(True)
 
         download.stateChanged.connect(on_state_changed)
@@ -1385,22 +1432,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
             return
 
-        latest_video = self.videos[-1]["video_file_path"]
-        frame_path = self._extract_last_frame(latest_video)
-        if frame_path is None:
-            return
-        if not self._copy_image_to_clipboard(frame_path):
-            return
-
-        self.last_extracted_frame_path = frame_path
-        self._append_log(f"Copied last frame from latest video: {frame_path}")
-        self.show_browser_page()
-        QTimer.singleShot(200, self._paste_clipboard_image_into_grok)
-        QTimer.singleShot(600, lambda: self._start_manual_browser_generation(manual_prompt, self.count.value()))
+        self.continue_from_frame_active = True
+        self.continue_from_frame_target_count = self.count.value()
+        self.continue_from_frame_completed = 0
+        self.continue_from_frame_prompt = manual_prompt
+        self.generate_btn.setEnabled(False)
+        self._append_log(
+            f"Continue-from-last-frame started for {self.continue_from_frame_target_count} iteration(s)."
+        )
+        self._start_continue_iteration()
 
     def show_browser_page(self) -> None:
-        self.browser.setUrl(QUrl("https://grok.com"))
-        self._append_log("Navigated embedded browser to grok.com.")
+        self.browser.setUrl(QUrl("https://grok.com/imagine"))
+        self._append_log("Navigated embedded browser to grok.com/imagine.")
 
     def stitch_all_videos(self) -> None:
         if len(self.videos) < 2:
