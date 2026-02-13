@@ -1274,6 +1274,28 @@ class MainWindow(QMainWindow):
                 (() => {
                     try {
                         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+
+                        const videoPromptSelectors = [
+                            "textarea[placeholder*='Type to customize this video' i]",
+                            "input[placeholder*='Type to customize this video' i]",
+                            "textarea[placeholder*='Type to customize video' i]",
+                            "input[placeholder*='Type to customize video' i]",
+                            "textarea[placeholder*='Customize video' i]",
+                            "input[placeholder*='Customize video' i]",
+                            "[contenteditable='true'][aria-label*='Type to customize this video' i]",
+                            "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
+                            "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                            "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                            "[contenteditable='true'][aria-label*='Make a video' i]"
+                        ];
+
+                        const alreadyOnVideoComposer = videoPromptSelectors.some((selector) =>
+                            [...document.querySelectorAll(selector)].some((node) => isVisible(node))
+                        );
+                        if (alreadyOnVideoComposer) {
+                            return { ok: true, clicked: true, count: 0, skippedImagePick: true };
+                        }
+
                         const common = { bubbles: true, cancelable: true, composed: true };
                         const emulateClick = (el) => {
                             if (!el || !isVisible(el) || el.disabled) return false;
@@ -1363,6 +1385,7 @@ class MainWindow(QMainWindow):
             def after_pick_image(result):
                 ok = isinstance(result, dict) and bool(result.get("ok", True))
                 clicked = isinstance(result, dict) and bool(result.get("clicked"))
+                skipped_image_pick = isinstance(result, dict) and bool(result.get("skippedImagePick"))
                 if not ok:
                     error_detail = result.get("error") if isinstance(result, dict) else result
                     self._append_log(
@@ -1370,9 +1393,14 @@ class MainWindow(QMainWindow):
                     )
                 elif clicked:
                     self.manual_image_make_video_clicked = True
-                    self._append_log(
-                        f"Variant {variant}: opened the first generated image/list item to load the video generation page."
-                    )
+                    if skipped_image_pick:
+                        self._append_log(
+                            f"Variant {variant}: video generation prompt is already visible; skipping image-pick step."
+                        )
+                    else:
+                        self._append_log(
+                            f"Variant {variant}: opened the first generated image/list item to load the video generation page."
+                        )
 
                 self.manual_download_poll_timer.start(3000)
 
