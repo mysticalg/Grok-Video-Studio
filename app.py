@@ -496,7 +496,8 @@ class MainWindow(QMainWindow):
                         input.dispatchEvent(new Event("change", {{ bubbles: true }}));
                     }} else {{
                         const proto = Object.getPrototypeOf(input);
-                        const valueSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+                        const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, "value") : null;
+                        const valueSetter = descriptor && descriptor.set;
                         if (valueSetter) valueSetter.call(input, prompt);
                         else input.value = prompt;
                         input.dispatchEvent(new Event("input", {{ bubbles: true }}));
@@ -583,9 +584,15 @@ class MainWindow(QMainWindow):
                         for (let i = 0; i < matches.length; i += 1) submitCandidates.push(matches[i]);
                     });
                     const submitButton = submitCandidates.find((el) => isVisible(el));
-                    if (!submitButton) return { ok: false, error: "Submit button not found" };
 
-                    if (submitButton.disabled) {
+                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const form = (submitButton && submitButton.form)
+                        || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
+                        || document.querySelector("form");
+
+                    if (!submitButton && !form) return { ok: false, error: "Submit button/form not found" };
+
+                    if (submitButton && submitButton.disabled) {
                         submitButton.disabled = false;
                         submitButton.removeAttribute("disabled");
                         submitButton.setAttribute("aria-disabled", "false");
@@ -600,11 +607,32 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                     };
 
-                    emulateClick(submitButton);
-                    submitButton.dispatchEvent(new MouseEvent("dblclick", common));
-                    emulateClick(submitButton);
+                    let clicked = false;
+                    if (submitButton) {
+                        emulateClick(submitButton);
+                        submitButton.dispatchEvent(new MouseEvent("dblclick", common));
+                        emulateClick(submitButton);
+                        clicked = true;
+                    }
 
-                    return { ok: true, submitted: true, doubleClicked: true, forceEnabled: true };
+                    let formSubmitted = false;
+                    if (form) {
+                        if (typeof form.requestSubmit === "function") {
+                            form.requestSubmit(submitButton || undefined);
+                            formSubmitted = true;
+                        } else if (typeof form.submit === "function") {
+                            form.submit();
+                            formSubmitted = true;
+                        }
+                    }
+
+                    return {
+                        ok: true,
+                        submitted: clicked || formSubmitted,
+                        doubleClicked: !!submitButton,
+                        formSubmitted,
+                        forceEnabled: !!submitButton
+                    };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
                 }
