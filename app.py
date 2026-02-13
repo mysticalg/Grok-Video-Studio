@@ -573,21 +573,37 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+
                     const submitSelectors = [
                         "button[type='submit'][aria-label='Submit']",
+                        "button[aria-label='Submit'][type='submit']",
                         "button[type='submit']",
                         "button[aria-label='Submit']"
                     ];
-                    const submitCandidates = [];
-                    submitSelectors.forEach((selector) => {
-                        const matches = document.querySelectorAll(selector);
-                        for (let i = 0; i < matches.length; i += 1) submitCandidates.push(matches[i]);
-                    });
-                    const submitButton = submitCandidates.find((el) => isVisible(el));
 
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const submitCandidates = [];
+                    const collect = (root) => {
+                        if (!root || typeof root.querySelectorAll !== "function") return;
+                        submitSelectors.forEach((selector) => {
+                            const matches = root.querySelectorAll(selector);
+                            for (let i = 0; i < matches.length; i += 1) submitCandidates.push(matches[i]);
+                        });
+                    };
+
+                    const composerRoot = (promptInput && typeof promptInput.closest === "function")
+                        ? (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section") || promptInput.parentElement)
+                        : null;
+
+                    collect(composerRoot);
+                    collect(document);
+
+                    const uniqueCandidates = [...new Set(submitCandidates)];
+                    const submitButton = uniqueCandidates.find((el) => isVisible(el));
+
                     const form = (submitButton && submitButton.form)
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
+                        || (composerRoot && typeof composerRoot.closest === "function" ? composerRoot.closest("form") : null)
                         || document.querySelector("form");
 
                     if (!submitButton && !form) return { ok: false, error: "Submit button/form not found" };
@@ -609,6 +625,7 @@ class MainWindow(QMainWindow):
 
                     let clicked = false;
                     if (submitButton) {
+                        submitButton.focus();
                         emulateClick(submitButton);
                         submitButton.dispatchEvent(new MouseEvent("dblclick", common));
                         emulateClick(submitButton);
@@ -631,7 +648,9 @@ class MainWindow(QMainWindow):
                         submitted: clicked || formSubmitted,
                         doubleClicked: !!submitButton,
                         formSubmitted,
-                        forceEnabled: !!submitButton
+                        forceEnabled: !!submitButton,
+                        buttonText: submitButton ? (submitButton.textContent || "").trim() : "",
+                        buttonAriaLabel: submitButton ? (submitButton.getAttribute("aria-label") || "") : ""
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -639,12 +658,31 @@ class MainWindow(QMainWindow):
             })()
         """
 
+        filled_prompt_check_script = r"""
+            (() => {
+                const input = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                if (!input) return { ok: false, error: "Prompt input not found while validating fill result" };
+                const value = input.isContentEditable ? (input.textContent || "") : (input.value || "");
+                return { ok: !!value.trim(), valueLength: value.length };
+            })()
+        """
+
         def after_submit(result):
             if not isinstance(result, dict) or not result.get("ok"):
-                self.pending_manual_variant_for_download = None
-                error_detail = result.get("error") if isinstance(result, dict) else result
-                self._append_log(f"ERROR: Manual prompt fill failed for variant {variant}: {error_detail!r}")
-                self.generate_btn.setEnabled(True)
+                def after_fill_check(check_result):
+                    if isinstance(check_result, dict) and check_result.get("ok"):
+                        self._append_log(
+                            f"Manual prompt fill response was unexpected ({result!r}) but prompt appears filled; continuing submit flow."
+                        )
+                        after_submit({"ok": True, "optionsRequested": [], "optionsApplied": [], "optionsWindowClosed": False})
+                        return
+
+                    self.pending_manual_variant_for_download = None
+                    error_detail = result.get("error") if isinstance(result, dict) else result
+                    self._append_log(f"ERROR: Manual prompt fill failed for variant {variant}: {error_detail!r}")
+                    self.generate_btn.setEnabled(True)
+
+                self.browser.page().runJavaScript(filled_prompt_check_script, after_fill_check)
                 return
 
             options_requested = result.get("optionsRequested") if isinstance(result, dict) else []
