@@ -1299,83 +1299,64 @@ class MainWindow(QMainWindow):
                         const common = { bubbles: true, cancelable: true, composed: true };
                         const emulateClick = (el) => {
                             if (!el || !isVisible(el) || el.disabled) return false;
-                            try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                            try { el.dispatchEvent(new MouseEvent("mouseover", common)); } catch (_) {}
-                            try { el.dispatchEvent(new MouseEvent("mousemove", common)); } catch (_) {}
-                            el.dispatchEvent(new MouseEvent("mousedown", common));
-                            try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
-                            el.dispatchEvent(new MouseEvent("mouseup", common));
-                            el.dispatchEvent(new MouseEvent("click", common));
-                            return true;
-                        };
-
-                        const getClickableImageTarget = (listItem) => {
-                            if (!listItem) return null;
-
-                            const imageNodes = [
-                                ...listItem.querySelectorAll("img"),
-                                ...listItem.querySelectorAll("picture img"),
-                                ...listItem.querySelectorAll("canvas"),
-                            ].filter((node) => isVisible(node));
-
-                            const nonVideoImages = imageNodes.filter((node) => {
-                                const alt = (node.getAttribute?.("alt") || "").toLowerCase();
-                                const ariaLabel = (node.getAttribute?.("aria-label") || "").toLowerCase();
-                                return !/play|video/.test(`${alt} ${ariaLabel}`);
-                            });
-
-                            const targetImage = nonVideoImages[0] || imageNodes[0] || null;
-                            if (!targetImage) return null;
-
-                            const clickableAncestor = targetImage.closest("a, button, [role='button'], [tabindex], .relative.group, [class~='relative'][class~='group'], media-post-masonry-card, [data-testid*='media-post' i]");
-                            if (clickableAncestor && isVisible(clickableAncestor) && clickableAncestor !== listItem) {
-                                const label = `${(clickableAncestor.getAttribute("aria-label") || "")} ${(clickableAncestor.textContent || "")}`.toLowerCase();
-                                if (!/play/.test(label)) return clickableAncestor;
+                            try {
+                                try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                                try { el.dispatchEvent(new MouseEvent("mouseover", common)); } catch (_) {}
+                                try { el.dispatchEvent(new MouseEvent("mousemove", common)); } catch (_) {}
+                                el.dispatchEvent(new MouseEvent("mousedown", common));
+                                try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                                el.dispatchEvent(new MouseEvent("mouseup", common));
+                                el.dispatchEvent(new MouseEvent("click", common));
+                                el.click?.();
+                                return true;
+                            } catch (_) {
+                                try {
+                                    el.click?.();
+                                    return true;
+                                } catch (__){
+                                    return false;
+                                }
                             }
-
-                            return targetImage;
                         };
 
-                        const listItems = [...document.querySelectorAll("div[role='listitem']")]
-                            .filter((item) => isVisible(item));
-                        if (!listItems.length) return { ok: true, clicked: false, count: 0 };
-
-                        const firstItem = listItems[0];
-                        const findBestCardTarget = (listItem) => {
-                            if (!listItem) return null;
-                            const candidates = [
-                                ...listItem.querySelectorAll("[class*='cursor-pointer']"),
-                                ...listItem.querySelectorAll("[class*='pointer-events-auto']"),
-                                ...listItem.querySelectorAll("[class*='media-post-masonry-card']"),
-                                ...listItem.querySelectorAll("[class*='group/media-post-masonry-card']"),
-                                ...listItem.querySelectorAll("[data-testid*='media-post' i]"),
-                                ...listItem.querySelectorAll("a, button, [role='button']"),
-                            ].filter((node) => isVisible(node));
-
-                            const nonControl = candidates.find((node) => {
-                                if (!node) return false;
-                                const label = `${(node.getAttribute?.("aria-label") || "")} ${(node.textContent || "")}`.toLowerCase();
-                                return !/unsave|save|download|share|compose|post|redo|menu|more/.test(label);
-                            });
-
-                            return nonControl || candidates[0] || null;
+                        const safeClosest = (el, selector) => {
+                            try { return el.closest(selector); } catch (_) { return null; }
                         };
 
-                        const cardTarget =
-                            findBestCardTarget(firstItem) ||
-                            getClickableImageTarget(firstItem) ||
-                            firstItem.querySelector(".relative.group") ||
-                            firstItem.querySelector("[class~='relative'][class~='group']") ||
-                            firstItem.querySelector("media-post-masonry-card") ||
-                            firstItem.querySelector("[data-testid*='media-post' i]") ||
-                            firstItem.querySelector("a") ||
-                            firstItem;
+                        const images = [...document.querySelectorAll("img, picture img, canvas")]
+                            .filter((node) => isVisible(node));
+                        if (!images.length) return { ok: true, clicked: false, count: 0 };
 
-                        const clicked = emulateClick(cardTarget);
-                        if (clicked) {
-                            firstItem.setAttribute("data-manual-image-open-clicked", "1");
+                        const scored = images
+                            .map((img) => {
+                                const card =
+                                    safeClosest(img, "div[role='listitem']") ||
+                                    safeClosest(img, "article") ||
+                                    safeClosest(img, "li") ||
+                                    safeClosest(img, "[class*='masonry']") ||
+                                    safeClosest(img, "[class*='media-post']") ||
+                                    img.parentElement;
+                                const text = `${(img.getAttribute("alt") || "")} ${(card && card.textContent) || ""}`.toLowerCase();
+                                const isNav = /history|library|settings|profile|menu/.test(text);
+                                const area = (img.clientWidth || 0) * (img.clientHeight || 0);
+                                return { img, card, isNav, area };
+                            })
+                            .filter((x) => !x.isNav)
+                            .sort((a, b) => b.area - a.area);
+
+                        const candidate = scored[0] || null;
+                        if (!candidate) return { ok: true, clicked: false, count: images.length };
+
+                        const clickTarget =
+                            (candidate.card && safeClosest(candidate.img, "a, button, [role='button'], [tabindex]")) ||
+                            candidate.card ||
+                            candidate.img;
+
+                        const clicked = emulateClick(clickTarget);
+                        if (clicked && candidate.card) {
+                            candidate.card.setAttribute("data-manual-image-open-clicked", "1");
                         }
-                        return { ok: clicked, clicked, count: listItems.length };
+                        return { ok: true, clicked, count: images.length };
                     } catch (err) {
                         return { ok: false, error: String(err && err.stack ? err.stack : err) };
                     }
@@ -1383,7 +1364,7 @@ class MainWindow(QMainWindow):
             """
 
             def after_pick_image(result):
-                ok = isinstance(result, dict) and bool(result.get("ok", True))
+                ok = not isinstance(result, dict) or bool(result.get("ok", True))
                 clicked = isinstance(result, dict) and bool(result.get("clicked"))
                 skipped_image_pick = isinstance(result, dict) and bool(result.get("skippedImagePick"))
                 if not ok:
@@ -1476,6 +1457,7 @@ class MainWindow(QMainWindow):
             def after_submit_video_prompt(result):
                 ok = isinstance(result, dict) and bool(result.get("ok", True))
                 submitted = isinstance(result, dict) and bool(result.get("submitted"))
+                reason = result.get("reason") if isinstance(result, dict) else None
                 if not ok:
                     error_detail = result.get("error") if isinstance(result, dict) else result
                     self._append_log(
@@ -1485,6 +1467,11 @@ class MainWindow(QMainWindow):
                     self.manual_video_prompt_submitted = True
                     self._append_log(
                         f"Variant {variant}: entered the video prompt on the generation page and clicked Generate Video."
+                    )
+                elif reason == "video-prompt-input-not-found":
+                    self.manual_image_make_video_clicked = False
+                    self._append_log(
+                        f"Variant {variant}: video prompt input is not visible yet; retrying image-pick step."
                     )
 
                 self.manual_download_poll_timer.start(3000)
