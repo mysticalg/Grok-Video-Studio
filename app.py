@@ -53,7 +53,7 @@ API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 GITHUB_REPO_URL = "https://github.com/dhookster/Grok-video-to-youtube-api"
-GITHUB_RELEASES_URL = f"{GITHUB_REPO_URL}/releases"
+GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
 GITHUB_ACTIONS_RUNS_URL = f"{GITHUB_REPO_URL}/actions/workflows/windows-build-release.yml"
 BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/dhooksterm"
 PAYPAL_DONATION_URL = "https://www.paypal.com/paypalme/dhookster"
@@ -3189,6 +3189,38 @@ class MainWindow(QMainWindow):
             raise RuntimeError(f"Could not determine valid duration for {video_path.name}.")
         return duration
 
+    def _probe_video_stream_info(self, video_path: Path) -> dict:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,duration",
+                "-of",
+                "json",
+                str(video_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams") or []
+        if not streams:
+            raise RuntimeError(f"No video stream found in {video_path.name}.")
+        stream = streams[0]
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        duration_raw = stream.get("duration")
+        duration = float(duration_raw) if duration_raw not in (None, "N/A", "") else self._probe_video_duration(video_path)
+        if width <= 0 or height <= 0 or duration <= 0:
+            raise RuntimeError(f"Could not probe valid video stream info for {video_path.name}.")
+        return {"width": width, "height": height, "duration": duration}
+
     def _video_has_audio_stream(self, video_path: Path) -> bool:
         result = subprocess.run(
             [
@@ -3211,13 +3243,17 @@ class MainWindow(QMainWindow):
         return bool(result.stdout.strip())
 
     def _stitch_videos_with_crossfade(self, video_paths: list[Path], output_file: Path, crossfade_duration: float) -> None:
-        durations = [self._probe_video_duration(path) for path in video_paths]
+        stream_infos = [self._probe_video_stream_info(path) for path in video_paths]
+        durations = [info["duration"] for info in stream_infos]
         has_audio = all(self._video_has_audio_stream(path) for path in video_paths)
         for path, duration in zip(video_paths, durations):
-            if duration <= crossfade_duration:
+            if duration <= crossfade_duration + 0.05:
                 raise RuntimeError(
                     f"Clip '{path.name}' is too short ({duration:.2f}s). Each clip must be longer than {crossfade_duration:.1f}s for crossfade stitching."
                 )
+
+        target_width = stream_infos[0]["width"]
+        target_height = stream_infos[0]["height"]
 
         ffmpeg_cmd = ["ffmpeg", "-y"]
         for path in video_paths:
@@ -3225,10 +3261,13 @@ class MainWindow(QMainWindow):
 
         filter_parts: list[str] = []
         for idx in range(len(video_paths)):
-            filter_parts.append(f"[{idx}:v]settb=AVTB,format=yuv420p[vsrc{idx}]")
+            filter_parts.append(
+                f"[{idx}:v]fps=24,scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,setsar=1,settb=AVTB,format=yuv420p[vsrc{idx}]"
+            )
             if has_audio:
                 filter_parts.append(
-                    f"[{idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[asrc{idx}]"
+                    f"[{idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,aresample=async=1[asrc{idx}]"
                 )
 
         cumulative_duration = durations[0]
@@ -3239,7 +3278,7 @@ class MainWindow(QMainWindow):
             offset = cumulative_duration - crossfade_duration
             next_video = f"v{idx}"
             filter_parts.append(
-                f"[{video_prev}][vsrc{idx}]xfade=transition=fade:duration={crossfade_duration:.3f}:offset={offset:.3f}[{next_video}]"
+                f"[{video_prev}][vsrc{idx}]xfade=transition=fade:duration={crossfade_duration:.3f}:offset={max(0.0, offset):.3f}[{next_video}]"
             )
             video_prev = next_video
 

@@ -24,7 +24,7 @@ A desktop-first Python/PyQt app for generating Grok videos, iterating quickly in
 
 If you just want to run the app on Windows, download the prebuilt zip here:
 
-- **Releases:** https://github.com/dhookster/Grok-video-to-youtube-api/releases
+- **Releases:** https://github.com/mysticalg/Grok-video-to-youtube-api/releases
 - **Latest CI artifacts (main branch builds):** https://github.com/dhookster/Grok-video-to-youtube-api/actions/workflows/windows-build-release.yml
 
 Look for `GrokVideoDesktopStudio-windows-x64.zip`.
