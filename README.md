@@ -14,14 +14,17 @@ A desktop-first Python/PyQt app for generating Grok videos, iterating quickly in
 - Keep a generated-video list in-session.
 - Preview generated or local videos inside the app.
 - Continue from the latest frame or a local seed image.
-- Stitch all listed videos into one final output.
+- Stitch all listed videos into one final output, with optional 0.5s crossfade blending between clips.
+- Configure video options (including crossfade duration) from settings.
+- Set a custom download folder in settings.
+- Set a default manual prompt template in settings.
 - Upload a selected video to YouTube.
 
 ## Download Windows binary (recommended)
 
 If you just want to run the app on Windows, download the prebuilt zip here:
 
-- **Releases:** https://github.com/dhookster/Grok-video-to-youtube-api/releases
+- **Releases:** https://github.com/mysticalg/Grok-video-to-youtube-api/releases
 - **Latest CI artifacts (main branch builds):** https://github.com/dhookster/Grok-video-to-youtube-api/actions/workflows/windows-build-release.yml
 
 Look for `GrokVideoDesktopStudio-windows-x64.zip`.
