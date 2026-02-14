@@ -293,6 +293,8 @@ class FilteredWebEnginePage(QWebEnginePage):
 
 
 class MainWindow(QMainWindow):
+    MANUAL_IMAGE_PICK_RETRY_LIMIT = 8
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Grok Video Desktop Studio")
@@ -307,6 +309,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_image_prompt: str | None = None
         self.manual_image_pick_clicked = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_pick_retry_count = 0
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_in_progress = False
@@ -927,6 +930,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_image_prompt = prompt
         self.manual_image_pick_clicked = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_pick_retry_count = 0
         self.manual_download_click_sent = False
 
         populate_script = rf"""
@@ -1300,6 +1304,7 @@ class MainWindow(QMainWindow):
                             f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
                         )
                     self.manual_image_pick_clicked = True
+                    self.manual_image_pick_retry_count = 0
                     QTimer.singleShot(1000, self._poll_for_manual_image)
                     return
 
@@ -1315,6 +1320,18 @@ class MainWindow(QMainWindow):
                     return
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
+            if not self.manual_image_pick_clicked:
+                self.manual_image_pick_retry_count += 1
+                if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
+                    self._append_log(
+                        "WARNING: Variant "
+                        f"{current_variant}: image pick validation stayed in '{status}' for "
+                        f"{self.manual_image_pick_retry_count} checks; forcing prompt submit stage."
+                    )
+                    self.manual_image_pick_clicked = True
+                    self.manual_image_pick_retry_count = 0
+                    QTimer.singleShot(1000, self._poll_for_manual_image)
+                    return
             self._append_log(
                 f"Variant {current_variant}: generated image not ready for pick+submit yet ({status}); retrying..."
             )
@@ -2137,6 +2154,7 @@ class MainWindow(QMainWindow):
                     self.pending_manual_image_prompt = None
                     self.manual_image_pick_clicked = False
                     self.manual_image_video_submit_sent = False
+                    self.manual_image_pick_retry_count = 0
                     self.manual_download_click_sent = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = None
@@ -2153,6 +2171,7 @@ class MainWindow(QMainWindow):
                     self.pending_manual_image_prompt = None
                     self.manual_image_pick_clicked = False
                     self.manual_image_video_submit_sent = False
+                    self.manual_image_pick_retry_count = 0
                     self.manual_download_click_sent = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = None
@@ -2186,6 +2205,7 @@ class MainWindow(QMainWindow):
                 self.pending_manual_image_prompt = None
                 self.manual_image_pick_clicked = False
                 self.manual_image_video_submit_sent = False
+                self.manual_image_pick_retry_count = 0
                 self.manual_download_click_sent = False
                 self.manual_download_in_progress = False
                 self.manual_download_started_at = None
@@ -2211,6 +2231,7 @@ class MainWindow(QMainWindow):
                 self.pending_manual_image_prompt = None
                 self.manual_image_pick_clicked = False
                 self.manual_image_video_submit_sent = False
+                self.manual_image_pick_retry_count = 0
                 self.manual_download_click_sent = False
                 self.manual_download_in_progress = False
                 self.manual_download_started_at = None
@@ -2235,6 +2256,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_image_prompt = None
         self.manual_image_pick_clicked = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_pick_retry_count = 0
         self.manual_download_click_sent = False
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
