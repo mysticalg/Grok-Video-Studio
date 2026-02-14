@@ -1730,10 +1730,6 @@ class MainWindow(QMainWindow):
                         if (clicked) {
                             optionsRequested.push(name);
                         }
-                        const isNowSelected = hasSelectedByText(patterns, composer) || hasSelectedByText(patterns);
-                        if (clicked && !isNowSelected) {
-                            clickByText(patterns, composer) || clickByText(patterns);
-                        }
                         const selected = hasSelectedByText(patterns, composer) || hasSelectedByText(patterns);
                         if (selected) optionsApplied.push(name);
                     };
@@ -1961,22 +1957,34 @@ class MainWindow(QMainWindow):
                         };
 
                         const buttons = [...document.querySelectorAll("button, [role='button']")].filter((el) => isVisible(el));
-                        const matchers = [
-                            /make\s*video/i,
-                            /generate/i,
-                            /submit/i,
-                        ];
+                        const buttonLabel = (btn) => (btn.getAttribute("aria-label") || btn.textContent || "").trim();
+                        const hasPlayGlyph = (btn) => {
+                            try {
+                                return !!btn.querySelector("svg, path, [data-icon*='play' i], [aria-label*='play' i]");
+                            } catch (_) {
+                                return false;
+                            }
+                        };
+
                         let actionButton = null;
-                        for (const matcher of matchers) {
-                            actionButton = buttons.find((btn) => matcher.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
-                            if (actionButton) break;
+                        actionButton = buttons.find((btn) => /make\s*video/i.test(buttonLabel(btn)));
+                        if (!actionButton) {
+                            actionButton = buttons.find((btn) => /make\s*video/i.test((btn.title || "").trim()));
                         }
+                        if (!actionButton) {
+                            actionButton = buttons.find((btn) => hasPlayGlyph(btn) && !/download|share|close|edit/i.test(buttonLabel(btn)));
+                        }
+                        if (!actionButton) {
+                            actionButton = buttons.find((btn) => /generate|submit/i.test(buttonLabel(btn)));
+                        }
+
                         const clicked = actionButton ? emulateClick(actionButton) : false;
                         return {
                             ok: clicked,
                             buttonText: actionButton ? (actionButton.textContent || "").trim() : "",
                             buttonAriaLabel: actionButton ? (actionButton.getAttribute("aria-label") || "") : "",
-                            error: clicked ? "" : "Could not find/click Make video button",
+                            usedPlayHeuristic: !!(actionButton && hasPlayGlyph(actionButton)),
+                            error: clicked ? "" : "Could not find/click Make video play button",
                         };
                     } catch (err) {
                         return { ok: false, error: String(err && err.stack ? err.stack : err) };
