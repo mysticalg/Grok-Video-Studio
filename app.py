@@ -2,6 +2,7 @@ import os
 import json
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
+QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
@@ -68,8 +70,47 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+
+
+def _path_supports_rw(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe_file = path / f".rw_probe_{os.getpid()}"
+        moved_file = path / f".rw_probe_{os.getpid()}_moved"
+        probe_file.write_text("ok", encoding="utf-8")
+        probe_file.replace(moved_file)
+        moved_file.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_qtwebengine_cache_dir() -> tuple[Path, bool]:
+    candidates: list[Path] = []
+
+    env_cache_dir = os.getenv("GROK_BROWSER_CACHE_DIR", "").strip()
+    if env_cache_dir:
+        candidates.append(Path(env_cache_dir).expanduser())
+
+    local_app_data = os.getenv("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "GrokVideoDesktopStudio" / "qtwebengine")
+
+    candidates.append(BASE_DIR / ".qtwebengine")
+    candidates.append(Path(tempfile.gettempdir()) / "GrokVideoDesktopStudio" / "qtwebengine")
+
+    for candidate in candidates:
+        if _path_supports_rw(candidate):
+            return candidate, True
+
+    fallback = Path(tempfile.gettempdir()) / f"GrokVideoDesktopStudio_qtwebengine_{os.getpid()}"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback, False
+
+
 def _configure_qtwebengine_runtime() -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    global CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE
+    CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE = _resolve_qtwebengine_cache_dir()
 
     default_flags = [
         "--enable-gpu-rasterization",
@@ -80,6 +121,9 @@ def _configure_qtwebengine_runtime() -> None:
         f"--media-cache-size={_env_int('GROK_BROWSER_MEDIA_CACHE_BYTES', 268435456)}",
         f"--disk-cache-size={_env_int('GROK_BROWSER_DISK_CACHE_BYTES', 536870912)}",
     ]
+    if not QTWEBENGINE_USE_DISK_CACHE:
+        default_flags.extend(["--disable-gpu-shader-disk-cache", "--disable-features=MediaHistoryLogging"])
+
     existing_flags = os.getenv("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(default_flags + ([existing_flags] if existing_flags else []))
 
@@ -582,14 +626,25 @@ class MainWindow(QMainWindow):
         self.player.setVideoOutput(self.preview)
 
         self.browser = QWebEngineView()
-        self.browser_profile = QWebEngineProfile("grok-video-desktop-profile", self)
+        if QTWEBENGINE_USE_DISK_CACHE:
+            self.browser_profile = QWebEngineProfile("grok-video-desktop-profile", self)
+        else:
+            # Off-the-record profile avoids startup cache/quota errors on locked folders (common on synced drives).
+            self.browser_profile = QWebEngineProfile(self)
+
         self.browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.browser))
         browser_profile = self.browser_profile
-        browser_profile.setPersistentStoragePath(str(CACHE_DIR / "profile"))
-        browser_profile.setCachePath(str(CACHE_DIR / "cache"))
-        browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
-        browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
-        browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
+        if QTWEBENGINE_USE_DISK_CACHE:
+            (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
+            (CACHE_DIR / "cache").mkdir(parents=True, exist_ok=True)
+            browser_profile.setPersistentStoragePath(str(CACHE_DIR / "profile"))
+            browser_profile.setCachePath(str(CACHE_DIR / "cache"))
+            browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
+            browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
+            browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
+        else:
+            browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
 
         browser_settings = self.browser.settings()
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
@@ -607,6 +662,13 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(260)
         log_layout.addWidget(self.log)
+
+        if QTWEBENGINE_USE_DISK_CACHE:
+            self._append_log(f"Browser cache path: {CACHE_DIR}")
+        else:
+            self._append_log(
+                "Browser cache: running in memory/off-the-record mode because no writable cache folder was available."
+            )
 
         preview_group = QGroupBox("🎞️ Preview")
         preview_layout = QVBoxLayout(preview_group)
