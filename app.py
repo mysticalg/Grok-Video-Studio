@@ -986,41 +986,59 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                         return true;
                     };
-                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
-                    const clickableAncestor = (el) => (el && typeof el.closest === "function")
-                        ? (el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label") || el)
-                        : el;
-                    const textOf = (el) => (el?.textContent || "").trim();
-                    const visible = () => [...document.querySelectorAll(interactiveSelector)].filter((el) => isVisible(el) && textOf(el));
-                    const selected = () => visible().filter((el) => {
-                        const target = clickableAncestor(el);
-                        if (!target) return false;
-                        const ariaPressed = target.getAttribute("aria-pressed") === "true";
-                        const ariaSelected = target.getAttribute("aria-selected") === "true";
-                        const dataState = (target.getAttribute("data-state") || "").toLowerCase() === "checked";
-                        const dataSelected = target.getAttribute("data-selected") === "true";
-                        const classSelected = /(active|selected|checked|on)/i.test(target.className || "");
-                        return ariaPressed || ariaSelected || dataState || dataSelected || classSelected;
-                    });
-                    const hasImageSelected = () => selected().some((el) => /^image$/i.test(textOf(el)));
-                    const clickByText = (patterns) => {
-                        const candidate = visible().find((el) => patterns.some((p) => p.test(textOf(el))));
-                        const target = clickableAncestor(candidate);
-                        return emulateClick(target);
+                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const hasImageSelectionMarker = () => {
+                        const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
+                            .filter((el) => isVisible(el));
+                        return selectedEls.some((el) => /(^|\s)image(\s|$)/i.test(textOf(el)));
                     };
 
-                    let imageSelected = hasImageSelected();
+                    const modelTriggerCandidates = [
+                        ...document.querySelectorAll("#model-select-trigger"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
+                        ...document.querySelectorAll("button, [role='button']"),
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+
+                    const modelTrigger = modelTriggerCandidates.find((el) => {
+                        const txt = textOf(el);
+                        return /model|video|image|options|settings/i.test(txt) || (el.id || "") === "model-select-trigger";
+                    }) || null;
+
                     let optionsOpened = false;
-
-                    if (!imageSelected) {
-                        imageSelected = clickByText([/^image$/i, /image mode/i]) || hasImageSelected();
-                    }
-                    if (!imageSelected) {
-                        optionsOpened = clickByText([/(^|\s)(model|options?|settings?)($|\s)/i]);
-                        imageSelected = clickByText([/^image$/i, /image mode/i]) || hasImageSelected();
+                    if (modelTrigger) {
+                        optionsOpened = emulateClick(modelTrigger);
                     }
 
-                    return { ok: true, imageSelected, optionsOpened };
+                    const menuItemSelectors = [
+                        "[role='menuitem'][data-radix-collection-item]",
+                        "[role='menuitemradio']",
+                        "[role='menuitem']",
+                        "[role='option']",
+                        "[data-radix-collection-item]",
+                    ];
+
+                    const menuItems = menuItemSelectors
+                        .flatMap((sel) => [...document.querySelectorAll(sel)])
+                        .filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+
+                    const imageItem = menuItems.find((el) => {
+                        const txt = textOf(el);
+                        return /(^|\s)image(\s|$)/i.test(txt) || /generate multiple images/i.test(txt);
+                    }) || null;
+
+                    const imageClicked = imageItem ? emulateClick(imageItem) : false;
+
+                    const triggerNowSaysImage = !!(modelTrigger && /(^|\s)image(\s|$)/i.test(textOf(modelTrigger)));
+                    const imageSelected = imageClicked || hasImageSelectionMarker() || triggerNowSaysImage;
+
+                    return {
+                        ok: true,
+                        imageSelected,
+                        optionsOpened,
+                        imageItemFound: !!imageItem,
+                        imageClicked,
+                        triggerText: modelTrigger ? textOf(modelTrigger) : "",
+                    };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
                 }
@@ -1153,8 +1171,12 @@ class MainWindow(QMainWindow):
                 return
 
             self._append_log(
-                f"Manual image variant {variant}: image mode selected; populating prompt next "
-                f"(attempt {attempts})."
+                "Manual image variant "
+                f"{variant}: image mode selected={result.get('imageSelected') if isinstance(result, dict) else 'unknown'} "
+                f"(opened={result.get('optionsOpened') if isinstance(result, dict) else 'unknown'}, "
+                f"itemFound={result.get('imageItemFound') if isinstance(result, dict) else 'unknown'}, "
+                f"itemClicked={result.get('imageClicked') if isinstance(result, dict) else 'unknown'}); "
+                f"populating prompt next (attempt {attempts})."
             )
             QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
 
