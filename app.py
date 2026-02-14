@@ -897,61 +897,39 @@ class MainWindow(QMainWindow):
         item = self.manual_image_generation_queue.pop(0)
         variant = item["variant"]
         prompt = item["prompt"]
+        attempts = int(item.get("attempts", 0)) + 1
+        item["attempts"] = attempts
         self.pending_manual_variant_for_download = variant
         self.pending_manual_download_type = "image"
         self.manual_download_click_sent = False
 
-        script = rf"""
+        populate_script = rf"""
             (() => {{
                 try {{
                     const prompt = {prompt!r};
-                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
-                    const clickableAncestor = (el) => {{
-                        if (!el) return null;
-                        if (typeof el.closest === "function") {{
-                            const ancestor = el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label");
-                            if (ancestor) return ancestor;
-                        }}
-                        return el;
-                    }};
-                    const emulateClick = (el) => {{
-                        if (!el || !isVisible(el) || el.disabled) return false;
-                        const common = {{ bubbles: true, cancelable: true, composed: true }};
-                        try {{ el.dispatchEvent(new PointerEvent("pointerdown", common)); }} catch (_) {{}}
-                        el.dispatchEvent(new MouseEvent("mousedown", common));
-                        try {{ el.dispatchEvent(new PointerEvent("pointerup", common)); }} catch (_) {{}}
-                        el.dispatchEvent(new MouseEvent("mouseup", common));
-                        el.dispatchEvent(new MouseEvent("click", common));
-                        return true;
-                    }};
-                    const textOf = (el) => (el.textContent || "").trim();
-                    const selectedElements = () => [...document.querySelectorAll(interactiveSelector)]
-                        .filter((el) => isVisible(el) && textOf(el))
-                        .filter((el) => {{
-                            const target = clickableAncestor(el);
-                            if (!target) return false;
-                            const ariaPressed = target.getAttribute("aria-pressed") === "true";
-                            const ariaSelected = target.getAttribute("aria-selected") === "true";
-                            const dataState = (target.getAttribute("data-state") || "").toLowerCase() === "checked";
-                            const dataSelected = target.getAttribute("data-selected") === "true";
-                            const classSelected = /\b(active|selected|checked|on)\b/i.test(target.className || "");
-                            return ariaPressed || ariaSelected || dataState || dataSelected || classSelected;
-                        }});
-                    const hasImageSelected = () => selectedElements().some((el) => /^image$/i.test(textOf(el)));
-                    const clickByText = (patterns) => {{
-                        const candidate = [...document.querySelectorAll(interactiveSelector)]
-                            .find((el) => isVisible(el) && patterns.some((re) => re.test(textOf(el))));
-                        const target = clickableAncestor(candidate);
-                        if (!target) return false;
-                        return emulateClick(target);
-                    }};
-
-                    const promptInput = document.querySelector(
-                        "textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]"
-                    );
+                    const selectors = [
+                        "textarea[placeholder*='Type to imagine' i]",
+                        "input[placeholder*='Type to imagine' i]",
+                        "textarea[placeholder*='Type to customize this video' i]",
+                        "input[placeholder*='Type to customize this video' i]",
+                        "textarea[placeholder*='Type to customize video' i]",
+                        "input[placeholder*='Type to customize video' i]",
+                        "textarea[placeholder*='Customize video' i]",
+                        "input[placeholder*='Customize video' i]",
+                        "div.tiptap.ProseMirror[contenteditable='true']",
+                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize this video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Make a video' i]",
+                        "[contenteditable='true'][data-placeholder*='Customize video' i]"
+                    ];
+                    const promptInput = selectors.map((sel) => document.querySelector(sel)).find(Boolean);
                     if (!promptInput) return {{ ok: false, error: "Prompt input not found" }};
 
+                    promptInput.focus();
                     if (promptInput.isContentEditable) {{
                         const paragraph = promptInput.querySelector("p") || promptInput;
                         paragraph.textContent = prompt;
@@ -963,47 +941,146 @@ class MainWindow(QMainWindow):
                         promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
                         promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
                     }}
-
-                    let imageSelected = hasImageSelected();
-                    let optionsOpened = false;
-                    if (!imageSelected) {{
-                        imageSelected = clickByText([/^image$/i]);
-                        imageSelected = hasImageSelected() || imageSelected;
-                    }}
-                    if (!imageSelected) {{
-                        optionsOpened = clickByText([/(^|\s)(model|options?|settings?)($|\s)/i]);
-                        imageSelected = clickByText([/^image$/i, /image mode/i]) || hasImageSelected();
-                    }}
-
-                    const submitButton = document.querySelector("button[type='submit'], button[aria-label*='submit' i], [role='button'][aria-label*='submit' i]");
-                    if (!submitButton) return {{ ok: false, error: "Submit button not found", imageSelected, optionsOpened }};
-                    emulateClick(submitButton);
-                    return {{ ok: true, imageSelected, optionsOpened }};
+                    return {{ ok: true }};
                 }} catch (err) {{
                     return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
                 }}
             }})()
         """
 
-        def _after_submit(result):
-            if not isinstance(result, dict) or not result.get("ok"):
-                self._append_log(f"WARNING: Could not submit manual image variant {variant}: {result!r}")
+        set_image_mode_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const emulateClick = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        return true;
+                    };
+                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
+                    const clickableAncestor = (el) => (el && typeof el.closest === "function")
+                        ? (el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label") || el)
+                        : el;
+                    const textOf = (el) => (el?.textContent || "").trim();
+                    const visible = () => [...document.querySelectorAll(interactiveSelector)].filter((el) => isVisible(el) && textOf(el));
+                    const selected = () => visible().filter((el) => {
+                        const target = clickableAncestor(el);
+                        if (!target) return false;
+                        const ariaPressed = target.getAttribute("aria-pressed") === "true";
+                        const ariaSelected = target.getAttribute("aria-selected") === "true";
+                        const dataState = (target.getAttribute("data-state") || "").toLowerCase() === "checked";
+                        const dataSelected = target.getAttribute("data-selected") === "true";
+                        const classSelected = /(active|selected|checked|on)/i.test(target.className || "");
+                        return ariaPressed || ariaSelected || dataState || dataSelected || classSelected;
+                    });
+                    const hasImageSelected = () => selected().some((el) => /^image$/i.test(textOf(el)));
+                    const clickByText = (patterns) => {
+                        const candidate = visible().find((el) => patterns.some((p) => p.test(textOf(el))));
+                        const target = clickableAncestor(candidate);
+                        return emulateClick(target);
+                    };
+
+                    let imageSelected = hasImageSelected();
+                    let optionsOpened = false;
+
+                    if (!imageSelected) {
+                        imageSelected = clickByText([/^image$/i, /image mode/i]) || hasImageSelected();
+                    }
+                    if (!imageSelected) {
+                        optionsOpened = clickByText([/(^|\s)(model|options?|settings?)($|\s)/i]);
+                        imageSelected = clickByText([/^image$/i, /image mode/i]) || hasImageSelected();
+                    }
+
+                    return { ok: true, imageSelected, optionsOpened };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        submit_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const emulateClick = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        return true;
+                    };
+                    const submitButton = document.querySelector("button[type='submit'], button[aria-label*='submit' i], [role='button'][aria-label*='submit' i]");
+                    if (!submitButton) return { ok: false, error: "Submit button not found" };
+                    return { ok: emulateClick(submitButton) };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _retry_variant(reason: str) -> None:
+            self._append_log(f"WARNING: Manual image variant {variant} attempt {attempts} failed: {reason}")
+            if attempts >= 4:
+                self._append_log(
+                    f"ERROR: Could not prepare manual image variant {variant} after {attempts} attempts; skipping variant."
+                )
                 self._submit_next_manual_image_variant()
+                return
+            self.manual_image_generation_queue.insert(0, item)
+            QTimer.singleShot(1200, self._submit_next_manual_image_variant)
+
+        def _after_submit(result):
+            if isinstance(result, dict) and result.get("ok"):
+                self.show_browser_page()
+                self._append_log(
+                    f"Submitted manual image variant {variant} (attempt {attempts}); "
+                    "waiting for first rendered image, then opening it for download."
+                )
+                QTimer.singleShot(7000, self._poll_for_manual_image)
+                return
+
+            # Some Grok navigations can clear the JS callback value; treat that as submitted.
+            if result in (None, ""):
+                self.show_browser_page()
+                self._append_log(
+                    f"Submitted manual image variant {variant} (attempt {attempts}); "
+                    "submit callback returned empty result after page activity; continuing to image polling."
+                )
+                QTimer.singleShot(7000, self._poll_for_manual_image)
+                return
+
+            _retry_variant(f"submit failed: {result!r}")
+
+        def _after_set_mode(result):
+            if not isinstance(result, dict) or not result.get("ok"):
+                _retry_variant(f"set image mode script failed: {result!r}")
                 return
 
             if not result.get("imageSelected"):
-                self._append_log(
-                    "WARNING: Image option was not confidently detected as selected before submit; "
-                    f"variant {variant} may still render as video depending on current Grok UI state."
-                )
-            self.show_browser_page()
-            self._append_log(
-                f"Submitted manual image variant {variant}; imageSelected={bool(result.get('imageSelected'))}; "
-                "waiting for first rendered image, then opening it for download."
-            )
-            QTimer.singleShot(7000, self._poll_for_manual_image)
+                _retry_variant(f"image option not selected: {result!r}")
+                return
 
-        self.browser.page().runJavaScript(script, _after_submit)
+            self._append_log(
+                f"Manual image variant {variant} prepared with image option selected "
+                f"(attempt {attempts}); submitting prompt."
+            )
+            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(submit_script, _after_submit))
+
+        def _after_populate(result):
+            if not isinstance(result, dict) or not result.get("ok"):
+                _retry_variant(f"prompt population failed: {result!r}")
+                return
+            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode))
+
+        self.browser.page().runJavaScript(populate_script, _after_populate)
 
     def _poll_for_manual_image(self) -> None:
         variant = self.pending_manual_variant_for_download
