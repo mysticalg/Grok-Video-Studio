@@ -1037,9 +1037,45 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                         return true;
                     };
-                    const submitButton = document.querySelector("button[type='submit'], button[aria-label*='submit' i], [role='button'][aria-label*='submit' i]");
+
+                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const submitSelectors = [
+                        "button[type='submit'][aria-label='Submit']",
+                        "button[aria-label='Submit'][type='submit']",
+                        "button[type='submit']",
+                        "button[aria-label*='submit' i]",
+                        "[role='button'][aria-label*='submit' i]"
+                    ];
+
+                    const candidates = [];
+                    const collect = (root) => {
+                        if (!root || typeof root.querySelectorAll !== "function") return;
+                        submitSelectors.forEach((selector) => {
+                            const matches = root.querySelectorAll(selector);
+                            for (let i = 0; i < matches.length; i += 1) candidates.push(matches[i]);
+                        });
+                    };
+
+                    const composerRoot = (promptInput && typeof promptInput.closest === "function")
+                        ? (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section") || promptInput.parentElement)
+                        : null;
+                    collect(composerRoot);
+                    collect(document);
+
+                    const submitButton = [...new Set(candidates)].find((el) => isVisible(el));
                     if (!submitButton) return { ok: false, error: "Submit button not found" };
-                    return { ok: emulateClick(submitButton) };
+                    if (submitButton.disabled) {
+                        return { ok: false, waiting: true, status: "submit-disabled" };
+                    }
+
+                    const clicked = emulateClick(submitButton);
+                    return {
+                        ok: clicked,
+                        waiting: !clicked,
+                        status: clicked ? "submit-clicked" : "submit-click-failed",
+                        ariaLabel: submitButton.getAttribute("aria-label") || "",
+                        disabled: !!submitButton.disabled,
+                    };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
                 }
@@ -1057,6 +1093,13 @@ class MainWindow(QMainWindow):
             self.manual_image_generation_queue.insert(0, item)
             QTimer.singleShot(1200, self._submit_next_manual_image_variant)
 
+        submit_attempts = 0
+
+        def _run_submit_attempt() -> None:
+            nonlocal submit_attempts
+            submit_attempts += 1
+            self.browser.page().runJavaScript(submit_script, _after_submit)
+
         def _after_submit(result):
             if isinstance(result, dict) and result.get("ok"):
                 self.show_browser_page()
@@ -1065,6 +1108,16 @@ class MainWindow(QMainWindow):
                     "waiting for first rendered image, then opening it for download."
                 )
                 QTimer.singleShot(7000, self._poll_for_manual_image)
+                return
+
+            if isinstance(result, dict) and result.get("waiting"):
+                if submit_attempts < 12:
+                    self._append_log(
+                        f"Manual image variant {variant}: submit button still disabled (attempt {submit_attempts}); retrying click..."
+                    )
+                    QTimer.singleShot(500, _run_submit_attempt)
+                    return
+                _retry_variant(f"submit button stayed disabled: {result!r}")
                 return
 
             # Some Grok navigations can clear the JS callback value; treat that as submitted.
@@ -1092,7 +1145,7 @@ class MainWindow(QMainWindow):
                 f"Manual image variant {variant} prepared with image option selected "
                 f"(attempt {attempts}); submitting prompt."
             )
-            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(submit_script, _after_submit))
+            QTimer.singleShot(450, _run_submit_attempt)
 
         def _after_populate(result):
             if not isinstance(result, dict) or not result.get("ok"):
