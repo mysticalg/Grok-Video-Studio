@@ -996,9 +996,10 @@ class MainWindow(QMainWindow):
                     "WARNING: Image option was not confidently detected as selected before submit; "
                     f"variant {variant} may still render as video depending on current Grok UI state."
                 )
+            self.show_browser_page()
             self._append_log(
                 f"Submitted manual image variant {variant}; imageSelected={bool(result.get('imageSelected'))}; "
-                "waiting for downloadable image."
+                "waiting for first rendered image, then opening it for download."
             )
             QTimer.singleShot(7000, self._poll_for_manual_image)
 
@@ -1011,24 +1012,66 @@ class MainWindow(QMainWindow):
 
         script = """
             (() => {
-                const img = [...document.querySelectorAll("img")]
-                  .find((el) => el.src && /^https?:/i.test(el.src) && el.naturalWidth > 0 && el.naturalHeight > 0);
-                if (!img) return { ok: false };
-                const a = document.createElement("a");
-                a.href = img.src;
-                a.download = `grok_manual_image_${Date.now()}.png`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                return { ok: true };
+                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const common = { bubbles: true, cancelable: true, composed: true };
+                const emulateClick = (el) => {
+                    if (!el || !isVisible(el) || el.disabled) return false;
+                    try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                    el.dispatchEvent(new MouseEvent("mousedown", common));
+                    try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                    el.dispatchEvent(new MouseEvent("mouseup", common));
+                    el.dispatchEvent(new MouseEvent("click", common));
+                    return true;
+                };
+
+                const firstImage = [...document.querySelectorAll("img")]
+                    .filter((el) => isVisible(el) && el.src && /^https?:/i.test(el.src) && el.naturalWidth > 0 && el.naturalHeight > 0)
+                    .sort((a, b) => {
+                        const ar = a.getBoundingClientRect();
+                        const br = b.getBoundingClientRect();
+                        if (ar.top !== br.top) return ar.top - br.top;
+                        return ar.left - br.left;
+                    })[0];
+
+                if (!firstImage) return { ok: false, status: "waiting-for-image" };
+
+                const clickedImage = emulateClick(firstImage);
+
+                const downloadSelectors = [
+                    "a[download]",
+                    "button[aria-label*='download' i]",
+                    "a[aria-label*='download' i]",
+                    "[role='button'][aria-label*='download' i]",
+                    "button:has(svg[aria-label*='download' i])",
+                    "button"
+                ];
+
+                let downloadEl = null;
+                for (const selector of downloadSelectors) {
+                    const candidates = [...document.querySelectorAll(selector)]
+                        .filter((el) => isVisible(el) && /(download|save image)/i.test((el.getAttribute("aria-label") || el.textContent || "").trim()));
+                    if (candidates.length) {
+                        downloadEl = candidates[0];
+                        break;
+                    }
+                }
+
+                if (!downloadEl) {
+                    return { ok: false, status: clickedImage ? "image-opened-waiting-download" : "image-click-failed" };
+                }
+
+                const clickedDownload = emulateClick(downloadEl);
+                return { ok: clickedDownload, status: clickedDownload ? "download-clicked" : "download-click-failed" };
             })()
         """
 
         def _after_poll(result):
             if isinstance(result, dict) and result.get("ok"):
-                self._append_log(f"Variant {variant} image detected; download requested.")
+                self._append_log(f"Variant {variant} image opened; in-page download clicked.")
                 self.manual_download_in_progress = True
                 return
+            status = result.get("status") if isinstance(result, dict) else "unknown"
+            self._append_log(f"Variant {variant} image download not ready yet ({status}); retrying...")
             QTimer.singleShot(3000, self._poll_for_manual_image)
 
         self.browser.page().runJavaScript(script, _after_poll)
