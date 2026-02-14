@@ -2154,9 +2154,11 @@ class MainWindow(QMainWindow):
         prompt_fill_seen_success = False
         last_prompt_fill_result = None
         max_prompt_fill_attempts = 3
+        prompt_force_retry_count = 0
+        max_prompt_force_retries = 2
 
         def after_submit(result):
-            nonlocal prompt_fill_attempt_count, prompt_fill_seen_success, last_prompt_fill_result
+            nonlocal prompt_fill_attempt_count, prompt_fill_seen_success, last_prompt_fill_result, prompt_force_retry_count
             prompt_fill_attempt_count += 1
             last_prompt_fill_result = result if isinstance(result, dict) else None
 
@@ -2206,20 +2208,21 @@ class MainWindow(QMainWindow):
                             f"proceeding with submit. Preview={preview!r}"
                         )
                     else:
+                        if prompt_force_retry_count < max_prompt_force_retries:
+                            prompt_force_retry_count += 1
+                            self._append_log(
+                                f"WARNING: Continue-mode prompt text could not be confirmed for variant {variant} after "
+                                f"{max_prompt_fill_attempts} attempts (score={best_score:.2f}, fill_ok_seen={prompt_fill_seen_success}, candidates={candidate_count}); "
+                                f"running final retry {prompt_force_retry_count}/{max_prompt_force_retries} with 100ms pause before submit."
+                            )
+                            QTimer.singleShot(100, lambda: self.browser.page().runJavaScript(script, after_submit))
+                            return
                         self._append_log(
-                            f"ERROR: Continue-mode prompt text could not be confirmed for variant {variant} after "
-                            f"{max_prompt_fill_attempts} attempts (score={best_score:.2f}, fill_ok_seen={prompt_fill_seen_success}, candidates={candidate_count}); "
-                            "stopping to avoid submitting the wrong prompt."
+                            f"WARNING: Continue-mode prompt text could not be confirmed for variant {variant} after "
+                            f"{max_prompt_fill_attempts} attempts plus {max_prompt_force_retries} final retries "
+                            f"(score={best_score:.2f}, fill_ok_seen={prompt_fill_seen_success}, candidates={candidate_count}); "
+                            "assuming prompt is present and proceeding."
                         )
-                        self.continue_from_frame_active = False
-                        self.continue_from_frame_target_count = 0
-                        self.continue_from_frame_completed = 0
-                        self.continue_from_frame_remaining = 0
-                        self.continue_from_frame_prompt = ""
-                        self.continue_from_frame_current_source_video = ""
-                        self.continue_from_frame_waiting_for_reload = False
-                        self.continue_from_frame_upload_token = 0
-                        return
 
                 if self.continue_from_frame_active:
                     _run_continue_mode_submit()
