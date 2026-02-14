@@ -2389,6 +2389,92 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = time.time()
         self.manual_download_poll_timer.start(0)
 
+    def _retry_manual_video_after_small_download(self, variant: int, video_path: Path, video_size: int) -> None:
+        if video_path.exists():
+            video_path.unlink(missing_ok=True)
+            self._append_log(f"Deleted undersized download for variant {variant}: {video_path}")
+
+        self._append_log(
+            f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB); "
+            "requesting regenerate and retrying download polling."
+        )
+
+        self.pending_manual_variant_for_download = variant
+        self.pending_manual_download_type = "video"
+        self.pending_manual_image_prompt = None
+        self.manual_image_pick_clicked = False
+        self.manual_image_video_submit_sent = False
+        self.manual_image_pick_retry_count = 0
+        self.manual_image_submit_retry_count = 0
+        self.manual_download_click_sent = False
+        self.manual_video_start_click_sent = False
+        self.manual_video_make_click_fallback_used = False
+        self.manual_video_allow_make_click = True
+        self.manual_download_in_progress = False
+        self.manual_download_started_at = time.time()
+        self.manual_download_deadline = time.time() + 420
+
+        script = r"""
+            (() => {
+                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const common = { bubbles: true, cancelable: true, composed: true };
+                const emulateClick = (el) => {
+                    if (!el || !isVisible(el) || el.disabled) return false;
+                    try {
+                        el.dispatchEvent(new PointerEvent("pointerdown", common));
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        el.dispatchEvent(new PointerEvent("pointerup", common));
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        return true;
+                    } catch (_) {
+                        try {
+                            el.click();
+                            return true;
+                        } catch (__) {
+                            return false;
+                        }
+                    }
+                };
+
+                const buttons = [...document.querySelectorAll("button")]
+                    .filter((btn) => isVisible(btn) && !btn.disabled);
+                const regenerateButton = buttons.find((btn) => {
+                    const label = (btn.getAttribute("aria-label") || btn.textContent || "").trim();
+                    return /(redo|regenerate|try\s+again)/i.test(label);
+                });
+
+                if (!regenerateButton) {
+                    return { status: "regenerate-not-found" };
+                }
+
+                const label = (regenerateButton.getAttribute("aria-label") || regenerateButton.textContent || "").trim();
+                return {
+                    status: emulateClick(regenerateButton) ? "regenerate-clicked" : "regenerate-visible",
+                    buttonLabel: label,
+                };
+            })()
+        """
+
+        def after_click(result):
+            status = (result or {}).get("status") if isinstance(result, dict) else "regenerate-not-found"
+            button_label = ((result or {}).get("buttonLabel") if isinstance(result, dict) else None) or "Redo"
+
+            if status == "regenerate-clicked":
+                self._append_log(f"Variant {variant}: clicked '{button_label}' to regenerate, polling for next download.")
+            elif status == "regenerate-visible":
+                self._append_log(
+                    f"Variant {variant}: '{button_label}' is visible but click did not register; continuing polling to retry."
+                )
+            else:
+                self._append_log(
+                    f"Variant {variant}: regenerate button not found; continuing video polling to recover automatically."
+                )
+
+            self.manual_download_poll_timer.start(1200)
+
+        self.browser.page().runJavaScript(script, after_click)
+
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -2635,31 +2721,7 @@ class MainWindow(QMainWindow):
                     return
 
                 if video_size < MIN_VALID_VIDEO_BYTES:
-                    self._append_log(
-                        f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB)."
-                    )
-                    self.pending_manual_variant_for_download = None
-                    self.pending_manual_download_type = None
-                    self.pending_manual_image_prompt = None
-                    self.manual_image_pick_clicked = False
-                    self.manual_image_video_submit_sent = False
-                    self.manual_image_pick_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
-                    self.manual_download_click_sent = False
-                    self.manual_video_start_click_sent = False
-                    self.manual_video_make_click_fallback_used = False
-                    self.manual_video_allow_make_click = True
-                    self.manual_download_in_progress = False
-                    self.manual_download_started_at = None
-                    self.manual_download_deadline = None
-
-                    if self.continue_from_frame_active:
-                        self._retry_continue_after_small_download(variant)
-                    else:
-                        self._append_log(
-                            "WARNING: Undersized manual download detected outside continue-from-last-frame mode; "
-                            "please use 'Continue from Last Frame' to regenerate from the extracted frame."
-                        )
+                    self._retry_manual_video_after_small_download(variant, video_path, video_size)
                     return
 
                 self.videos.append(
