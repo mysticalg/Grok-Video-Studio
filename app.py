@@ -582,6 +582,18 @@ class MainWindow(QMainWindow):
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
         actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 2)
 
+        self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation (24 → 48 fps)")
+        self.stitch_interpolation_checkbox.setToolTip(
+            "After stitching, use ffmpeg minterpolate to smooth motion by generating in-between frames."
+        )
+        actions_layout.addWidget(self.stitch_interpolation_checkbox, 5, 0, 1, 2)
+
+        self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling (2x Lanczos)")
+        self.stitch_upscale_checkbox.setToolTip(
+            "After stitching, upscale output up to 2x (capped at 4K) with high-quality Lanczos scaling."
+        )
+        actions_layout.addWidget(self.stitch_upscale_checkbox, 6, 0, 1, 2)
+
         self.video_options_dropdown = QComboBox()
         self.video_options_dropdown.addItem("Video Options: Crossfade 0.5s", 0.5)
         self.video_options_dropdown.addItem("Crossfade 0.2s", 0.2)
@@ -593,7 +605,7 @@ class MainWindow(QMainWindow):
         self.video_options_dropdown.setCurrentIndex(0)
         self.video_options_dropdown.setToolTip("Video options including stitch crossfade duration.")
         self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
-        actions_layout.addWidget(self.video_options_dropdown, 5, 0, 1, 2)
+        actions_layout.addWidget(self.video_options_dropdown, 7, 0, 1, 2)
 
         self.upload_youtube_btn = QPushButton("▶ Upload Selected to YouTube")
         self.upload_youtube_btn.setToolTip("Upload the currently selected local video to your YouTube channel.")
@@ -602,7 +614,7 @@ class MainWindow(QMainWindow):
             "border: 1px solid #990000; border-radius: 6px; padding: 8px;"
         )
         self.upload_youtube_btn.clicked.connect(self.upload_selected_to_youtube)
-        actions_layout.addWidget(self.upload_youtube_btn, 6, 0, 1, 2)
+        actions_layout.addWidget(self.upload_youtube_btn, 8, 0, 1, 2)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
@@ -611,7 +623,7 @@ class MainWindow(QMainWindow):
             "background-color: #ffdd00; color: #222; border-radius: 8px;"
         )
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
-        actions_layout.addWidget(self.buy_coffee_btn, 7, 0, 1, 2)
+        actions_layout.addWidget(self.buy_coffee_btn, 9, 0, 1, 2)
 
         left_layout.addWidget(actions_group)
 
@@ -942,6 +954,8 @@ class MainWindow(QMainWindow):
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
             "count": self.count.value(),
             "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
+            "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
+            "stitch_upscale_enabled": self.stitch_upscale_checkbox.isChecked(),
             "crossfade_duration": self.crossfade_duration.value(),
             "download_dir": str(self.download_dir),
             "preview_muted": self.preview_mute_checkbox.isChecked(),
@@ -984,6 +998,10 @@ class MainWindow(QMainWindow):
                 pass
         if "stitch_crossfade_enabled" in preferences:
             self.stitch_crossfade_checkbox.setChecked(bool(preferences["stitch_crossfade_enabled"]))
+        if "stitch_interpolation_enabled" in preferences:
+            self.stitch_interpolation_checkbox.setChecked(bool(preferences["stitch_interpolation_enabled"]))
+        if "stitch_upscale_enabled" in preferences:
+            self.stitch_upscale_checkbox.setChecked(bool(preferences["stitch_upscale_enabled"]))
         if "crossfade_duration" in preferences:
             try:
                 self.crossfade_duration.setValue(float(preferences["crossfade_duration"]))
@@ -3097,16 +3115,35 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Need More Videos", "At least two videos are required to stitch.")
             return
 
-        output_file = self.download_dir / f"stitched_{int(time.time() * 1000)}.mp4"
+        timestamp = int(time.time() * 1000)
+        output_file = self.download_dir / f"stitched_{timestamp}.mp4"
+        stitched_base_file = self.download_dir / f"stitched_base_{timestamp}.mp4"
         video_paths = [Path(video["video_file_path"]) for video in self.videos]
+        interpolate_enabled = self.stitch_interpolation_checkbox.isChecked()
+        upscale_enabled = self.stitch_upscale_checkbox.isChecked()
+        enhancement_enabled = interpolate_enabled or upscale_enabled
 
         try:
+            stitch_target = stitched_base_file if enhancement_enabled else output_file
             if self.stitch_crossfade_checkbox.isChecked():
                 self._append_log(f"Stitching videos with {self.crossfade_duration.value():.1f}s crossfade transitions enabled.")
-                self._stitch_videos_with_crossfade(video_paths, output_file, crossfade_duration=self.crossfade_duration.value())
+                self._stitch_videos_with_crossfade(video_paths, stitch_target, crossfade_duration=self.crossfade_duration.value())
             else:
                 self._append_log("Stitching videos with hard cuts (no crossfade).")
-                self._stitch_videos_concat(video_paths, output_file)
+                self._stitch_videos_concat(video_paths, stitch_target)
+
+            if enhancement_enabled:
+                self._append_log(
+                    "Applying stitched video enhancements: "
+                    f"frame interpolation={'on' if interpolate_enabled else 'off'}, "
+                    f"upscaling={'on' if upscale_enabled else 'off'}."
+                )
+                self._enhance_stitched_video(
+                    input_file=stitch_target,
+                    output_file=output_file,
+                    interpolate=interpolate_enabled,
+                    upscale=upscale_enabled,
+                )
         except FileNotFoundError:
             QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for stitching but was not found in PATH.")
             return
@@ -3116,6 +3153,9 @@ class MainWindow(QMainWindow):
         except RuntimeError as exc:
             QMessageBox.critical(self, "Stitch Failed", str(exc))
             return
+        finally:
+            if stitched_base_file.exists():
+                stitched_base_file.unlink()
 
         self._append_log(f"Stitched video created: {output_file}")
 
@@ -3311,6 +3351,35 @@ class MainWindow(QMainWindow):
             ffmpeg_cmd[-1:-1] = ["-map", f"[{audio_prev}]", "-c:a", "aac"]
 
         subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _enhance_stitched_video(self, input_file: Path, output_file: Path, interpolate: bool, upscale: bool) -> None:
+        if not interpolate and not upscale:
+            return
+
+        vf_filters: list[str] = []
+        if interpolate:
+            vf_filters.append("minterpolate=fps=48:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1")
+        if upscale:
+            vf_filters.append("scale='min(iw*2,3840)':'min(ih*2,2160)':flags=lanczos")
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_file),
+            "-vf",
+            ",".join(vf_filters),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-c:a",
+            "copy",
+            str(output_file),
+        ]
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def upload_selected_to_youtube(self) -> None:
         index = self.video_picker.currentIndex()
