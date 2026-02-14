@@ -1610,6 +1610,15 @@ class MainWindow(QMainWindow):
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
+                const hasInvisibleAncestor = (el, stopAt = null) => {{
+                    let node = el;
+                    while (node && node !== document.body) {{
+                        if (node.classList && node.classList.contains("invisible")) return true;
+                        if (stopAt && node === stopAt) break;
+                        node = node.parentElement;
+                    }}
+                    return false;
+                }};
                 const emulateClick = (el) => {{
                     if (!el || !isVisible(el) || el.disabled) return false;
                     try {{ el.dispatchEvent(new PointerEvent("pointerdown", common)); }} catch (_) {{}}
@@ -1625,12 +1634,29 @@ class MainWindow(QMainWindow):
                         .filter((img) => isVisible(img));
                     if (!generatedImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
 
-                    const firstImage = generatedImages[0];
-                    const listItem = firstImage.closest("[role='listitem']");
-                    const clickedImage = emulateClick(firstImage) || emulateClick(listItem) || emulateClick(firstImage.parentElement);
-                    if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
-                    await sleep(ACTION_DELAY_MS);
-                    return {{ ok: true, status: "generated-image-clicked" }};
+                    for (let idx = 0; idx < generatedImages.length; idx += 1) {{
+                        const image = generatedImages[idx];
+                        const listItem = image.closest("[role='listitem']") || image.closest("article") || image.parentElement;
+                        const scope = listItem || document;
+
+                        const makeVideoButtons = [...scope.querySelectorAll("button")].filter((btn) => {{
+                            const label = (btn.getAttribute("aria-label") || btn.textContent || "").trim();
+                            return /make\\s+video/i.test(label);
+                        }});
+
+                        const hasUsableMakeVideo = makeVideoButtons.some(
+                            (btn) => isVisible(btn) && !btn.disabled && !hasInvisibleAncestor(btn, listItem)
+                        );
+                        if (!hasUsableMakeVideo) continue;
+
+                        const clickedImage = emulateClick(image) || emulateClick(listItem) || emulateClick(image.parentElement);
+                        if (!clickedImage) continue;
+
+                        await sleep(ACTION_DELAY_MS);
+                        return {{ ok: true, status: "generated-image-clicked", pickedIndex: idx + 1, totalImages: generatedImages.length }};
+                    }}
+
+                    return {{ ok: false, status: "generated-image-no-usable-make-video" }};
                 }}
 
                 if (window.__grokManualImageSubmitToken === submitToken) {{
@@ -1700,7 +1726,7 @@ class MainWindow(QMainWindow):
                 if status == "generated-image-clicked":
                     if not self.manual_image_pick_clicked:
                         self._append_log(
-                            f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
+                            f"Variant {current_variant}: clicked generated image tile #{result.get('pickedIndex', '?')} (of {result.get('totalImages', '?')}); preparing video prompt + submit."
                         )
                     self.manual_image_pick_clicked = True
                     self.manual_image_pick_retry_count = 0
