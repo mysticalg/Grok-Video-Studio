@@ -101,15 +101,28 @@ class GenerateWorker(QThread):
         self.config = config
         self.prompt_config = prompt_config
         self.count = count
+        self.stop_requested = False
+
+    def request_stop(self) -> None:
+        self.stop_requested = True
+        self.requestInterruption()
+
+    def _ensure_not_stopped(self) -> None:
+        if self.stop_requested or self.isInterruptionRequested():
+            raise RuntimeError("Generation stopped by user")
 
     def run(self) -> None:
         try:
             for idx in range(1, self.count + 1):
+                self._ensure_not_stopped()
                 self.status.emit(f"Generating variant {idx}/{self.count}...")
                 video = self.generate_one_video(idx)
                 self.finished_video.emit(video)
             self.status.emit("Generation complete.")
         except Exception as exc:
+            if str(exc) == "Generation stopped by user":
+                self.status.emit("Generation stopped.")
+                return
             self.failed.emit(str(exc))
 
     def _api_error_message(self, response: requests.Response) -> str:
@@ -157,6 +170,7 @@ class GenerateWorker(QThread):
         return response.json()["choices"][0]["message"]["content"].strip()
 
     def build_prompt(self, variant: int) -> str:
+        self._ensure_not_stopped()
         source = self.prompt_config.source
         if source == "manual":
             return self.prompt_config.manual_prompt
@@ -172,6 +186,7 @@ class GenerateWorker(QThread):
         return self.call_grok_chat(system, user)
 
     def start_video_job(self, prompt: str, resolution: str) -> str:
+        self._ensure_not_stopped()
         response = requests.post(
             f"{API_BASE_URL}/imagine/video/generations",
             headers={"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"},
@@ -190,6 +205,7 @@ class GenerateWorker(QThread):
     def poll_video_job(self, job_id: str, timeout_s: int = 420) -> dict:
         start = time.time()
         while time.time() - start < timeout_s:
+            self._ensure_not_stopped()
             response = requests.get(
                 f"{API_BASE_URL}/imagine/video/generations/{job_id}",
                 headers={"Authorization": f"Bearer {self.config.api_key}"},
@@ -206,11 +222,13 @@ class GenerateWorker(QThread):
         raise TimeoutError("Timed out waiting for video generation")
 
     def download_video(self, video_url: str, suffix: str) -> Path:
+        self._ensure_not_stopped()
         file_path = DOWNLOAD_DIR / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
         with requests.get(video_url, stream=True, timeout=240) as response:
             response.raise_for_status()
             with open(file_path, "wb") as handle:
                 for chunk in response.iter_content(chunk_size=8192):
+                    self._ensure_not_stopped()
                     if chunk:
                         handle.write(chunk)
         return file_path
@@ -281,6 +299,7 @@ class MainWindow(QMainWindow):
         self.resize(1500, 900)
         self.videos: list[dict] = []
         self.worker: GenerateWorker | None = None
+        self.stop_all_requested = False
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
         self.pending_manual_variant_for_download: int | None = None
@@ -359,6 +378,9 @@ class MainWindow(QMainWindow):
         self.generate_image_btn.clicked.connect(self.start_image_generation)
         actions_layout.addWidget(self.generate_image_btn, 0, 1)
 
+        self.stop_all_btn = QPushButton("Stop All Jobs")
+        self.stop_all_btn.clicked.connect(self.stop_all_jobs)
+        actions_layout.addWidget(self.stop_all_btn, 1, 0)
 
         self.continue_frame_btn = QPushButton("Continue from Last Frame (paste + generate)")
         self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
@@ -800,6 +822,7 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after)
 
     def start_generation(self) -> None:
+        self.stop_all_requested = False
         concept = self.concept.toPlainText().strip()
         source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
@@ -845,6 +868,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def start_image_generation(self) -> None:
+        self.stop_all_requested = False
         source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
 
@@ -883,6 +907,10 @@ class MainWindow(QMainWindow):
         self._submit_next_manual_image_variant()
 
     def _submit_next_manual_image_variant(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
         if not self.manual_image_generation_queue:
             self._append_log("Manual browser image generation complete.")
             return
@@ -1076,6 +1104,10 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(populate_script, _after_populate)
 
     def _poll_for_manual_image(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
         variant = self.pending_manual_variant_for_download
         if variant is None or self.pending_manual_download_type != "image":
             return
@@ -1147,6 +1179,10 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, _after_poll)
 
     def _start_continue_iteration(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
         frame_path: Path | None = None
         if self.continue_from_frame_seed_image_path is not None:
             frame_path = self.continue_from_frame_seed_image_path
@@ -1211,6 +1247,10 @@ class MainWindow(QMainWindow):
         return str(latest)
 
     def _submit_next_manual_variant(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
         if not self.manual_generation_queue:
             self._append_log("Manual browser generation complete.")
             return
@@ -1753,6 +1793,10 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_timer.start(0)
 
     def _poll_for_manual_video(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
         variant = self.pending_manual_variant_for_download
         if variant is None:
             return
@@ -1996,6 +2040,32 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_seed_image_path = None
 
         download.stateChanged.connect(on_state_changed)
+
+    def stop_all_jobs(self) -> None:
+        self.stop_all_requested = True
+        self.manual_generation_queue.clear()
+        self.manual_image_generation_queue.clear()
+        self.manual_download_poll_timer.stop()
+        self.continue_from_frame_reload_timeout_timer.stop()
+        self.pending_manual_variant_for_download = None
+        self.pending_manual_download_type = None
+        self.manual_download_click_sent = False
+        self.manual_download_in_progress = False
+        self.manual_download_started_at = None
+        self.manual_download_deadline = None
+
+        self.continue_from_frame_active = False
+        self.continue_from_frame_target_count = 0
+        self.continue_from_frame_completed = 0
+        self.continue_from_frame_prompt = ""
+        self.continue_from_frame_current_source_video = ""
+        self.continue_from_frame_seed_image_path = None
+        self.continue_from_frame_waiting_for_reload = False
+
+        if self.worker and self.worker.isRunning():
+            self.worker.request_stop()
+            self._append_log("Stop requested: API generation worker will stop after the current request completes.")
+        self._append_log("Stop all requested: cleared queued manual image/video jobs and halted polling timers.")
 
     def on_video_finished(self, video: dict) -> None:
         self.videos.append(video)
