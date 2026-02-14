@@ -293,6 +293,9 @@ class FilteredWebEnginePage(QWebEnginePage):
 
 
 class MainWindow(QMainWindow):
+    MANUAL_IMAGE_PICK_RETRY_LIMIT = 8
+    MANUAL_IMAGE_SUBMIT_RETRY_LIMIT = 4
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Grok Video Desktop Studio")
@@ -307,8 +310,14 @@ class MainWindow(QMainWindow):
         self.pending_manual_image_prompt: str | None = None
         self.manual_image_pick_clicked = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_pick_retry_count = 0
+        self.manual_image_submit_retry_count = 0
+        self.manual_image_submit_token = 0
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
+        self.manual_video_start_click_sent = False
+        self.manual_video_make_click_fallback_used = False
+        self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
         self.manual_download_poll_timer = QTimer(self)
@@ -927,6 +936,9 @@ class MainWindow(QMainWindow):
         self.pending_manual_image_prompt = prompt
         self.manual_image_pick_clicked = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_pick_retry_count = 0
+        self.manual_image_submit_retry_count = 0
+        self.manual_image_submit_token += 1
         self.manual_download_click_sent = False
 
         populate_script = rf"""
@@ -1218,9 +1230,12 @@ class MainWindow(QMainWindow):
         prompt = self.pending_manual_image_prompt or ""
         phase = "pick" if not self.manual_image_pick_clicked else "submit"
         script = f"""
-            (() => {{
+            (async () => {{
                 const prompt = {prompt!r};
                 const phase = {phase!r};
+                const submitToken = {self.manual_image_submit_token};
+                const ACTION_DELAY_MS = 200;
+                const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
                 const emulateClick = (el) => {{
@@ -1242,7 +1257,12 @@ class MainWindow(QMainWindow):
                     const listItem = firstImage.closest("[role='listitem']");
                     const clickedImage = emulateClick(firstImage) || emulateClick(listItem) || emulateClick(firstImage.parentElement);
                     if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
+                    await sleep(ACTION_DELAY_MS);
                     return {{ ok: true, status: "generated-image-clicked" }};
+                }}
+
+                if (window.__grokManualImageSubmitToken === submitToken) {{
+                    return {{ ok: true, status: "video-submit-already-clicked" }};
                 }}
 
                 const promptSelectors = [
@@ -1260,32 +1280,43 @@ class MainWindow(QMainWindow):
                 if (!promptInput) return {{ ok: false, status: "image-clicked-waiting-prompt-input" }};
 
                 promptInput.focus();
+                await sleep(ACTION_DELAY_MS);
+
                 if (promptInput.isContentEditable) {{
                     const paragraph = document.createElement("p");
                     paragraph.textContent = prompt;
                     promptInput.replaceChildren(paragraph);
-                    promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
                 }} else {{
                     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(promptInput), "value")?.set;
                     if (setter) setter.call(promptInput, prompt);
                     else promptInput.value = prompt;
-                    promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
                 }}
+                await sleep(ACTION_DELAY_MS);
+
+                promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                await sleep(ACTION_DELAY_MS);
+                promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                await sleep(ACTION_DELAY_MS);
+
+                const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
+                if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
                 const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
                     .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
                 if (!submitButton) return {{ ok: false, status: "prompt-filled-waiting-submit" }};
 
+                await sleep(ACTION_DELAY_MS);
                 const submitted = emulateClick(submitButton);
+                if (submitted) window.__grokManualImageSubmitToken = submitToken;
                 return {{
                     ok: submitted,
                     status: submitted ? "video-submit-clicked" : "submit-click-failed",
                     buttonLabel: (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim(),
+                    filledLength: typedValue.length,
                 }};
             }})()
         """
+
 
         def _after_poll(result):
             current_variant = self.pending_manual_variant_for_download
@@ -1300,23 +1331,65 @@ class MainWindow(QMainWindow):
                             f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
                         )
                     self.manual_image_pick_clicked = True
+                    self.manual_image_pick_retry_count = 0
+                    self.manual_image_submit_retry_count = 0
                     QTimer.singleShot(1000, self._poll_for_manual_image)
                     return
 
-                if status == "video-submit-clicked":
-                    label = result.get("buttonLabel") or "submit"
+                if status in ("video-submit-clicked", "video-submit-already-clicked"):
+                    if status == "video-submit-clicked":
+                        detail = result.get("buttonLabel") or "submit"
+                        filled_length = result.get("filledLength")
+                        if isinstance(filled_length, int):
+                            message = f"video prompt submitted via '{detail}' (length={filled_length})"
+                        else:
+                            message = f"video prompt submitted via '{detail}'"
+                    else:
+                        message = "submit was already clicked earlier; waiting for video render/download"
+
                     if not self.manual_image_video_submit_sent:
-                        self._append_log(
-                            f"Variant {current_variant}: video prompt submitted via '{label}'; waiting for video render/download."
-                        )
+                        self._append_log(f"Variant {current_variant}: {message}.")
                     self.manual_image_video_submit_sent = True
+                    self.manual_image_submit_retry_count = 0
                     self.pending_manual_download_type = "video"
                     self._trigger_browser_video_download(current_variant)
                     return
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
+            if not self.manual_image_pick_clicked:
+                self.manual_image_pick_retry_count += 1
+                if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
+                    self._append_log(
+                        "WARNING: Variant "
+                        f"{current_variant}: image pick validation stayed in '{status}' for "
+                        f"{self.manual_image_pick_retry_count} checks; forcing prompt submit stage."
+                    )
+                    self.manual_image_pick_clicked = True
+                    self.manual_image_pick_retry_count = 0
+                    self.manual_image_submit_retry_count = 0
+                    QTimer.singleShot(1000, self._poll_for_manual_image)
+                    return
+                self._append_log(
+                    f"Variant {current_variant}: generated image not ready for pick+submit yet ({status}); retrying..."
+                )
+                QTimer.singleShot(3000, self._poll_for_manual_image)
+                return
+
+            self.manual_image_submit_retry_count += 1
+            if self.manual_image_submit_retry_count >= self.MANUAL_IMAGE_SUBMIT_RETRY_LIMIT:
+                self._append_log(
+                    "WARNING: Variant "
+                    f"{current_variant}: submit-stage validation stayed in '{status}' for "
+                    f"{self.manual_image_submit_retry_count} checks; assuming submit succeeded and continuing to download polling."
+                )
+                self.manual_image_video_submit_sent = True
+                self.manual_image_submit_retry_count = 0
+                self.pending_manual_download_type = "video"
+                self._trigger_browser_video_download(current_variant)
+                return
+
             self._append_log(
-                f"Variant {current_variant}: generated image not ready for pick+submit yet ({status}); retrying..."
+                f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying..."
             )
             QTimer.singleShot(3000, self._poll_for_manual_image)
 
@@ -1884,13 +1957,14 @@ class MainWindow(QMainWindow):
             def _after_continue_submit(submit_result):
                 if not isinstance(submit_result, dict) or not submit_result.get("ok"):
                     error_detail = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
-                    self._append_log(
-                        f"WARNING: Continue-mode submit for variant {variant} reported an issue: {error_detail!r}."
-                    )
+                    if error_detail not in (None, "", "callback-empty"):
+                        self._append_log(
+                            f"Continue-mode submit for variant {variant} reported an issue: {error_detail!r}; continuing to video download polling."
+                        )
                 else:
                     button_label = submit_result.get("buttonAriaLabel") or submit_result.get("buttonText") or "Make video"
                     self._append_log(f"Continue-mode submit clicked '{button_label}' for variant {variant}.")
-                self._trigger_browser_video_download(variant)
+                self._trigger_browser_video_download(variant, allow_make_video_click=False)
 
             QTimer.singleShot(action_delay_ms, lambda: self.browser.page().runJavaScript(continue_submit_script, _after_continue_submit))
 
@@ -1898,19 +1972,21 @@ class MainWindow(QMainWindow):
             fill_ok = isinstance(result, dict) and bool(result.get("ok"))
             if not fill_ok:
                 error_detail = result.get("error") if isinstance(result, dict) else result
-                self._append_log(
-                    f"WARNING: Manual prompt fill reported an error for variant {variant}: {error_detail!r}. "
-                    "Verifying current field content before continuing."
-                )
+                if error_detail not in (None, "", "callback-empty"):
+                    self._append_log(
+                        f"Manual prompt fill reported an issue for variant {variant}: {error_detail!r}. "
+                        "Verifying current field content before continuing."
+                    )
 
             def _after_verify_prompt(verify_result):
                 verify_ok = isinstance(verify_result, dict) and bool(verify_result.get("ok"))
                 if not (fill_ok or verify_ok):
                     verify_error = verify_result.get("error") if isinstance(verify_result, dict) else verify_result
-                    self._append_log(
-                        f"WARNING: Prompt fill verification did not confirm content for variant {variant}: {verify_error!r}. "
-                        "Continuing with option selection and forced submit anyway."
-                    )
+                    if verify_error not in (None, "", "callback-empty"):
+                        self._append_log(
+                            f"Prompt fill verification did not confirm content for variant {variant}: {verify_error!r}. "
+                            "Continuing with option selection and forced submit anyway."
+                        )
                 if self.continue_from_frame_active:
                     _run_continue_mode_submit()
                 else:
@@ -1930,10 +2006,13 @@ class MainWindow(QMainWindow):
 
         self.browser.page().runJavaScript(script, after_submit)
 
-    def _trigger_browser_video_download(self, variant: int) -> None:
+    def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
         self.manual_download_click_sent = False
+        self.manual_video_start_click_sent = False
+        self.manual_video_make_click_fallback_used = False
+        self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
         self.manual_download_poll_timer.start(0)
@@ -1951,6 +2030,9 @@ class MainWindow(QMainWindow):
         if time.time() > deadline:
             self.pending_manual_variant_for_download = None
             self.manual_download_click_sent = False
+            self.manual_video_start_click_sent = False
+            self.manual_video_make_click_fallback_used = False
+            self.manual_video_allow_make_click = True
             self.manual_download_in_progress = False
             self.manual_download_started_at = None
             self.manual_download_deadline = None
@@ -1963,75 +2045,86 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_prompt = ""
             return
 
-        script = """
-            (() => {
+        allow_make_video_click = "true" if (self.manual_video_allow_make_click and not self.manual_video_start_click_sent) else "false"
+        script = f"""
+            (() => {{
+                const allowMakeVideoClick = {allow_make_video_click};
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                const common = { bubbles: true, cancelable: true, composed: true };
-                const emulateClick = (el) => {
+                const common = {{ bubbles: true, cancelable: true, composed: true }};
+                const emulateClick = (el) => {{
                     if (!el || !isVisible(el) || el.disabled) return false;
-                    try {
+                    try {{
                         el.dispatchEvent(new PointerEvent("pointerdown", common));
                         el.dispatchEvent(new MouseEvent("mousedown", common));
                         el.dispatchEvent(new PointerEvent("pointerup", common));
                         el.dispatchEvent(new MouseEvent("mouseup", common));
                         el.dispatchEvent(new MouseEvent("click", common));
                         return true;
-                    } catch (_) {
-                        try {
+                    }} catch (_) {{
+                        try {{
                             el.click();
                             return true;
-                        } catch (__){
+                        }} catch (__){{
                             return false;
-                        }
-                    }
-                };
+                        }}
+                    }}
+                }};
                 const percentNode = [...document.querySelectorAll("div .tabular-nums, div.tabular-nums")]
-                    .find((el) => isVisible(el) && /^\\d{1,3}%$/.test((el.textContent || "").trim()));
-                if (percentNode) {
-                    return { status: "progress", progressText: (percentNode.textContent || "").trim() };
-                }
+                    .find((el) => isVisible(el) && /^\\d{{1,3}}%$/.test((el.textContent || "").trim()));
+                if (percentNode) {{
+                    return {{ status: "progress", progressText: (percentNode.textContent || "").trim() }};
+                }}
 
                 const redoButton = [...document.querySelectorAll("button")]
                     .find((btn) => isVisible(btn) && !btn.disabled && /redo/i.test((btn.textContent || "").trim()));
 
                 const makeVideoButton = [...document.querySelectorAll("button")]
-                    .find((btn) => {
+                    .find((btn) => {{
                         if (!isVisible(btn) || btn.disabled) return false;
                         const label = (btn.getAttribute("aria-label") || btn.textContent || "").trim();
                         return /make\\s+video/i.test(label);
-                    });
+                    }});
 
-                const downloadButton = [...document.querySelectorAll("button[aria-label='Download'], button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /download/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                const downloadCandidates = [...document.querySelectorAll("button[aria-label='Download'][type='button'], button[aria-label='Download']")]
+                    .filter((btn) => isVisible(btn) && !btn.disabled);
+                const makeVideoContainer = makeVideoButton
+                    ? (makeVideoButton.closest("form") || makeVideoButton.closest("section") || makeVideoButton.closest("main") || makeVideoButton.parentElement)
+                    : null;
+                let downloadButton = downloadCandidates.find((btn) => makeVideoContainer && makeVideoContainer.contains(btn) && btn !== makeVideoButton);
+                if (!downloadButton) downloadButton = downloadCandidates[0] || null;
 
-                if (makeVideoButton && !redoButton) {
-                    return {
-                        status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
-                        buttonLabel: (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim(),
-                    };
-                }
-
-                if (!redoButton) {
-                    return { status: "waiting-for-redo" };
-                }
-
-                if (downloadButton) {
-                    return {
+                if (downloadButton && (redoButton || !makeVideoButton)) {{
+                    return {{
                         status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
-                    };
-                }
+                    }};
+                }}
+
+                if (makeVideoButton && !redoButton) {{
+                    const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
+                    if (!allowMakeVideoClick) {{
+                        return {{ status: "make-video-awaiting-progress", buttonLabel }};
+                    }}
+                    return {{
+                        status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
+                        buttonLabel,
+                    }};
+                }}
+
+                if (!redoButton) {{
+                    return {{ status: "waiting-for-redo" }};
+                }}
 
                 const video = document.querySelector("video");
                 const source = document.querySelector("video source");
                 const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
                 const enoughData = !!(video && video.readyState >= 3 && Number(video.duration || 0) > 0);
-                return {
+                return {{
                     status: src ? (enoughData ? "video-src-ready" : "video-buffering") : "waiting",
                     src,
                     readyState: video ? video.readyState : 0,
                     duration: video ? Number(video.duration || 0) : 0,
-                };
-            })()
+                }};
+            }})()
         """
 
         def after_poll(result):
@@ -2047,6 +2140,7 @@ class MainWindow(QMainWindow):
             progress_text = (result.get("progressText") or "").strip()
 
             if status == "progress":
+                self.manual_video_start_click_sent = True
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
                 self.manual_download_poll_timer.start(3000)
@@ -2055,6 +2149,12 @@ class MainWindow(QMainWindow):
             if status == "make-video-clicked":
                 label = (result.get("buttonLabel") or "Make video").strip()
                 self._append_log(f"Variant {current_variant}: clicked '{label}' to start video generation.")
+                self.manual_video_start_click_sent = True
+                self.manual_video_make_click_fallback_used = True
+                self.manual_download_poll_timer.start(3000)
+                return
+
+            if status == "make-video-awaiting-progress":
                 self.manual_download_poll_timer.start(3000)
                 return
 
@@ -2137,11 +2237,29 @@ class MainWindow(QMainWindow):
                     self.pending_manual_image_prompt = None
                     self.manual_image_pick_clicked = False
                     self.manual_image_video_submit_sent = False
+                    self.manual_image_pick_retry_count = 0
+                    self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
+                    self.manual_video_start_click_sent = False
+                    self.manual_video_make_click_fallback_used = False
+                    self.manual_video_allow_make_click = True
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = None
                     self.manual_download_deadline = None
                     self._submit_next_manual_image_variant()
+                    return
+
+                image_extensions = {"png", "jpg", "jpeg", "webp", "gif", "bmp"}
+                if download_type == "video" and extension.lower() in image_extensions:
+                    self._append_log(
+                        f"WARNING: Variant {variant}: clicked a non-video download target ({extension}); retrying with video download button."
+                    )
+                    if video_path.exists():
+                        video_path.unlink(missing_ok=True)
+                    self.manual_download_click_sent = False
+                    self.manual_download_in_progress = False
+                    self.manual_download_started_at = time.time()
+                    self.manual_download_poll_timer.start(1200)
                     return
 
                 if video_size < MIN_VALID_VIDEO_BYTES:
@@ -2153,7 +2271,12 @@ class MainWindow(QMainWindow):
                     self.pending_manual_image_prompt = None
                     self.manual_image_pick_clicked = False
                     self.manual_image_video_submit_sent = False
+                    self.manual_image_pick_retry_count = 0
+                    self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
+                    self.manual_video_start_click_sent = False
+                    self.manual_video_make_click_fallback_used = False
+                    self.manual_video_allow_make_click = True
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = None
                     self.manual_download_deadline = None
@@ -2186,7 +2309,12 @@ class MainWindow(QMainWindow):
                 self.pending_manual_image_prompt = None
                 self.manual_image_pick_clicked = False
                 self.manual_image_video_submit_sent = False
+                self.manual_image_pick_retry_count = 0
+                self.manual_image_submit_retry_count = 0
                 self.manual_download_click_sent = False
+                self.manual_video_start_click_sent = False
+                self.manual_video_make_click_fallback_used = False
+                self.manual_video_allow_make_click = True
                 self.manual_download_in_progress = False
                 self.manual_download_started_at = None
                 self.manual_download_deadline = None
@@ -2211,7 +2339,12 @@ class MainWindow(QMainWindow):
                 self.pending_manual_image_prompt = None
                 self.manual_image_pick_clicked = False
                 self.manual_image_video_submit_sent = False
+                self.manual_image_pick_retry_count = 0
+                self.manual_image_submit_retry_count = 0
                 self.manual_download_click_sent = False
+                self.manual_video_start_click_sent = False
+                self.manual_video_make_click_fallback_used = False
+                self.manual_video_allow_make_click = True
                 self.manual_download_in_progress = False
                 self.manual_download_started_at = None
                 self.manual_download_deadline = None
@@ -2235,7 +2368,13 @@ class MainWindow(QMainWindow):
         self.pending_manual_image_prompt = None
         self.manual_image_pick_clicked = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_pick_retry_count = 0
+        self.manual_image_submit_retry_count = 0
+        self.manual_image_submit_token += 1
         self.manual_download_click_sent = False
+        self.manual_video_start_click_sent = False
+        self.manual_video_make_click_fallback_used = False
+        self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
         self.manual_download_deadline = None
@@ -2499,7 +2638,7 @@ class MainWindow(QMainWindow):
             return
         self.continue_from_frame_waiting_for_reload = False
         self._append_log(
-            "WARNING: Timed out waiting for upload-triggered reload. Continuing anyway with prompt submission."
+            "Timed out waiting for upload-triggered reload; continuing with prompt submission."
         )
         self._start_manual_browser_generation(self.continue_from_frame_prompt, 1)
 
