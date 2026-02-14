@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import time
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import requests
 from PySide6.QtCore import QMimeData, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QGuiApplication, QImage
+from PySide6.QtGui import QAction, QGuiApplication, QImage
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -43,6 +45,7 @@ CACHE_DIR = BASE_DIR / ".qtwebengine"
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -310,42 +313,7 @@ class MainWindow(QMainWindow):
         left = QWidget()
         left_layout = QVBoxLayout(left)
 
-        config_row = QHBoxLayout()
-
-        api_group = QGroupBox("API + Models")
-        api_group_layout = QVBoxLayout(api_group)
-
-        api_group_layout.addWidget(QLabel("Grok API Key (required for video generation)"))
-        self.api_key = QLineEdit()
-        self.api_key.setEchoMode(QLineEdit.Password)
-        self.api_key.setText(os.getenv("GROK_API_KEY", ""))
-        api_group_layout.addWidget(self.api_key)
-
-        api_group_layout.addWidget(QLabel("Chat Model"))
-        self.chat_model = QLineEdit(os.getenv("GROK_CHAT_MODEL", "grok-3-mini"))
-        api_group_layout.addWidget(self.chat_model)
-
-        api_group_layout.addWidget(QLabel("Video Model"))
-        self.image_model = QLineEdit(os.getenv("GROK_VIDEO_MODEL", "grok-video-latest"))
-        api_group_layout.addWidget(self.image_model)
-
-        api_group_layout.addWidget(QLabel("Prompt Source"))
-        self.prompt_source = QComboBox()
-        self.prompt_source.addItem("Manual prompt (no API)", "manual")
-        self.prompt_source.addItem("Grok API", "grok")
-        self.prompt_source.addItem("OpenAI API", "openai")
-        self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
-        api_group_layout.addWidget(self.prompt_source)
-
-        api_group_layout.addWidget(QLabel("OpenAI API Key (for OpenAI prompt generation)"))
-        self.openai_api_key = QLineEdit()
-        self.openai_api_key.setEchoMode(QLineEdit.Password)
-        self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
-        api_group_layout.addWidget(self.openai_api_key)
-
-        api_group_layout.addWidget(QLabel("OpenAI Chat Model"))
-        self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
-        api_group_layout.addWidget(self.openai_chat_model)
+        self._build_model_api_settings_dialog()
 
         prompt_group = QGroupBox("Prompt Inputs")
         prompt_group_layout = QVBoxLayout(prompt_group)
@@ -374,11 +342,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.count)
         prompt_group_layout.addLayout(row)
 
-        config_row.addWidget(api_group, 1)
-        config_row.addWidget(prompt_group, 1)
-        config_row.setAlignment(api_group, Qt.AlignTop)
-        config_row.setAlignment(prompt_group, Qt.AlignTop)
-        left_layout.addLayout(config_row)
+        prompt_group_layout.addWidget(QLabel("Model/API settings moved to menu: Model/API Settings"))
+        left_layout.addWidget(prompt_group)
 
         actions_group = QGroupBox("Actions")
         actions_layout = QGridLayout(actions_group)
@@ -478,8 +443,6 @@ class MainWindow(QMainWindow):
         right_splitter.addWidget(bottom_splitter)
         right_splitter.setSizes([620, 280])
 
-        self._toggle_prompt_source_fields()
-
         splitter.addWidget(left)
         splitter.addWidget(right_splitter)
         splitter.setSizes([760, 1140])
@@ -491,6 +454,161 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(container)
         layout.addWidget(splitter)
         self.setCentralWidget(container)
+
+        self._build_menu_bar()
+        self._toggle_prompt_source_fields()
+
+    def _build_model_api_settings_dialog(self) -> None:
+        self.model_api_settings_dialog = QDialog(self)
+        self.model_api_settings_dialog.setWindowTitle("Model/API Settings")
+        dialog_layout = QVBoxLayout(self.model_api_settings_dialog)
+        form_layout = QFormLayout()
+
+        self.api_key = QLineEdit()
+        self.api_key.setEchoMode(QLineEdit.Password)
+        self.api_key.setText(os.getenv("GROK_API_KEY", ""))
+        form_layout.addRow("Grok API Key", self.api_key)
+
+        self.chat_model = QLineEdit(os.getenv("GROK_CHAT_MODEL", "grok-3-mini"))
+        form_layout.addRow("Chat Model", self.chat_model)
+
+        self.image_model = QLineEdit(os.getenv("GROK_VIDEO_MODEL", "grok-video-latest"))
+        form_layout.addRow("Video Model", self.image_model)
+
+        self.prompt_source = QComboBox()
+        self.prompt_source.addItem("Manual prompt (no API)", "manual")
+        self.prompt_source.addItem("Grok API", "grok")
+        self.prompt_source.addItem("OpenAI API", "openai")
+        self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
+        form_layout.addRow("Prompt Source", self.prompt_source)
+
+        self.openai_api_key = QLineEdit()
+        self.openai_api_key.setEchoMode(QLineEdit.Password)
+        self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
+        form_layout.addRow("OpenAI API Key", self.openai_api_key)
+
+        self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
+        form_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
+
+        dialog_layout.addLayout(form_layout)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        button_box.rejected.connect(self.model_api_settings_dialog.reject)
+        button_box.accepted.connect(self.model_api_settings_dialog.accept)
+        button_box.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.model_api_settings_dialog.close)
+        dialog_layout.addWidget(button_box)
+
+    def _build_menu_bar(self) -> None:
+        menu_bar = self.menuBar()
+
+        file_menu = menu_bar.addMenu("File")
+        save_action = QAction("Save Preferences...", self)
+        save_action.triggered.connect(self.save_preferences)
+        file_menu.addAction(save_action)
+
+        load_action = QAction("Load Preferences...", self)
+        load_action.triggered.connect(self.load_preferences)
+        file_menu.addAction(load_action)
+
+        file_menu.addSeparator()
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        settings_menu = menu_bar.addMenu("Model/API Settings")
+        open_settings_action = QAction("Open Model/API Settings", self)
+        open_settings_action.triggered.connect(self.show_model_api_settings)
+        settings_menu.addAction(open_settings_action)
+
+    def show_model_api_settings(self) -> None:
+        self.model_api_settings_dialog.show()
+        self.model_api_settings_dialog.raise_()
+        self.model_api_settings_dialog.activateWindow()
+
+    def _collect_preferences(self) -> dict:
+        return {
+            "api_key": self.api_key.text(),
+            "chat_model": self.chat_model.text(),
+            "image_model": self.image_model.text(),
+            "prompt_source": self.prompt_source.currentData(),
+            "openai_api_key": self.openai_api_key.text(),
+            "openai_chat_model": self.openai_chat_model.text(),
+            "concept": self.concept.toPlainText(),
+            "manual_prompt": self.manual_prompt.toPlainText(),
+            "count": self.count.value(),
+        }
+
+    def _apply_preferences(self, preferences: dict) -> None:
+        if not isinstance(preferences, dict):
+            raise ValueError("Preferences file must contain a JSON object.")
+
+        if "api_key" in preferences:
+            self.api_key.setText(str(preferences["api_key"]))
+        if "chat_model" in preferences:
+            self.chat_model.setText(str(preferences["chat_model"]))
+        if "image_model" in preferences:
+            self.image_model.setText(str(preferences["image_model"]))
+        if "prompt_source" in preferences:
+            source_index = self.prompt_source.findData(str(preferences["prompt_source"]))
+            if source_index >= 0:
+                self.prompt_source.setCurrentIndex(source_index)
+        if "openai_api_key" in preferences:
+            self.openai_api_key.setText(str(preferences["openai_api_key"]))
+        if "openai_chat_model" in preferences:
+            self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
+        if "concept" in preferences:
+            self.concept.setPlainText(str(preferences["concept"]))
+        if "manual_prompt" in preferences:
+            self.manual_prompt.setPlainText(str(preferences["manual_prompt"]))
+        if "count" in preferences:
+            try:
+                self.count.setValue(int(preferences["count"]))
+            except (TypeError, ValueError):
+                pass
+
+        self._toggle_prompt_source_fields()
+
+    def save_preferences(self) -> None:
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Preferences",
+            str(DEFAULT_PREFERENCES_FILE),
+            "JSON Files (*.json)",
+        )
+        if not file_path:
+            return
+
+        try:
+            preferences = self._collect_preferences()
+            with open(file_path, "w", encoding="utf-8") as handle:
+                json.dump(preferences, handle, indent=2)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Preferences Failed", str(exc))
+            self._append_log(f"ERROR: Could not save preferences: {exc}")
+            return
+
+        self._append_log(f"Saved preferences to: {file_path}")
+
+    def load_preferences(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Preferences",
+            str(DEFAULT_PREFERENCES_FILE),
+            "JSON Files (*.json)",
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                preferences = json.load(handle)
+            self._apply_preferences(preferences)
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Preferences Failed", str(exc))
+            self._append_log(f"ERROR: Could not load preferences: {exc}")
+            return
+
+        self._append_log(f"Loaded preferences from: {file_path}")
 
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
