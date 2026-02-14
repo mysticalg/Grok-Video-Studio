@@ -1143,7 +1143,7 @@ class MainWindow(QMainWindow):
             if result in (None, ""):
                 self._append_log(
                     f"Manual image variant {variant}: image-mode callback returned empty result; "
-                    "continuing to submit using current composer state."
+                    "continuing with prompt population and assuming current mode is correct."
                 )
             elif not isinstance(result, dict) or not result.get("ok"):
                 _retry_variant(f"set image mode script failed: {result!r}")
@@ -1153,18 +1153,18 @@ class MainWindow(QMainWindow):
                 return
 
             self._append_log(
-                f"Manual image variant {variant} prepared with image option selected "
-                f"(attempt {attempts}); submitting prompt."
+                f"Manual image variant {variant}: image mode selected; populating prompt next "
+                f"(attempt {attempts})."
             )
-            QTimer.singleShot(450, _run_submit_attempt)
+            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
 
         def _after_populate(result):
             if result in (None, ""):
                 self._append_log(
                     f"Manual image variant {variant}: prompt populate callback returned empty result; "
-                    "continuing to mode selection."
+                    "continuing to submit."
                 )
-                QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode))
+                QTimer.singleShot(450, _run_submit_attempt)
                 return
 
             if not isinstance(result, dict) or not result.get("ok"):
@@ -1172,11 +1172,11 @@ class MainWindow(QMainWindow):
                 return
 
             self._append_log(
-                f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); selecting image mode."
+                f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); submitting prompt."
             )
-            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode))
+            QTimer.singleShot(450, _run_submit_attempt)
 
-        self.browser.page().runJavaScript(populate_script, _after_populate)
+        self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
 
     def _poll_for_manual_image(self) -> None:
         if self.stop_all_requested:
