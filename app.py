@@ -582,11 +582,18 @@ class MainWindow(QMainWindow):
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
         actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 2)
 
-        self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation (24 → 48 fps)")
+        self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation")
         self.stitch_interpolation_checkbox.setToolTip(
             "After stitching, use ffmpeg minterpolate to smooth motion by generating in-between frames."
         )
-        actions_layout.addWidget(self.stitch_interpolation_checkbox, 5, 0, 1, 2)
+        actions_layout.addWidget(self.stitch_interpolation_checkbox, 5, 0, 1, 1)
+
+        self.stitch_interpolation_fps = QComboBox()
+        self.stitch_interpolation_fps.addItem("48 fps", 48)
+        self.stitch_interpolation_fps.addItem("60 fps", 60)
+        self.stitch_interpolation_fps.setCurrentIndex(0)
+        self.stitch_interpolation_fps.setToolTip("Target frame rate used when frame interpolation is enabled.")
+        actions_layout.addWidget(self.stitch_interpolation_fps, 5, 1, 1, 1)
 
         self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling (2x Lanczos)")
         self.stitch_upscale_checkbox.setToolTip(
@@ -955,6 +962,7 @@ class MainWindow(QMainWindow):
             "count": self.count.value(),
             "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
+            "stitch_interpolation_fps": int(self.stitch_interpolation_fps.currentData()),
             "stitch_upscale_enabled": self.stitch_upscale_checkbox.isChecked(),
             "crossfade_duration": self.crossfade_duration.value(),
             "download_dir": str(self.download_dir),
@@ -1000,6 +1008,11 @@ class MainWindow(QMainWindow):
             self.stitch_crossfade_checkbox.setChecked(bool(preferences["stitch_crossfade_enabled"]))
         if "stitch_interpolation_enabled" in preferences:
             self.stitch_interpolation_checkbox.setChecked(bool(preferences["stitch_interpolation_enabled"]))
+        if "stitch_interpolation_fps" in preferences:
+            fps = str(preferences["stitch_interpolation_fps"]).strip()
+            fps_index = self.stitch_interpolation_fps.findData(int(fps)) if fps.isdigit() else -1
+            if fps_index >= 0:
+                self.stitch_interpolation_fps.setCurrentIndex(fps_index)
         if "stitch_upscale_enabled" in preferences:
             self.stitch_upscale_checkbox.setChecked(bool(preferences["stitch_upscale_enabled"]))
         if "crossfade_duration" in preferences:
@@ -3133,15 +3146,18 @@ class MainWindow(QMainWindow):
                 self._stitch_videos_concat(video_paths, stitch_target)
 
             if enhancement_enabled:
+                interpolation_fps = int(self.stitch_interpolation_fps.currentData())
+                interpolation_status = f"{interpolation_fps} fps" if interpolate_enabled else "off"
                 self._append_log(
                     "Applying stitched video enhancements: "
-                    f"frame interpolation={'on' if interpolate_enabled else 'off'}, "
+                    f"frame interpolation={interpolation_status}, "
                     f"upscaling={'on' if upscale_enabled else 'off'}."
                 )
                 self._enhance_stitched_video(
                     input_file=stitch_target,
                     output_file=output_file,
                     interpolate=interpolate_enabled,
+                    interpolation_fps=interpolation_fps,
                     upscale=upscale_enabled,
                 )
         except FileNotFoundError:
@@ -3352,13 +3368,23 @@ class MainWindow(QMainWindow):
 
         subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    def _enhance_stitched_video(self, input_file: Path, output_file: Path, interpolate: bool, upscale: bool) -> None:
+    def _enhance_stitched_video(
+        self,
+        input_file: Path,
+        output_file: Path,
+        interpolate: bool,
+        interpolation_fps: int,
+        upscale: bool,
+    ) -> None:
         if not interpolate and not upscale:
             return
 
         vf_filters: list[str] = []
         if interpolate:
-            vf_filters.append("minterpolate=fps=48:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1")
+            target_fps = 48 if interpolation_fps not in {48, 60} else interpolation_fps
+            vf_filters.append(
+                f"minterpolate=fps={target_fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
+            )
         if upscale:
             vf_filters.append("scale='min(iw*2,3840)':'min(ih*2,2160)':flags=lanczos")
 

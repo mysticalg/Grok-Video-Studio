@@ -16,7 +16,7 @@ A desktop-first Python/PyQt app for generating Grok videos, iterating quickly in
 - Continue from the latest frame or a local seed image.
 - Stitch all listed videos into one final output, with optional crossfade blending between clips.
 - Optional stitched-output enhancements:
-  - Frame interpolation (24 → 48 fps) for smoother motion.
+  - Frame interpolation (24 → 48 fps or 60 fps) for smoother motion.
   - AI-style 2x upscaling (Lanczos, capped at 4K output).
 - Configure video options (including crossfade duration) from settings.
 - Set a custom download folder in settings.
