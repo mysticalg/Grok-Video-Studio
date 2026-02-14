@@ -2079,8 +2079,19 @@ class MainWindow(QMainWindow):
                         return /make\\s+video/i.test(label);
                     }});
 
-                const downloadButton = [...document.querySelectorAll("button[aria-label='Download'], button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /download/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                const downloadCandidates = [...document.querySelectorAll("button[aria-label='Download'][type='button'], button[aria-label='Download']")]
+                    .filter((btn) => isVisible(btn) && !btn.disabled);
+                const makeVideoContainer = makeVideoButton
+                    ? (makeVideoButton.closest("form") || makeVideoButton.closest("section") || makeVideoButton.closest("main") || makeVideoButton.parentElement)
+                    : null;
+                let downloadButton = downloadCandidates.find((btn) => makeVideoContainer && makeVideoContainer.contains(btn) && btn !== makeVideoButton);
+                if (!downloadButton) downloadButton = downloadCandidates[0] || null;
+
+                if (downloadButton && (redoButton || !makeVideoButton)) {{
+                    return {{
+                        status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
+                    }};
+                }}
 
                 if (makeVideoButton && !redoButton) {{
                     const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
@@ -2095,12 +2106,6 @@ class MainWindow(QMainWindow):
 
                 if (!redoButton) {{
                     return {{ status: "waiting-for-redo" }};
-                }}
-
-                if (downloadButton) {{
-                    return {{
-                        status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
-                    }};
                 }}
 
                 const video = document.querySelector("video");
@@ -2127,11 +2132,6 @@ class MainWindow(QMainWindow):
 
             status = result.get("status", "waiting")
             progress_text = (result.get("progressText") or "").strip()
-            elapsed_since_start = (
-                time.time() - self.manual_download_started_at
-                if self.manual_download_started_at is not None
-                else 0.0
-            )
 
             if status == "progress":
                 self.manual_video_start_click_sent = True
@@ -2149,14 +2149,6 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "make-video-awaiting-progress":
-                if elapsed_since_start >= 20 and not self.manual_video_make_click_fallback_used:
-                    self.manual_video_make_click_fallback_used = True
-                    self.manual_video_start_click_sent = False
-                    self._append_log(
-                        f"Variant {current_variant}: no render progress detected yet; allowing one fallback 'Make video' retry click."
-                    )
-                    self.manual_download_poll_timer.start(500)
-                    return
                 self.manual_download_poll_timer.start(3000)
                 return
 
@@ -2248,6 +2240,19 @@ class MainWindow(QMainWindow):
                     self.manual_download_started_at = None
                     self.manual_download_deadline = None
                     self._submit_next_manual_image_variant()
+                    return
+
+                image_extensions = {"png", "jpg", "jpeg", "webp", "gif", "bmp"}
+                if download_type == "video" and extension.lower() in image_extensions:
+                    self._append_log(
+                        f"WARNING: Variant {variant}: clicked a non-video download target ({extension}); retrying with video download button."
+                    )
+                    if video_path.exists():
+                        video_path.unlink(missing_ok=True)
+                    self.manual_download_click_sent = False
+                    self.manual_download_in_progress = False
+                    self.manual_download_started_at = time.time()
+                    self.manual_download_poll_timer.start(1200)
                     return
 
                 if video_size < MIN_VALID_VIDEO_BYTES:
