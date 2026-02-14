@@ -1317,6 +1317,16 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(1200, self._submit_next_manual_image_variant)
 
         submit_attempts = 0
+        set_mode_attempts = 0
+        pre_submit_mode_checks = 0
+
+        def _run_set_mode_attempt() -> None:
+            nonlocal set_mode_attempts
+            set_mode_attempts += 1
+            self._append_log(
+                f"Manual image variant {variant}: selecting Images option ({set_mode_attempts}/6)."
+            )
+            self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
 
         def _run_submit_attempt() -> None:
             nonlocal submit_attempts
@@ -1362,12 +1372,31 @@ class MainWindow(QMainWindow):
             if result in (None, ""):
                 self._append_log(
                     f"Manual image variant {variant}: image-mode callback returned empty result; "
-                    "continuing with prompt population and assuming current mode is correct."
+                    "retrying image-mode selection after a short delay."
                 )
-            elif not isinstance(result, dict) or not result.get("ok"):
+                if set_mode_attempts < 6:
+                    QTimer.singleShot(350, _run_set_mode_attempt)
+                    return
+                _retry_variant("image-mode callback stayed empty")
+                return
+
+            if not isinstance(result, dict) or not result.get("ok"):
+                if set_mode_attempts < 6:
+                    self._append_log(
+                        f"Manual image variant {variant}: image-mode selection script did not complete; retrying ({set_mode_attempts}/6)."
+                    )
+                    QTimer.singleShot(350, _run_set_mode_attempt)
+                    return
                 _retry_variant(f"set image mode script failed: {result!r}")
                 return
-            elif not result.get("imageSelected"):
+
+            if not result.get("imageSelected"):
+                if set_mode_attempts < 6:
+                    self._append_log(
+                        f"Manual image variant {variant}: Images option not active yet; retrying selection ({set_mode_attempts}/6)."
+                    )
+                    QTimer.singleShot(350, _run_set_mode_attempt)
+                    return
                 _retry_variant(f"image option not selected: {result!r}")
                 return
 
@@ -1377,17 +1406,40 @@ class MainWindow(QMainWindow):
                 f"(opened={result.get('optionsOpened') if isinstance(result, dict) else 'unknown'}, "
                 f"itemFound={result.get('imageItemFound') if isinstance(result, dict) else 'unknown'}, "
                 f"itemClicked={result.get('imageClicked') if isinstance(result, dict) else 'unknown'}); "
-                f"populating prompt next (attempt {attempts})."
+                "waiting briefly, then populating prompt."
             )
-            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+            QTimer.singleShot(650, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+
+        def _submit_after_mode_recheck() -> None:
+            self._append_log(
+                f"Manual image variant {variant}: Images option confirmed; pausing briefly before submit."
+            )
+            QTimer.singleShot(900, _run_submit_attempt)
+
+        def _after_pre_submit_mode_check(result):
+            nonlocal pre_submit_mode_checks
+            pre_submit_mode_checks += 1
+
+            if isinstance(result, dict) and result.get("ok") and result.get("imageSelected"):
+                _submit_after_mode_recheck()
+                return
+
+            if pre_submit_mode_checks < 4:
+                self._append_log(
+                    f"Manual image variant {variant}: re-checking Images option before submit ({pre_submit_mode_checks}/4)."
+                )
+                QTimer.singleShot(350, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_pre_submit_mode_check))
+                return
+
+            _retry_variant(f"image mode was not confirmed before submit: {result!r}")
 
         def _after_populate(result):
             if result in (None, ""):
                 self._append_log(
                     f"Manual image variant {variant}: prompt populate callback returned empty result; "
-                    "continuing to submit."
+                    "re-checking Images option before submit."
                 )
-                QTimer.singleShot(450, _run_submit_attempt)
+                QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_pre_submit_mode_check))
                 return
 
             if not isinstance(result, dict) or not result.get("ok"):
@@ -1395,11 +1447,12 @@ class MainWindow(QMainWindow):
                 return
 
             self._append_log(
-                f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); submitting prompt."
+                f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); "
+                "re-checking Images option before submit."
             )
-            QTimer.singleShot(450, _run_submit_attempt)
+            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_pre_submit_mode_check))
 
-        self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
+        _run_set_mode_attempt()
 
     def _poll_for_manual_image(self) -> None:
         if self.stop_all_requested:
