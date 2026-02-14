@@ -1625,7 +1625,12 @@ class MainWindow(QMainWindow):
                 try {{
                     const expectedPrompt = {escaped_prompt};
                     const normalize = (value) => (value || "").replace(/\s+/g, " ").trim().toLowerCase();
+                    const tokenize = (value) => normalize(value)
+                        .split(/[^a-z0-9]+/i)
+                        .map((t) => t.trim())
+                        .filter((t) => t.length >= 3);
                     const expected = normalize(expectedPrompt);
+                    const expectedTokens = [...new Set(tokenize(expectedPrompt))];
                     const selectors = [
                         "textarea[placeholder*='Type to imagine' i]",
                         "input[placeholder*='Type to imagine' i]",
@@ -1653,24 +1658,44 @@ class MainWindow(QMainWindow):
                         const matches = document.querySelectorAll(selector);
                         for (let i = 0; i < matches.length; i += 1) candidates.push(matches[i]);
                     }});
-                    const promptInput = candidates.find((el) => isVisible(el));
-                    if (!promptInput) return {{ ok: false, error: "Visible prompt input not found during verification" }};
+                    const visibleCandidates = [...new Set(candidates)].filter((el) => isVisible(el));
+                    if (!visibleCandidates.length) return {{ ok: false, error: "Visible prompt input not found during verification", hasAnyText: false, bestScore: 0 }};
 
-                    const value = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
-                    const normalizedValue = normalize(value);
-                    const containsExpected = !!expected && normalizedValue.includes(expected);
+                    const values = visibleCandidates.map((el) => (el.isContentEditable ? (el.textContent || "") : (el.value || "")));
+                    const normalizedValues = values.map((value) => normalize(value));
+                    const hasAnyText = values.some((value) => !!value.trim());
+                    const containsExpected = !!expected && normalizedValues.some((value) => value.includes(expected));
+
+                    let bestScore = 0;
+                    let bestValue = "";
+                    for (const value of values) {{
+                        const tokens = new Set(tokenize(value));
+                        if (!expectedTokens.length) continue;
+                        let matched = 0;
+                        for (const token of expectedTokens) {{
+                            if (tokens.has(token)) matched += 1;
+                        }}
+                        const score = matched / expectedTokens.length;
+                        if (score > bestScore) {{
+                            bestScore = score;
+                            bestValue = value;
+                        }}
+                    }}
+
+                    const ok = containsExpected || (expectedTokens.length >= 4 && bestScore >= 0.72);
                     return {{
-                        ok: containsExpected,
-                        filledLength: value.length,
+                        ok,
                         containsExpected,
-                        valuePreview: value.slice(0, 120),
+                        bestScore,
+                        hasAnyText,
+                        candidateCount: visibleCandidates.length,
+                        valuePreview: (bestValue || values.find((v) => v.trim()) || "").slice(0, 160),
                     }};
                 }} catch (err) {{
-                    return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                    return {{ ok: false, error: String(err && err.stack ? err.stack : err), hasAnyText: false, bestScore: 0 }};
                 }}
             }})()
         """
-
         set_options_script = r"""
             (() => {
                 try {
@@ -2046,19 +2071,29 @@ class MainWindow(QMainWindow):
                         QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(script, after_submit))
                         return
 
-                    self._append_log(
-                        f"ERROR: Continue-mode prompt text could not be confirmed for variant {variant} after "
-                        f"{max_prompt_fill_attempts} attempts; stopping to avoid submitting the wrong prompt."
-                    )
-                    self.continue_from_frame_active = False
-                    self.continue_from_frame_target_count = 0
-                    self.continue_from_frame_completed = 0
-                    self.continue_from_frame_remaining = 0
-                    self.continue_from_frame_prompt = ""
-                    self.continue_from_frame_current_source_video = ""
-                    self.continue_from_frame_waiting_for_reload = False
-                    self.continue_from_frame_upload_token = 0
-                    return
+                    has_any_text = isinstance(verify_result, dict) and bool(verify_result.get("hasAnyText"))
+                    best_score = float(verify_result.get("bestScore") or 0.0) if isinstance(verify_result, dict) else 0.0
+                    preview = (verify_result.get("valuePreview") or "") if isinstance(verify_result, dict) else ""
+                    if has_any_text and best_score >= 0.45:
+                        self._append_log(
+                            f"WARNING: Continue-mode prompt text could not be strictly confirmed for variant {variant} "
+                            f"after {max_prompt_fill_attempts} attempts (score={best_score:.2f}); proceeding with submit. "
+                            f"Preview={preview!r}"
+                        )
+                    else:
+                        self._append_log(
+                            f"ERROR: Continue-mode prompt text could not be confirmed for variant {variant} after "
+                            f"{max_prompt_fill_attempts} attempts; stopping to avoid submitting the wrong prompt."
+                        )
+                        self.continue_from_frame_active = False
+                        self.continue_from_frame_target_count = 0
+                        self.continue_from_frame_completed = 0
+                        self.continue_from_frame_remaining = 0
+                        self.continue_from_frame_prompt = ""
+                        self.continue_from_frame_current_source_video = ""
+                        self.continue_from_frame_waiting_for_reload = False
+                        self.continue_from_frame_upload_token = 0
+                        return
 
                 if self.continue_from_frame_active:
                     _run_continue_mode_submit()
