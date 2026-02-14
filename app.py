@@ -1133,7 +1133,7 @@ class MainWindow(QMainWindow):
 
         def _after_submit(result):
             if isinstance(result, dict) and result.get("ok"):
-                self.show_browser_page()
+                #self.show_browser_page()
                 self._append_log(
                     f"Submitted manual image variant {variant} (attempt {attempts}); "
                     "waiting for first rendered image, then opening it for download."
@@ -1153,7 +1153,7 @@ class MainWindow(QMainWindow):
 
             # Some Grok navigations can clear the JS callback value; treat that as submitted.
             if result in (None, ""):
-                self.show_browser_page()
+                #self.show_browser_page()
                 self._append_log(
                     f"Submitted manual image variant {variant} (attempt {attempts}); "
                     "submit callback returned empty result after page activity; continuing to image polling."
