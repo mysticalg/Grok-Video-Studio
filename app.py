@@ -2,13 +2,15 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
 import requests
-from PySide6.QtCore import QMimeData, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QMimeData, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,6 +18,8 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -277,6 +281,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download: int | None = None
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
+        self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
@@ -286,6 +291,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_completed = 0
         self.continue_from_frame_prompt = ""
         self.continue_from_frame_current_source_video = ""
+        self.continue_from_frame_seed_image_path: Path | None = None
         self.continue_from_frame_waiting_for_reload = False
         self.continue_from_frame_reload_timeout_timer = QTimer(self)
         self.continue_from_frame_reload_timeout_timer.setSingleShot(True)
@@ -304,51 +310,61 @@ class MainWindow(QMainWindow):
         left = QWidget()
         left_layout = QVBoxLayout(left)
 
-        left_layout.addWidget(QLabel("Grok API Key (required for video generation)"))
+        config_row = QHBoxLayout()
+
+        api_group = QGroupBox("API + Models")
+        api_group_layout = QVBoxLayout(api_group)
+
+        api_group_layout.addWidget(QLabel("Grok API Key (required for video generation)"))
         self.api_key = QLineEdit()
         self.api_key.setEchoMode(QLineEdit.Password)
         self.api_key.setText(os.getenv("GROK_API_KEY", ""))
-        left_layout.addWidget(self.api_key)
+        api_group_layout.addWidget(self.api_key)
 
-        left_layout.addWidget(QLabel("Chat Model"))
+        api_group_layout.addWidget(QLabel("Chat Model"))
         self.chat_model = QLineEdit(os.getenv("GROK_CHAT_MODEL", "grok-3-mini"))
-        left_layout.addWidget(self.chat_model)
+        api_group_layout.addWidget(self.chat_model)
 
-        left_layout.addWidget(QLabel("Video Model"))
+        api_group_layout.addWidget(QLabel("Video Model"))
         self.image_model = QLineEdit(os.getenv("GROK_VIDEO_MODEL", "grok-video-latest"))
-        left_layout.addWidget(self.image_model)
+        api_group_layout.addWidget(self.image_model)
 
-        left_layout.addWidget(QLabel("Prompt Source"))
+        api_group_layout.addWidget(QLabel("Prompt Source"))
         self.prompt_source = QComboBox()
         self.prompt_source.addItem("Manual prompt (no API)", "manual")
         self.prompt_source.addItem("Grok API", "grok")
         self.prompt_source.addItem("OpenAI API", "openai")
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
-        left_layout.addWidget(self.prompt_source)
+        api_group_layout.addWidget(self.prompt_source)
 
-        left_layout.addWidget(QLabel("OpenAI API Key (for OpenAI prompt generation)"))
+        api_group_layout.addWidget(QLabel("OpenAI API Key (for OpenAI prompt generation)"))
         self.openai_api_key = QLineEdit()
         self.openai_api_key.setEchoMode(QLineEdit.Password)
         self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
-        left_layout.addWidget(self.openai_api_key)
+        api_group_layout.addWidget(self.openai_api_key)
 
-        left_layout.addWidget(QLabel("OpenAI Chat Model"))
+        api_group_layout.addWidget(QLabel("OpenAI Chat Model"))
         self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
-        left_layout.addWidget(self.openai_chat_model)
+        api_group_layout.addWidget(self.openai_chat_model)
 
-        left_layout.addWidget(QLabel("Concept"))
+        prompt_group = QGroupBox("Prompt Inputs")
+        prompt_group_layout = QVBoxLayout(prompt_group)
+
+        prompt_group_layout.addWidget(QLabel("Concept"))
         self.concept = QPlainTextEdit()
         self.concept.setPlaceholderText("Describe the video idea...")
-        left_layout.addWidget(self.concept)
+        self.concept.setMaximumHeight(90)
+        prompt_group_layout.addWidget(self.concept)
 
-        left_layout.addWidget(QLabel("Manual Prompt (used only when source is Manual)"))
+        prompt_group_layout.addWidget(QLabel("Manual Prompt (used only when source is Manual)"))
         self.manual_prompt = QPlainTextEdit()
         self.manual_prompt.setPlaceholderText("Paste or write an exact prompt to skip prompt APIs...")
         self.manual_prompt.setPlainText(
             "abstract surreal artistic photorealistic strange random dream like scifi fast moving camera, "
             "fast moving fractals morphing and intersecting, highly detailed"
         )
-        left_layout.addWidget(self.manual_prompt)
+        self.manual_prompt.setMaximumHeight(110)
+        prompt_group_layout.addWidget(self.manual_prompt)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Count"))
@@ -356,49 +372,59 @@ class MainWindow(QMainWindow):
         self.count.setRange(1, 10)
         self.count.setValue(1)
         row.addWidget(self.count)
-        left_layout.addLayout(row)
+        prompt_group_layout.addLayout(row)
+
+        config_row.addWidget(api_group, 1)
+        config_row.addWidget(prompt_group, 1)
+        left_layout.addLayout(config_row)
+
+        actions_group = QGroupBox("Actions")
+        actions_layout = QGridLayout(actions_group)
 
         self.generate_btn = QPushButton("Generate Video")
         self.generate_btn.clicked.connect(self.start_generation)
-        left_layout.addWidget(self.generate_btn)
+        actions_layout.addWidget(self.generate_btn, 0, 0, 1, 2)
 
         self.open_btn = QPushButton("Open Local Video...")
         self.open_btn.clicked.connect(self.open_local_video)
-        left_layout.addWidget(self.open_btn)
+        actions_layout.addWidget(self.open_btn, 1, 0)
 
         self.extract_frame_btn = QPushButton("Extract Last Frame + Copy Image")
         self.extract_frame_btn.clicked.connect(self.extract_last_frame_from_selected)
-        left_layout.addWidget(self.extract_frame_btn)
+        actions_layout.addWidget(self.extract_frame_btn, 1, 1)
 
         self.continue_frame_btn = QPushButton("Continue from Last Frame (paste + generate)")
         self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
-        left_layout.addWidget(self.continue_frame_btn)
+        actions_layout.addWidget(self.continue_frame_btn, 2, 0)
+
+        self.continue_image_btn = QPushButton("Continue from Local Image (paste + generate)")
+        self.continue_image_btn.clicked.connect(self.continue_from_local_image)
+        actions_layout.addWidget(self.continue_image_btn, 2, 1)
 
         self.show_browser_btn = QPushButton("Show Browser (grok.com/imagine)")
         self.show_browser_btn.clicked.connect(self.show_browser_page)
-        left_layout.addWidget(self.show_browser_btn)
+        actions_layout.addWidget(self.show_browser_btn, 3, 0)
 
         self.stitch_btn = QPushButton("Stitch All Videos")
         self.stitch_btn.clicked.connect(self.stitch_all_videos)
-        left_layout.addWidget(self.stitch_btn)
+        actions_layout.addWidget(self.stitch_btn, 3, 1)
 
         self.upload_youtube_btn = QPushButton("Upload Selected to YouTube")
         self.upload_youtube_btn.clicked.connect(self.upload_selected_to_youtube)
-        left_layout.addWidget(self.upload_youtube_btn)
+        actions_layout.addWidget(self.upload_youtube_btn, 4, 0, 1, 2)
+
+        left_layout.addWidget(actions_group)
 
         left_layout.addWidget(QLabel("Generated Videos"))
         self.video_picker = QComboBox()
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
         left_layout.addWidget(self.video_picker)
 
-        left_layout.addWidget(QLabel("Activity Log"))
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        left_layout.addWidget(self.log)
-
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
+        self.preview = QVideoWidget()
+        self.player.setVideoOutput(self.preview)
 
         self.browser = QWebEngineView()
         self.browser_profile = QWebEngineProfile("grok-video-desktop-profile", self)
@@ -420,11 +446,32 @@ class MainWindow(QMainWindow):
         self.browser.loadFinished.connect(self._on_browser_load_finished)
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
 
+        log_group = QGroupBox("Activity Log")
+        log_layout = QVBoxLayout(log_group)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(260)
+        log_layout.addWidget(self.log)
+
+        preview_group = QGroupBox("Preview")
+        preview_layout = QVBoxLayout(preview_group)
+        preview_layout.addWidget(self.preview)
+
+        bottom_splitter = QSplitter()
+        bottom_splitter.addWidget(preview_group)
+        bottom_splitter.addWidget(log_group)
+        bottom_splitter.setSizes([500, 800])
+
+        right_splitter = QSplitter(Qt.Vertical)
+        right_splitter.addWidget(self.browser)
+        right_splitter.addWidget(bottom_splitter)
+        right_splitter.setSizes([620, 280])
+
         self._toggle_prompt_source_fields()
 
         splitter.addWidget(left)
-        splitter.addWidget(self.browser)
-        splitter.setSizes([500, 1000])
+        splitter.addWidget(right_splitter)
+        splitter.setSizes([760, 1140])
 
         # Keep browser visible as a fixed right-hand pane
         splitter.setChildrenCollapsible(False)
@@ -435,7 +482,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
     def _append_log(self, text: str) -> None:
-        self.log.appendPlainText(text)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.log.appendPlainText(f"[{timestamp}] {text}")
 
     def _on_browser_load_finished(self, ok: bool) -> None:
         if ok:
@@ -645,44 +693,48 @@ class MainWindow(QMainWindow):
         self._submit_next_manual_variant()
 
     def _start_continue_iteration(self) -> None:
-        latest_video = self._resolve_latest_video_for_continuation()
-        if not latest_video:
-            self._append_log("ERROR: No videos available to continue from last frame.")
-            self.continue_from_frame_active = False
-            self.continue_from_frame_current_source_video = ""
-            return
+        frame_path: Path | None = None
+        if self.continue_from_frame_seed_image_path is not None:
+            frame_path = self.continue_from_frame_seed_image_path
+            self._append_log(f"Continue-from-image: using selected image: {frame_path}")
+        else:
+            latest_video = self._resolve_latest_video_for_continuation()
+            if not latest_video:
+                self._append_log("ERROR: No videos available to continue from last frame.")
+                self.continue_from_frame_active = False
+                self.continue_from_frame_current_source_video = ""
+                return
 
-        self.continue_from_frame_current_source_video = latest_video
-        self._append_log(f"Continue-from-last-frame: extracting frame from source video: {latest_video}")
-        frame_path = self._extract_last_frame(latest_video)
-        if frame_path is None:
-            self._append_log("ERROR: Continue-from-last-frame stopped because frame extraction failed.")
-            self.continue_from_frame_active = False
-            self.continue_from_frame_current_source_video = ""
-            return
-        self._append_log(f"Continue-from-last-frame: extracted last frame to {frame_path}")
-        if not self._copy_image_to_clipboard(frame_path):
-            self._append_log("ERROR: Continue-from-last-frame stopped because clipboard image copy failed.")
-            self.continue_from_frame_active = False
-            self.continue_from_frame_current_source_video = ""
-            return
+            self.continue_from_frame_current_source_video = latest_video
+            self._append_log(f"Continue-from-last-frame: extracting frame from source video: {latest_video}")
+            frame_path = self._extract_last_frame(latest_video)
+            if frame_path is None:
+                self._append_log("ERROR: Continue-from-last-frame stopped because frame extraction failed.")
+                self.continue_from_frame_active = False
+                self.continue_from_frame_current_source_video = ""
+                return
+            self._append_log(f"Continue-from-last-frame: extracted last frame to {frame_path}")
+            if not self._copy_image_to_clipboard(frame_path):
+                self._append_log("ERROR: Continue-from-last-frame stopped because clipboard image copy failed.")
+                self.continue_from_frame_active = False
+                self.continue_from_frame_current_source_video = ""
+                return
 
         self.last_extracted_frame_path = frame_path
         iteration = self.continue_from_frame_completed + 1
         self._append_log(
-            f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: copied last frame {frame_path}"
+            f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: using seed image {frame_path}"
         )
         browser_page_pause_ms = 200
         self._append_log(
-            "Continue-from-last-frame: starting image paste into the current Grok prompt area "
-            "without forcing page navigation..."
+            "Continue mode: starting image paste into the current Grok prompt area without forcing page navigation..."
         )
         QTimer.singleShot(
             9000 + browser_page_pause_ms,
             lambda: self._upload_frame_into_grok(frame_path, on_uploaded=self._wait_for_continue_upload_reload),
         )
         self._append_log(
-            "Continue-from-last-frame: image paste scheduled; waiting for upload/reload before prompt submission."
+            "Continue mode: image paste scheduled; waiting for upload/reload before prompt submission."
         )
 
     def _resolve_latest_video_for_continuation(self) -> str | None:
@@ -1242,6 +1294,7 @@ class MainWindow(QMainWindow):
     def _trigger_browser_video_download(self, variant: int) -> None:
         self.manual_download_deadline = time.time() + 420
         self.manual_download_click_sent = False
+        self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
         self.manual_download_poll_timer.start(0)
 
@@ -1254,6 +1307,7 @@ class MainWindow(QMainWindow):
         if time.time() > deadline:
             self.pending_manual_variant_for_download = None
             self.manual_download_click_sent = False
+            self.manual_download_in_progress = False
             self.manual_download_started_at = None
             self.manual_download_deadline = None
             self._append_log(f"ERROR: Variant {variant} did not produce a downloadable video in time.")
@@ -1348,6 +1402,7 @@ class MainWindow(QMainWindow):
                 if not self.manual_download_click_sent:
                     self._append_log(f"Variant {current_variant} appears ready; clicked in-page Download button.")
                     self.manual_download_click_sent = True
+                    self.manual_download_in_progress = True
                 self.manual_download_poll_timer.start(3000)
                 return
 
@@ -1373,10 +1428,11 @@ class MainWindow(QMainWindow):
                     return true;
                 }})()
             """
-            self.browser.page().runJavaScript(trigger_download_script)
             if not self.manual_download_click_sent:
+                self.browser.page().runJavaScript(trigger_download_script)
                 self._append_log(f"Variant {current_variant} video detected; browser download requested from video source.")
                 self.manual_download_click_sent = True
+                self.manual_download_in_progress = True
 
             self.manual_download_poll_timer.start(3000)
 
@@ -1385,6 +1441,12 @@ class MainWindow(QMainWindow):
     def _on_browser_download_requested(self, download) -> None:
         variant = self.pending_manual_variant_for_download
         if variant is None:
+            return
+        if self.manual_download_in_progress:
+            self.manual_download_in_progress = False
+        elif self.manual_download_click_sent:
+            self._append_log("Ignoring duplicate browser download request for current manual variant.")
+            download.cancel()
             return
 
         filename = f"video_{int(time.time() * 1000)}_manual_v{variant}.mp4"
@@ -1403,6 +1465,7 @@ class MainWindow(QMainWindow):
                     )
                     self.pending_manual_variant_for_download = None
                     self.manual_download_click_sent = False
+                    self.manual_download_in_progress = False
                     self.manual_download_started_at = None
                     self.manual_download_deadline = None
 
@@ -1431,6 +1494,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self.show_browser_page)
                 self.pending_manual_variant_for_download = None
                 self.manual_download_click_sent = False
+                self.manual_download_in_progress = False
                 self.manual_download_started_at = None
                 self.manual_download_deadline = None
                 if self.continue_from_frame_active:
@@ -1438,18 +1502,20 @@ class MainWindow(QMainWindow):
                     if self.continue_from_frame_completed < self.continue_from_frame_target_count:
                         QTimer.singleShot(800, self._start_continue_iteration)
                     else:
-                        self._append_log("Continue-from-last-frame workflow complete.")
+                        self._append_log("Continue workflow complete.")
                         self.continue_from_frame_active = False
                         self.continue_from_frame_target_count = 0
                         self.continue_from_frame_completed = 0
                         self.continue_from_frame_prompt = ""
                         self.continue_from_frame_current_source_video = ""
+                        self.continue_from_frame_seed_image_path = None
                 else:
                     self._submit_next_manual_variant()
             elif state == download.DownloadState.DownloadInterrupted:
                 self._append_log(f"ERROR: Download interrupted for manual variant {variant}.")
                 self.pending_manual_variant_for_download = None
                 self.manual_download_click_sent = False
+                self.manual_download_in_progress = False
                 self.manual_download_started_at = None
                 self.manual_download_deadline = None
                 self.continue_from_frame_active = False
@@ -1457,6 +1523,7 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_completed = 0
                 self.continue_from_frame_prompt = ""
                 self.continue_from_frame_current_source_video = ""
+                self.continue_from_frame_seed_image_path = None
 
         download.stateChanged.connect(on_state_changed)
 
@@ -1479,15 +1546,15 @@ class MainWindow(QMainWindow):
 
     def _preview_video(self, file_path: str) -> None:
         self.player.setSource(QUrl.fromLocalFile(file_path))
-        self.player.stop()
-        self._append_log(f"Selected video (preview disabled): {file_path}")
+        self.player.play()
+        self._append_log(f"Selected video for preview: {file_path}")
 
     def open_local_video(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(self, "Select video", str(DOWNLOAD_DIR), "Videos (*.mp4 *.mov *.webm)")
         if not file_path:
             return
         self._preview_video(file_path)
-        self._append_log(f"Opened local file (preview disabled): {file_path}")
+        self._append_log(f"Opened local file for preview: {file_path}")
 
     def _toggle_prompt_source_fields(self) -> None:
         source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
@@ -1728,10 +1795,45 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_completed = 0
         self.continue_from_frame_prompt = manual_prompt
         self.continue_from_frame_current_source_video = ""
+        self.continue_from_frame_seed_image_path = None
         self._append_log(
             f"Continue-from-last-frame started for {self.continue_from_frame_target_count} iteration(s)."
         )
         self._append_log(f"Continue-from-last-frame source video selected: {latest_video}")
+        self._start_continue_iteration()
+
+    def continue_from_local_image(self) -> None:
+        source = self.prompt_source.currentData()
+        if source != "manual":
+            QMessageBox.warning(self, "Manual Mode Required", "Set Prompt Source to 'Manual prompt (no API)' for image continuation.")
+            return
+
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
+            return
+
+        image_path, _ = QFileDialog.getOpenFileName(self, "Select image", str(DOWNLOAD_DIR), "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if not image_path:
+            return
+
+        seed_image = Path(image_path)
+        if not seed_image.exists():
+            QMessageBox.warning(self, "Image Missing", "Selected image was not found on disk.")
+            return
+
+        self.continue_from_frame_active = True
+        self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_reload_timeout_timer.stop()
+        self.continue_from_frame_target_count = self.count.value()
+        self.continue_from_frame_completed = 0
+        self.continue_from_frame_prompt = manual_prompt
+        self.continue_from_frame_current_source_video = ""
+        self.continue_from_frame_seed_image_path = seed_image
+
+        self._append_log(
+            f"Continue-from-image started for {self.continue_from_frame_target_count} iteration(s) using {seed_image}."
+        )
         self._start_continue_iteration()
 
     def show_browser_page(self) -> None:
