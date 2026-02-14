@@ -951,9 +951,11 @@ class MainWindow(QMainWindow):
 
                     promptInput.focus();
                     if (promptInput.isContentEditable) {{
-                        const paragraph = promptInput.querySelector("p") || promptInput;
+                        const paragraph = document.createElement("p");
                         paragraph.textContent = prompt;
-                        promptInput.dispatchEvent(new InputEvent("input", {{ bubbles: true, data: prompt, inputType: "insertText" }}));
+                        promptInput.replaceChildren(paragraph);
+                        promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                        promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
                     }} else {{
                         const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(promptInput), "value")?.set;
                         if (setter) setter.call(promptInput, prompt);
@@ -961,7 +963,9 @@ class MainWindow(QMainWindow):
                         promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
                         promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
                     }}
-                    return {{ ok: true }};
+                    const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
+                    if (!typedValue.trim()) return {{ ok: false, error: "Prompt field did not accept text" }};
+                    return {{ ok: true, filledLength: typedValue.length }};
                 }} catch (err) {{
                     return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
                 }}
@@ -1098,6 +1102,9 @@ class MainWindow(QMainWindow):
         def _run_submit_attempt() -> None:
             nonlocal submit_attempts
             submit_attempts += 1
+            self._append_log(
+                f"Manual image variant {variant}: attempting submit click ({submit_attempts}/12)."
+            )
             self.browser.page().runJavaScript(submit_script, _after_submit)
 
         def _after_submit(result):
@@ -1133,11 +1140,15 @@ class MainWindow(QMainWindow):
             _retry_variant(f"submit failed: {result!r}")
 
         def _after_set_mode(result):
-            if not isinstance(result, dict) or not result.get("ok"):
+            if result in (None, ""):
+                self._append_log(
+                    f"Manual image variant {variant}: image-mode callback returned empty result; "
+                    "continuing to submit using current composer state."
+                )
+            elif not isinstance(result, dict) or not result.get("ok"):
                 _retry_variant(f"set image mode script failed: {result!r}")
                 return
-
-            if not result.get("imageSelected"):
+            elif not result.get("imageSelected"):
                 _retry_variant(f"image option not selected: {result!r}")
                 return
 
@@ -1148,9 +1159,21 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(450, _run_submit_attempt)
 
         def _after_populate(result):
+            if result in (None, ""):
+                self._append_log(
+                    f"Manual image variant {variant}: prompt populate callback returned empty result; "
+                    "continuing to mode selection."
+                )
+                QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode))
+                return
+
             if not isinstance(result, dict) or not result.get("ok"):
                 _retry_variant(f"prompt population failed: {result!r}")
                 return
+
+            self._append_log(
+                f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); selecting image mode."
+            )
             QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode))
 
         self.browser.page().runJavaScript(populate_script, _after_populate)
