@@ -329,6 +329,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_prompt = ""
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path: Path | None = None
+        self.continue_from_frame_use_first_and_last = False
         self.continue_from_frame_waiting_for_reload = False
         self.continue_from_frame_reload_timeout_timer = QTimer(self)
         self.continue_from_frame_reload_timeout_timer.setSingleShot(True)
@@ -398,13 +399,17 @@ class MainWindow(QMainWindow):
         self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
         actions_layout.addWidget(self.continue_frame_btn, 2, 0)
 
+        self.continue_first_last_btn = QPushButton("Continue from First + Last Frame (paste + generate)")
+        self.continue_first_last_btn.clicked.connect(self.continue_from_first_and_last_frame)
+        actions_layout.addWidget(self.continue_first_last_btn, 3, 0)
+
         self.continue_image_btn = QPushButton("Continue from Local Image (paste + generate)")
         self.continue_image_btn.clicked.connect(self.continue_from_local_image)
         actions_layout.addWidget(self.continue_image_btn, 2, 1)
 
         self.show_browser_btn = QPushButton("Show Browser (grok.com/imagine)")
         self.show_browser_btn.clicked.connect(self.show_browser_page)
-        actions_layout.addWidget(self.show_browser_btn, 3, 0)
+        actions_layout.addWidget(self.show_browser_btn, 4, 0)
 
         self.stitch_btn = QPushButton("Stitch All Videos")
         self.stitch_btn.clicked.connect(self.stitch_all_videos)
@@ -412,7 +417,7 @@ class MainWindow(QMainWindow):
 
         self.upload_youtube_btn = QPushButton("Upload Selected to YouTube")
         self.upload_youtube_btn.clicked.connect(self.upload_selected_to_youtube)
-        actions_layout.addWidget(self.upload_youtube_btn, 4, 0, 1, 2)
+        actions_layout.addWidget(self.upload_youtube_btn, 5, 0, 1, 2)
 
         left_layout.addWidget(actions_group)
 
@@ -711,21 +716,22 @@ class MainWindow(QMainWindow):
             self.continue_from_frame_current_source_video = ""
             return
 
-        frame_path = self._extract_last_frame(source_video)
-        if frame_path is None:
+        frame_paths = self._extract_continue_seed_frames(source_video)
+        if frame_paths is None:
             self._append_log(
-                "ERROR: Could not extract a last frame from the previous source video; "
-                "continue-from-last-frame workflow is stopping."
+                "ERROR: Could not extract continuation frame(s) from the previous source video; "
+                "continuation workflow is stopping."
             )
             self.continue_from_frame_active = False
             self.continue_from_frame_target_count = 0
             self.continue_from_frame_completed = 0
             self.continue_from_frame_prompt = ""
             self.continue_from_frame_current_source_video = ""
+            self.continue_from_frame_use_first_and_last = False
             return
 
-        self.last_extracted_frame_path = frame_path
-        self._upload_frame_into_grok(frame_path, on_uploaded=self._wait_for_continue_upload_reload)
+        self.last_extracted_frame_path = frame_paths[-1]
+        self._upload_frames_into_grok(frame_paths, on_uploaded=self._wait_for_continue_upload_reload)
 
     def _ensure_browser_video_playback(self) -> None:
         if not hasattr(self, "browser") or self.browser is None:
@@ -1401,8 +1407,10 @@ class MainWindow(QMainWindow):
             return
 
         frame_path: Path | None = None
+        frame_paths: list[Path] = []
         if self.continue_from_frame_seed_image_path is not None:
             frame_path = self.continue_from_frame_seed_image_path
+            frame_paths = [frame_path]
             self._append_log(f"Continue-from-image: using selected image: {frame_path}")
         else:
             latest_video = self._resolve_latest_video_for_continuation()
@@ -1413,24 +1421,20 @@ class MainWindow(QMainWindow):
                 return
 
             self.continue_from_frame_current_source_video = latest_video
-            self._append_log(f"Continue-from-last-frame: extracting frame from source video: {latest_video}")
-            frame_path = self._extract_last_frame(latest_video)
-            if frame_path is None:
-                self._append_log("ERROR: Continue-from-last-frame stopped because frame extraction failed.")
+            frame_paths = self._extract_continue_seed_frames(latest_video)
+            if frame_paths is None:
+                self._append_log("ERROR: Continuation stopped because frame extraction failed.")
                 self.continue_from_frame_active = False
                 self.continue_from_frame_current_source_video = ""
+                self.continue_from_frame_use_first_and_last = False
                 return
-            self._append_log(f"Continue-from-last-frame: extracted last frame to {frame_path}")
-            if not self._copy_image_to_clipboard(frame_path):
-                self._append_log("ERROR: Continue-from-last-frame stopped because clipboard image copy failed.")
-                self.continue_from_frame_active = False
-                self.continue_from_frame_current_source_video = ""
-                return
+            frame_path = frame_paths[-1]
 
         self.last_extracted_frame_path = frame_path
         iteration = self.continue_from_frame_completed + 1
+        image_count = 2 if self.continue_from_frame_use_first_and_last and self.continue_from_frame_seed_image_path is None else 1
         self._append_log(
-            f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: using seed image {frame_path}"
+            f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: using {image_count} seed image(s), ending with {frame_path}"
         )
         browser_page_pause_ms = 200
         self._append_log(
@@ -1438,11 +1442,33 @@ class MainWindow(QMainWindow):
         )
         QTimer.singleShot(
             9000 + browser_page_pause_ms,
-            lambda: self._upload_frame_into_grok(frame_path, on_uploaded=self._wait_for_continue_upload_reload),
+            lambda: self._upload_frames_into_grok(frame_paths, on_uploaded=self._wait_for_continue_upload_reload),
         )
         self._append_log(
             "Continue mode: image paste scheduled; waiting for upload/reload before prompt submission."
         )
+
+    def _extract_continue_seed_frames(self, video_path: str) -> list[Path] | None:
+        if self.continue_from_frame_use_first_and_last:
+            self._append_log(f"Continue-from-first+last-frame: extracting first and last frame from source video: {video_path}")
+            first_frame = self._extract_first_frame(video_path)
+            if first_frame is None:
+                self._append_log("ERROR: Failed to extract first frame for continuation.")
+                return None
+            last_frame = self._extract_last_frame(video_path)
+            if last_frame is None:
+                self._append_log("ERROR: Failed to extract last frame for continuation.")
+                return None
+            self._append_log(f"Continue-from-first+last-frame: extracted first frame to {first_frame}")
+            self._append_log(f"Continue-from-first+last-frame: extracted last frame to {last_frame}")
+            return [first_frame, last_frame]
+
+        self._append_log(f"Continue-from-last-frame: extracting frame from source video: {video_path}")
+        frame_path = self._extract_last_frame(video_path)
+        if frame_path is None:
+            return None
+        self._append_log(f"Continue-from-last-frame: extracted last frame to {frame_path}")
+        return [frame_path]
 
     def _resolve_latest_video_for_continuation(self) -> str | None:
         if self.videos:
@@ -2330,6 +2356,7 @@ class MainWindow(QMainWindow):
                         self.continue_from_frame_prompt = ""
                         self.continue_from_frame_current_source_video = ""
                         self.continue_from_frame_seed_image_path = None
+                        self.continue_from_frame_use_first_and_last = False
                 else:
                     self._submit_next_manual_variant()
             elif state == download.DownloadState.DownloadInterrupted:
@@ -2354,6 +2381,7 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_prompt = ""
                 self.continue_from_frame_current_source_video = ""
                 self.continue_from_frame_seed_image_path = None
+                self.continue_from_frame_use_first_and_last = False
 
         download.stateChanged.connect(on_state_changed)
 
@@ -2385,6 +2413,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_prompt = ""
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
+        self.continue_from_frame_use_first_and_last = False
         self.continue_from_frame_waiting_for_reload = False
 
         if self.worker and self.worker.isRunning():
@@ -2457,6 +2486,36 @@ class MainWindow(QMainWindow):
 
         return "png" if download_type == "image" else "mp4"
 
+    def _extract_first_frame(self, video_path: str) -> Path | None:
+        frame_path = DOWNLOAD_DIR / f"first_frame_{int(time.time() * 1000)}.png"
+        self._append_log(f"Starting ffmpeg first-frame extraction from: {video_path}")
+
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    video_path,
+                    "-frames:v",
+                    "1",
+                    str(frame_path),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except FileNotFoundError:
+            QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
+            return None
+        except subprocess.CalledProcessError as exc:
+            QMessageBox.critical(self, "Frame Extraction Failed", exc.stderr[-800:] or "ffmpeg failed.")
+            return None
+
+        self._append_log(f"Completed ffmpeg first-frame extraction: {frame_path}")
+        return frame_path
+
     def _extract_last_frame(self, video_path: str) -> Path | None:
         frame_path = DOWNLOAD_DIR / f"last_frame_{int(time.time() * 1000)}.png"
         self._append_log(f"Starting ffmpeg last-frame extraction from: {video_path}")
@@ -2505,125 +2564,140 @@ class MainWindow(QMainWindow):
         return True
 
     def _upload_frame_into_grok(self, frame_path: Path, on_uploaded=None) -> None:
+        self._upload_frames_into_grok([frame_path], on_uploaded=on_uploaded)
+
+    def _upload_frames_into_grok(self, frame_paths: list[Path], on_uploaded=None) -> None:
         import base64
 
-        self._append_log(f"Starting browser-side image paste for frame: {frame_path.name}")
-        frame_base64 = base64.b64encode(frame_path.read_bytes()).decode("ascii")
-        upload_script = r"""
-            (() => {
-                const base64Data = __FRAME_BASE64__;
-                const fileName = __FRAME_NAME__;
-                const selectors = [
-                    "textarea[placeholder*='Type to imagine' i]",
-                    "input[placeholder*='Type to imagine' i]",
-                    "textarea[placeholder*='Type to customize this video' i]",
-                    "input[placeholder*='Type to customize this video' i]",
-                    "textarea[placeholder*='Type to customize video' i]",
-                    "input[placeholder*='Type to customize video' i]",
-                    "textarea[placeholder*='Customize video' i]",
-                    "input[placeholder*='Customize video' i]",
-                    "textarea[aria-label*='Make a video' i]",
-                    "input[aria-label*='Make a video' i]",
-                    "div.tiptap.ProseMirror[contenteditable='true']",
-                    "[contenteditable='true'][aria-label*='Type to imagine' i]",
-                    "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
-                    "[contenteditable='true'][aria-label*='Type to customize this video' i]",
-                    "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
-                    "[contenteditable='true'][aria-label*='Type to customize video' i]",
-                    "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
-                    "[contenteditable='true'][aria-label*='Make a video' i]",
-                    "[contenteditable='true'][data-placeholder*='Customize video' i]"
-                ];
-                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                const setInputFiles = (input, files) => {
-                    try {
-                        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
-                        if (descriptor && typeof descriptor.set === "function") {
-                            descriptor.set.call(input, files);
-                            return true;
-                        }
-                    } catch (_) {}
+        if not frame_paths:
+            self._append_log("ERROR: No frames provided for browser-side image paste.")
+            return
 
-                    try {
-                        Object.defineProperty(input, "files", { value: files, configurable: true });
-                        return true;
-                    } catch (_) {
-                        return false;
-                    }
-                };
+        def _upload_next(index: int) -> None:
+            if index >= len(frame_paths):
+                if callable(on_uploaded):
+                    on_uploaded()
+                return
 
-                const dispatchFileEvents = (target, dt) => {
-                    try {
-                        target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                        target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                    } catch (_) {}
-
-                    ["dragenter", "dragover", "drop"].forEach((eventName) => {
+            frame_path = frame_paths[index]
+            self._append_log(f"Starting browser-side image paste for frame {index + 1}/{len(frame_paths)}: {frame_path.name}")
+            frame_base64 = base64.b64encode(frame_path.read_bytes()).decode("ascii")
+            upload_script = r"""
+                (() => {
+                    const base64Data = __FRAME_BASE64__;
+                    const fileName = __FRAME_NAME__;
+                    const selectors = [
+                        "textarea[placeholder*='Type to imagine' i]",
+                        "input[placeholder*='Type to imagine' i]",
+                        "textarea[placeholder*='Type to customize this video' i]",
+                        "input[placeholder*='Type to customize this video' i]",
+                        "textarea[placeholder*='Type to customize video' i]",
+                        "input[placeholder*='Type to customize video' i]",
+                        "textarea[placeholder*='Customize video' i]",
+                        "input[placeholder*='Customize video' i]",
+                        "textarea[aria-label*='Make a video' i]",
+                        "input[aria-label*='Make a video' i]",
+                        "div.tiptap.ProseMirror[contenteditable='true']",
+                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize this video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Make a video' i]",
+                        "[contenteditable='true'][data-placeholder*='Customize video' i]"
+                    ];
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const setInputFiles = (input, files) => {
                         try {
-                            target.dispatchEvent(new DragEvent(eventName, { bubbles: true, cancelable: true, dataTransfer: dt }));
+                            const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+                            if (descriptor && typeof descriptor.set === "function") {
+                                descriptor.set.call(input, files);
+                                return true;
+                            }
                         } catch (_) {}
-                    });
 
-                    try {
-                        const pasteEvent = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
-                        target.dispatchEvent(pasteEvent);
-                    } catch (_) {}
-                };
-
-                for (const selector of selectors) {
-                    const node = [...document.querySelectorAll(selector)].find((el) => isVisible(el));
-                    if (node) {
-                        node.focus();
-                        const binary = atob(base64Data);
-                        const bytes = new Uint8Array(binary.length);
-                        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-                        const file = new File([bytes], fileName, { type: "image/png" });
-
-                        const dt = new DataTransfer();
-                        dt.items.add(file);
-
-                        const queryBar = node.closest(".query-bar") || node.closest("form") || node.parentElement;
-                        const promptRoot = queryBar?.parentElement || node.parentElement;
-                        const scopedInputs = [
-                            ...(promptRoot ? promptRoot.querySelectorAll("input[type='file']") : []),
-                            ...(queryBar ? queryBar.querySelectorAll("input[type='file']") : []),
-                        ];
-                        const fileInputs = scopedInputs.length
-                            ? [...new Set(scopedInputs)]
-                            : [...document.querySelectorAll("input[type='file']")];
-
-                        let populatedInputs = 0;
-                        for (const input of fileInputs) {
-                            try {
-                                if (!setInputFiles(input, dt.files)) continue;
-                                dispatchFileEvents(input, dt);
-                                populatedInputs += 1;
-                            } catch (_) {}
+                        try {
+                            Object.defineProperty(input, "files", { value: files, configurable: true });
+                            return true;
+                        } catch (_) {
+                            return false;
                         }
+                    };
 
-                        dispatchFileEvents(node, dt);
-                        if (queryBar && queryBar !== node) dispatchFileEvents(queryBar, dt);
-                        if (promptRoot && promptRoot !== queryBar && promptRoot !== node) dispatchFileEvents(promptRoot, dt);
+                    const dispatchFileEvents = (target, dt) => {
+                        try {
+                            target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                            target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                        } catch (_) {}
 
-                        return {
-                            ok: populatedInputs > 0,
-                            fileInputs: fileInputs.length,
-                            populatedInputs,
-                            selector,
-                        };
+                        ["dragenter", "dragover", "drop"].forEach((eventName) => {
+                            try {
+                                target.dispatchEvent(new DragEvent(eventName, { bubbles: true, cancelable: true, dataTransfer: dt }));
+                            } catch (_) {}
+                        });
+
+                        try {
+                            const pasteEvent = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
+                            target.dispatchEvent(pasteEvent);
+                        } catch (_) {}
+                    };
+
+                    for (const selector of selectors) {
+                        const node = [...document.querySelectorAll(selector)].find((el) => isVisible(el));
+                        if (node) {
+                            node.focus();
+                            const binary = atob(base64Data);
+                            const bytes = new Uint8Array(binary.length);
+                            for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                            const file = new File([bytes], fileName, { type: "image/png" });
+
+                            const dt = new DataTransfer();
+                            dt.items.add(file);
+
+                            const queryBar = node.closest(".query-bar") || node.closest("form") || node.parentElement;
+                            const promptRoot = queryBar?.parentElement || node.parentElement;
+                            const scopedInputs = [
+                                ...(promptRoot ? promptRoot.querySelectorAll("input[type='file']") : []),
+                                ...(queryBar ? queryBar.querySelectorAll("input[type='file']") : []),
+                            ];
+                            const fileInputs = scopedInputs.length
+                                ? [...new Set(scopedInputs)]
+                                : [...document.querySelectorAll("input[type='file']")];
+
+                            let populatedInputs = 0;
+                            for (const input of fileInputs) {
+                                try {
+                                    if (!setInputFiles(input, dt.files)) continue;
+                                    dispatchFileEvents(input, dt);
+                                    populatedInputs += 1;
+                                } catch (_) {}
+                            }
+
+                            dispatchFileEvents(node, dt);
+                            if (queryBar && queryBar !== node) dispatchFileEvents(queryBar, dt);
+                            if (promptRoot && promptRoot !== queryBar && promptRoot !== node) dispatchFileEvents(promptRoot, dt);
+
+                            return {
+                                ok: populatedInputs > 0,
+                                fileInputs: fileInputs.length,
+                                populatedInputs,
+                                selector,
+                            };
+                        }
                     }
-                }
-                return { ok: false, error: 'Prompt input not found for paste' };
-            })()
-        """
+                    return { ok: false, error: 'Prompt input not found for paste' };
+                })()
+            """
 
-        upload_script = upload_script.replace("__FRAME_BASE64__", repr(frame_base64)).replace("__FRAME_NAME__", repr(frame_path.name))
+            upload_script = upload_script.replace("__FRAME_BASE64__", repr(frame_base64)).replace("__FRAME_NAME__", repr(frame_path.name))
 
-        def after_focus(_result):
-            if callable(on_uploaded):
-                on_uploaded()
+            def after_focus(_result):
+                QTimer.singleShot(350, lambda: _upload_next(index + 1))
 
-        self.browser.page().runJavaScript(upload_script, after_focus)
+            self.browser.page().runJavaScript(upload_script, after_focus)
+
+        _upload_next(0)
 
     def _wait_for_continue_upload_reload(self) -> None:
         self.continue_from_frame_waiting_for_reload = True
@@ -2666,10 +2740,42 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_prompt = manual_prompt
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
+        self.continue_from_frame_use_first_and_last = False
         self._append_log(
             f"Continue-from-last-frame started for {self.continue_from_frame_target_count} iteration(s)."
         )
         self._append_log(f"Continue-from-last-frame source video selected: {latest_video}")
+        self._start_continue_iteration()
+
+    def continue_from_first_and_last_frame(self) -> None:
+        source = self.prompt_source.currentData()
+        if source != "manual":
+            QMessageBox.warning(self, "Manual Mode Required", "Set Prompt Source to 'Manual prompt (no API)' for frame continuation.")
+            return
+
+        latest_video = self._resolve_latest_video_for_continuation()
+        if not latest_video:
+            QMessageBox.warning(self, "No Videos", "Generate or open a video first.")
+            return
+
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
+            return
+
+        self.continue_from_frame_active = True
+        self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_reload_timeout_timer.stop()
+        self.continue_from_frame_target_count = self.count.value()
+        self.continue_from_frame_completed = 0
+        self.continue_from_frame_prompt = manual_prompt
+        self.continue_from_frame_current_source_video = ""
+        self.continue_from_frame_seed_image_path = None
+        self.continue_from_frame_use_first_and_last = True
+        self._append_log(
+            f"Continue-from-first+last-frame started for {self.continue_from_frame_target_count} iteration(s)."
+        )
+        self._append_log(f"Continue-from-first+last-frame source video selected: {latest_video}")
         self._start_continue_iteration()
 
     def continue_from_local_image(self) -> None:
@@ -2700,6 +2806,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_prompt = manual_prompt
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = seed_image
+        self.continue_from_frame_use_first_and_last = False
 
         self._append_log(
             f"Continue-from-image started for {self.continue_from_frame_target_count} iteration(s) using {seed_image}."
