@@ -305,6 +305,8 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download: int | None = None
         self.pending_manual_download_type: str | None = None
         self.pending_manual_image_prompt: str | None = None
+        self.manual_image_pick_clicked = False
+        self.manual_image_video_submit_sent = False
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_in_progress = False
@@ -923,6 +925,8 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download = variant
         self.pending_manual_download_type = "image"
         self.pending_manual_image_prompt = prompt
+        self.manual_image_pick_clicked = False
+        self.manual_image_video_submit_sent = False
         self.manual_download_click_sent = False
 
         populate_script = rf"""
@@ -1212,9 +1216,11 @@ class MainWindow(QMainWindow):
             return
 
         prompt = self.pending_manual_image_prompt or ""
+        phase = "pick" if not self.manual_image_pick_clicked else "submit"
         script = f"""
             (() => {{
                 const prompt = {prompt!r};
+                const phase = {phase!r};
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
                 const emulateClick = (el) => {{
@@ -1227,13 +1233,17 @@ class MainWindow(QMainWindow):
                     return true;
                 }};
 
-                const listItems = [...document.querySelectorAll("[role='listitem']")]
-                    .filter((el) => isVisible(el) && !!el.querySelector("img"));
-                if (!listItems.length) return {{ ok: false, status: "waiting-for-generated-list-items" }};
+                if (phase === "pick") {{
+                    const generatedImages = [...document.querySelectorAll("img[alt='Generated image']")]
+                        .filter((img) => isVisible(img));
+                    if (!generatedImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
 
-                const firstItem = listItems[0];
-                const clickedImage = emulateClick(firstItem) || emulateClick(firstItem.querySelector("img"));
-                if (!clickedImage) return {{ ok: false, status: "image-list-item-click-failed" }};
+                    const firstImage = generatedImages[0];
+                    const listItem = firstImage.closest("[role='listitem']");
+                    const clickedImage = emulateClick(firstImage) || emulateClick(listItem) || emulateClick(firstImage.parentElement);
+                    if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
+                    return {{ ok: true, status: "generated-image-clicked" }};
+                }}
 
                 const promptSelectors = [
                     "textarea[placeholder*='Type to customize video' i]",
@@ -1271,7 +1281,7 @@ class MainWindow(QMainWindow):
                 const submitted = emulateClick(submitButton);
                 return {{
                     ok: submitted,
-                    status: submitted ? "image-picked-and-video-submitted" : "submit-click-failed",
+                    status: submitted ? "video-submit-clicked" : "submit-click-failed",
                     buttonLabel: (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim(),
                 }};
             }})()
@@ -1283,15 +1293,28 @@ class MainWindow(QMainWindow):
                 return
 
             if isinstance(result, dict) and result.get("ok"):
-                label = result.get("buttonLabel") or "submit"
-                self._append_log(
-                    f"Variant {current_variant}: first generated image selected and '{label}' clicked; waiting for video render/download."
-                )
-                self.pending_manual_download_type = "video"
-                self._trigger_browser_video_download(current_variant)
-                return
+                status = result.get("status") or "ok"
+                if status == "generated-image-clicked":
+                    if not self.manual_image_pick_clicked:
+                        self._append_log(
+                            f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
+                        )
+                    self.manual_image_pick_clicked = True
+                    QTimer.singleShot(1000, self._poll_for_manual_image)
+                    return
 
-            status = result.get("status") if isinstance(result, dict) else "unknown"
+                if status == "video-submit-clicked":
+                    label = result.get("buttonLabel") or "submit"
+                    if not self.manual_image_video_submit_sent:
+                        self._append_log(
+                            f"Variant {current_variant}: video prompt submitted via '{label}'; waiting for video render/download."
+                        )
+                    self.manual_image_video_submit_sent = True
+                    self.pending_manual_download_type = "video"
+                    self._trigger_browser_video_download(current_variant)
+                    return
+
+            status = result.get("status") if isinstance(result, dict) else "callback-empty"
             self._append_log(
                 f"Variant {current_variant}: generated image not ready for pick+submit yet ({status}); retrying..."
             )
@@ -2112,6 +2135,8 @@ class MainWindow(QMainWindow):
                     self.pending_manual_variant_for_download = None
                     self.pending_manual_download_type = None
                     self.pending_manual_image_prompt = None
+                    self.manual_image_pick_clicked = False
+                    self.manual_image_video_submit_sent = False
                     self.manual_download_click_sent = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = None
@@ -2126,6 +2151,8 @@ class MainWindow(QMainWindow):
                     self.pending_manual_variant_for_download = None
                     self.pending_manual_download_type = None
                     self.pending_manual_image_prompt = None
+                    self.manual_image_pick_clicked = False
+                    self.manual_image_video_submit_sent = False
                     self.manual_download_click_sent = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = None
@@ -2157,6 +2184,8 @@ class MainWindow(QMainWindow):
                 self.pending_manual_variant_for_download = None
                 self.pending_manual_download_type = None
                 self.pending_manual_image_prompt = None
+                self.manual_image_pick_clicked = False
+                self.manual_image_video_submit_sent = False
                 self.manual_download_click_sent = False
                 self.manual_download_in_progress = False
                 self.manual_download_started_at = None
@@ -2180,6 +2209,8 @@ class MainWindow(QMainWindow):
                 self.pending_manual_variant_for_download = None
                 self.pending_manual_download_type = None
                 self.pending_manual_image_prompt = None
+                self.manual_image_pick_clicked = False
+                self.manual_image_video_submit_sent = False
                 self.manual_download_click_sent = False
                 self.manual_download_in_progress = False
                 self.manual_download_started_at = None
@@ -2202,6 +2233,8 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download = None
         self.pending_manual_download_type = None
         self.pending_manual_image_prompt = None
+        self.manual_image_pick_clicked = False
+        self.manual_image_video_submit_sent = False
         self.manual_download_click_sent = False
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
