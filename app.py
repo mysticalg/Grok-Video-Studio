@@ -32,9 +32,9 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QProgressDialog,
     QPushButton,
     QPlainTextEdit,
+    QProgressBar,
     QSpinBox,
     QSplitter,
     QTextBrowser,
@@ -324,6 +324,93 @@ class GenerateWorker(QThread):
             "source_url": video_url,
         }
 
+class StitchWorker(QThread):
+    progress = Signal(int, str)
+    status = Signal(str)
+    finished_stitch = Signal(dict)
+    failed = Signal(str, str)
+
+    def __init__(
+        self,
+        window: "MainWindow",
+        video_paths: list[Path],
+        output_file: Path,
+        stitched_base_file: Path,
+        crossfade_enabled: bool,
+        crossfade_duration: float,
+        interpolate_enabled: bool,
+        interpolation_fps: int,
+        upscale_enabled: bool,
+    ):
+        super().__init__()
+        self.window = window
+        self.video_paths = video_paths
+        self.output_file = output_file
+        self.stitched_base_file = stitched_base_file
+        self.crossfade_enabled = crossfade_enabled
+        self.crossfade_duration = crossfade_duration
+        self.interpolate_enabled = interpolate_enabled
+        self.interpolation_fps = interpolation_fps
+        self.upscale_enabled = upscale_enabled
+
+    def run(self) -> None:
+        enhancement_enabled = self.interpolate_enabled or self.upscale_enabled
+        try:
+            stitch_target = self.stitched_base_file if enhancement_enabled else self.output_file
+
+            if self.crossfade_enabled:
+                self.status.emit(f"Stitching videos with {self.crossfade_duration:.1f}s crossfade transitions enabled.")
+                self.window._stitch_videos_with_crossfade(
+                    self.video_paths,
+                    stitch_target,
+                    crossfade_duration=self.crossfade_duration,
+                    progress_callback=lambda p: self.progress.emit(max(5, int(5 + (p * 0.70))), "Stitching clips with crossfade..."),
+                )
+            else:
+                self.status.emit("Stitching videos with hard cuts (no crossfade).")
+                self.window._stitch_videos_concat(
+                    self.video_paths,
+                    stitch_target,
+                    progress_callback=lambda p: self.progress.emit(max(5, int(5 + (p * 0.70))), "Stitching clips with hard cuts..."),
+                )
+
+            if enhancement_enabled:
+                interpolation_status = f"{self.interpolation_fps} fps" if self.interpolate_enabled else "off"
+                self.status.emit(
+                    "Applying stitched video enhancements: "
+                    f"frame interpolation={interpolation_status}, "
+                    f"upscaling={'on' if self.upscale_enabled else 'off'}."
+                )
+                self.window._enhance_stitched_video(
+                    input_file=stitch_target,
+                    output_file=self.output_file,
+                    interpolate=self.interpolate_enabled,
+                    interpolation_fps=self.interpolation_fps,
+                    upscale=self.upscale_enabled,
+                    progress_callback=lambda p: self.progress.emit(max(75, int(75 + (p * 0.25))), "Applying interpolation/upscaling..."),
+                )
+
+            self.progress.emit(100, "Finalizing stitched video...")
+            self.finished_stitch.emit(
+                {
+                    "title": "Stitched Video",
+                    "prompt": "stitched",
+                    "resolution": "mixed",
+                    "video_file_path": str(self.output_file),
+                    "source_url": "local-stitch",
+                }
+            )
+        except FileNotFoundError:
+            self.failed.emit("ffmpeg Missing", "ffmpeg is required for stitching but was not found in PATH.")
+        except subprocess.CalledProcessError as exc:
+            self.failed.emit("Stitch Failed", exc.stderr[-800:] or "ffmpeg failed.")
+        except RuntimeError as exc:
+            self.failed.emit("Stitch Failed", str(exc))
+        finally:
+            if self.stitched_base_file.exists():
+                self.stitched_base_file.unlink()
+
+
 
 class FilteredWebEnginePage(QWebEnginePage):
     """Suppress noisy third-party console warnings from grok.com in the embedded browser."""
@@ -364,6 +451,7 @@ class MainWindow(QMainWindow):
         self.download_dir = DOWNLOAD_DIR
         self.videos: list[dict] = []
         self.worker: GenerateWorker | None = None
+        self.stitch_worker: StitchWorker | None = None
         self.stop_all_requested = False
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
@@ -684,6 +772,16 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(260)
         log_layout.addWidget(self.log)
+
+        self.stitch_progress_label = QLabel("Stitch progress: idle")
+        self.stitch_progress_label.setStyleSheet("color: #9fb3c8;")
+        log_layout.addWidget(self.stitch_progress_label)
+
+        self.stitch_progress_bar = QProgressBar()
+        self.stitch_progress_bar.setRange(0, 100)
+        self.stitch_progress_bar.setValue(0)
+        self.stitch_progress_bar.setVisible(False)
+        log_layout.addWidget(self.stitch_progress_bar)
 
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
@@ -3126,6 +3224,10 @@ class MainWindow(QMainWindow):
         self._append_log("Navigated embedded browser to grok.com/imagine.")
 
     def stitch_all_videos(self) -> None:
+        if self.stitch_worker and self.stitch_worker.isRunning():
+            QMessageBox.information(self, "Stitch In Progress", "A stitch operation is already running.")
+            return
+
         if len(self.videos) < 2:
             QMessageBox.warning(self, "Need More Videos", "At least two videos are required to stitch.")
             return
@@ -3138,7 +3240,6 @@ class MainWindow(QMainWindow):
         interpolation_fps = int(self.stitch_interpolation_fps.currentData())
         upscale_enabled = self.stitch_upscale_checkbox.isChecked()
         crossfade_enabled = self.stitch_crossfade_checkbox.isChecked()
-        enhancement_enabled = interpolate_enabled or upscale_enabled
 
         settings_summary = (
             f"Crossfade: {'on' if crossfade_enabled else 'off'}"
@@ -3147,15 +3248,8 @@ class MainWindow(QMainWindow):
             + f" | Upscaling: {'on' if upscale_enabled else 'off'}"
         )
 
-        progress_dialog = QProgressDialog("Preparing stitched video...", "", 0, 100, self)
-        progress_dialog.setWindowTitle("Stitching Videos")
-        progress_dialog.setCancelButton(None)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setWindowModality(Qt.WindowModal)
-        progress_dialog.setAutoClose(True)
-        progress_dialog.setAutoReset(True)
-
         started_at = time.time()
+        self.stitch_progress_bar.setVisible(True)
 
         def update_progress(value: int, stage: str) -> None:
             bounded_value = max(0, min(100, int(value)))
@@ -3165,75 +3259,45 @@ class MainWindow(QMainWindow):
                 eta_seconds = max(0.0, (elapsed / bounded_value) * (100 - bounded_value))
                 eta_label = f"~{eta_seconds:.0f}s"
 
-            progress_dialog.setValue(bounded_value)
-            progress_dialog.setLabelText(
-                f"{stage}\n"
-                f"Settings: {settings_summary}\n"
-                f"Elapsed: {elapsed:.1f}s | ETA: {eta_label}"
+            self.stitch_progress_bar.setValue(bounded_value)
+            self.stitch_progress_label.setText(
+                f"{stage} | {bounded_value}% | Elapsed: {elapsed:.1f}s | ETA: {eta_label} | {settings_summary}"
             )
-            QApplication.processEvents()
+
+        def on_stitch_failed(title: str, message: str) -> None:
+            self.stitch_progress_label.setText(f"Stitch progress: failed ({message[:120]})")
+            self.stitch_progress_bar.setVisible(False)
+            QMessageBox.critical(self, title, message)
+
+        def on_stitch_finished(stitched_video: dict) -> None:
+            self._append_log(f"Stitched video created: {stitched_video['video_file_path']}")
+            self.stitch_progress_label.setText("Stitch progress: complete")
+            self.stitch_progress_bar.setValue(100)
+            self.stitch_progress_bar.setVisible(False)
+            self.on_video_finished(stitched_video)
+
+        def on_stitch_complete() -> None:
+            self.stitch_worker = None
 
         update_progress(1, "Preparing stitch pipeline...")
 
-        try:
-            stitch_target = stitched_base_file if enhancement_enabled else output_file
-            if crossfade_enabled:
-                self._append_log(f"Stitching videos with {self.crossfade_duration.value():.1f}s crossfade transitions enabled.")
-                self._stitch_videos_with_crossfade(
-                    video_paths,
-                    stitch_target,
-                    crossfade_duration=self.crossfade_duration.value(),
-                    progress_callback=lambda p: update_progress(max(5, int(5 + (p * 0.70))), "Stitching clips with crossfade..."),
-                )
-            else:
-                self._append_log("Stitching videos with hard cuts (no crossfade).")
-                self._stitch_videos_concat(
-                    video_paths,
-                    stitch_target,
-                    progress_callback=lambda p: update_progress(max(5, int(5 + (p * 0.70))), "Stitching clips with hard cuts..."),
-                )
-
-            if enhancement_enabled:
-                interpolation_status = f"{interpolation_fps} fps" if interpolate_enabled else "off"
-                self._append_log(
-                    "Applying stitched video enhancements: "
-                    f"frame interpolation={interpolation_status}, "
-                    f"upscaling={'on' if upscale_enabled else 'off'}."
-                )
-                self._enhance_stitched_video(
-                    input_file=stitch_target,
-                    output_file=output_file,
-                    interpolate=interpolate_enabled,
-                    interpolation_fps=interpolation_fps,
-                    upscale=upscale_enabled,
-                    progress_callback=lambda p: update_progress(max(75, int(75 + (p * 0.25))), "Applying interpolation/upscaling..."),
-                )
-
-            update_progress(100, "Finalizing stitched video...")
-        except FileNotFoundError:
-            QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for stitching but was not found in PATH.")
-            return
-        except subprocess.CalledProcessError as exc:
-            QMessageBox.critical(self, "Stitch Failed", exc.stderr[-800:] or "ffmpeg failed.")
-            return
-        except RuntimeError as exc:
-            QMessageBox.critical(self, "Stitch Failed", str(exc))
-            return
-        finally:
-            if stitched_base_file.exists():
-                stitched_base_file.unlink()
-            progress_dialog.close()
-
-        self._append_log(f"Stitched video created: {output_file}")
-
-        stitched_video = {
-            "title": "Stitched Video",
-            "prompt": "stitched",
-            "resolution": "mixed",
-            "video_file_path": str(output_file),
-            "source_url": "local-stitch",
-        }
-        self.on_video_finished(stitched_video)
+        self.stitch_worker = StitchWorker(
+            window=self,
+            video_paths=video_paths,
+            output_file=output_file,
+            stitched_base_file=stitched_base_file,
+            crossfade_enabled=crossfade_enabled,
+            crossfade_duration=self.crossfade_duration.value(),
+            interpolate_enabled=interpolate_enabled,
+            interpolation_fps=interpolation_fps,
+            upscale_enabled=upscale_enabled,
+        )
+        self.stitch_worker.progress.connect(update_progress)
+        self.stitch_worker.status.connect(self._append_log)
+        self.stitch_worker.failed.connect(on_stitch_failed)
+        self.stitch_worker.finished_stitch.connect(on_stitch_finished)
+        self.stitch_worker.finished.connect(on_stitch_complete)
+        self.stitch_worker.start()
 
     def _stitch_videos_concat(
         self,
