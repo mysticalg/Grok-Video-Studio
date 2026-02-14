@@ -1335,6 +1335,7 @@ class MainWindow(QMainWindow):
         prompt = item["prompt"]
         variant = item["variant"]
         self.pending_manual_variant_for_download = variant
+        self.pending_manual_download_type = "video"
         self.manual_download_click_sent = False
         action_delay_ms = 1000
         self._append_log(
@@ -1861,6 +1862,7 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after_submit)
 
     def _trigger_browser_video_download(self, variant: int) -> None:
+        self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
         self.manual_download_click_sent = False
         self.manual_download_in_progress = False
@@ -1923,8 +1925,22 @@ class MainWindow(QMainWindow):
                 const redoButton = [...document.querySelectorAll("button")]
                     .find((btn) => isVisible(btn) && !btn.disabled && /redo/i.test((btn.textContent || "").trim()));
 
+                const makeVideoButton = [...document.querySelectorAll("button")]
+                    .find((btn) => {
+                        if (!isVisible(btn) || btn.disabled) return false;
+                        const label = (btn.getAttribute("aria-label") || btn.textContent || "").trim();
+                        return /make\\s+video/i.test(label);
+                    });
+
                 const downloadButton = [...document.querySelectorAll("button[aria-label='Download'], button")]
                     .find((btn) => isVisible(btn) && !btn.disabled && /download/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+
+                if (makeVideoButton && !redoButton) {
+                    return {
+                        status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
+                        buttonLabel: (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim(),
+                    };
+                }
 
                 if (!redoButton) {
                     return { status: "waiting-for-redo" };
@@ -1965,6 +1981,17 @@ class MainWindow(QMainWindow):
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
                 self.manual_download_poll_timer.start(3000)
+                return
+
+            if status == "make-video-clicked":
+                label = (result.get("buttonLabel") or "Make video").strip()
+                self._append_log(f"Variant {current_variant}: clicked '{label}' to start video generation.")
+                self.manual_download_poll_timer.start(3000)
+                return
+
+            if status == "make-video-visible":
+                self._append_log(f"Variant {current_variant}: '{result.get('buttonLabel') or 'Make video'}' is visible but click did not register; retrying.")
+                self.manual_download_poll_timer.start(2000)
                 return
 
             if status == "waiting-for-redo":
