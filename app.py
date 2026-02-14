@@ -1620,17 +1620,55 @@ class MainWindow(QMainWindow):
             })()
         """
 
-        verify_prompt_script = r"""
-            (() => {
-                try {
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
-                    if (!promptInput) return { ok: false, error: "Prompt input not found during verification" };
+        verify_prompt_script = rf"""
+            (() => {{
+                try {{
+                    const expectedPrompt = {escaped_prompt};
+                    const normalize = (value) => (value || "").replace(/\s+/g, " ").trim().toLowerCase();
+                    const expected = normalize(expectedPrompt);
+                    const selectors = [
+                        "textarea[placeholder*='Type to imagine' i]",
+                        "input[placeholder*='Type to imagine' i]",
+                        "textarea[placeholder*='Type to customize this video' i]",
+                        "input[placeholder*='Type to customize this video' i]",
+                        "textarea[placeholder*='Type to customize video' i]",
+                        "input[placeholder*='Type to customize video' i]",
+                        "textarea[placeholder*='Customize video' i]",
+                        "input[placeholder*='Customize video' i]",
+                        "textarea[aria-label*='Make a video' i]",
+                        "input[aria-label*='Make a video' i]",
+                        "div.tiptap.ProseMirror[contenteditable='true']",
+                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize this video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Make a video' i]",
+                        "[contenteditable='true'][data-placeholder*='Customize video' i]",
+                    ];
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const candidates = [];
+                    selectors.forEach((selector) => {{
+                        const matches = document.querySelectorAll(selector);
+                        for (let i = 0; i < matches.length; i += 1) candidates.push(matches[i]);
+                    }});
+                    const promptInput = candidates.find((el) => isVisible(el));
+                    if (!promptInput) return {{ ok: false, error: "Visible prompt input not found during verification" }};
+
                     const value = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
-                    return { ok: !!value.trim(), filledLength: value.length };
-                } catch (err) {
-                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
-                }
-            })()
+                    const normalizedValue = normalize(value);
+                    const containsExpected = !!expected && normalizedValue.includes(expected);
+                    return {{
+                        ok: containsExpected,
+                        filledLength: value.length,
+                        containsExpected,
+                        valuePreview: value.slice(0, 120),
+                    }};
+                }} catch (err) {{
+                    return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                }}
+            }})()
         """
 
         set_options_script = r"""
@@ -1974,7 +2012,13 @@ class MainWindow(QMainWindow):
 
             QTimer.singleShot(action_delay_ms, lambda: self.browser.page().runJavaScript(continue_submit_script, _after_continue_submit))
 
+        prompt_fill_attempt_count = 0
+        max_prompt_fill_attempts = 3
+
         def after_submit(result):
+            nonlocal prompt_fill_attempt_count
+            prompt_fill_attempt_count += 1
+
             fill_ok = isinstance(result, dict) and bool(result.get("ok"))
             if not fill_ok:
                 error_detail = result.get("error") if isinstance(result, dict) else result
@@ -1986,13 +2030,36 @@ class MainWindow(QMainWindow):
 
             def _after_verify_prompt(verify_result):
                 verify_ok = isinstance(verify_result, dict) and bool(verify_result.get("ok"))
-                if not (fill_ok or verify_ok):
+                if not verify_ok:
                     verify_error = verify_result.get("error") if isinstance(verify_result, dict) else verify_result
                     if verify_error not in (None, "", "callback-empty"):
                         self._append_log(
-                            f"Prompt fill verification did not confirm content for variant {variant}: {verify_error!r}. "
-                            "Continuing with option selection and forced submit anyway."
+                            f"Prompt fill verification did not confirm expected text for variant {variant}: {verify_error!r}."
                         )
+
+                if self.continue_from_frame_active and not verify_ok:
+                    if prompt_fill_attempt_count < max_prompt_fill_attempts:
+                        self._append_log(
+                            f"Continue-mode prompt text not confirmed for variant {variant}; retrying fill "
+                            f"({prompt_fill_attempt_count}/{max_prompt_fill_attempts}) before submit."
+                        )
+                        QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(script, after_submit))
+                        return
+
+                    self._append_log(
+                        f"ERROR: Continue-mode prompt text could not be confirmed for variant {variant} after "
+                        f"{max_prompt_fill_attempts} attempts; stopping to avoid submitting the wrong prompt."
+                    )
+                    self.continue_from_frame_active = False
+                    self.continue_from_frame_target_count = 0
+                    self.continue_from_frame_completed = 0
+                    self.continue_from_frame_remaining = 0
+                    self.continue_from_frame_prompt = ""
+                    self.continue_from_frame_current_source_video = ""
+                    self.continue_from_frame_waiting_for_reload = False
+                    self.continue_from_frame_upload_token = 0
+                    return
+
                 if self.continue_from_frame_active:
                     _run_continue_mode_submit()
                 else:
@@ -2000,10 +2067,6 @@ class MainWindow(QMainWindow):
                         action_delay_ms,
                         lambda: self.browser.page().runJavaScript(open_options_script, _continue_after_options_open),
                     )
-
-            if fill_ok:
-                _after_verify_prompt({"ok": True})
-                return
 
             QTimer.singleShot(
                 250,
