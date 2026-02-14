@@ -2,6 +2,7 @@ import os
 import json
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from dataclasses import dataclass
@@ -16,9 +17,11 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -44,16 +47,21 @@ BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
+QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 GITHUB_REPO_URL = "https://github.com/dhookster/Grok-video-to-youtube-api"
-GITHUB_RELEASES_URL = f"{GITHUB_REPO_URL}/releases"
+GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
 GITHUB_ACTIONS_RUNS_URL = f"{GITHUB_REPO_URL}/actions/workflows/windows-build-release.yml"
 BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/dhooksterm"
 PAYPAL_DONATION_URL = "https://www.paypal.com/paypalme/dhookster"
 SOL_DONATION_ADDRESS = "6HiqW3jeF3ymxjK5Fcm6dHi46gDuFmeCeSNdW99CfJjp"
+DEFAULT_MANUAL_PROMPT_TEXT = (
+    "abstract surreal artistic photorealistic strange random dream like scifi fast moving camera, "
+    "fast moving fractals morphing and intersecting, highly detailed"
+)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -66,8 +74,47 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+
+
+def _path_supports_rw(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe_file = path / f".rw_probe_{os.getpid()}"
+        moved_file = path / f".rw_probe_{os.getpid()}_moved"
+        probe_file.write_text("ok", encoding="utf-8")
+        probe_file.replace(moved_file)
+        moved_file.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_qtwebengine_cache_dir() -> tuple[Path, bool]:
+    candidates: list[Path] = []
+
+    env_cache_dir = os.getenv("GROK_BROWSER_CACHE_DIR", "").strip()
+    if env_cache_dir:
+        candidates.append(Path(env_cache_dir).expanduser())
+
+    local_app_data = os.getenv("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "GrokVideoDesktopStudio" / "qtwebengine")
+
+    candidates.append(BASE_DIR / ".qtwebengine")
+    candidates.append(Path(tempfile.gettempdir()) / "GrokVideoDesktopStudio" / "qtwebengine")
+
+    for candidate in candidates:
+        if _path_supports_rw(candidate):
+            return candidate, True
+
+    fallback = Path(tempfile.gettempdir()) / f"GrokVideoDesktopStudio_qtwebengine_{os.getpid()}"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback, False
+
+
 def _configure_qtwebengine_runtime() -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    global CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE
+    CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE = _resolve_qtwebengine_cache_dir()
 
     default_flags = [
         "--enable-gpu-rasterization",
@@ -78,6 +125,9 @@ def _configure_qtwebengine_runtime() -> None:
         f"--media-cache-size={_env_int('GROK_BROWSER_MEDIA_CACHE_BYTES', 268435456)}",
         f"--disk-cache-size={_env_int('GROK_BROWSER_DISK_CACHE_BYTES', 536870912)}",
     ]
+    if not QTWEBENGINE_USE_DISK_CACHE:
+        default_flags.extend(["--disable-gpu-shader-disk-cache", "--disable-features=MediaHistoryLogging"])
+
     existing_flags = os.getenv("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(default_flags + ([existing_flags] if existing_flags else []))
 
@@ -103,11 +153,12 @@ class GenerateWorker(QThread):
     failed = Signal(str)
     status = Signal(str)
 
-    def __init__(self, config: GrokConfig, prompt_config: PromptConfig, count: int):
+    def __init__(self, config: GrokConfig, prompt_config: PromptConfig, count: int, download_dir: Path):
         super().__init__()
         self.config = config
         self.prompt_config = prompt_config
         self.count = count
+        self.download_dir = download_dir
         self.stop_requested = False
 
     def request_stop(self) -> None:
@@ -230,7 +281,8 @@ class GenerateWorker(QThread):
 
     def download_video(self, video_url: str, suffix: str) -> Path:
         self._ensure_not_stopped()
-        file_path = DOWNLOAD_DIR / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        file_path = self.download_dir / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
         with requests.get(video_url, stream=True, timeout=240) as response:
             response.raise_for_status()
             with open(file_path, "wb") as handle:
@@ -307,6 +359,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Grok Video Desktop Studio")
         self.resize(1500, 900)
+        self.download_dir = DOWNLOAD_DIR
         self.videos: list[dict] = []
         self.worker: GenerateWorker | None = None
         self.stop_all_requested = False
@@ -346,6 +399,8 @@ class MainWindow(QMainWindow):
         self.video_playback_hack_timer.timeout.connect(self._ensure_browser_video_playback)
         self._playback_hack_success_logged = False
         self.last_extracted_frame_path: Path | None = None
+        self.preview_muted = False
+        self.preview_volume = 100
         self._build_ui()
         self._apply_space_age_theme()
 
@@ -442,10 +497,7 @@ class MainWindow(QMainWindow):
         prompt_group_layout.addWidget(QLabel("Manual Prompt (used only when source is Manual)"))
         self.manual_prompt = QPlainTextEdit()
         self.manual_prompt.setPlaceholderText("Paste or write an exact prompt to skip prompt APIs...")
-        self.manual_prompt.setPlainText(
-            "abstract surreal artistic photorealistic strange random dream like scifi fast moving camera, "
-            "fast moving fractals morphing and intersecting, highly detailed"
-        )
+        self.manual_prompt.setPlainText(self.manual_prompt_default_input.toPlainText().strip() or DEFAULT_MANUAL_PROMPT_TEXT)
         self.manual_prompt.setMaximumHeight(110)
         prompt_group_layout.addWidget(self.manual_prompt)
 
@@ -526,10 +578,31 @@ class MainWindow(QMainWindow):
         self.stitch_btn.clicked.connect(self.stitch_all_videos)
         actions_layout.addWidget(self.stitch_btn, 3, 1)
 
-        self.upload_youtube_btn = QPushButton("📤 Upload Selected to YouTube")
+        self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
+        self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
+        actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 2)
+
+        self.video_options_dropdown = QComboBox()
+        self.video_options_dropdown.addItem("Video Options: Crossfade 0.5s", 0.5)
+        self.video_options_dropdown.addItem("Crossfade 0.2s", 0.2)
+        self.video_options_dropdown.addItem("Crossfade 0.3s", 0.3)
+        self.video_options_dropdown.addItem("Crossfade 0.5s", 0.5)
+        self.video_options_dropdown.addItem("Crossfade 0.8s", 0.8)
+        self.video_options_dropdown.addItem("Crossfade 1.0s", 1.0)
+        self.video_options_dropdown.addItem("Open advanced video settings...", None)
+        self.video_options_dropdown.setCurrentIndex(0)
+        self.video_options_dropdown.setToolTip("Video options including stitch crossfade duration.")
+        self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
+        actions_layout.addWidget(self.video_options_dropdown, 5, 0, 1, 2)
+
+        self.upload_youtube_btn = QPushButton("▶ Upload Selected to YouTube")
         self.upload_youtube_btn.setToolTip("Upload the currently selected local video to your YouTube channel.")
+        self.upload_youtube_btn.setStyleSheet(
+            "background-color: #cc0000; color: white; font-weight: 700;"
+            "border: 1px solid #990000; border-radius: 6px; padding: 8px;"
+        )
         self.upload_youtube_btn.clicked.connect(self.upload_selected_to_youtube)
-        actions_layout.addWidget(self.upload_youtube_btn, 4, 0, 1, 2)
+        actions_layout.addWidget(self.upload_youtube_btn, 6, 0, 1, 2)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
@@ -538,7 +611,7 @@ class MainWindow(QMainWindow):
             "background-color: #ffdd00; color: #222; border-radius: 8px;"
         )
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
-        actions_layout.addWidget(self.buy_coffee_btn, 5, 0, 1, 2)
+        actions_layout.addWidget(self.buy_coffee_btn, 7, 0, 1, 2)
 
         left_layout.addWidget(actions_group)
 
@@ -554,14 +627,25 @@ class MainWindow(QMainWindow):
         self.player.setVideoOutput(self.preview)
 
         self.browser = QWebEngineView()
-        self.browser_profile = QWebEngineProfile("grok-video-desktop-profile", self)
+        if QTWEBENGINE_USE_DISK_CACHE:
+            self.browser_profile = QWebEngineProfile("grok-video-desktop-profile", self)
+        else:
+            # Off-the-record profile avoids startup cache/quota errors on locked folders (common on synced drives).
+            self.browser_profile = QWebEngineProfile(self)
+
         self.browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.browser))
         browser_profile = self.browser_profile
-        browser_profile.setPersistentStoragePath(str(CACHE_DIR / "profile"))
-        browser_profile.setCachePath(str(CACHE_DIR / "cache"))
-        browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
-        browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
-        browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
+        if QTWEBENGINE_USE_DISK_CACHE:
+            (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
+            (CACHE_DIR / "cache").mkdir(parents=True, exist_ok=True)
+            browser_profile.setPersistentStoragePath(str(CACHE_DIR / "profile"))
+            browser_profile.setCachePath(str(CACHE_DIR / "cache"))
+            browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
+            browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
+            browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
+        else:
+            browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
 
         browser_settings = self.browser.settings()
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
@@ -580,6 +664,13 @@ class MainWindow(QMainWindow):
         self.log.setMinimumHeight(260)
         log_layout.addWidget(self.log)
 
+        if QTWEBENGINE_USE_DISK_CACHE:
+            self._append_log(f"Browser cache path: {CACHE_DIR}")
+        else:
+            self._append_log(
+                "Browser cache: running in memory/off-the-record mode because no writable cache folder was available."
+            )
+
         preview_group = QGroupBox("🎞️ Preview")
         preview_layout = QVBoxLayout(preview_group)
         preview_layout.addWidget(self.preview)
@@ -597,7 +688,24 @@ class MainWindow(QMainWindow):
         )
         self.preview_stop_btn.clicked.connect(self.stop_preview)
         preview_controls.addWidget(self.preview_stop_btn)
+
+        self.preview_mute_checkbox = QCheckBox("Mute")
+        self.preview_mute_checkbox.toggled.connect(self._set_preview_muted)
+        preview_controls.addWidget(self.preview_mute_checkbox)
+
+        self.preview_volume_label = QLabel("Volume")
+        preview_controls.addWidget(self.preview_volume_label)
+
+        self.preview_volume_slider = QSpinBox()
+        self.preview_volume_slider.setRange(0, 100)
+        self.preview_volume_slider.setValue(self.preview_volume)
+        self.preview_volume_slider.setSuffix("%")
+        self.preview_volume_slider.valueChanged.connect(self._set_preview_volume)
+        preview_controls.addWidget(self.preview_volume_slider)
         preview_layout.addLayout(preview_controls)
+
+        self.audio_output.setMuted(self.preview_muted)
+        self.audio_output.setVolume(self.preview_volume / 100)
 
         bottom_splitter = QSplitter()
         bottom_splitter.addWidget(preview_group)
@@ -660,6 +768,30 @@ class MainWindow(QMainWindow):
         self.youtube_api_key.setEchoMode(QLineEdit.Password)
         self.youtube_api_key.setText(os.getenv("YOUTUBE_API_KEY", ""))
         form_layout.addRow("YouTube API Key", self.youtube_api_key)
+
+        self.download_path_input = QLineEdit(str(self.download_dir))
+        self.download_path_input.setReadOnly(True)
+        choose_download_path_btn = QPushButton("Browse...")
+        choose_download_path_btn.clicked.connect(self._choose_download_path)
+        download_path_row = QHBoxLayout()
+        download_path_row.addWidget(self.download_path_input)
+        download_path_row.addWidget(choose_download_path_btn)
+        form_layout.addRow("Download Folder", download_path_row)
+
+        self.crossfade_duration = QDoubleSpinBox()
+        self.crossfade_duration.setRange(0.1, 3.0)
+        self.crossfade_duration.setSingleStep(0.1)
+        self.crossfade_duration.setDecimals(1)
+        self.crossfade_duration.setValue(0.5)
+        self.crossfade_duration.setSuffix(" s")
+        self.crossfade_duration.valueChanged.connect(self._sync_video_options_label)
+        form_layout.addRow("Crossfade Duration", self.crossfade_duration)
+
+        self.manual_prompt_default_input = QPlainTextEdit()
+        self.manual_prompt_default_input.setMaximumHeight(90)
+        self.manual_prompt_default_input.setPlaceholderText("Default text used to prefill Manual Prompt.")
+        self.manual_prompt_default_input.setPlainText(DEFAULT_MANUAL_PROMPT_TEXT)
+        form_layout.addRow("Default Manual Prompt", self.manual_prompt_default_input)
 
         dialog_layout.addLayout(form_layout)
 
@@ -764,6 +896,38 @@ class MainWindow(QMainWindow):
         self.model_api_settings_dialog.raise_()
         self.model_api_settings_dialog.activateWindow()
 
+    def _choose_download_path(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Choose Download Folder", str(self.download_dir))
+        if not path:
+            return
+        self.download_dir = Path(path)
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.download_path_input.setText(str(self.download_dir))
+        self._append_log(f"Download folder set to: {self.download_dir}")
+
+    def _on_video_options_selected(self, index: int) -> None:
+        option_value = self.video_options_dropdown.itemData(index)
+        if option_value is None:
+            self.show_model_api_settings()
+            self.video_options_dropdown.blockSignals(True)
+            self.video_options_dropdown.setCurrentIndex(0)
+            self.video_options_dropdown.blockSignals(False)
+            return
+
+        try:
+            self.crossfade_duration.setValue(float(option_value))
+            self._sync_video_options_label()
+        except (TypeError, ValueError):
+            pass
+
+    def _sync_video_options_label(self) -> None:
+        duration = self.crossfade_duration.value()
+        label = f"Video Options: Crossfade {duration:.1f}s"
+        self.video_options_dropdown.blockSignals(True)
+        self.video_options_dropdown.setItemText(0, label)
+        self.video_options_dropdown.setCurrentIndex(0)
+        self.video_options_dropdown.blockSignals(False)
+
     def _collect_preferences(self) -> dict:
         return {
             "api_key": self.api_key.text(),
@@ -775,7 +939,13 @@ class MainWindow(QMainWindow):
             "youtube_api_key": self.youtube_api_key.text(),
             "concept": self.concept.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
+            "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
             "count": self.count.value(),
+            "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
+            "crossfade_duration": self.crossfade_duration.value(),
+            "download_dir": str(self.download_dir),
+            "preview_muted": self.preview_mute_checkbox.isChecked(),
+            "preview_volume": self.preview_volume_slider.value(),
         }
 
     def _apply_preferences(self, preferences: dict) -> None:
@@ -802,9 +972,36 @@ class MainWindow(QMainWindow):
             self.concept.setPlainText(str(preferences["concept"]))
         if "manual_prompt" in preferences:
             self.manual_prompt.setPlainText(str(preferences["manual_prompt"]))
+        if "manual_prompt_default" in preferences:
+            default_prompt = str(preferences["manual_prompt_default"])
+            self.manual_prompt_default_input.setPlainText(default_prompt)
+            if "manual_prompt" not in preferences:
+                self.manual_prompt.setPlainText(default_prompt)
         if "count" in preferences:
             try:
                 self.count.setValue(int(preferences["count"]))
+            except (TypeError, ValueError):
+                pass
+        if "stitch_crossfade_enabled" in preferences:
+            self.stitch_crossfade_checkbox.setChecked(bool(preferences["stitch_crossfade_enabled"]))
+        if "crossfade_duration" in preferences:
+            try:
+                self.crossfade_duration.setValue(float(preferences["crossfade_duration"]))
+            except (TypeError, ValueError):
+                pass
+        if "download_dir" in preferences:
+            download_dir = Path(str(preferences["download_dir"]))
+            try:
+                download_dir.mkdir(parents=True, exist_ok=True)
+                self.download_dir = download_dir
+                self.download_path_input.setText(str(self.download_dir))
+            except Exception:
+                pass
+        if "preview_muted" in preferences:
+            self.preview_mute_checkbox.setChecked(bool(preferences["preview_muted"]))
+        if "preview_volume" in preferences:
+            try:
+                self.preview_volume_slider.setValue(int(preferences["preview_volume"]))
             except (TypeError, ValueError):
                 pass
 
@@ -1048,7 +1245,7 @@ class MainWindow(QMainWindow):
             openai_chat_model=self.openai_chat_model.text().strip() or "gpt-4o-mini",
         )
 
-        self.worker = GenerateWorker(config, prompt_config, self.count.value())
+        self.worker = GenerateWorker(config, prompt_config, self.count.value(), self.download_dir)
         self.worker.status.connect(self._append_log)
         self.worker.finished_video.connect(self.on_video_finished)
         self.worker.failed.connect(self.on_generation_error)
@@ -1625,7 +1822,7 @@ class MainWindow(QMainWindow):
 
         candidates: list[Path] = []
         for pattern in ("*.mp4", "*.mov", "*.webm"):
-            candidates.extend(DOWNLOAD_DIR.glob(pattern))
+            candidates.extend(self.download_dir.glob(pattern))
 
         files = [path for path in candidates if path.is_file()]
         if not files:
@@ -2396,14 +2593,14 @@ class MainWindow(QMainWindow):
         download_type = self.pending_manual_download_type or "video"
         extension = self._resolve_download_extension(download, download_type)
         filename = f"{download_type}_{int(time.time() * 1000)}_manual_v{variant}.{extension}"
-        download.setDownloadDirectory(str(DOWNLOAD_DIR))
+        download.setDownloadDirectory(str(self.download_dir))
         download.setDownloadFileName(filename)
         download.accept()
-        self._append_log(f"Downloading manual {download_type} variant {variant} to {DOWNLOAD_DIR / filename}")
+        self._append_log(f"Downloading manual {download_type} variant {variant} to {self.download_dir / filename}")
 
         def on_state_changed(state):
             if state == download.DownloadState.DownloadCompleted:
-                video_path = DOWNLOAD_DIR / filename
+                video_path = self.download_dir / filename
                 video_size = video_path.stat().st_size if video_path.exists() else 0
                 if download_type == "image":
                     self._append_log(f"Saved image: {video_path}")
@@ -2600,6 +2797,16 @@ class MainWindow(QMainWindow):
         self.player.stop()
         self._append_log("Preview playback stopped.")
 
+    def _set_preview_muted(self, muted: bool) -> None:
+        self.preview_muted = bool(muted)
+        self.audio_output.setMuted(self.preview_muted)
+        self._append_log(f"Preview audio {'muted' if self.preview_muted else 'unmuted'}.")
+
+    def _set_preview_volume(self, value: int) -> None:
+        self.preview_volume = int(value)
+        self.audio_output.setVolume(self.preview_volume / 100)
+        self._append_log(f"Preview volume set to {self.preview_volume}%.")
+
     def _toggle_prompt_source_fields(self) -> None:
         source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
         is_manual = source == "manual"
@@ -2633,7 +2840,7 @@ class MainWindow(QMainWindow):
         return "png" if download_type == "image" else "mp4"
 
     def _extract_last_frame(self, video_path: str) -> Path | None:
-        frame_path = DOWNLOAD_DIR / f"last_frame_{int(time.time() * 1000)}.png"
+        frame_path = self.download_dir / f"last_frame_{int(time.time() * 1000)}.png"
         self._append_log(f"Starting ffmpeg last-frame extraction from: {video_path}")
 
         try:
@@ -2858,7 +3065,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
             return
 
-        image_path, _ = QFileDialog.getOpenFileName(self, "Select image", str(DOWNLOAD_DIR), "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+        image_path, _ = QFileDialog.getOpenFileName(self, "Select image", str(self.download_dir), "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
         if not image_path:
             return
 
@@ -2890,12 +3097,43 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Need More Videos", "At least two videos are required to stitch.")
             return
 
-        list_file = DOWNLOAD_DIR / f"stitch_list_{int(time.time() * 1000)}.txt"
-        output_file = DOWNLOAD_DIR / f"stitched_{int(time.time() * 1000)}.mp4"
+        output_file = self.download_dir / f"stitched_{int(time.time() * 1000)}.mp4"
+        video_paths = [Path(video["video_file_path"]) for video in self.videos]
+
+        try:
+            if self.stitch_crossfade_checkbox.isChecked():
+                self._append_log(f"Stitching videos with {self.crossfade_duration.value():.1f}s crossfade transitions enabled.")
+                self._stitch_videos_with_crossfade(video_paths, output_file, crossfade_duration=self.crossfade_duration.value())
+            else:
+                self._append_log("Stitching videos with hard cuts (no crossfade).")
+                self._stitch_videos_concat(video_paths, output_file)
+        except FileNotFoundError:
+            QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for stitching but was not found in PATH.")
+            return
+        except subprocess.CalledProcessError as exc:
+            QMessageBox.critical(self, "Stitch Failed", exc.stderr[-800:] or "ffmpeg failed.")
+            return
+        except RuntimeError as exc:
+            QMessageBox.critical(self, "Stitch Failed", str(exc))
+            return
+
+        self._append_log(f"Stitched video created: {output_file}")
+
+        stitched_video = {
+            "title": "Stitched Video",
+            "prompt": "stitched",
+            "resolution": "mixed",
+            "video_file_path": str(output_file),
+            "source_url": "local-stitch",
+        }
+        self.on_video_finished(stitched_video)
+
+    def _stitch_videos_concat(self, video_paths: list[Path], output_file: Path) -> None:
+        list_file = self.download_dir / f"stitch_list_{int(time.time() * 1000)}.txt"
 
         concat_lines = []
-        for video in self.videos:
-            quoted_path = Path(video["video_file_path"]).as_posix().replace("'", "'\\''")
+        for video_path in video_paths:
+            quoted_path = video_path.as_posix().replace("'", "'\\''")
             concat_lines.append(f"file '{quoted_path}'")
         list_file.write_text("\n".join(concat_lines), encoding="utf-8")
 
@@ -2925,24 +3163,154 @@ class MainWindow(QMainWindow):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-        except FileNotFoundError:
-            QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for stitching but was not found in PATH.")
-            return
-        except subprocess.CalledProcessError as exc:
-            QMessageBox.critical(self, "Stitch Failed", exc.stderr[-800:] or "ffmpeg failed.")
-            return
         finally:
             if list_file.exists():
                 list_file.unlink()
 
-        stitched_video = {
-            "title": "Stitched Video",
-            "prompt": "stitched",
-            "resolution": "mixed",
-            "video_file_path": str(output_file),
-            "source_url": "local-stitch",
-        }
-        self.on_video_finished(stitched_video)
+    def _probe_video_duration(self, video_path: Path) -> float:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        duration = float(result.stdout.strip())
+        if duration <= 0:
+            raise RuntimeError(f"Could not determine valid duration for {video_path.name}.")
+        return duration
+
+    def _probe_video_stream_info(self, video_path: Path) -> dict:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,duration",
+                "-of",
+                "json",
+                str(video_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams") or []
+        if not streams:
+            raise RuntimeError(f"No video stream found in {video_path.name}.")
+        stream = streams[0]
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        duration_raw = stream.get("duration")
+        duration = float(duration_raw) if duration_raw not in (None, "N/A", "") else self._probe_video_duration(video_path)
+        if width <= 0 or height <= 0 or duration <= 0:
+            raise RuntimeError(f"Could not probe valid video stream info for {video_path.name}.")
+        return {"width": width, "height": height, "duration": duration}
+
+    def _video_has_audio_stream(self, video_path: Path) -> bool:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "csv=p=0",
+                str(video_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return bool(result.stdout.strip())
+
+    def _stitch_videos_with_crossfade(self, video_paths: list[Path], output_file: Path, crossfade_duration: float) -> None:
+        stream_infos = [self._probe_video_stream_info(path) for path in video_paths]
+        durations = [info["duration"] for info in stream_infos]
+        has_audio = all(self._video_has_audio_stream(path) for path in video_paths)
+        for path, duration in zip(video_paths, durations):
+            if duration <= crossfade_duration + 0.05:
+                raise RuntimeError(
+                    f"Clip '{path.name}' is too short ({duration:.2f}s). Each clip must be longer than {crossfade_duration:.1f}s for crossfade stitching."
+                )
+
+        target_width = stream_infos[0]["width"]
+        target_height = stream_infos[0]["height"]
+
+        ffmpeg_cmd = ["ffmpeg", "-y"]
+        for path in video_paths:
+            ffmpeg_cmd.extend(["-i", str(path)])
+
+        filter_parts: list[str] = []
+        for idx in range(len(video_paths)):
+            filter_parts.append(
+                f"[{idx}:v]fps=24,scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,setsar=1,settb=AVTB,format=yuv420p[vsrc{idx}]"
+            )
+            if has_audio:
+                filter_parts.append(
+                    f"[{idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,aresample=async=1[asrc{idx}]"
+                )
+
+        cumulative_duration = durations[0]
+        video_prev = "vsrc0"
+        audio_prev = "asrc0"
+
+        for idx in range(1, len(video_paths)):
+            offset = cumulative_duration - crossfade_duration
+            next_video = f"v{idx}"
+            filter_parts.append(
+                f"[{video_prev}][vsrc{idx}]xfade=transition=fade:duration={crossfade_duration:.3f}:offset={max(0.0, offset):.3f}[{next_video}]"
+            )
+            video_prev = next_video
+
+            if has_audio:
+                next_audio = f"a{idx}"
+                filter_parts.append(
+                    f"[{audio_prev}][asrc{idx}]acrossfade=d={crossfade_duration:.3f}:c1=tri:c2=tri[{next_audio}]"
+                )
+                audio_prev = next_audio
+
+            cumulative_duration += durations[idx] - crossfade_duration
+
+        filter_complex = ";".join(filter_parts)
+        ffmpeg_cmd.extend(
+            [
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                f"[{video_prev}]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "20",
+                str(output_file),
+            ]
+        )
+        if has_audio:
+            ffmpeg_cmd[-1:-1] = ["-map", f"[{audio_prev}]", "-c:a", "aac"]
+
+        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def upload_selected_to_youtube(self) -> None:
         index = self.video_picker.currentIndex()
