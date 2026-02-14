@@ -326,6 +326,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_active = False
         self.continue_from_frame_target_count = 0
         self.continue_from_frame_completed = 0
+        self.continue_from_frame_remaining = 0
         self.continue_from_frame_prompt = ""
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path: Path | None = None
@@ -707,6 +708,7 @@ class MainWindow(QMainWindow):
             self.continue_from_frame_active = False
             self.continue_from_frame_target_count = 0
             self.continue_from_frame_completed = 0
+            self.continue_from_frame_remaining = 0
             self.continue_from_frame_prompt = ""
             self.continue_from_frame_current_source_video = ""
             return
@@ -720,6 +722,7 @@ class MainWindow(QMainWindow):
             self.continue_from_frame_active = False
             self.continue_from_frame_target_count = 0
             self.continue_from_frame_completed = 0
+            self.continue_from_frame_remaining = 0
             self.continue_from_frame_prompt = ""
             self.continue_from_frame_current_source_video = ""
             return
@@ -1429,8 +1432,10 @@ class MainWindow(QMainWindow):
 
         self.last_extracted_frame_path = frame_path
         iteration = self.continue_from_frame_completed + 1
+        remaining_after_this = max(self.continue_from_frame_remaining - 1, 0)
         self._append_log(
-            f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: using seed image {frame_path}"
+            f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: using seed image {frame_path} "
+            f"(remaining after this run: {remaining_after_this})"
         )
         browser_page_pause_ms = 200
         self._append_log(
@@ -2042,6 +2047,7 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_active = False
                 self.continue_from_frame_target_count = 0
                 self.continue_from_frame_completed = 0
+                self.continue_from_frame_remaining = 0
                 self.continue_from_frame_prompt = ""
             return
 
@@ -2320,13 +2326,15 @@ class MainWindow(QMainWindow):
                 self.manual_download_deadline = None
                 if self.continue_from_frame_active:
                     self.continue_from_frame_completed += 1
-                    if self.continue_from_frame_completed < self.continue_from_frame_target_count:
+                    self.continue_from_frame_remaining = max(self.continue_from_frame_remaining - 1, 0)
+                    if self.continue_from_frame_remaining > 0:
                         QTimer.singleShot(800, self._start_continue_iteration)
                     else:
                         self._append_log("Continue workflow complete.")
                         self.continue_from_frame_active = False
                         self.continue_from_frame_target_count = 0
                         self.continue_from_frame_completed = 0
+                        self.continue_from_frame_remaining = 0
                         self.continue_from_frame_prompt = ""
                         self.continue_from_frame_current_source_video = ""
                         self.continue_from_frame_seed_image_path = None
@@ -2351,6 +2359,7 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_active = False
                 self.continue_from_frame_target_count = 0
                 self.continue_from_frame_completed = 0
+                self.continue_from_frame_remaining = 0
                 self.continue_from_frame_prompt = ""
                 self.continue_from_frame_current_source_video = ""
                 self.continue_from_frame_seed_image_path = None
@@ -2382,6 +2391,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_active = False
         self.continue_from_frame_target_count = 0
         self.continue_from_frame_completed = 0
+        self.continue_from_frame_remaining = 0
         self.continue_from_frame_prompt = ""
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
@@ -2663,6 +2673,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_reload_timeout_timer.stop()
         self.continue_from_frame_target_count = self.count.value()
         self.continue_from_frame_completed = 0
+        self.continue_from_frame_remaining = self.count.value()
         self.continue_from_frame_prompt = manual_prompt
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
@@ -2697,6 +2708,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_reload_timeout_timer.stop()
         self.continue_from_frame_target_count = self.count.value()
         self.continue_from_frame_completed = 0
+        self.continue_from_frame_remaining = self.count.value()
         self.continue_from_frame_prompt = manual_prompt
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = seed_image
