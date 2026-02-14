@@ -8,6 +8,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
+from typing import Callable
 
 import requests
 from PySide6.QtCore import QMimeData, QThread, QTimer, QUrl, Qt, Signal
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QPlainTextEdit,
     QSpinBox,
@@ -3133,20 +3135,65 @@ class MainWindow(QMainWindow):
         stitched_base_file = self.download_dir / f"stitched_base_{timestamp}.mp4"
         video_paths = [Path(video["video_file_path"]) for video in self.videos]
         interpolate_enabled = self.stitch_interpolation_checkbox.isChecked()
+        interpolation_fps = int(self.stitch_interpolation_fps.currentData())
         upscale_enabled = self.stitch_upscale_checkbox.isChecked()
+        crossfade_enabled = self.stitch_crossfade_checkbox.isChecked()
         enhancement_enabled = interpolate_enabled or upscale_enabled
+
+        settings_summary = (
+            f"Crossfade: {'on' if crossfade_enabled else 'off'}"
+            + (f" ({self.crossfade_duration.value():.1f}s)" if crossfade_enabled else "")
+            + f" | Interpolation: {f'{interpolation_fps} fps' if interpolate_enabled else 'off'}"
+            + f" | Upscaling: {'on' if upscale_enabled else 'off'}"
+        )
+
+        progress_dialog = QProgressDialog("Preparing stitched video...", "", 0, 100, self)
+        progress_dialog.setWindowTitle("Stitching Videos")
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setAutoClose(True)
+        progress_dialog.setAutoReset(True)
+
+        started_at = time.time()
+
+        def update_progress(value: int, stage: str) -> None:
+            bounded_value = max(0, min(100, int(value)))
+            elapsed = time.time() - started_at
+            eta_label = "calculating..."
+            if bounded_value > 0:
+                eta_seconds = max(0.0, (elapsed / bounded_value) * (100 - bounded_value))
+                eta_label = f"~{eta_seconds:.0f}s"
+
+            progress_dialog.setValue(bounded_value)
+            progress_dialog.setLabelText(
+                f"{stage}\n"
+                f"Settings: {settings_summary}\n"
+                f"Elapsed: {elapsed:.1f}s | ETA: {eta_label}"
+            )
+            QApplication.processEvents()
+
+        update_progress(1, "Preparing stitch pipeline...")
 
         try:
             stitch_target = stitched_base_file if enhancement_enabled else output_file
-            if self.stitch_crossfade_checkbox.isChecked():
+            if crossfade_enabled:
                 self._append_log(f"Stitching videos with {self.crossfade_duration.value():.1f}s crossfade transitions enabled.")
-                self._stitch_videos_with_crossfade(video_paths, stitch_target, crossfade_duration=self.crossfade_duration.value())
+                self._stitch_videos_with_crossfade(
+                    video_paths,
+                    stitch_target,
+                    crossfade_duration=self.crossfade_duration.value(),
+                    progress_callback=lambda p: update_progress(max(5, int(5 + (p * 0.70))), "Stitching clips with crossfade..."),
+                )
             else:
                 self._append_log("Stitching videos with hard cuts (no crossfade).")
-                self._stitch_videos_concat(video_paths, stitch_target)
+                self._stitch_videos_concat(
+                    video_paths,
+                    stitch_target,
+                    progress_callback=lambda p: update_progress(max(5, int(5 + (p * 0.70))), "Stitching clips with hard cuts..."),
+                )
 
             if enhancement_enabled:
-                interpolation_fps = int(self.stitch_interpolation_fps.currentData())
                 interpolation_status = f"{interpolation_fps} fps" if interpolate_enabled else "off"
                 self._append_log(
                     "Applying stitched video enhancements: "
@@ -3159,7 +3206,10 @@ class MainWindow(QMainWindow):
                     interpolate=interpolate_enabled,
                     interpolation_fps=interpolation_fps,
                     upscale=upscale_enabled,
+                    progress_callback=lambda p: update_progress(max(75, int(75 + (p * 0.25))), "Applying interpolation/upscaling..."),
                 )
+
+            update_progress(100, "Finalizing stitched video...")
         except FileNotFoundError:
             QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for stitching but was not found in PATH.")
             return
@@ -3172,6 +3222,7 @@ class MainWindow(QMainWindow):
         finally:
             if stitched_base_file.exists():
                 stitched_base_file.unlink()
+            progress_dialog.close()
 
         self._append_log(f"Stitched video created: {output_file}")
 
@@ -3184,7 +3235,12 @@ class MainWindow(QMainWindow):
         }
         self.on_video_finished(stitched_video)
 
-    def _stitch_videos_concat(self, video_paths: list[Path], output_file: Path) -> None:
+    def _stitch_videos_concat(
+        self,
+        video_paths: list[Path],
+        output_file: Path,
+        progress_callback: Callable[[float], None] | None = None,
+    ) -> None:
         list_file = self.download_dir / f"stitch_list_{int(time.time() * 1000)}.txt"
 
         concat_lines = []
@@ -3194,7 +3250,8 @@ class MainWindow(QMainWindow):
         list_file.write_text("\n".join(concat_lines), encoding="utf-8")
 
         try:
-            subprocess.run(
+            total_duration = sum(self._probe_video_duration(path) for path in video_paths)
+            self._run_ffmpeg_with_progress(
                 [
                     "ffmpeg",
                     "-y",
@@ -3214,10 +3271,8 @@ class MainWindow(QMainWindow):
                     "aac",
                     str(output_file),
                 ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                total_duration=total_duration,
+                progress_callback=progress_callback,
             )
         finally:
             if list_file.exists():
@@ -3298,7 +3353,47 @@ class MainWindow(QMainWindow):
         )
         return bool(result.stdout.strip())
 
-    def _stitch_videos_with_crossfade(self, video_paths: list[Path], output_file: Path, crossfade_duration: float) -> None:
+    def _run_ffmpeg_with_progress(
+        self,
+        ffmpeg_cmd: list[str],
+        total_duration: float,
+        progress_callback: Callable[[float], None] | None = None,
+    ) -> None:
+        command = ffmpeg_cmd[:-1] + ["-progress", "pipe:1", "-nostats", ffmpeg_cmd[-1]]
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        if progress_callback is not None:
+            progress_callback(0.0)
+
+        out_time_ms = 0
+        if process.stdout is not None:
+            for raw_line in process.stdout:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith("out_time_ms="):
+                    try:
+                        out_time_ms = int(line.split("=", 1)[1])
+                    except ValueError:
+                        continue
+                    if total_duration > 0 and progress_callback is not None:
+                        progress = (out_time_ms / 1_000_000.0) / total_duration
+                        progress_callback(max(0.0, min(1.0, progress)))
+
+        _, stderr_text = process.communicate()
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr_text)
+
+        if progress_callback is not None:
+            progress_callback(1.0)
+
+    def _stitch_videos_with_crossfade(
+        self,
+        video_paths: list[Path],
+        output_file: Path,
+        crossfade_duration: float,
+        progress_callback: Callable[[float], None] | None = None,
+    ) -> None:
         stream_infos = [self._probe_video_stream_info(path) for path in video_paths]
         durations = [info["duration"] for info in stream_infos]
         has_audio = all(self._video_has_audio_stream(path) for path in video_paths)
@@ -3366,7 +3461,11 @@ class MainWindow(QMainWindow):
         if has_audio:
             ffmpeg_cmd[-1:-1] = ["-map", f"[{audio_prev}]", "-c:a", "aac"]
 
-        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self._run_ffmpeg_with_progress(
+            ffmpeg_cmd,
+            total_duration=cumulative_duration,
+            progress_callback=progress_callback,
+        )
 
     def _enhance_stitched_video(
         self,
@@ -3375,6 +3474,7 @@ class MainWindow(QMainWindow):
         interpolate: bool,
         interpolation_fps: int,
         upscale: bool,
+        progress_callback: Callable[[float], None] | None = None,
     ) -> None:
         if not interpolate and not upscale:
             return
@@ -3405,7 +3505,11 @@ class MainWindow(QMainWindow):
             "copy",
             str(output_file),
         ]
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self._run_ffmpeg_with_progress(
+            command,
+            total_duration=self._probe_video_duration(input_file),
+            progress_callback=progress_callback,
+        )
 
     def upload_selected_to_youtube(self) -> None:
         index = self.video_picker.currentIndex()
