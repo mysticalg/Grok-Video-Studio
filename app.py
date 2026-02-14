@@ -6,10 +6,11 @@ import time
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from PySide6.QtCore import QMimeData, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QGuiApplication, QImage
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QImage
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -100,15 +101,28 @@ class GenerateWorker(QThread):
         self.config = config
         self.prompt_config = prompt_config
         self.count = count
+        self.stop_requested = False
+
+    def request_stop(self) -> None:
+        self.stop_requested = True
+        self.requestInterruption()
+
+    def _ensure_not_stopped(self) -> None:
+        if self.stop_requested or self.isInterruptionRequested():
+            raise RuntimeError("Generation stopped by user")
 
     def run(self) -> None:
         try:
             for idx in range(1, self.count + 1):
+                self._ensure_not_stopped()
                 self.status.emit(f"Generating variant {idx}/{self.count}...")
                 video = self.generate_one_video(idx)
                 self.finished_video.emit(video)
             self.status.emit("Generation complete.")
         except Exception as exc:
+            if str(exc) == "Generation stopped by user":
+                self.status.emit("Generation stopped.")
+                return
             self.failed.emit(str(exc))
 
     def _api_error_message(self, response: requests.Response) -> str:
@@ -156,6 +170,7 @@ class GenerateWorker(QThread):
         return response.json()["choices"][0]["message"]["content"].strip()
 
     def build_prompt(self, variant: int) -> str:
+        self._ensure_not_stopped()
         source = self.prompt_config.source
         if source == "manual":
             return self.prompt_config.manual_prompt
@@ -171,6 +186,7 @@ class GenerateWorker(QThread):
         return self.call_grok_chat(system, user)
 
     def start_video_job(self, prompt: str, resolution: str) -> str:
+        self._ensure_not_stopped()
         response = requests.post(
             f"{API_BASE_URL}/imagine/video/generations",
             headers={"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"},
@@ -189,6 +205,7 @@ class GenerateWorker(QThread):
     def poll_video_job(self, job_id: str, timeout_s: int = 420) -> dict:
         start = time.time()
         while time.time() - start < timeout_s:
+            self._ensure_not_stopped()
             response = requests.get(
                 f"{API_BASE_URL}/imagine/video/generations/{job_id}",
                 headers={"Authorization": f"Bearer {self.config.api_key}"},
@@ -205,11 +222,13 @@ class GenerateWorker(QThread):
         raise TimeoutError("Timed out waiting for video generation")
 
     def download_video(self, video_url: str, suffix: str) -> Path:
+        self._ensure_not_stopped()
         file_path = DOWNLOAD_DIR / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
         with requests.get(video_url, stream=True, timeout=240) as response:
             response.raise_for_status()
             with open(file_path, "wb") as handle:
                 for chunk in response.iter_content(chunk_size=8192):
+                    self._ensure_not_stopped()
                     if chunk:
                         handle.write(chunk)
         return file_path
@@ -280,8 +299,11 @@ class MainWindow(QMainWindow):
         self.resize(1500, 900)
         self.videos: list[dict] = []
         self.worker: GenerateWorker | None = None
+        self.stop_all_requested = False
         self.manual_generation_queue: list[dict] = []
+        self.manual_image_generation_queue: list[dict] = []
         self.pending_manual_variant_for_download: int | None = None
+        self.pending_manual_download_type: str | None = None
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_in_progress = False
@@ -350,15 +372,15 @@ class MainWindow(QMainWindow):
 
         self.generate_btn = QPushButton("Generate Video")
         self.generate_btn.clicked.connect(self.start_generation)
-        actions_layout.addWidget(self.generate_btn, 0, 0, 1, 2)
+        actions_layout.addWidget(self.generate_btn, 0, 0)
 
-        self.open_btn = QPushButton("Open Local Video...")
-        self.open_btn.clicked.connect(self.open_local_video)
-        actions_layout.addWidget(self.open_btn, 1, 0)
+        self.generate_image_btn = QPushButton("Populate Image Prompt in Browser")
+        self.generate_image_btn.clicked.connect(self.start_image_generation)
+        actions_layout.addWidget(self.generate_image_btn, 0, 1)
 
-        self.extract_frame_btn = QPushButton("Extract Last Frame + Copy Image")
-        self.extract_frame_btn.clicked.connect(self.extract_last_frame_from_selected)
-        actions_layout.addWidget(self.extract_frame_btn, 1, 1)
+        self.stop_all_btn = QPushButton("Stop All Jobs")
+        self.stop_all_btn.clicked.connect(self.stop_all_jobs)
+        actions_layout.addWidget(self.stop_all_btn, 1, 0)
 
         self.continue_frame_btn = QPushButton("Continue from Last Frame (paste + generate)")
         self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
@@ -524,6 +546,31 @@ class MainWindow(QMainWindow):
         open_settings_action = QAction("Open Model/API Settings", self)
         open_settings_action.triggered.connect(self.show_model_api_settings)
         settings_menu.addAction(open_settings_action)
+
+        help_menu = menu_bar.addMenu("Help")
+        info_action = QAction("Info", self)
+        info_action.triggered.connect(self.show_app_info)
+        help_menu.addAction(info_action)
+
+        github_action = QAction("GitHub", self)
+        github_action.triggered.connect(self.open_github_page)
+        help_menu.addAction(github_action)
+
+    def show_app_info(self) -> None:
+        QMessageBox.information(
+            self,
+            "App Info",
+            "Grok Video Desktop Studio\n\n"
+            "Version: 1.0.0\n"
+            "Authors: Grok Video Desktop Studio contributors\n"
+            "Creation Date: 2025-01-01\n\n"
+            "Donation links:\n"
+            "- https://github.com/sponsors\n"
+            "- https://www.buymeacoffee.com",
+        )
+
+    def open_github_page(self) -> None:
+        QDesktopServices.openUrl(QUrl("https://github.com"))
 
     def show_model_api_settings(self) -> None:
         self.model_api_settings_dialog.show()
@@ -775,6 +822,7 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after)
 
     def start_generation(self) -> None:
+        self.stop_all_requested = False
         concept = self.concept.toPlainText().strip()
         source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
@@ -819,6 +867,26 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self.on_generation_error)
         self.worker.start()
 
+    def start_image_generation(self) -> None:
+        self.stop_all_requested = False
+        source = self.prompt_source.currentData()
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+
+        if source != "manual":
+            QMessageBox.warning(
+                self,
+                "Manual Prompt Required",
+                "Populate Image Prompt in Browser is only available when Prompt Source is set to Manual prompt (no API).",
+            )
+            return
+
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            return
+
+        self.show_browser_page()
+        self._start_manual_browser_image_generation(manual_prompt, self.count.value())
+
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
         self.manual_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
         self._append_log(
@@ -829,7 +897,292 @@ class MainWindow(QMainWindow):
         self._append_log("Attempting to populate the visible Grok prompt box on the current page...")
         self._submit_next_manual_variant()
 
+    def _start_manual_browser_image_generation(self, prompt: str, count: int) -> None:
+        self.manual_image_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
+        self._append_log(
+            "Manual image mode now reuses the current browser page exactly as-is. "
+            "No navigation or reload will happen."
+        )
+        self._append_log(f"Manual image mode queued with repeat count={count}.")
+        self._submit_next_manual_image_variant()
+
+    def _submit_next_manual_image_variant(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
+        if not self.manual_image_generation_queue:
+            self._append_log("Manual browser image generation complete.")
+            return
+
+        item = self.manual_image_generation_queue.pop(0)
+        variant = item["variant"]
+        prompt = item["prompt"]
+        attempts = int(item.get("attempts", 0)) + 1
+        item["attempts"] = attempts
+        self.pending_manual_variant_for_download = variant
+        self.pending_manual_download_type = "image"
+        self.manual_download_click_sent = False
+
+        populate_script = rf"""
+            (() => {{
+                try {{
+                    const prompt = {prompt!r};
+                    const selectors = [
+                        "textarea[placeholder*='Type to imagine' i]",
+                        "input[placeholder*='Type to imagine' i]",
+                        "textarea[placeholder*='Type to customize this video' i]",
+                        "input[placeholder*='Type to customize this video' i]",
+                        "textarea[placeholder*='Type to customize video' i]",
+                        "input[placeholder*='Type to customize video' i]",
+                        "textarea[placeholder*='Customize video' i]",
+                        "input[placeholder*='Customize video' i]",
+                        "div.tiptap.ProseMirror[contenteditable='true']",
+                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize this video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Make a video' i]",
+                        "[contenteditable='true'][data-placeholder*='Customize video' i]"
+                    ];
+                    const promptInput = selectors.map((sel) => document.querySelector(sel)).find(Boolean);
+                    if (!promptInput) return {{ ok: false, error: "Prompt input not found" }};
+
+                    promptInput.focus();
+                    if (promptInput.isContentEditable) {{
+                        const paragraph = promptInput.querySelector("p") || promptInput;
+                        paragraph.textContent = prompt;
+                        promptInput.dispatchEvent(new InputEvent("input", {{ bubbles: true, data: prompt, inputType: "insertText" }}));
+                    }} else {{
+                        const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(promptInput), "value")?.set;
+                        if (setter) setter.call(promptInput, prompt);
+                        else promptInput.value = prompt;
+                        promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                        promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    }}
+                    return {{ ok: true }};
+                }} catch (err) {{
+                    return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                }}
+            }})()
+        """
+
+        set_image_mode_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const emulateClick = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        return true;
+                    };
+                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
+                    const clickableAncestor = (el) => (el && typeof el.closest === "function")
+                        ? (el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label") || el)
+                        : el;
+                    const textOf = (el) => (el?.textContent || "").trim();
+                    const visible = () => [...document.querySelectorAll(interactiveSelector)].filter((el) => isVisible(el) && textOf(el));
+                    const selected = () => visible().filter((el) => {
+                        const target = clickableAncestor(el);
+                        if (!target) return false;
+                        const ariaPressed = target.getAttribute("aria-pressed") === "true";
+                        const ariaSelected = target.getAttribute("aria-selected") === "true";
+                        const dataState = (target.getAttribute("data-state") || "").toLowerCase() === "checked";
+                        const dataSelected = target.getAttribute("data-selected") === "true";
+                        const classSelected = /(active|selected|checked|on)/i.test(target.className || "");
+                        return ariaPressed || ariaSelected || dataState || dataSelected || classSelected;
+                    });
+                    const hasImageSelected = () => selected().some((el) => /^image$/i.test(textOf(el)));
+                    const clickByText = (patterns) => {
+                        const candidate = visible().find((el) => patterns.some((p) => p.test(textOf(el))));
+                        const target = clickableAncestor(candidate);
+                        return emulateClick(target);
+                    };
+
+                    let imageSelected = hasImageSelected();
+                    let optionsOpened = false;
+
+                    if (!imageSelected) {
+                        imageSelected = clickByText([/^image$/i, /image mode/i]) || hasImageSelected();
+                    }
+                    if (!imageSelected) {
+                        optionsOpened = clickByText([/(^|\s)(model|options?|settings?)($|\s)/i]);
+                        imageSelected = clickByText([/^image$/i, /image mode/i]) || hasImageSelected();
+                    }
+
+                    return { ok: true, imageSelected, optionsOpened };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        submit_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const emulateClick = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        return true;
+                    };
+                    const submitButton = document.querySelector("button[type='submit'], button[aria-label*='submit' i], [role='button'][aria-label*='submit' i]");
+                    if (!submitButton) return { ok: false, error: "Submit button not found" };
+                    return { ok: emulateClick(submitButton) };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _retry_variant(reason: str) -> None:
+            self._append_log(f"WARNING: Manual image variant {variant} attempt {attempts} failed: {reason}")
+            if attempts >= 4:
+                self._append_log(
+                    f"ERROR: Could not prepare manual image variant {variant} after {attempts} attempts; skipping variant."
+                )
+                self._submit_next_manual_image_variant()
+                return
+            self.manual_image_generation_queue.insert(0, item)
+            QTimer.singleShot(1200, self._submit_next_manual_image_variant)
+
+        def _after_submit(result):
+            if isinstance(result, dict) and result.get("ok"):
+                self.show_browser_page()
+                self._append_log(
+                    f"Submitted manual image variant {variant} (attempt {attempts}); "
+                    "waiting for first rendered image, then opening it for download."
+                )
+                QTimer.singleShot(7000, self._poll_for_manual_image)
+                return
+
+            # Some Grok navigations can clear the JS callback value; treat that as submitted.
+            if result in (None, ""):
+                self.show_browser_page()
+                self._append_log(
+                    f"Submitted manual image variant {variant} (attempt {attempts}); "
+                    "submit callback returned empty result after page activity; continuing to image polling."
+                )
+                QTimer.singleShot(7000, self._poll_for_manual_image)
+                return
+
+            _retry_variant(f"submit failed: {result!r}")
+
+        def _after_set_mode(result):
+            if not isinstance(result, dict) or not result.get("ok"):
+                _retry_variant(f"set image mode script failed: {result!r}")
+                return
+
+            if not result.get("imageSelected"):
+                _retry_variant(f"image option not selected: {result!r}")
+                return
+
+            self._append_log(
+                f"Manual image variant {variant} prepared with image option selected "
+                f"(attempt {attempts}); submitting prompt."
+            )
+            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(submit_script, _after_submit))
+
+        def _after_populate(result):
+            if not isinstance(result, dict) or not result.get("ok"):
+                _retry_variant(f"prompt population failed: {result!r}")
+                return
+            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode))
+
+        self.browser.page().runJavaScript(populate_script, _after_populate)
+
+    def _poll_for_manual_image(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
+        variant = self.pending_manual_variant_for_download
+        if variant is None or self.pending_manual_download_type != "image":
+            return
+
+        script = """
+            (() => {
+                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const common = { bubbles: true, cancelable: true, composed: true };
+                const emulateClick = (el) => {
+                    if (!el || !isVisible(el) || el.disabled) return false;
+                    try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                    el.dispatchEvent(new MouseEvent("mousedown", common));
+                    try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                    el.dispatchEvent(new MouseEvent("mouseup", common));
+                    el.dispatchEvent(new MouseEvent("click", common));
+                    return true;
+                };
+
+                const firstImage = [...document.querySelectorAll("img")]
+                    .filter((el) => isVisible(el) && el.src && /^https?:/i.test(el.src) && el.naturalWidth > 0 && el.naturalHeight > 0)
+                    .sort((a, b) => {
+                        const ar = a.getBoundingClientRect();
+                        const br = b.getBoundingClientRect();
+                        if (ar.top !== br.top) return ar.top - br.top;
+                        return ar.left - br.left;
+                    })[0];
+
+                if (!firstImage) return { ok: false, status: "waiting-for-image" };
+
+                const clickedImage = emulateClick(firstImage);
+
+                const downloadSelectors = [
+                    "a[download]",
+                    "button[aria-label*='download' i]",
+                    "a[aria-label*='download' i]",
+                    "[role='button'][aria-label*='download' i]",
+                    "button:has(svg[aria-label*='download' i])",
+                    "button"
+                ];
+
+                let downloadEl = null;
+                for (const selector of downloadSelectors) {
+                    const candidates = [...document.querySelectorAll(selector)]
+                        .filter((el) => isVisible(el) && /(download|save image)/i.test((el.getAttribute("aria-label") || el.textContent || "").trim()));
+                    if (candidates.length) {
+                        downloadEl = candidates[0];
+                        break;
+                    }
+                }
+
+                if (!downloadEl) {
+                    return { ok: false, status: clickedImage ? "image-opened-waiting-download" : "image-click-failed" };
+                }
+
+                const clickedDownload = emulateClick(downloadEl);
+                return { ok: clickedDownload, status: clickedDownload ? "download-clicked" : "download-click-failed" };
+            })()
+        """
+
+        def _after_poll(result):
+            if isinstance(result, dict) and result.get("ok"):
+                self._append_log(f"Variant {variant} image opened; in-page download clicked.")
+                self.manual_download_in_progress = True
+                return
+            status = result.get("status") if isinstance(result, dict) else "unknown"
+            self._append_log(f"Variant {variant} image download not ready yet ({status}); retrying...")
+            QTimer.singleShot(3000, self._poll_for_manual_image)
+
+        self.browser.page().runJavaScript(script, _after_poll)
+
     def _start_continue_iteration(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
         frame_path: Path | None = None
         if self.continue_from_frame_seed_image_path is not None:
             frame_path = self.continue_from_frame_seed_image_path
@@ -894,6 +1247,10 @@ class MainWindow(QMainWindow):
         return str(latest)
 
     def _submit_next_manual_variant(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
         if not self.manual_generation_queue:
             self._append_log("Manual browser generation complete.")
             return
@@ -1436,6 +1793,10 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_timer.start(0)
 
     def _poll_for_manual_video(self) -> None:
+        if self.stop_all_requested:
+            self._append_log("Stop-all flag active; skipping queued job activity.")
+            return
+
         variant = self.pending_manual_variant_for_download
         if variant is None:
             return
@@ -1586,21 +1947,35 @@ class MainWindow(QMainWindow):
             download.cancel()
             return
 
-        filename = f"video_{int(time.time() * 1000)}_manual_v{variant}.mp4"
+        download_type = self.pending_manual_download_type or "video"
+        extension = self._resolve_download_extension(download, download_type)
+        filename = f"{download_type}_{int(time.time() * 1000)}_manual_v{variant}.{extension}"
         download.setDownloadDirectory(str(DOWNLOAD_DIR))
         download.setDownloadFileName(filename)
         download.accept()
-        self._append_log(f"Downloading manual variant {variant} to {DOWNLOAD_DIR / filename}")
+        self._append_log(f"Downloading manual {download_type} variant {variant} to {DOWNLOAD_DIR / filename}")
 
         def on_state_changed(state):
             if state == download.DownloadState.DownloadCompleted:
                 video_path = DOWNLOAD_DIR / filename
                 video_size = video_path.stat().st_size if video_path.exists() else 0
+                if download_type == "image":
+                    self._append_log(f"Saved image: {video_path}")
+                    self.pending_manual_variant_for_download = None
+                    self.pending_manual_download_type = None
+                    self.manual_download_click_sent = False
+                    self.manual_download_in_progress = False
+                    self.manual_download_started_at = None
+                    self.manual_download_deadline = None
+                    self._submit_next_manual_image_variant()
+                    return
+
                 if video_size < MIN_VALID_VIDEO_BYTES:
                     self._append_log(
                         f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB)."
                     )
                     self.pending_manual_variant_for_download = None
+                    self.pending_manual_download_type = None
                     self.manual_download_click_sent = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = None
@@ -1630,6 +2005,7 @@ class MainWindow(QMainWindow):
                 self._append_log("Download complete; returning embedded browser to grok.com/imagine.")
                 QTimer.singleShot(0, self.show_browser_page)
                 self.pending_manual_variant_for_download = None
+                self.pending_manual_download_type = None
                 self.manual_download_click_sent = False
                 self.manual_download_in_progress = False
                 self.manual_download_started_at = None
@@ -1651,6 +2027,7 @@ class MainWindow(QMainWindow):
             elif state == download.DownloadState.DownloadInterrupted:
                 self._append_log(f"ERROR: Download interrupted for manual variant {variant}.")
                 self.pending_manual_variant_for_download = None
+                self.pending_manual_download_type = None
                 self.manual_download_click_sent = False
                 self.manual_download_in_progress = False
                 self.manual_download_started_at = None
@@ -1663,6 +2040,32 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_seed_image_path = None
 
         download.stateChanged.connect(on_state_changed)
+
+    def stop_all_jobs(self) -> None:
+        self.stop_all_requested = True
+        self.manual_generation_queue.clear()
+        self.manual_image_generation_queue.clear()
+        self.manual_download_poll_timer.stop()
+        self.continue_from_frame_reload_timeout_timer.stop()
+        self.pending_manual_variant_for_download = None
+        self.pending_manual_download_type = None
+        self.manual_download_click_sent = False
+        self.manual_download_in_progress = False
+        self.manual_download_started_at = None
+        self.manual_download_deadline = None
+
+        self.continue_from_frame_active = False
+        self.continue_from_frame_target_count = 0
+        self.continue_from_frame_completed = 0
+        self.continue_from_frame_prompt = ""
+        self.continue_from_frame_current_source_video = ""
+        self.continue_from_frame_seed_image_path = None
+        self.continue_from_frame_waiting_for_reload = False
+
+        if self.worker and self.worker.isRunning():
+            self.worker.request_stop()
+            self._append_log("Stop requested: API generation worker will stop after the current request completes.")
+        self._append_log("Stop all requested: cleared queued manual image/video jobs and halted polling timers.")
 
     def on_video_finished(self, video: dict) -> None:
         self.videos.append(video)
@@ -1686,13 +2089,6 @@ class MainWindow(QMainWindow):
         self.player.play()
         self._append_log(f"Selected video for preview: {file_path}")
 
-    def open_local_video(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select video", str(DOWNLOAD_DIR), "Videos (*.mp4 *.mov *.webm)")
-        if not file_path:
-            return
-        self._preview_video(file_path)
-        self._append_log(f"Opened local file for preview: {file_path}")
-
     def play_preview(self) -> None:
         if self.player.source().isEmpty():
             self._append_log("Preview play requested, but no video is currently loaded.")
@@ -1712,28 +2108,29 @@ class MainWindow(QMainWindow):
         self.openai_api_key.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
-        self.generate_btn.setText("Populate Prompt in Browser" if is_manual else "Generate Video")
+        self.generate_btn.setText("Populate Video Prompt" if is_manual else "Generate Video")
+        self.generate_image_btn.setText("Populate Image Prompt")
+        self.generate_image_btn.setEnabled(is_manual)
 
-    def extract_last_frame_from_selected(self) -> None:
-        index = self.video_picker.currentIndex()
-        if index < 0 or index >= len(self.videos):
-            QMessageBox.warning(self, "No Video Selected", "Select a generated video first.")
-            return
+    def _resolve_download_extension(self, download, download_type: str) -> str:
+        suggested = ""
+        try:
+            suggested = download.downloadFileName() or ""
+        except Exception:
+            suggested = ""
 
-        video_path = self.videos[index]["video_file_path"]
-        frame_path = self._extract_last_frame(video_path)
-        if frame_path is None:
-            return
+        if "." in suggested:
+            return suggested.rsplit(".", 1)[-1].lower()
 
-        if not self._copy_image_to_clipboard(frame_path):
-            return
+        try:
+            parsed = urlparse(download.url().toString())
+            path_name = Path(parsed.path).name
+            if "." in path_name:
+                return path_name.rsplit(".", 1)[-1].lower()
+        except Exception:
+            pass
 
-        self.last_extracted_frame_path = frame_path
-        self.browser.setUrl(QUrl.fromLocalFile(str(frame_path)))
-        self._append_log(
-            "Extracted last frame and copied it to clipboard as an image. "
-            f"Saved to: {frame_path}. You can now paste it into Grok's prompt tab."
-        )
+        return "png" if download_type == "image" else "mp4"
 
     def _extract_last_frame(self, video_path: str) -> Path | None:
         frame_path = DOWNLOAD_DIR / f"last_frame_{int(time.time() * 1000)}.png"
