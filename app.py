@@ -1529,7 +1529,8 @@ class MainWindow(QMainWindow):
                         "[role='textbox']",
                         "textarea",
                         "input[type='text']",
-                        "[contenteditable='true']",
+                        "input:not([type])",
+                        "[contenteditable]:not([contenteditable='false'])",
                     ].forEach((selector) => {{
                         const matches = document.querySelectorAll(selector);
                         for (let i = 0; i < matches.length; i += 1) inputCandidates.push(matches[i]);
@@ -1571,10 +1572,7 @@ class MainWindow(QMainWindow):
                             let inserted = false;
                             try {{ inserted = document.execCommand("insertText", false, value); }} catch (_) {{}}
                             if (!inserted) {{
-                                node.textContent = "";
-                                const paragraph = document.createElement("p");
-                                paragraph.textContent = value;
-                                node.replaceChildren(paragraph);
+                                node.textContent = value;
                             }}
 
                             try {{ node.dispatchEvent(new InputEvent("input", {{ bubbles: true, data: value, inputType: "insertText" }})); }} catch (_) {{ node.dispatchEvent(new Event("input", {{ bubbles: true }})); }}
@@ -1595,7 +1593,17 @@ class MainWindow(QMainWindow):
 
                     let input = scoredInputs.length ? scoredInputs[0].el : null;
                     if (!input && makeVideoButton) {{
-                        input = makeVideoButton.closest("form, .query-bar, [class*='query' i], [class*='composer' i], [class*='prompt' i]")?.querySelector("textarea, input, [role='textbox'], [contenteditable='true']") || null;
+                        input = makeVideoButton.closest("form, .query-bar, [class*='query' i], [class*='composer' i], [class*='prompt' i]")?.querySelector("textarea, input, [role='textbox'], [contenteditable]:not([contenteditable='false'])") || null;
+                    }}
+                    if (!input) {{
+                        const placeholderProbe = [...document.querySelectorAll("div, span, p")].find((el) =>
+                            isVisible(el) && /type\s+to\s+customize\s+video|type\s+to\s+imagine/i.test((el.textContent || "").trim())
+                        );
+                        if (placeholderProbe) {{
+                            try {{ placeholderProbe.click(); }} catch (_) {{}}
+                            const ae = document.activeElement;
+                            if (ae && (ae.matches("textarea, input, [role='textbox']") || ae.isContentEditable)) input = ae;
+                        }}
                     }}
                     if (!input) return {{ ok: false, error: "Prompt input not found", candidateCount: uniqueVisibleInputs.length }};
 
@@ -1716,10 +1724,15 @@ class MainWindow(QMainWindow):
                         "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
                         "[contenteditable='true'][aria-label*='Make a video' i]",
                         "[contenteditable='true'][data-placeholder*='Customize video' i]",
+                        "[contenteditable]:not([contenteditable='false'])",
                     ];
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const candidates = [];
                     selectors.forEach((selector) => {{
+                        const matches = document.querySelectorAll(selector);
+                        for (let i = 0; i < matches.length; i += 1) candidates.push(matches[i]);
+                    }});
+                    ["[role='textbox']", "textarea", "input[type='text']", "input:not([type])", "[contenteditable]:not([contenteditable='false'])"].forEach((selector) => {{
                         const matches = document.querySelectorAll(selector);
                         for (let i = 0; i < matches.length; i += 1) candidates.push(matches[i]);
                     }});
