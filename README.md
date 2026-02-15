@@ -139,14 +139,15 @@ python app.py
 ### TikTok: how to get a token to paste manually
 
 1. In TikTok for Developers, open your app and confirm your redirect URI exactly matches what you will use (for local testing this app defaults to `http://localhost:1457/auth/callback`).
-2. Build and open the authorize URL in your browser (replace placeholders):
+2. Generate a PKCE verifier/challenge + state (required by TikTok), then build/open the authorize URL:
 
-```text
-https://www.tiktok.com/v2/auth/authorize/?client_key=YOUR_CLIENT_KEY&response_type=code&scope=user.info.basic,video.upload,video.publish&redirect_uri=http%3A%2F%2Flocalhost%3A1457%2Fauth%2Fcallback&state=RANDOM_STRING
+```bash
+python -c "import base64,hashlib,secrets,urllib.parse;v=secrets.token_urlsafe(64);c=base64.urlsafe_b64encode(hashlib.sha256(v.encode()).digest()).decode().rstrip('=');s=secrets.token_hex(16);r='http://localhost:1457/auth/callback';p={'client_key':'YOUR_CLIENT_KEY','response_type':'code','scope':'user.info.basic,video.upload,video.publish','redirect_uri':r,'state':s,'code_challenge':c,'code_challenge_method':'S256'};print('VERIFIER=',v);print('STATE=',s);print('URL=', 'https://www.tiktok.com/v2/auth/authorize/?'+urllib.parse.urlencode(p))"
 ```
 
-3. After you approve access, TikTok redirects to your redirect URI with `?code=...&state=...`.
-4. Exchange that code for an access token:
+3. Open the printed `URL`, approve access, and verify `state` matches your printed `STATE`.
+4. After redirect, copy the `code` from `?code=...&state=...`.
+5. Exchange the code for an access token (use the same verifier):
 
 ```bash
 curl -X POST https://open.tiktokapis.com/v2/oauth/token/ \
@@ -155,10 +156,11 @@ curl -X POST https://open.tiktokapis.com/v2/oauth/token/ \
   -d "client_secret=YOUR_CLIENT_SECRET" \
   -d "code=AUTH_CODE_FROM_CALLBACK" \
   -d "grant_type=authorization_code" \
-  -d "redirect_uri=http://localhost:1457/auth/callback"
+  -d "redirect_uri=http://localhost:1457/auth/callback" \
+  -d "code_verifier=VERIFIER_FROM_STEP_2"
 ```
 
-5. Copy `access_token` from the JSON response and paste it into **Model/API Settings → TikTok Access Token**.
+6. Copy `access_token` from the JSON response and paste it into **Model/API Settings → TikTok Access Token**.
 
 > Note: In sandbox mode, only test users/scopes approved for your app can authorize successfully.
 

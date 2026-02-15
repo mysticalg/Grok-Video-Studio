@@ -2312,7 +2312,14 @@ class MainWindow(QMainWindow):
             self._append_log(f"ERROR: Facebook OAuth flow failed: {exc}")
             QMessageBox.critical(self, "Facebook OAuth Failed", str(exc))
 
-    def _exchange_tiktok_oauth_code(self, code: str, redirect_uri: str, client_key: str, client_secret: str) -> str:
+    def _exchange_tiktok_oauth_code(
+        self,
+        code: str,
+        redirect_uri: str,
+        client_key: str,
+        client_secret: str,
+        code_verifier: str,
+    ) -> str:
         response = requests.post(
             TIKTOK_OAUTH_TOKEN_URL,
             data={
@@ -2321,6 +2328,7 @@ class MainWindow(QMainWindow):
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": redirect_uri,
+                "code_verifier": code_verifier,
             },
             timeout=60,
         )
@@ -2346,13 +2354,15 @@ class MainWindow(QMainWindow):
             raise RuntimeError("TikTok Client Secret is required for OAuth.")
 
         state = secrets.token_hex(16)
+        verifier = secrets.token_urlsafe(64)
+        challenge = self._openai_pkce_challenge(verifier)
         redirect_uri = f"http://localhost:{TIKTOK_OAUTH_CALLBACK_PORT}/auth/callback"
         server, done_event, callback_result = self._start_oauth_callback_listener(TIKTOK_OAUTH_CALLBACK_PORT)
 
         try:
             authorize_url = (
                 f"{TIKTOK_OAUTH_AUTHORIZE_URL}?"
-                f"{urlencode({'client_key': client_key, 'redirect_uri': redirect_uri, 'state': state, 'response_type': 'code', 'scope': TIKTOK_OAUTH_SCOPE})}"
+                f"{urlencode({'client_key': client_key, 'redirect_uri': redirect_uri, 'state': state, 'response_type': 'code', 'scope': TIKTOK_OAUTH_SCOPE, 'code_challenge': challenge, 'code_challenge_method': 'S256'})}"
             )
 
             opened = QDesktopServices.openUrl(QUrl(authorize_url))
@@ -2382,7 +2392,7 @@ class MainWindow(QMainWindow):
             if not code:
                 raise RuntimeError("TikTok OAuth callback did not include an authorization code.")
 
-            access_token = self._exchange_tiktok_oauth_code(code, redirect_uri, client_key, client_secret)
+            access_token = self._exchange_tiktok_oauth_code(code, redirect_uri, client_key, client_secret, verifier)
             self.tiktok_access_token.setText(access_token)
             self._append_log("TikTok OAuth complete. Access token has been populated in TikTok Access Token.")
         finally:
