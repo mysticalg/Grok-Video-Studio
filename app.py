@@ -156,6 +156,7 @@ class PromptConfig:
     video_resolution: str
     video_resolution_label: str
     video_aspect_ratio: str
+    video_duration_seconds: int
 
 
 class GenerateWorker(QThread):
@@ -199,6 +200,19 @@ class GenerateWorker(QThread):
         except Exception:
             return response.text[:500] or response.reason
 
+    def _prompt_option_suffix(self) -> str:
+        duration = int(self.prompt_config.video_duration_seconds)
+        aspect = self.prompt_config.video_aspect_ratio
+        resolution = self.prompt_config.video_resolution_label
+        return f" --ar {aspect} --aspect {aspect} --v {duration} --res {resolution}"
+
+    def _append_prompt_options(self, prompt: str) -> str:
+        prompt_text = prompt.strip()
+        suffix = self._prompt_option_suffix()
+        if suffix.strip() in prompt_text:
+            return prompt_text
+        return f"{prompt_text}{suffix}".strip()
+
     def call_grok_chat(self, system: str, user: str) -> str:
         headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
         response = requests.post(
@@ -241,20 +255,20 @@ class GenerateWorker(QThread):
         self._ensure_not_stopped()
         source = self.prompt_config.source
         if source == "manual":
-            return self.prompt_config.manual_prompt
+            return self._append_prompt_options(self.prompt_config.manual_prompt)
 
         system = "You write highly visual prompts for short cinematic AI videos."
         user = (
-            "Create one polished video prompt for a 10 second scene in "
+            "Create one polished video prompt for a "
+            f"{self.prompt_config.video_duration_seconds} second scene in "
             f"{self.prompt_config.video_resolution_label} with a {self.prompt_config.video_aspect_ratio} aspect ratio "
             f"from this concept: {self.prompt_config.concept}. This is variant #{variant}."
         )
 
-        if source == "openai":
-            return self.call_openai_chat(system, user)
-        return self.call_grok_chat(system, user)
+        raw_prompt = self.call_openai_chat(system, user) if source == "openai" else self.call_grok_chat(system, user)
+        return self._append_prompt_options(raw_prompt)
 
-    def start_video_job(self, prompt: str, resolution: str) -> str:
+    def start_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> str:
         self._ensure_not_stopped()
         response = requests.post(
             f"{API_BASE_URL}/imagine/video/generations",
@@ -262,7 +276,7 @@ class GenerateWorker(QThread):
             json={
                 "model": self.config.image_model,
                 "prompt": prompt,
-                "duration_seconds": 10,
+                "duration_seconds": duration_seconds,
                 "resolution": resolution,
                 "fps": 24,
             },
@@ -307,7 +321,11 @@ class GenerateWorker(QThread):
         prompt = self.build_prompt(variant)
 
         try:
-            video_job_id = self.start_video_job(prompt, self.prompt_config.video_resolution)
+            video_job_id = self.start_video_job(
+                prompt,
+                self.prompt_config.video_resolution,
+                int(self.prompt_config.video_duration_seconds),
+            )
         except requests.HTTPError as exc:
             raise RuntimeError(
                 "Could not start a video generation job with the selected resolution "
@@ -577,17 +595,24 @@ class MainWindow(QMainWindow):
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
         self.video_resolution.addItem("720p (1280x720)", "1280x720")
-        self.video_resolution.addItem("1080p (1920x1080)", "1920x1080")
         self.video_resolution.setCurrentIndex(1)
         row.addWidget(self.video_resolution)
 
+        row.addWidget(QLabel("Duration"))
+        self.video_duration = QComboBox()
+        self.video_duration.addItem("6s", 6)
+        self.video_duration.addItem("10s", 10)
+        self.video_duration.setCurrentIndex(1)
+        row.addWidget(self.video_duration)
+
         row.addWidget(QLabel("Aspect"))
         self.video_aspect_ratio = QComboBox()
-        self.video_aspect_ratio.addItem("16:9", "16:9")
-        self.video_aspect_ratio.addItem("9:16", "9:16")
+        self.video_aspect_ratio.addItem("2:3", "2:3")
+        self.video_aspect_ratio.addItem("3:2", "3:2")
         self.video_aspect_ratio.addItem("1:1", "1:1")
-        self.video_aspect_ratio.addItem("4:3", "4:3")
-        self.video_aspect_ratio.setCurrentIndex(0)
+        self.video_aspect_ratio.addItem("9:16", "9:16")
+        self.video_aspect_ratio.addItem("16:9", "16:9")
+        self.video_aspect_ratio.setCurrentIndex(4)
         row.addWidget(self.video_aspect_ratio)
         prompt_group_layout.addLayout(row)
 
@@ -1241,6 +1266,7 @@ class MainWindow(QMainWindow):
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
             "count": self.count.value(),
             "video_resolution": str(self.video_resolution.currentData()),
+            "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
             "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
@@ -1305,6 +1331,14 @@ class MainWindow(QMainWindow):
             resolution_index = self.video_resolution.findData(str(preferences["video_resolution"]))
             if resolution_index >= 0:
                 self.video_resolution.setCurrentIndex(resolution_index)
+        if "video_duration_seconds" in preferences:
+            try:
+                duration_value = int(preferences["video_duration_seconds"])
+                duration_index = self.video_duration.findData(duration_value)
+                if duration_index >= 0:
+                    self.video_duration.setCurrentIndex(duration_index)
+            except (TypeError, ValueError):
+                pass
         if "video_aspect_ratio" in preferences:
             aspect_index = self.video_aspect_ratio.findData(str(preferences["video_aspect_ratio"]))
             if aspect_index >= 0:
@@ -1628,6 +1662,7 @@ class MainWindow(QMainWindow):
 
         selected_resolution = str(self.video_resolution.currentData() or "1280x720")
         selected_resolution_label = self.video_resolution.currentText().split(" ", 1)[0]
+        selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
 
         prompt_config = PromptConfig(
@@ -1639,6 +1674,7 @@ class MainWindow(QMainWindow):
             video_resolution=selected_resolution,
             video_resolution_label=selected_resolution_label,
             video_aspect_ratio=selected_aspect_ratio,
+            video_duration_seconds=selected_duration_seconds,
         )
 
         self.worker = GenerateWorker(config, prompt_config, self.count.value(), self.download_dir)
@@ -1666,8 +1702,22 @@ class MainWindow(QMainWindow):
         
         self._start_manual_browser_image_generation(manual_prompt, self.count.value())
 
+    def _prompt_option_suffix(self) -> str:
+        duration = int(self.video_duration.currentData() or 10)
+        aspect = str(self.video_aspect_ratio.currentData() or "16:9")
+        resolution = self.video_resolution.currentText().split(" ", 1)[0]
+        return f" --ar {aspect} --aspect {aspect} --v {duration} --res {resolution}"
+
+    def _append_prompt_option_suffix(self, prompt: str) -> str:
+        prompt_text = (prompt or "").strip()
+        suffix = self._prompt_option_suffix()
+        if suffix.strip() in prompt_text:
+            return prompt_text
+        return f"{prompt_text}{suffix}".strip()
+
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
-        self.manual_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
+        prompt_with_options = self._append_prompt_option_suffix(prompt)
+        self.manual_generation_queue = [{"prompt": prompt_with_options, "variant": idx} for idx in range(1, count + 1)]
         self._append_log(
             "Manual mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
@@ -1677,7 +1727,8 @@ class MainWindow(QMainWindow):
         self._submit_next_manual_variant()
 
     def _start_manual_browser_image_generation(self, prompt: str, count: int) -> None:
-        self.manual_image_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
+        prompt_with_options = self._append_prompt_option_suffix(prompt)
+        self.manual_image_generation_queue = [{"prompt": prompt_with_options, "variant": idx} for idx in range(1, count + 1)]
         self._append_log(
             "Manual image mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
@@ -1887,10 +1938,11 @@ class MainWindow(QMainWindow):
                     const composer = (promptInput && (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section"))) || document;
 
                     const aspectPatterns = {
-                        "16:9": [/^16\s*:\s*9$/i],
-                        "9:16": [/^9\s*:\s*16$/i],
+                        "2:3": [/^2\s*:\s*3$/i],
+                        "3:2": [/^3\s*:\s*2$/i],
                         "1:1": [/^1\s*:\s*1$/i],
-                        "4:3": [/^4\s*:\s*3$/i],
+                        "9:16": [/^9\s*:\s*16$/i],
+                        "16:9": [/^16\s*:\s*9$/i],
                     };
                     const imagePatterns = [/(^|\s)image(\s|$)/i, /generate multiple images/i];
                     const desiredAspectPatterns = aspectPatterns[desiredAspect] || aspectPatterns["16:9"];
@@ -2370,6 +2422,7 @@ class MainWindow(QMainWindow):
         self.manual_download_click_sent = False
         action_delay_ms = 1000
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
+        selected_duration_label = f"{int(self.video_duration.currentData() or 10)}s"
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
         self._append_log(
             f"Populating prompt for manual variant {variant} in browser, setting video options "
@@ -2582,19 +2635,24 @@ class MainWindow(QMainWindow):
 
                     const desiredQuality = "{selected_quality_label}";
                     const desiredAspect = "{selected_aspect_ratio}";
+                    const desiredDuration = "{selected_duration_label}";
                     const qualityPatterns = {
                         "480p": [/480\s*p/i, /854\s*[x×]\s*480/i],
-                        "720p": [/720\s*p/i, /1280\s*[x×]\s*720/i],
-                        "1080p": [/1080\s*p/i, /1920\s*[x×]\s*1080/i]
+                        "720p": [/720\s*p/i, /1280\s*[x×]\s*720/i]
+                    };
+                    const durationPatterns = {
+                        "6s": [/^6\s*s(ec(onds?)?)?$/i],
+                        "10s": [/^10\s*s(ec(onds?)?)?$/i]
                     };
                     const aspectPatterns = {
-                        "16:9": [/^16\s*:\s*9$/i],
-                        "9:16": [/^9\s*:\s*16$/i],
+                        "2:3": [/^2\s*:\s*3$/i],
+                        "3:2": [/^3\s*:\s*2$/i],
                         "1:1": [/^1\s*:\s*1$/i],
-                        "4:3": [/^4\s*:\s*3$/i]
+                        "9:16": [/^9\s*:\s*16$/i],
+                        "16:9": [/^16\s*:\s*9$/i]
                     };
 
-                    const requiredOptions = ["video", desiredQuality, "10s", desiredAspect];
+                    const requiredOptions = ["video", desiredQuality, desiredDuration, desiredAspect];
                     const optionsRequested = [];
                     const optionsApplied = [];
 
@@ -2620,7 +2678,7 @@ class MainWindow(QMainWindow):
 
                     applyOption("video", [/^video$/i], null);
                     applyOption(desiredQuality, qualityPatterns[desiredQuality] || qualityPatterns["720p"], desiredQuality);
-                    applyOption("10s", [/^10\s*s(ec(onds?)?)?$/i], "10s");
+                    applyOption(desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"], desiredDuration);
                     applyOption(desiredAspect, aspectPatterns[desiredAspect] || aspectPatterns["16:9"], desiredAspect);
 
                     const missingOptions = requiredOptions.filter((option) => {
@@ -2628,8 +2686,8 @@ class MainWindow(QMainWindow):
                             ? [/^video$/i]
                             : option === desiredQuality
                                 ? (qualityPatterns[desiredQuality] || qualityPatterns["720p"])
-                                : option === "10s"
-                                    ? [/^10\s*s(ec(onds?)?)?$/i]
+                                : option === desiredDuration
+                                    ? (durationPatterns[desiredDuration] || durationPatterns["10s"])
                                     : (aspectPatterns[desiredAspect] || aspectPatterns["16:9"]);
                         return !(hasSelectedByText(patterns, composer) || hasSelectedByText(patterns));
                     });
@@ -2647,6 +2705,7 @@ class MainWindow(QMainWindow):
             })()
         """
         set_options_script = set_options_script.replace('"{selected_quality_label}"', json.dumps(selected_quality_label))
+        set_options_script = set_options_script.replace('"{selected_duration_label}"', json.dumps(selected_duration_label))
         set_options_script = set_options_script.replace('"{selected_aspect_ratio}"', json.dumps(selected_aspect_ratio))
 
         close_options_script = r"""
