@@ -26,6 +26,7 @@ A desktop-first Python/PySide6 app for generating Grok videos, iterating quickly
   - YouTube
   - Facebook Page
   - Instagram Reels (requires a publicly reachable video URL)
+  - TikTok (via TikTok Content Posting API)
 
 ## Download Windows binary (recommended)
 
@@ -80,6 +81,8 @@ python app.py
 - `OPENAI_OAUTH_CALLBACK_PORT` (default: `1455`)
 - `OPENAI_CHATGPT_API_BASE` (default: `https://chatgpt.com/backend-api/codex`)
 - `OPENAI_USE_CHATGPT_BACKEND` (default: `1`; routes `auth.openai.com` OAuth tokens to ChatGPT Codex backend)
+- `TIKTOK_ACCESS_TOKEN` (optional; can also be set in-app)
+- `TIKTOK_PRIVACY_LEVEL` (optional default: `PUBLIC_TO_EVERYONE`; options also include `MUTUAL_FOLLOW_FRIENDS`, `SELF_ONLY`)
 
 ### Embedded browser/runtime
 
@@ -120,6 +123,7 @@ python app.py
 - **YouTube:** uses OAuth. You can upload with an existing `youtube_token.json`; `client_secret.json` is only needed for first-time OAuth sign-in/token renewal when no valid token is available.
 - **Facebook:** requires Graph API credentials configured via environment/settings used by the uploader workflow.
 - **Instagram Reels:** requires Meta Graph API credentials and a publicly accessible HTTP(S) video URL.
+- **TikTok:** requires a TikTok OAuth access token with Content Posting API permissions (`video.upload` and `video.publish`). Optional privacy level can be configured in settings.
 
 ## Notes
 

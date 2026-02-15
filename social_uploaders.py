@@ -7,6 +7,7 @@ from typing import Callable
 import requests
 
 GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
+TIKTOK_API_BASE = "https://open.tiktokapis.com/v2"
 
 
 def upload_video_to_facebook_page(
@@ -148,3 +149,116 @@ def upload_video_to_instagram_reels(
     if progress_callback is not None:
         progress_callback(100, "Instagram upload complete.")
     return str(media_id)
+
+
+def upload_video_to_tiktok(
+    access_token: str,
+    video_path: str,
+    caption: str,
+    privacy_level: str = "PUBLIC_TO_EVERYONE",
+    publish_timeout_s: int = 300,
+    progress_callback: Callable[[int, str], None] | None = None,
+) -> str:
+    if not access_token.strip():
+        raise ValueError("TikTok access token is required.")
+
+    video_file = Path(video_path)
+    if not video_file.exists() or not video_file.is_file():
+        raise ValueError("TikTok upload video path is invalid.")
+
+    allowed_privacy_levels = {"PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"}
+    normalized_privacy = privacy_level.strip().upper() or "PUBLIC_TO_EVERYONE"
+    if normalized_privacy not in allowed_privacy_levels:
+        raise ValueError(f"Invalid TikTok privacy level: {privacy_level}")
+
+    file_size = video_file.stat().st_size
+    if file_size <= 0:
+        raise ValueError("TikTok upload video file is empty.")
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json; charset=UTF-8",
+    }
+
+    if progress_callback is not None:
+        progress_callback(8, "Initializing TikTok upload session...")
+
+    init_resp = requests.post(
+        f"{TIKTOK_API_BASE}/post/publish/video/init/",
+        headers=headers,
+        json={
+            "post_info": {
+                "title": caption,
+                "privacy_level": normalized_privacy,
+                "disable_comment": False,
+                "disable_duet": False,
+                "disable_stitch": False,
+            },
+            "source_info": {
+                "source": "FILE_UPLOAD",
+                "video_size": file_size,
+                "chunk_size": file_size,
+                "total_chunk_count": 1,
+            },
+        },
+        timeout=120,
+    )
+    if not init_resp.ok:
+        raise RuntimeError(f"TikTok upload init failed: {init_resp.status_code} {init_resp.text[:500]}")
+
+    init_payload = init_resp.json()
+    init_data = init_payload.get("data") if isinstance(init_payload, dict) else None
+    upload_url = (init_data or {}).get("upload_url")
+    publish_id = (init_data or {}).get("publish_id")
+    if not upload_url or not publish_id:
+        raise RuntimeError(f"TikTok init response missing upload_url/publish_id: {init_payload}")
+
+    if progress_callback is not None:
+        progress_callback(30, "Uploading video bytes to TikTok...")
+
+    with video_file.open("rb") as video_handle:
+        upload_resp = requests.put(
+            upload_url,
+            data=video_handle,
+            headers={"Content-Type": "video/mp4", "Content-Length": str(file_size)},
+            timeout=600,
+        )
+
+    if not upload_resp.ok:
+        raise RuntimeError(f"TikTok binary upload failed: {upload_resp.status_code} {upload_resp.text[:500]}")
+
+    if progress_callback is not None:
+        progress_callback(65, "TikTok upload received. Waiting for publish processing...")
+
+    deadline = time.time() + publish_timeout_s
+    terminal_success_states = {"PUBLISH_COMPLETE", "SEND_TO_USER_INBOX"}
+    terminal_error_states = {"FAILED", "PUBLISH_FAILED"}
+
+    while time.time() < deadline:
+        status_resp = requests.post(
+            f"{TIKTOK_API_BASE}/post/publish/status/fetch/",
+            headers=headers,
+            json={"publish_id": publish_id},
+            timeout=120,
+        )
+        if not status_resp.ok:
+            raise RuntimeError(f"TikTok status check failed: {status_resp.status_code} {status_resp.text[:500]}")
+
+        status_payload = status_resp.json()
+        status_data = status_payload.get("data") if isinstance(status_payload, dict) else None
+        publish_status = str((status_data or {}).get("status") or "").upper()
+
+        if publish_status in terminal_success_states:
+            if progress_callback is not None:
+                progress_callback(100, f"TikTok upload complete ({publish_status}).")
+            return str(publish_id)
+
+        if publish_status in terminal_error_states:
+            status_message = (status_data or {}).get("fail_reason") or (status_data or {}).get("status")
+            raise RuntimeError(f"TikTok publish failed: {status_message}")
+
+        if progress_callback is not None:
+            progress_callback(82, f"TikTok processing status: {publish_status or 'IN_PROGRESS'}...")
+        time.sleep(3)
+
+    raise RuntimeError("TikTok publish did not finish processing before timeout.")

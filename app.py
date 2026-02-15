@@ -50,7 +50,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
-from social_uploaders import upload_video_to_facebook_page, upload_video_to_instagram_reels
+from social_uploaders import upload_video_to_facebook_page, upload_video_to_instagram_reels, upload_video_to_tiktok
 from youtube_uploader import upload_video_to_youtube
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1073,6 +1073,15 @@ class MainWindow(QMainWindow):
         self.upload_instagram_btn.clicked.connect(self.upload_selected_to_instagram)
         upload_layout.addWidget(self.upload_instagram_btn)
 
+        self.upload_tiktok_btn = QPushButton("TikTok")
+        self.upload_tiktok_btn.setToolTip("Upload selected local video to TikTok using TikTok Content Posting API.")
+        self.upload_tiktok_btn.setStyleSheet(
+            "background-color: #111111; color: white; font-weight: 700;"
+            "border: 1px solid #2f2f2f; border-radius: 6px; padding: 5px 10px;"
+        )
+        self.upload_tiktok_btn.clicked.connect(self.upload_selected_to_tiktok)
+        upload_layout.addWidget(self.upload_tiktok_btn)
+
         actions_layout.addWidget(upload_group, 13, 0, 1, 2)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
@@ -1335,6 +1344,21 @@ class MainWindow(QMainWindow):
         self.instagram_access_token.setText(os.getenv("INSTAGRAM_ACCESS_TOKEN", ""))
         form_layout.addRow("Instagram Access Token", self.instagram_access_token)
 
+        self.tiktok_access_token = QLineEdit()
+        self.tiktok_access_token.setEchoMode(QLineEdit.Password)
+        self.tiktok_access_token.setText(os.getenv("TIKTOK_ACCESS_TOKEN", ""))
+        form_layout.addRow("TikTok Access Token", self.tiktok_access_token)
+
+        self.tiktok_privacy_level = QComboBox()
+        self.tiktok_privacy_level.addItem("Public", "PUBLIC_TO_EVERYONE")
+        self.tiktok_privacy_level.addItem("Friends (mutual follow)", "MUTUAL_FOLLOW_FRIENDS")
+        self.tiktok_privacy_level.addItem("Private (only me)", "SELF_ONLY")
+        env_privacy = os.getenv("TIKTOK_PRIVACY_LEVEL", "PUBLIC_TO_EVERYONE").strip().upper()
+        privacy_index = self.tiktok_privacy_level.findData(env_privacy)
+        if privacy_index >= 0:
+            self.tiktok_privacy_level.setCurrentIndex(privacy_index)
+        form_layout.addRow("TikTok Privacy", self.tiktok_privacy_level)
+
         self.download_path_input = QLineEdit(str(self.download_dir))
         self.download_path_input.setReadOnly(True)
         choose_download_path_btn = QPushButton("Browse...")
@@ -1540,6 +1564,8 @@ class MainWindow(QMainWindow):
             "facebook_access_token": self.facebook_access_token.text(),
             "instagram_business_id": self.instagram_business_id.text(),
             "instagram_access_token": self.instagram_access_token.text(),
+            "tiktok_access_token": self.tiktok_access_token.text(),
+            "tiktok_privacy_level": self.tiktok_privacy_level.currentData(),
             "concept": self.concept.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
@@ -1602,6 +1628,12 @@ class MainWindow(QMainWindow):
             self.instagram_business_id.setText(str(preferences["instagram_business_id"]))
         if "instagram_access_token" in preferences:
             self.instagram_access_token.setText(str(preferences["instagram_access_token"]))
+        if "tiktok_access_token" in preferences:
+            self.tiktok_access_token.setText(str(preferences["tiktok_access_token"]))
+        if "tiktok_privacy_level" in preferences:
+            privacy_index = self.tiktok_privacy_level.findData(str(preferences["tiktok_privacy_level"]))
+            if privacy_index >= 0:
+                self.tiktok_privacy_level.setCurrentIndex(privacy_index)
         if "concept" in preferences:
             self.concept.setPlainText(str(preferences["concept"]))
         if "manual_prompt" in preferences:
@@ -5013,6 +5045,30 @@ class MainWindow(QMainWindow):
             success_prefix="Media published successfully. ID:",
         )
 
+    def upload_selected_to_tiktok(self) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
+            return
+
+        video_path = self.videos[index]["video_file_path"]
+        _, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=False)
+        if not accepted:
+            return
+
+        self._start_upload(
+            platform_name="TikTok",
+            upload_fn=upload_video_to_tiktok,
+            upload_kwargs={
+                "access_token": self.tiktok_access_token.text().strip(),
+                "video_path": video_path,
+                "caption": self._compose_social_text(caption, hashtags),
+                "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
+            },
+            success_dialog_title="TikTok Upload Complete",
+            success_prefix="Video uploaded successfully. Publish ID:",
+        )
+
     def _start_upload(
         self,
         platform_name: str,
@@ -5028,6 +5084,7 @@ class MainWindow(QMainWindow):
         self.upload_youtube_btn.setEnabled(False)
         self.upload_facebook_btn.setEnabled(False)
         self.upload_instagram_btn.setEnabled(False)
+        self.upload_tiktok_btn.setEnabled(False)
 
         self.upload_progress_label.setText(f"Upload progress: starting {platform_name} upload...")
         self.upload_progress_bar.setValue(0)
@@ -5065,6 +5122,7 @@ class MainWindow(QMainWindow):
         self.upload_youtube_btn.setEnabled(True)
         self.upload_facebook_btn.setEnabled(True)
         self.upload_instagram_btn.setEnabled(True)
+        self.upload_tiktok_btn.setEnabled(True)
         self.upload_worker = None
 
     def _compose_social_text(self, base_text: str, hashtags: list[str]) -> str:
