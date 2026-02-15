@@ -142,7 +142,7 @@ python app.py
 2. Generate a PKCE verifier/challenge + state (required by TikTok), then build/open the authorize URL:
 
 ```bash
-python -c "import base64,hashlib,secrets,urllib.parse;v=secrets.token_urlsafe(64);c=base64.urlsafe_b64encode(hashlib.sha256(v.encode()).digest()).decode().rstrip('=');s=secrets.token_hex(16);r='http://localhost:1457/auth/callback';p={'client_key':'YOUR_CLIENT_KEY','response_type':'code','scope':'user.info.basic,video.upload,video.publish','redirect_uri':r,'state':s,'code_challenge':c,'code_challenge_method':'S256'};print('VERIFIER=',v);print('STATE=',s);print('URL=', 'https://www.tiktok.com/v2/auth/authorize/?'+urllib.parse.urlencode(p))"
+python -c "import base64,hashlib,secrets,string,urllib.parse;alphabet=string.ascii_letters+string.digits+'-._~';v=''.join(secrets.choice(alphabet) for _ in range(64));c=base64.urlsafe_b64encode(hashlib.sha256(v.encode()).digest()).decode().rstrip('=');s=secrets.token_hex(16);r='http://localhost:1457/auth/callback';p={'client_key':'YOUR_CLIENT_KEY','response_type':'code','scope':'user.info.basic,video.upload,video.publish','redirect_uri':r,'state':s,'code_challenge':c,'code_challenge_method':'S256'};print('VERIFIER=',v);print('STATE=',s);print('URL=', 'https://www.tiktok.com/v2/auth/authorize/?'+urllib.parse.urlencode(p))"
 ```
 
 3. Open the printed `URL`, approve access, and verify `state` matches your printed `STATE`.

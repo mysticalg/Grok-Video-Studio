@@ -5,6 +5,7 @@ import base64
 import hashlib
 import secrets
 import subprocess
+import string
 import sys
 import tempfile
 import threading
@@ -2083,6 +2084,11 @@ class MainWindow(QMainWindow):
         digest = hashlib.sha256(verifier.encode("utf-8")).digest()
         return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
 
+    def _generate_pkce_verifier(self, length: int = 64) -> str:
+        length = max(43, min(128, int(length)))
+        alphabet = string.ascii_letters + string.digits + "-._~"
+        return "".join(secrets.choice(alphabet) for _ in range(length))
+
     def _start_oauth_callback_listener(self, port: int):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2144,7 +2150,7 @@ class MainWindow(QMainWindow):
 
     def _run_openai_oauth_flow(self) -> None:
         state = secrets.token_hex(16)
-        verifier = secrets.token_urlsafe(64)
+        verifier = self._generate_pkce_verifier(64)
         challenge = self._openai_pkce_challenge(verifier)
         redirect_uri = f"http://localhost:{OPENAI_OAUTH_CALLBACK_PORT}/auth/callback"
 
@@ -2367,7 +2373,7 @@ class MainWindow(QMainWindow):
             raise RuntimeError("TikTok Client Secret is required for OAuth.")
 
         state = secrets.token_hex(16)
-        verifier = secrets.token_urlsafe(64)
+        verifier = self._generate_pkce_verifier(64)
         challenge = self._openai_pkce_challenge(verifier)
         redirect_uri = f"http://localhost:{TIKTOK_OAUTH_CALLBACK_PORT}/auth/callback"
         server, done_event, callback_result = self._start_oauth_callback_listener(TIKTOK_OAUTH_CALLBACK_PORT)
