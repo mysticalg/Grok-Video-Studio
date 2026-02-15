@@ -463,6 +463,7 @@ class MainWindow(QMainWindow):
         self.stitch_worker: StitchWorker | None = None
         self._ffmpeg_nvenc_checked = False
         self._ffmpeg_nvenc_available = False
+        self.preview_fullscreen_overlay_btn: QPushButton | None = None
         self.stop_all_requested = False
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
@@ -882,6 +883,7 @@ class MainWindow(QMainWindow):
         self.preview_fullscreen_btn = QPushButton("⛶ Fullscreen")
         self.preview_fullscreen_btn.setToolTip("Toggle fullscreen preview.")
         self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
+        self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
         preview_controls.addWidget(self.preview_fullscreen_btn)
         preview_layout.addLayout(preview_controls)
 
@@ -3147,16 +3149,49 @@ class MainWindow(QMainWindow):
     def seek_preview(self, position: int) -> None:
         self.player.setPosition(max(0, int(position)))
 
-    def toggle_preview_fullscreen(self) -> None:
-        if self.preview.isFullScreen():
-            self.preview.setFullScreen(False)
-            self.preview_fullscreen_btn.setText("⛶ Fullscreen")
-            self._append_log("Preview exited fullscreen mode.")
+    def _ensure_preview_fullscreen_overlay(self) -> None:
+        if self.preview_fullscreen_overlay_btn is not None:
             return
 
-        self.preview.setFullScreen(True)
-        self.preview_fullscreen_btn.setText("🗗 Exit Fullscreen")
-        self._append_log("Preview entered fullscreen mode.")
+        overlay_btn = QPushButton("🗗 Exit Fullscreen")
+        overlay_btn.setToolTip("Exit fullscreen preview")
+        overlay_btn.setStyleSheet(
+            "background-color: rgba(15, 24, 40, 0.85); color: white; font-weight: 700;"
+            "border: 1px solid #4fc3f7; border-radius: 8px; padding: 8px 12px;"
+        )
+        overlay_btn.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        overlay_btn.setWindowFlag(Qt.FramelessWindowHint, True)
+        overlay_btn.clicked.connect(self.toggle_preview_fullscreen)
+        self.preview_fullscreen_overlay_btn = overlay_btn
+
+    def _position_preview_fullscreen_overlay(self) -> None:
+        if self.preview_fullscreen_overlay_btn is None:
+            return
+
+        self.preview_fullscreen_overlay_btn.adjustSize()
+        preview_frame = self.preview.frameGeometry()
+        x = preview_frame.right() - self.preview_fullscreen_overlay_btn.width() - 24
+        y = preview_frame.top() + 20
+        self.preview_fullscreen_overlay_btn.move(max(10, x), max(10, y))
+
+    def _on_preview_fullscreen_changed(self, fullscreen: bool) -> None:
+        self.preview_fullscreen_btn.setText("🗗 Exit Fullscreen" if fullscreen else "⛶ Fullscreen")
+
+        if fullscreen:
+            self._ensure_preview_fullscreen_overlay()
+            self._position_preview_fullscreen_overlay()
+            if self.preview_fullscreen_overlay_btn is not None:
+                self.preview_fullscreen_overlay_btn.show()
+                self.preview_fullscreen_overlay_btn.raise_()
+            self._append_log("Preview entered fullscreen mode.")
+            return
+
+        if self.preview_fullscreen_overlay_btn is not None:
+            self.preview_fullscreen_overlay_btn.hide()
+        self._append_log("Preview exited fullscreen mode.")
+
+    def toggle_preview_fullscreen(self) -> None:
+        self.preview.setFullScreen(not self.preview.isFullScreen())
 
     def on_generation_error(self, error: str) -> None:
         self._append_log(f"ERROR: {error}")
@@ -3692,6 +3727,7 @@ class MainWindow(QMainWindow):
             self._ffmpeg_nvenc_available = "h264_nvenc" in encoders_output
         except Exception:
             self._ffmpeg_nvenc_available = False
+        self.preview_fullscreen_overlay_btn: QPushButton | None = None
 
         return self._ffmpeg_nvenc_available
 
