@@ -96,6 +96,7 @@ For OpenAI prompt generation, the app now uses OAuth access tokens.
 In **Model/API Settings**, set Prompt Source to **OpenAI API**, then run Browser Authorization (or paste an access token).
 Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex-style) in your system browser. On success, the app auto-fills **OpenAI Access Token**.
 After OAuth completes, the app attempts a Codex-subscription token exchange (`requested_token=openai-api-key`) using the returned `id_token`, then auto-uses that exchanged token for API calls when available. The app also extracts org/project claims from token payloads and sends `OpenAI-Organization` / `OpenAI-Project` headers on OpenAI requests when available, then runs a tiny OpenAI request to verify model/quota access for your selected OpenAI model.
+OpenAI requests are sent via the Responses API (`/v1/responses`) for Codex subscription compatibility.
 
 ## Browser performance tuning (embedded Chromium)
 

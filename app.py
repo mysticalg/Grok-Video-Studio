@@ -261,21 +261,31 @@ class GenerateWorker(QThread):
     def call_openai_chat(self, system: str, user: str) -> str:
         headers = self._openai_headers()
         response = requests.post(
-            f"{OPENAI_API_BASE}/chat/completions",
+            f"{OPENAI_API_BASE}/responses",
             headers=headers,
             json={
                 "model": self.prompt_config.openai_chat_model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
+                "instructions": system,
+                "input": user,
                 "temperature": 0.9,
             },
             timeout=90,
         )
         if not response.ok:
-            raise RuntimeError(f"OpenAI chat request failed: {response.status_code} {self._api_error_message(response)}")
-        return response.json()["choices"][0]["message"]["content"].strip()
+            raise RuntimeError(f"OpenAI responses request failed: {response.status_code} {self._api_error_message(response)}")
+        payload = response.json()
+        output_text = str(payload.get("output_text", "")).strip()
+        if output_text:
+            return output_text
+        output = payload.get("output", [])
+        for item in output if isinstance(output, list) else []:
+            content = item.get("content", []) if isinstance(item, dict) else []
+            for part in content if isinstance(content, list) else []:
+                if isinstance(part, dict) and part.get("type") in {"output_text", "text"}:
+                    text_value = str(part.get("text", "")).strip()
+                    if text_value:
+                        return text_value
+        raise RuntimeError("OpenAI responses API returned no text output.")
 
     def build_prompt(self, variant: int) -> str:
         self._ensure_not_stopped()
@@ -1903,11 +1913,11 @@ class MainWindow(QMainWindow):
             headers["OpenAI-Project"] = self.openai_project_id
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": "quota-check"}],
-            "max_tokens": 1,
+            "input": "quota-check",
+            "max_output_tokens": 1,
             "temperature": 0,
         }
-        response = requests.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload, timeout=45)
+        response = requests.post(f"{OPENAI_API_BASE}/responses", headers=headers, json=payload, timeout=45)
         if response.ok:
             self._append_log(f"OpenAI API quota/model check succeeded for model '{model}'.")
             return
@@ -2036,11 +2046,32 @@ class MainWindow(QMainWindow):
                 headers["OpenAI-Organization"] = self.openai_org_id
             if self.openai_project_id:
                 headers["OpenAI-Project"] = self.openai_project_id
-            payload["model"] = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
-            response = requests.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload, timeout=90)
+            model_name = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
+            response = requests.post(
+                f"{OPENAI_API_BASE}/responses",
+                headers=headers,
+                json={
+                    "model": model_name,
+                    "instructions": system,
+                    "input": user,
+                    "temperature": 0.4,
+                },
+                timeout=90,
+            )
             if not response.ok:
                 raise RuntimeError(f"OpenAI request failed: {response.status_code} {response.text[:400]}")
-            return response.json()["choices"][0]["message"]["content"].strip()
+            response_payload = response.json()
+            output_text = str(response_payload.get("output_text", "")).strip()
+            if output_text:
+                return output_text
+            for item in response_payload.get("output", []) if isinstance(response_payload.get("output", []), list) else []:
+                content = item.get("content", []) if isinstance(item, dict) else []
+                for part in content if isinstance(content, list) else []:
+                    if isinstance(part, dict) and part.get("type") in {"output_text", "text"}:
+                        text_value = str(part.get("text", "")).strip()
+                        if text_value:
+                            return text_value
+            raise RuntimeError("OpenAI responses API returned no text output.")
 
         grok_key = self.api_key.text().strip()
         if not grok_key:
