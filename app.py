@@ -2209,16 +2209,7 @@ class MainWindow(QMainWindow):
 
     def start_image_generation(self) -> None:
         self.stop_all_requested = False
-        source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
-
-        if source != "manual":
-            QMessageBox.warning(
-                self,
-                "Manual Prompt Required",
-                "Populate Image Prompt in Browser is only available when Prompt Source is set to Manual prompt (no API).",
-            )
-            return
 
         if not manual_prompt:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
@@ -3982,6 +3973,7 @@ class MainWindow(QMainWindow):
         if selected_index < 0 or selected_index >= len(self.videos):
             selected_index = len(self.videos) - 1
         self.video_picker.setCurrentIndex(selected_index)
+        self.show_selected_video(selected_index)
 
     def on_video_finished(self, video: dict) -> None:
         self.videos.append(video)
@@ -4159,13 +4151,13 @@ class MainWindow(QMainWindow):
         source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
         is_manual = source == "manual"
         is_openai = source == "openai"
-        self.manual_prompt.setEnabled(is_manual)
+        self.manual_prompt.setEnabled(True)
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
         self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "🎬 Generate Video")
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
-        self.generate_image_btn.setEnabled(is_manual)
+        self.generate_image_btn.setEnabled(True)
 
     def _resolve_download_extension(self, download, download_type: str) -> str:
         suggested = ""
@@ -4373,11 +4365,6 @@ class MainWindow(QMainWindow):
         self._start_manual_browser_generation(self.continue_from_frame_prompt, 1)
 
     def continue_from_last_frame(self) -> None:
-        source = self.prompt_source.currentData()
-        if source != "manual":
-            QMessageBox.warning(self, "Manual Mode Required", "Set Prompt Source to 'Manual prompt (no API)' for frame continuation.")
-            return
-
         latest_video = self._resolve_latest_video_for_continuation()
         if not latest_video:
             QMessageBox.warning(self, "No Videos", "Generate or open a video first.")
@@ -4403,11 +4390,6 @@ class MainWindow(QMainWindow):
         self._start_continue_iteration()
 
     def continue_from_local_image(self) -> None:
-        source = self.prompt_source.currentData()
-        if source != "manual":
-            QMessageBox.warning(self, "Manual Mode Required", "Set Prompt Source to 'Manual prompt (no API)' for image continuation.")
-            return
-
         manual_prompt = self.manual_prompt.toPlainText().strip()
         if not manual_prompt:
             QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
