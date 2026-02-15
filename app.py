@@ -170,8 +170,8 @@ def _call_openai_chat_api(access_token: str, model: str, system: str, user: str,
     if is_responses_api:
         payload = {
             "model": model,
+            "instructions": system,
             "input": [
-                {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             "temperature": temperature,
