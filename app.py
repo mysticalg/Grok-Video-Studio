@@ -2028,6 +2028,25 @@ class MainWindow(QMainWindow):
             raise RuntimeError("OAuth token response did not include access_token.")
         return payload
 
+    def _refresh_openai_oauth_tokens(self, refresh_token: str) -> dict:
+        token_endpoint = f"{OPENAI_OAUTH_ISSUER}/oauth/token"
+        response = _openai_post_serialized(
+            token_endpoint,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": OPENAI_CODEX_CLIENT_ID,
+                "scope": OPENAI_OAUTH_SCOPE,
+            },
+            timeout=60,
+        )
+        if not response.ok:
+            raise RuntimeError(f"OAuth token refresh failed: {response.status_code} {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("access_token"):
+            raise RuntimeError("OAuth refresh response did not include access_token.")
+        return payload
+
     def _run_openai_oauth_flow(self) -> None:
         state = secrets.token_hex(16)
         verifier = secrets.token_urlsafe(64)
@@ -2080,6 +2099,7 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("OpenAI OAuth callback did not include an authorization code.")
 
             token_payload = self._exchange_openai_oauth_code(code, redirect_uri, verifier)
+            refresh_token = str(token_payload.get("refresh_token", "")).strip()
             id_token = str(token_payload.get("id_token", "")).strip()
             access_token = ""
             if id_token:
@@ -2089,8 +2109,26 @@ class MainWindow(QMainWindow):
                     token_payload = {**token_payload, **exchanged_payload}
                     self._append_log("OpenAI OAuth complete. Exchanged id_token for API token (preferred path).")
                 except Exception as exc:
-                    self._append_log(f"WARN: id_token exchange failed on all known endpoints; falling back to OAuth access_token. {exc}")
-                    self._append_log("Tip: set OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT to your org's documented token-exchange URL/format; providers may require different OAuth token-exchange parameters.")
+                    exchange_error = str(exc)
+                    retried = False
+                    if "token_expired" in exchange_error and refresh_token:
+                        self._append_log("id_token exchange returned token_expired; refreshing OAuth token and retrying once.")
+                        try:
+                            refreshed_payload = self._refresh_openai_oauth_tokens(refresh_token)
+                            token_payload = {**token_payload, **refreshed_payload}
+                            refresh_token = str(token_payload.get("refresh_token", refresh_token)).strip()
+                            refreshed_id_token = str(token_payload.get("id_token", "")).strip()
+                            if refreshed_id_token:
+                                exchanged_payload = self._exchange_openai_id_token_for_api_token(refreshed_id_token)
+                                access_token = str(exchanged_payload.get("access_token", "")).strip()
+                                token_payload = {**token_payload, **exchanged_payload}
+                                self._append_log("OpenAI id_token exchange succeeded after one token refresh retry.")
+                                retried = True
+                        except Exception as retry_exc:
+                            self._append_log(f"WARN: token refresh + id_token retry failed. {retry_exc}")
+                    if not retried:
+                        self._append_log(f"WARN: id_token exchange failed on all known endpoints; falling back to OAuth access_token. {exc}")
+                        self._append_log("Tip: set OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT to your org's documented token-exchange URL/format; providers may require different OAuth token-exchange parameters.")
             if not access_token:
                 access_token = str(token_payload.get("access_token", "")).strip()
 
