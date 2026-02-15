@@ -3584,18 +3584,28 @@ class MainWindow(QMainWindow):
         total_duration: float,
         progress_callback: Callable[[float], None] | None = None,
     ) -> None:
-        command = ffmpeg_cmd[:-1] + ["-progress", "pipe:1", "-nostats", ffmpeg_cmd[-1]]
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        command = ffmpeg_cmd[:-1] + ["-progress", "pipe:1", "-nostats", "-loglevel", "error", ffmpeg_cmd[-1]]
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
 
         if progress_callback is not None:
             progress_callback(0.0)
 
         out_time_ms = 0
+        output_lines: list[str] = []
         if process.stdout is not None:
             for raw_line in process.stdout:
                 line = raw_line.strip()
                 if not line:
                     continue
+                output_lines.append(line)
+                if len(output_lines) > 200:
+                    output_lines = output_lines[-200:]
                 if line.startswith("out_time_ms="):
                     try:
                         out_time_ms = int(line.split("=", 1)[1])
@@ -3605,9 +3615,10 @@ class MainWindow(QMainWindow):
                         progress = (out_time_ms / 1_000_000.0) / total_duration
                         progress_callback(max(0.0, min(1.0, progress)))
 
-        _, stderr_text = process.communicate()
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr_text)
+        return_code = process.wait()
+        if return_code != 0:
+            stderr_text = "\n".join(output_lines[-80:])
+            raise subprocess.CalledProcessError(return_code, command, stderr=stderr_text)
 
         if progress_callback is not None:
             progress_callback(1.0)
