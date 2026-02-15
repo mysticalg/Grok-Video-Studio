@@ -721,32 +721,37 @@ class MainWindow(QMainWindow):
         self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
         actions_layout.addWidget(self.video_options_dropdown, 8, 0, 1, 2)
 
-        self.upload_youtube_btn = QPushButton("▶ Upload Selected to YouTube")
+        upload_group = QGroupBox("Upload")
+        upload_layout = QHBoxLayout(upload_group)
+
+        self.upload_youtube_btn = QPushButton("YouTube")
         self.upload_youtube_btn.setToolTip("Upload the currently selected local video to your YouTube channel.")
         self.upload_youtube_btn.setStyleSheet(
             "background-color: #cc0000; color: white; font-weight: 700;"
-            "border: 1px solid #990000; border-radius: 6px; padding: 8px;"
+            "border: 1px solid #990000; border-radius: 6px; padding: 5px 10px;"
         )
         self.upload_youtube_btn.clicked.connect(self.upload_selected_to_youtube)
-        actions_layout.addWidget(self.upload_youtube_btn, 9, 0, 1, 2)
+        upload_layout.addWidget(self.upload_youtube_btn)
 
-        self.upload_facebook_btn = QPushButton("📘 Upload Selected to Facebook")
+        self.upload_facebook_btn = QPushButton("Facebook")
         self.upload_facebook_btn.setToolTip("Upload the selected local video to your Facebook Page as an unpublished video.")
         self.upload_facebook_btn.setStyleSheet(
             "background-color: #1877F2; color: white; font-weight: 700;"
-            "border: 1px solid #115bcc; border-radius: 6px; padding: 8px;"
+            "border: 1px solid #115bcc; border-radius: 6px; padding: 5px 10px;"
         )
         self.upload_facebook_btn.clicked.connect(self.upload_selected_to_facebook)
-        actions_layout.addWidget(self.upload_facebook_btn, 10, 0, 1, 2)
+        upload_layout.addWidget(self.upload_facebook_btn)
 
-        self.upload_instagram_btn = QPushButton("📸 Upload Selected to Instagram")
+        self.upload_instagram_btn = QPushButton("Instagram")
         self.upload_instagram_btn.setToolTip("Publish selected video to Instagram Reels using Meta Graph API (requires a public source URL).")
         self.upload_instagram_btn.setStyleSheet(
             "background-color: #8a3ab9; color: white; font-weight: 700;"
-            "border: 1px solid #6d2f94; border-radius: 6px; padding: 8px;"
+            "border: 1px solid #6d2f94; border-radius: 6px; padding: 5px 10px;"
         )
         self.upload_instagram_btn.clicked.connect(self.upload_selected_to_instagram)
-        actions_layout.addWidget(self.upload_instagram_btn, 11, 0, 1, 2)
+        upload_layout.addWidget(self.upload_instagram_btn)
+
+        actions_layout.addWidget(upload_group, 9, 0, 1, 2)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
@@ -755,13 +760,14 @@ class MainWindow(QMainWindow):
             "background-color: #ffdd00; color: #222; border-radius: 8px;"
         )
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
-        actions_layout.addWidget(self.buy_coffee_btn, 12, 0, 1, 2)
+        actions_layout.addWidget(self.buy_coffee_btn, 10, 0, 1, 2)
 
         left_layout.addWidget(actions_group)
 
         left_layout.addWidget(QLabel("Generated Videos"))
         self.video_picker = QComboBox()
-        self.video_picker.setIconSize(QPixmap(120, 68).size())
+        self.video_picker.setIconSize(QPixmap(144, 82).size())
+        self.video_picker.setMinimumHeight(42)
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
         left_layout.addWidget(self.video_picker)
 
@@ -3054,7 +3060,7 @@ class MainWindow(QMainWindow):
                         "-frames:v",
                         "1",
                         "-vf",
-                        "scale=120:-2",
+                        "scale=144:-2",
                         str(thumb_path),
                     ],
                     check=True,
