@@ -175,6 +175,7 @@ def _call_openai_chat_api(access_token: str, model: str, system: str, user: str,
                 {"role": "user", "content": user},
             ],
             "temperature": temperature,
+            "store": False,
         }
     else:
         payload = {
