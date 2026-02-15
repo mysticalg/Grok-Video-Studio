@@ -67,6 +67,7 @@ OPENAI_CODEX_CLIENT_ID = os.getenv("OPENAI_CODEX_CLIENT_ID", "app_EMoamEEZ73f0Ck
 OPENAI_OAUTH_SCOPE = "openid profile email offline_access"
 OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455"))
 OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT = os.getenv("OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT", "").strip()
+OPENAI_MIN_REQUEST_INTERVAL_SECONDS = os.getenv("OPENAI_MIN_REQUEST_INTERVAL_SECONDS", "0.35").strip()
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
@@ -90,6 +91,29 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(value: str, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
+_OPENAI_SERIAL_REQUEST_LOCK = threading.Lock()
+_OPENAI_LAST_REQUEST_TS = 0.0
+
+
+def _openai_post_serialized(url: str, **kwargs) -> requests.Response:
+    global _OPENAI_LAST_REQUEST_TS
+    min_interval_s = _env_float(OPENAI_MIN_REQUEST_INTERVAL_SECONDS, 0.35)
+    with _OPENAI_SERIAL_REQUEST_LOCK:
+        elapsed = time.monotonic() - _OPENAI_LAST_REQUEST_TS
+        wait_s = max(0.0, min_interval_s - elapsed)
+        if wait_s > 0:
+            time.sleep(wait_s)
+        response = requests.post(url, **kwargs)
+        _OPENAI_LAST_REQUEST_TS = time.monotonic()
+        return response
 
 
 def _path_supports_rw(path: Path) -> bool:
@@ -257,7 +281,7 @@ class GenerateWorker(QThread):
             headers["OpenAI-Organization"] = self.prompt_config.openai_org_id
         if self.prompt_config.openai_project_id:
             headers["OpenAI-Project"] = self.prompt_config.openai_project_id
-        response = requests.post(
+        response = _openai_post_serialized(
             f"{OPENAI_API_BASE}/chat/completions",
             headers=headers,
             json={
@@ -1883,7 +1907,7 @@ class MainWindow(QMainWindow):
 
     def _exchange_openai_id_token_for_api_token(self, id_token: str) -> dict:
         endpoint = OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT or f"{OPENAI_API_BASE}/auth/id_token/exchange"
-        response = requests.post(endpoint, json={"id_token": id_token}, timeout=60)
+        response = _openai_post_serialized(endpoint, json={"id_token": id_token}, timeout=60)
         if not response.ok:
             raise RuntimeError(f"ID token exchange failed: {response.status_code} {response.text[:500]}")
         payload = response.json()
@@ -1893,7 +1917,7 @@ class MainWindow(QMainWindow):
 
     def _exchange_openai_oauth_code(self, code: str, redirect_uri: str, code_verifier: str) -> dict:
         token_endpoint = f"{OPENAI_OAUTH_ISSUER}/oauth/token"
-        response = requests.post(
+        response = _openai_post_serialized(
             token_endpoint,
             data={
                 "grant_type": "authorization_code",
@@ -1936,6 +1960,7 @@ class MainWindow(QMainWindow):
             opened = QDesktopServices.openUrl(QUrl(authorize_url))
             if opened:
                 self._append_log("Opened OpenAI OAuth authorize URL in your system browser. Complete sign-in to continue.")
+                self._append_log("OpenAI API calls are serialized and staggered to one request at a time.")
             else:
                 self._append_log("Could not launch system browser for OAuth authorize URL.")
                 raise RuntimeError("Failed to open system browser for OpenAI OAuth authorization.")
@@ -2025,7 +2050,7 @@ class MainWindow(QMainWindow):
             if self.openai_project_id.text().strip():
                 headers["OpenAI-Project"] = self.openai_project_id.text().strip()
             payload["model"] = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
-            response = requests.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload, timeout=90)
+            response = _openai_post_serialized(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload, timeout=90)
             if not response.ok:
                 raise RuntimeError(f"OpenAI request failed: {response.status_code} {response.text[:400]}")
             return response.json()["choices"][0]["message"]["content"].strip()

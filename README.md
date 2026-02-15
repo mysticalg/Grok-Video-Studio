@@ -78,6 +78,7 @@ python app.py
 - `OPENAI_CODEX_CLIENT_ID` (default: `app_EMoamEEZ73f0CkXaXp7hrann`)
 - `OPENAI_OAUTH_CALLBACK_PORT` (default: `1455`)
 - `OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT` (optional override for id_token -> API token exchange endpoint)
+- `OPENAI_MIN_REQUEST_INTERVAL_SECONDS` (default: `0.35`; staggers OpenAI requests and keeps them serialized one-at-a-time)
 
 ### Embedded browser/runtime
 
