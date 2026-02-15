@@ -1837,8 +1837,16 @@ class MainWindow(QMainWindow):
                 self._append_log(f"GUI→browser option sync warning: {result.get('error', 'unknown error')}")
                 return
             if result.get("modeSwitched"):
+                self._append_log("GUI→browser option sync: switched to Video mode; retrying option apply.")
                 self._schedule_browser_option_sync_from_gui(delay_ms=280)
                 return
+            requested = result.get("requested") or []
+            applied = result.get("applied") or []
+            self._append_log(
+                "GUI→browser option sync stage complete; "
+                f"requested: {', '.join(requested) if requested else 'none'}; "
+                f"applied: {', '.join(applied) if applied else 'none'}."
+            )
             missing = result.get("missing") or []
             if missing:
                 self._append_log(f"GUI→browser option sync incomplete; missing: {', '.join(missing)}")
@@ -2293,10 +2301,30 @@ class MainWindow(QMainWindow):
                         if (selected) optionsApplied.push(name);
                     };
 
+                    const findModeNode = (modeName) => {
+                        const modePattern = modeName === "video"
+                            ? /(^|\s)video(\s|$)|generate\s*a\s*video/i
+                            : /(^|\s)image(\s|$)|generate\s*multiple\s*images/i;
+                        const candidates = [...document.querySelectorAll("[role='menuitem'], button, [role='button']")]
+                            .filter((el) => isVisible(el) && modePattern.test(normalizeText(el.textContent || "")));
+                        return candidates[0] || null;
+                    };
+                    const applyMode = (modeName) => {
+                        const modeNode = findModeNode(modeName);
+                        if (!modeNode) return;
+                        if (isOptionButtonSelected(modeNode)) {
+                            optionsApplied.push(`${modeName}(already-selected)`);
+                            return;
+                        }
+                        const clicked = emulateClick(modeNode) || (typeof modeNode.click === "function" ? (modeNode.click(), true) : false);
+                        if (clicked) optionsRequested.push(modeName);
+                        if (isOptionButtonSelected(modeNode)) optionsApplied.push(modeName);
+                    };
+
                     // In Radix menus, clicking Image/Video menu items can close the panel.
                     // Apply aspect first, then switch mode.
                     applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
-                    applyOption("image", imagePatterns);
+                    applyMode("image");
 
                     const missingOptions = [];
                     if (!(hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
@@ -3058,12 +3086,32 @@ class MainWindow(QMainWindow):
                         if (selected) optionsApplied.push(name);
                     };
 
+                    const findModeNode = (modeName) => {
+                        const modePattern = modeName === "video"
+                            ? /(^|\s)video(\s|$)|generate\s*a\s*video/i
+                            : /(^|\s)image(\s|$)|generate\s*multiple\s*images/i;
+                        const candidates = [...document.querySelectorAll("[role='menuitem'], button, [role='button']")]
+                            .filter((el) => isVisible(el) && modePattern.test(normalizeText(el.textContent || "")));
+                        return candidates[0] || null;
+                    };
+                    const applyMode = (modeName) => {
+                        const modeNode = findModeNode(modeName);
+                        if (!modeNode) return;
+                        if (isOptionButtonSelected(modeNode)) {
+                            optionsApplied.push(`${modeName}(already-selected)`);
+                            return;
+                        }
+                        const clicked = emulateClick(modeNode) || (typeof modeNode.click === "function" ? (modeNode.click(), true) : false);
+                        if (clicked) optionsRequested.push(modeName);
+                        if (isOptionButtonSelected(modeNode)) optionsApplied.push(modeName);
+                    };
+
                     // In Radix menus, clicking Image/Video menu items can close the panel.
                     // Apply quality/duration/aspect first, then switch mode.
                     applyOption(desiredQuality, qualityPatterns[desiredQuality] || qualityPatterns["720p"], desiredQuality);
                     applyOption(desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"], desiredDuration);
                     applyOption(desiredAspect, aspectPatterns[desiredAspect] || aspectPatterns["16:9"], desiredAspect);
-                    applyOption("video", [/^video$/i], null);
+                    applyMode("video");
 
                     const missingOptions = requiredOptions.filter((option) => {
                         const patterns = option === "video"
@@ -3216,7 +3264,7 @@ class MainWindow(QMainWindow):
             requested_summary = ", ".join(options_requested) if options_requested else "none"
             applied_summary = ", ".join(options_applied) if options_applied else "none detected"
             self._append_log(
-                f"Options staged for variant {variant}; options requested: {requested_summary}; options applied markers: {applied_summary}."
+                f"Options stage[apply] variant {variant}: requested={requested_summary}; applied={applied_summary}."
             )
 
             def _continue_after_options_close(close_result):
@@ -3226,7 +3274,7 @@ class MainWindow(QMainWindow):
                         f"WARNING: Closing options window reported an error for variant {variant}: {close_error!r}. Continuing."
                     )
 
-                self._append_log(f"Options window closed for variant {variant}; submitting after {action_delay_ms}ms delay.")
+                self._append_log(f"Options stage[close] variant {variant}: closing panel complete; submitting after {action_delay_ms}ms delay.")
 
                 def after_delayed_submit(submit_result):
                     if not isinstance(submit_result, dict) or not submit_result.get("ok"):
@@ -3261,7 +3309,7 @@ class MainWindow(QMainWindow):
             elif panel_visible:
                 self._append_log(f"Options panel appears visible for variant {variant}; proceeding to option selection.")
 
-            self._append_log(f"Options window opened for variant {variant}; setting options after {action_delay_ms}ms delay.")
+            self._append_log(f"Options stage[open] variant {variant}: panel open callback received; applying quality={selected_quality_label}, duration={selected_duration_label}, aspect={selected_aspect_ratio} after {action_delay_ms}ms delay.")
             QTimer.singleShot(
                 action_delay_ms,
                 lambda: self.browser.page().runJavaScript(set_options_script, _continue_after_options_set),
