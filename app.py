@@ -221,7 +221,6 @@ def _call_openai_chat_api(access_token: str, model: str, system: str, user: str,
             "input": [
                 {"role": "user", "content": user},
             ],
-            "temperature": temperature,
             "store": False,
             "stream": True,
         }
