@@ -200,19 +200,6 @@ class GenerateWorker(QThread):
         except Exception:
             return response.text[:500] or response.reason
 
-    def _prompt_option_suffix(self) -> str:
-        duration = int(self.prompt_config.video_duration_seconds)
-        aspect = self.prompt_config.video_aspect_ratio
-        resolution = self.prompt_config.video_resolution_label
-        return f" --ar {aspect} --aspect {aspect} --v {duration} --res {resolution}"
-
-    def _append_prompt_options(self, prompt: str) -> str:
-        prompt_text = prompt.strip()
-        suffix = self._prompt_option_suffix()
-        if suffix.strip() in prompt_text:
-            return prompt_text
-        return f"{prompt_text}{suffix}".strip()
-
     def call_grok_chat(self, system: str, user: str) -> str:
         headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
         response = requests.post(
@@ -255,7 +242,7 @@ class GenerateWorker(QThread):
         self._ensure_not_stopped()
         source = self.prompt_config.source
         if source == "manual":
-            return self._append_prompt_options(self.prompt_config.manual_prompt)
+            return self.prompt_config.manual_prompt
 
         system = "You write highly visual prompts for short cinematic AI videos."
         user = (
@@ -265,8 +252,7 @@ class GenerateWorker(QThread):
             f"from this concept: {self.prompt_config.concept}. This is variant #{variant}."
         )
 
-        raw_prompt = self.call_openai_chat(system, user) if source == "openai" else self.call_grok_chat(system, user)
-        return self._append_prompt_options(raw_prompt)
+        return self.call_openai_chat(system, user) if source == "openai" else self.call_grok_chat(system, user)
 
     def start_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> str:
         self._ensure_not_stopped()
@@ -1702,22 +1688,8 @@ class MainWindow(QMainWindow):
         
         self._start_manual_browser_image_generation(manual_prompt, self.count.value())
 
-    def _prompt_option_suffix(self) -> str:
-        duration = int(self.video_duration.currentData() or 10)
-        aspect = str(self.video_aspect_ratio.currentData() or "16:9")
-        resolution = self.video_resolution.currentText().split(" ", 1)[0]
-        return f" --ar {aspect} --aspect {aspect} --v {duration} --res {resolution}"
-
-    def _append_prompt_option_suffix(self, prompt: str) -> str:
-        prompt_text = (prompt or "").strip()
-        suffix = self._prompt_option_suffix()
-        if suffix.strip() in prompt_text:
-            return prompt_text
-        return f"{prompt_text}{suffix}".strip()
-
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
-        prompt_with_options = self._append_prompt_option_suffix(prompt)
-        self.manual_generation_queue = [{"prompt": prompt_with_options, "variant": idx} for idx in range(1, count + 1)]
+        self.manual_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
         self._append_log(
             "Manual mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
@@ -1727,8 +1699,7 @@ class MainWindow(QMainWindow):
         self._submit_next_manual_variant()
 
     def _start_manual_browser_image_generation(self, prompt: str, count: int) -> None:
-        prompt_with_options = self._append_prompt_option_suffix(prompt)
-        self.manual_image_generation_queue = [{"prompt": prompt_with_options, "variant": idx} for idx in range(1, count + 1)]
+        self.manual_image_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
         self._append_log(
             "Manual image mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
