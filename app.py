@@ -12,7 +12,7 @@ from typing import Callable
 
 import requests
 from PySide6.QtCore import QMimeData, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QImage
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -32,9 +32,10 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QProgressDialog,
     QPushButton,
     QPlainTextEdit,
+    QProgressBar,
+    QSlider,
     QSpinBox,
     QSplitter,
     QTextBrowser,
@@ -43,11 +44,14 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
+from social_uploaders import upload_video_to_facebook_page, upload_video_to_instagram_reels
 from youtube_uploader import upload_video_to_youtube
 
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
+THUMBNAILS_DIR = DOWNLOAD_DIR / ".thumbnails"
+THUMBNAILS_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
@@ -324,6 +328,101 @@ class GenerateWorker(QThread):
             "source_url": video_url,
         }
 
+class StitchWorker(QThread):
+    progress = Signal(int, str)
+    status = Signal(str)
+    finished_stitch = Signal(dict)
+    failed = Signal(str, str)
+
+    def __init__(
+        self,
+        window: "MainWindow",
+        video_paths: list[Path],
+        output_file: Path,
+        stitched_base_file: Path,
+        crossfade_enabled: bool,
+        crossfade_duration: float,
+        interpolate_enabled: bool,
+        interpolation_fps: int,
+        upscale_enabled: bool,
+        upscale_target: str,
+        use_gpu_encoding: bool,
+    ):
+        super().__init__()
+        self.window = window
+        self.video_paths = video_paths
+        self.output_file = output_file
+        self.stitched_base_file = stitched_base_file
+        self.crossfade_enabled = crossfade_enabled
+        self.crossfade_duration = crossfade_duration
+        self.interpolate_enabled = interpolate_enabled
+        self.interpolation_fps = interpolation_fps
+        self.upscale_enabled = upscale_enabled
+        self.upscale_target = upscale_target
+        self.use_gpu_encoding = use_gpu_encoding
+
+    def run(self) -> None:
+        enhancement_enabled = self.interpolate_enabled or self.upscale_enabled
+        try:
+            stitch_target = self.stitched_base_file if enhancement_enabled else self.output_file
+
+            if self.crossfade_enabled:
+                self.status.emit(f"Stitching videos with {self.crossfade_duration:.1f}s crossfade transitions enabled.")
+                self.window._stitch_videos_with_crossfade(
+                    self.video_paths,
+                    stitch_target,
+                    crossfade_duration=self.crossfade_duration,
+                    progress_callback=lambda p: self.progress.emit(max(5, int(5 + (p * 0.70))), "Stitching clips with crossfade..."),
+                    use_gpu_encoding=self.use_gpu_encoding,
+                )
+            else:
+                self.status.emit("Stitching videos with hard cuts (no crossfade).")
+                self.window._stitch_videos_concat(
+                    self.video_paths,
+                    stitch_target,
+                    progress_callback=lambda p: self.progress.emit(max(5, int(5 + (p * 0.70))), "Stitching clips with hard cuts..."),
+                    use_gpu_encoding=self.use_gpu_encoding,
+                )
+
+            if enhancement_enabled:
+                interpolation_status = f"{self.interpolation_fps} fps" if self.interpolate_enabled else "off"
+                self.status.emit(
+                    "Applying stitched video enhancements: "
+                    f"frame interpolation={interpolation_status}, "
+                    f"upscaling={self.upscale_target if self.upscale_enabled else 'off'}."
+                )
+                self.window._enhance_stitched_video(
+                    input_file=stitch_target,
+                    output_file=self.output_file,
+                    interpolate=self.interpolate_enabled,
+                    interpolation_fps=self.interpolation_fps,
+                    upscale=self.upscale_enabled,
+                    upscale_target=self.upscale_target,
+                    progress_callback=lambda p: self.progress.emit(max(75, int(75 + (p * 0.25))), "Applying interpolation/upscaling..."),
+                    use_gpu_encoding=self.use_gpu_encoding,
+                )
+
+            self.progress.emit(100, "Finalizing stitched video...")
+            self.finished_stitch.emit(
+                {
+                    "title": "Stitched Video",
+                    "prompt": "stitched",
+                    "resolution": "mixed",
+                    "video_file_path": str(self.output_file),
+                    "source_url": "local-stitch",
+                }
+            )
+        except FileNotFoundError:
+            self.failed.emit("ffmpeg Missing", "ffmpeg is required for stitching but was not found in PATH.")
+        except subprocess.CalledProcessError as exc:
+            self.failed.emit("Stitch Failed", exc.stderr[-800:] or "ffmpeg failed.")
+        except RuntimeError as exc:
+            self.failed.emit("Stitch Failed", str(exc))
+        finally:
+            if self.stitched_base_file.exists():
+                self.stitched_base_file.unlink()
+
+
 
 class FilteredWebEnginePage(QWebEnginePage):
     """Suppress noisy third-party console warnings from grok.com in the embedded browser."""
@@ -364,6 +463,10 @@ class MainWindow(QMainWindow):
         self.download_dir = DOWNLOAD_DIR
         self.videos: list[dict] = []
         self.worker: GenerateWorker | None = None
+        self.stitch_worker: StitchWorker | None = None
+        self._ffmpeg_nvenc_checked = False
+        self._ffmpeg_nvenc_available = False
+        self.preview_fullscreen_overlay_btn: QPushButton | None = None
         self.stop_all_requested = False
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
@@ -404,6 +507,7 @@ class MainWindow(QMainWindow):
         self.preview_muted = False
         self.preview_volume = 100
         self._build_ui()
+        self._load_startup_preferences()
         self._apply_space_age_theme()
 
     def _apply_space_age_theme(self) -> None:
@@ -582,7 +686,7 @@ class MainWindow(QMainWindow):
 
         self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
-        actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 2)
+        actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 1)
 
         self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation")
         self.stitch_interpolation_checkbox.setToolTip(
@@ -597,33 +701,71 @@ class MainWindow(QMainWindow):
         self.stitch_interpolation_fps.setToolTip("Target frame rate used when frame interpolation is enabled.")
         actions_layout.addWidget(self.stitch_interpolation_fps, 5, 1, 1, 1)
 
-        self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling (2x Lanczos)")
+        self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling")
         self.stitch_upscale_checkbox.setToolTip(
-            "After stitching, upscale output up to 2x (capped at 4K) with high-quality Lanczos scaling."
+            "After stitching, upscale output to a selected target resolution using high-quality Lanczos scaling."
         )
-        actions_layout.addWidget(self.stitch_upscale_checkbox, 6, 0, 1, 2)
+        actions_layout.addWidget(self.stitch_upscale_checkbox, 6, 0, 1, 1)
+
+        self.stitch_upscale_target = QComboBox()
+        self.stitch_upscale_target.addItem("2x (max 4K)", "2x")
+        self.stitch_upscale_target.addItem("1080p (1920x1080)", "1080p")
+        self.stitch_upscale_target.addItem("1440p (2560x1440)", "1440p")
+        self.stitch_upscale_target.addItem("4K (3840x2160)", "4k")
+        self.stitch_upscale_target.setCurrentIndex(0)
+        self.stitch_upscale_target.setToolTip("Choose output upscale target resolution.")
+        actions_layout.addWidget(self.stitch_upscale_target, 6, 1, 1, 1)
+
+        self.stitch_gpu_checkbox = QCheckBox("Use GPU encoding for stitching (NVENC)")
+        self.stitch_gpu_checkbox.setToolTip("Use NVIDIA NVENC encoder when available to reduce CPU load.")
+        self.stitch_gpu_checkbox.setChecked(True)
+        self.stitch_gpu_checkbox.toggled.connect(lambda _: self._sync_video_options_label())
+        actions_layout.addWidget(self.stitch_gpu_checkbox, 7, 0, 1, 2)
 
         self.video_options_dropdown = QComboBox()
-        self.video_options_dropdown.addItem("Video Options: Crossfade 0.5s", 0.5)
-        self.video_options_dropdown.addItem("Crossfade 0.2s", 0.2)
-        self.video_options_dropdown.addItem("Crossfade 0.3s", 0.3)
-        self.video_options_dropdown.addItem("Crossfade 0.5s", 0.5)
-        self.video_options_dropdown.addItem("Crossfade 0.8s", 0.8)
-        self.video_options_dropdown.addItem("Crossfade 1.0s", 1.0)
-        self.video_options_dropdown.addItem("Open advanced video settings...", None)
-        self.video_options_dropdown.setCurrentIndex(0)
-        self.video_options_dropdown.setToolTip("Video options including stitch crossfade duration.")
+        self.video_options_dropdown.addItem("0.2s", 0.2)
+        self.video_options_dropdown.addItem("0.3s", 0.3)
+        self.video_options_dropdown.addItem("0.5s", 0.5)
+        self.video_options_dropdown.addItem("0.8s", 0.8)
+        self.video_options_dropdown.addItem("1.0s", 1.0)
+        self.video_options_dropdown.addItem("Advanced...", None)
+        self.video_options_dropdown.setCurrentIndex(2)
+        self.video_options_dropdown.setMaximumWidth(140)
+        self.video_options_dropdown.setToolTip("Crossfade duration for stitching.")
         self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
-        actions_layout.addWidget(self.video_options_dropdown, 7, 0, 1, 2)
+        actions_layout.addWidget(self.video_options_dropdown, 4, 1, 1, 1, alignment=Qt.AlignRight)
 
-        self.upload_youtube_btn = QPushButton("▶ Upload Selected to YouTube")
+        upload_group = QGroupBox("Upload")
+        upload_layout = QHBoxLayout(upload_group)
+
+        self.upload_youtube_btn = QPushButton("YouTube")
         self.upload_youtube_btn.setToolTip("Upload the currently selected local video to your YouTube channel.")
         self.upload_youtube_btn.setStyleSheet(
             "background-color: #cc0000; color: white; font-weight: 700;"
-            "border: 1px solid #990000; border-radius: 6px; padding: 8px;"
+            "border: 1px solid #990000; border-radius: 6px; padding: 5px 10px;"
         )
         self.upload_youtube_btn.clicked.connect(self.upload_selected_to_youtube)
-        actions_layout.addWidget(self.upload_youtube_btn, 8, 0, 1, 2)
+        upload_layout.addWidget(self.upload_youtube_btn)
+
+        self.upload_facebook_btn = QPushButton("Facebook")
+        self.upload_facebook_btn.setToolTip("Upload the selected local video to your Facebook Page as an unpublished video.")
+        self.upload_facebook_btn.setStyleSheet(
+            "background-color: #1877F2; color: white; font-weight: 700;"
+            "border: 1px solid #115bcc; border-radius: 6px; padding: 5px 10px;"
+        )
+        self.upload_facebook_btn.clicked.connect(self.upload_selected_to_facebook)
+        upload_layout.addWidget(self.upload_facebook_btn)
+
+        self.upload_instagram_btn = QPushButton("Instagram")
+        self.upload_instagram_btn.setToolTip("Publish selected video to Instagram Reels using Meta Graph API (requires a public source URL).")
+        self.upload_instagram_btn.setStyleSheet(
+            "background-color: #8a3ab9; color: white; font-weight: 700;"
+            "border: 1px solid #6d2f94; border-radius: 6px; padding: 5px 10px;"
+        )
+        self.upload_instagram_btn.clicked.connect(self.upload_selected_to_instagram)
+        upload_layout.addWidget(self.upload_instagram_btn)
+
+        actions_layout.addWidget(upload_group, 9, 0, 1, 2)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
@@ -632,14 +774,39 @@ class MainWindow(QMainWindow):
             "background-color: #ffdd00; color: #222; border-radius: 8px;"
         )
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
-        actions_layout.addWidget(self.buy_coffee_btn, 9, 0, 1, 2)
+        actions_layout.addWidget(self.buy_coffee_btn, 10, 0, 1, 2)
 
         left_layout.addWidget(actions_group)
 
         left_layout.addWidget(QLabel("Generated Videos"))
         self.video_picker = QComboBox()
+        self.video_picker.setIconSize(QPixmap(144, 82).size())
+        self.video_picker.setMinimumHeight(42)
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
         left_layout.addWidget(self.video_picker)
+
+        video_list_controls = QHBoxLayout()
+        self.open_video_btn = QPushButton("📂 Open Video")
+        self.open_video_btn.setToolTip("Open a local video file and add it to Generated Videos.")
+        self.open_video_btn.clicked.connect(self.open_local_video)
+        video_list_controls.addWidget(self.open_video_btn)
+
+        self.video_move_up_btn = QPushButton("⬆ Move Up")
+        self.video_move_up_btn.setToolTip("Move selected video earlier in the Generated Videos order.")
+        self.video_move_up_btn.clicked.connect(lambda: self.move_selected_video(-1))
+        video_list_controls.addWidget(self.video_move_up_btn)
+
+        self.video_move_down_btn = QPushButton("⬇ Move Down")
+        self.video_move_down_btn.setToolTip("Move selected video later in the Generated Videos order.")
+        self.video_move_down_btn.clicked.connect(lambda: self.move_selected_video(1))
+        video_list_controls.addWidget(self.video_move_down_btn)
+
+        self.video_remove_btn = QPushButton("🗑 Remove")
+        self.video_remove_btn.setToolTip("Remove selected video from Generated Videos list.")
+        self.video_remove_btn.clicked.connect(self.remove_selected_video)
+        video_list_controls.addWidget(self.video_remove_btn)
+
+        left_layout.addLayout(video_list_controls)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -685,6 +852,16 @@ class MainWindow(QMainWindow):
         self.log.setMinimumHeight(260)
         log_layout.addWidget(self.log)
 
+        self.stitch_progress_label = QLabel("Stitch progress: idle")
+        self.stitch_progress_label.setStyleSheet("color: #9fb3c8;")
+        log_layout.addWidget(self.stitch_progress_label)
+
+        self.stitch_progress_bar = QProgressBar()
+        self.stitch_progress_bar.setRange(0, 100)
+        self.stitch_progress_bar.setValue(0)
+        self.stitch_progress_bar.setVisible(False)
+        log_layout.addWidget(self.stitch_progress_bar)
+
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
         else:
@@ -723,10 +900,28 @@ class MainWindow(QMainWindow):
         self.preview_volume_slider.setSuffix("%")
         self.preview_volume_slider.valueChanged.connect(self._set_preview_volume)
         preview_controls.addWidget(self.preview_volume_slider)
+
+        self.preview_fullscreen_btn = QPushButton("⛶ Fullscreen")
+        self.preview_fullscreen_btn.setToolTip("Toggle fullscreen preview.")
+        self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
+        self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
+        preview_controls.addWidget(self.preview_fullscreen_btn)
         preview_layout.addLayout(preview_controls)
+
+        timeline_layout = QHBoxLayout()
+        self.preview_position_label = QLabel("00:00 / 00:00")
+        timeline_layout.addWidget(self.preview_position_label)
+
+        self.preview_seek_slider = QSlider(Qt.Horizontal)
+        self.preview_seek_slider.setRange(0, 0)
+        self.preview_seek_slider.sliderMoved.connect(self.seek_preview)
+        timeline_layout.addWidget(self.preview_seek_slider)
+        preview_layout.addLayout(timeline_layout)
 
         self.audio_output.setMuted(self.preview_muted)
         self.audio_output.setVolume(self.preview_volume / 100)
+        self.player.positionChanged.connect(self._on_preview_position_changed)
+        self.player.durationChanged.connect(self._on_preview_duration_changed)
 
         bottom_splitter = QSplitter()
         bottom_splitter.addWidget(preview_group)
@@ -752,6 +947,7 @@ class MainWindow(QMainWindow):
 
         self._build_menu_bar()
         self._toggle_prompt_source_fields()
+        self._sync_video_options_label()
 
     def _build_model_api_settings_dialog(self) -> None:
         self.model_api_settings_dialog = QDialog(self)
@@ -790,6 +986,22 @@ class MainWindow(QMainWindow):
         self.youtube_api_key.setText(os.getenv("YOUTUBE_API_KEY", ""))
         form_layout.addRow("YouTube API Key", self.youtube_api_key)
 
+        self.facebook_page_id = QLineEdit(os.getenv("FACEBOOK_PAGE_ID", ""))
+        form_layout.addRow("Facebook Page ID", self.facebook_page_id)
+
+        self.facebook_access_token = QLineEdit()
+        self.facebook_access_token.setEchoMode(QLineEdit.Password)
+        self.facebook_access_token.setText(os.getenv("FACEBOOK_ACCESS_TOKEN", ""))
+        form_layout.addRow("Facebook Access Token", self.facebook_access_token)
+
+        self.instagram_business_id = QLineEdit(os.getenv("INSTAGRAM_BUSINESS_ID", ""))
+        form_layout.addRow("Instagram Business ID", self.instagram_business_id)
+
+        self.instagram_access_token = QLineEdit()
+        self.instagram_access_token.setEchoMode(QLineEdit.Password)
+        self.instagram_access_token.setText(os.getenv("INSTAGRAM_ACCESS_TOKEN", ""))
+        form_layout.addRow("Instagram Access Token", self.instagram_access_token)
+
         self.download_path_input = QLineEdit(str(self.download_dir))
         self.download_path_input.setReadOnly(True)
         choose_download_path_btn = QPushButton("Browse...")
@@ -816,10 +1028,14 @@ class MainWindow(QMainWindow):
 
         dialog_layout.addLayout(form_layout)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        button_box.rejected.connect(self.model_api_settings_dialog.reject)
-        button_box.accepted.connect(self.model_api_settings_dialog.accept)
-        button_box.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.model_api_settings_dialog.close)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close)
+        save_btn = button_box.button(QDialogButtonBox.StandardButton.Save)
+        if save_btn is not None:
+            save_btn.setText("Save Settings")
+            save_btn.clicked.connect(self.save_model_api_settings)
+        close_btn = button_box.button(QDialogButtonBox.StandardButton.Close)
+        if close_btn is not None:
+            close_btn.clicked.connect(self.model_api_settings_dialog.close)
         dialog_layout.addWidget(button_box)
 
     def _build_menu_bar(self) -> None:
@@ -833,6 +1049,10 @@ class MainWindow(QMainWindow):
         load_action = QAction("Load Preferences...", self)
         load_action.triggered.connect(self.load_preferences)
         file_menu.addAction(load_action)
+
+        open_video_action = QAction("Open Video...", self)
+        open_video_action.triggered.connect(self.open_local_video)
+        file_menu.addAction(open_video_action)
 
         file_menu.addSeparator()
         exit_action = QAction("Exit", self)
@@ -930,9 +1150,7 @@ class MainWindow(QMainWindow):
         option_value = self.video_options_dropdown.itemData(index)
         if option_value is None:
             self.show_model_api_settings()
-            self.video_options_dropdown.blockSignals(True)
-            self.video_options_dropdown.setCurrentIndex(0)
-            self.video_options_dropdown.blockSignals(False)
+            self._sync_video_options_label()
             return
 
         try:
@@ -943,10 +1161,12 @@ class MainWindow(QMainWindow):
 
     def _sync_video_options_label(self) -> None:
         duration = self.crossfade_duration.value()
-        label = f"Video Options: Crossfade {duration:.1f}s"
+        target_index = self.video_options_dropdown.findData(duration)
         self.video_options_dropdown.blockSignals(True)
-        self.video_options_dropdown.setItemText(0, label)
-        self.video_options_dropdown.setCurrentIndex(0)
+        if target_index >= 0:
+            self.video_options_dropdown.setCurrentIndex(target_index)
+        else:
+            self.video_options_dropdown.setCurrentIndex(2)
         self.video_options_dropdown.blockSignals(False)
 
     def _collect_preferences(self) -> dict:
@@ -958,6 +1178,10 @@ class MainWindow(QMainWindow):
             "openai_api_key": self.openai_api_key.text(),
             "openai_chat_model": self.openai_chat_model.text(),
             "youtube_api_key": self.youtube_api_key.text(),
+            "facebook_page_id": self.facebook_page_id.text(),
+            "facebook_access_token": self.facebook_access_token.text(),
+            "instagram_business_id": self.instagram_business_id.text(),
+            "instagram_access_token": self.instagram_access_token.text(),
             "concept": self.concept.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
@@ -966,6 +1190,8 @@ class MainWindow(QMainWindow):
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
             "stitch_interpolation_fps": int(self.stitch_interpolation_fps.currentData()),
             "stitch_upscale_enabled": self.stitch_upscale_checkbox.isChecked(),
+            "stitch_upscale_target": str(self.stitch_upscale_target.currentData()),
+            "stitch_gpu_enabled": self.stitch_gpu_checkbox.isChecked(),
             "crossfade_duration": self.crossfade_duration.value(),
             "download_dir": str(self.download_dir),
             "preview_muted": self.preview_mute_checkbox.isChecked(),
@@ -992,6 +1218,14 @@ class MainWindow(QMainWindow):
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
         if "youtube_api_key" in preferences:
             self.youtube_api_key.setText(str(preferences["youtube_api_key"]))
+        if "facebook_page_id" in preferences:
+            self.facebook_page_id.setText(str(preferences["facebook_page_id"]))
+        if "facebook_access_token" in preferences:
+            self.facebook_access_token.setText(str(preferences["facebook_access_token"]))
+        if "instagram_business_id" in preferences:
+            self.instagram_business_id.setText(str(preferences["instagram_business_id"]))
+        if "instagram_access_token" in preferences:
+            self.instagram_access_token.setText(str(preferences["instagram_access_token"]))
         if "concept" in preferences:
             self.concept.setPlainText(str(preferences["concept"]))
         if "manual_prompt" in preferences:
@@ -1017,6 +1251,12 @@ class MainWindow(QMainWindow):
                 self.stitch_interpolation_fps.setCurrentIndex(fps_index)
         if "stitch_upscale_enabled" in preferences:
             self.stitch_upscale_checkbox.setChecked(bool(preferences["stitch_upscale_enabled"]))
+        if "stitch_upscale_target" in preferences:
+            target_index = self.stitch_upscale_target.findData(str(preferences["stitch_upscale_target"]))
+            if target_index >= 0:
+                self.stitch_upscale_target.setCurrentIndex(target_index)
+        if "stitch_gpu_enabled" in preferences:
+            self.stitch_gpu_checkbox.setChecked(bool(preferences["stitch_gpu_enabled"]))
         if "crossfade_duration" in preferences:
             try:
                 self.crossfade_duration.setValue(float(preferences["crossfade_duration"]))
@@ -1039,6 +1279,46 @@ class MainWindow(QMainWindow):
                 pass
 
         self._toggle_prompt_source_fields()
+        self._sync_video_options_label()
+
+    def _save_preferences_to_path(self, file_path: Path, *, show_feedback: bool = False) -> bool:
+        try:
+            preferences = self._collect_preferences()
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as handle:
+                json.dump(preferences, handle, indent=2)
+        except Exception as exc:
+            if show_feedback:
+                QMessageBox.critical(self, "Save Preferences Failed", str(exc))
+            self._append_log(f"ERROR: Could not save preferences: {exc}")
+            return False
+
+        self._append_log(f"Saved preferences to: {file_path}")
+        return True
+
+    def _load_preferences_from_path(self, file_path: Path, *, show_feedback: bool = False) -> bool:
+        if not file_path.exists():
+            return False
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                preferences = json.load(handle)
+            self._apply_preferences(preferences)
+        except Exception as exc:
+            if show_feedback:
+                QMessageBox.critical(self, "Load Preferences Failed", str(exc))
+            self._append_log(f"ERROR: Could not load preferences: {exc}")
+            return False
+
+        self._append_log(f"Loaded preferences from: {file_path}")
+        return True
+
+    def save_model_api_settings(self) -> None:
+        if self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=True):
+            QMessageBox.information(self, "Settings Saved", f"Settings saved to:\n{DEFAULT_PREFERENCES_FILE}")
+
+    def _load_startup_preferences(self) -> None:
+        self._load_preferences_from_path(DEFAULT_PREFERENCES_FILE, show_feedback=False)
 
     def save_preferences(self) -> None:
         file_path, _ = QFileDialog.getSaveFileName(
@@ -1050,16 +1330,7 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        try:
-            preferences = self._collect_preferences()
-            with open(file_path, "w", encoding="utf-8") as handle:
-                json.dump(preferences, handle, indent=2)
-        except Exception as exc:
-            QMessageBox.critical(self, "Save Preferences Failed", str(exc))
-            self._append_log(f"ERROR: Could not save preferences: {exc}")
-            return
-
-        self._append_log(f"Saved preferences to: {file_path}")
+        self._save_preferences_to_path(Path(file_path), show_feedback=True)
 
     def load_preferences(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1071,16 +1342,7 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        try:
-            with open(file_path, "r", encoding="utf-8") as handle:
-                preferences = json.load(handle)
-            self._apply_preferences(preferences)
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Preferences Failed", str(exc))
-            self._append_log(f"ERROR: Could not load preferences: {exc}")
-            return
-
-        self._append_log(f"Loaded preferences from: {file_path}")
+        self._load_preferences_from_path(Path(file_path), show_feedback=True)
 
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2695,7 +2957,7 @@ class MainWindow(QMainWindow):
                         )
                     return
 
-                self.videos.append(
+                self.on_video_finished(
                     {
                         "title": f"Manual Browser Video {variant}",
                         "prompt": self.manual_prompt.toPlainText().strip(),
@@ -2704,9 +2966,6 @@ class MainWindow(QMainWindow):
                         "source_url": "browser-session",
                     }
                 )
-                self.video_picker.addItem(f"Manual Browser Video {variant} (web)")
-                self.video_picker.setCurrentIndex(self.video_picker.count() - 1)
-                self._append_log(f"Saved: {video_path}")
                 self._append_log("Download complete; returning embedded browser to grok.com/imagine.")
                 QTimer.singleShot(0, self.show_browser_page)
                 self.pending_manual_variant_for_download = None
@@ -2797,12 +3056,195 @@ class MainWindow(QMainWindow):
             self._append_log("Stop requested: API generation worker will stop after the current request completes.")
         self._append_log("Stop all requested: cleared queued manual image/video jobs and halted polling timers.")
 
+    def _build_video_label(self, video: dict) -> str:
+        title = str(video.get("title") or "Video")
+        resolution = str(video.get("resolution") or "unknown")
+        return f"{title} ({resolution})"
+
+    def _thumbnail_for_video(self, video_path: str) -> QIcon:
+        source_path = Path(video_path)
+        if not source_path.exists():
+            return QIcon()
+
+        safe_name = f"thumb_{source_path.stem}_{abs(hash(str(source_path.resolve()))) % 10**10}.jpg"
+        thumb_path = THUMBNAILS_DIR / safe_name
+        if not thumb_path.exists():
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-ss",
+                        "00:00:01.000",
+                        "-i",
+                        str(source_path),
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        "scale=144:-2",
+                        str(thumb_path),
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            except Exception:
+                return QIcon()
+
+        pixmap = QPixmap(str(thumb_path))
+        if pixmap.isNull():
+            return QIcon()
+        return QIcon(pixmap)
+
+    def _refresh_video_picker(self, selected_index: int = -1) -> None:
+        self.video_picker.blockSignals(True)
+        self.video_picker.clear()
+        for video in self.videos:
+            self.video_picker.addItem(self._thumbnail_for_video(video["video_file_path"]), self._build_video_label(video))
+        self.video_picker.blockSignals(False)
+
+        if not self.videos:
+            return
+
+        if selected_index < 0 or selected_index >= len(self.videos):
+            selected_index = len(self.videos) - 1
+        self.video_picker.setCurrentIndex(selected_index)
+
     def on_video_finished(self, video: dict) -> None:
         self.videos.append(video)
-        label = f"{video['title']} ({video['resolution']})"
-        self.video_picker.addItem(label)
-        self.video_picker.setCurrentIndex(self.video_picker.count() - 1)
+        self._refresh_video_picker(selected_index=len(self.videos) - 1)
         self._append_log(f"Saved: {video['video_file_path']}")
+
+    def open_local_video(self) -> None:
+        video_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Video",
+            str(self.download_dir),
+            "Video Files (*.mp4 *.mov *.mkv *.webm *.avi)",
+        )
+        if not video_path:
+            return
+
+        resolution = "local"
+        try:
+            info = self._probe_video_stream_info(Path(video_path))
+            resolution = f"{info['width']}x{info['height']}"
+        except Exception:
+            pass
+
+        loaded_video = {
+            "title": f"Opened: {Path(video_path).stem}",
+            "prompt": "opened-local-video",
+            "resolution": resolution,
+            "video_file_path": video_path,
+            "source_url": "local-open",
+        }
+        self.on_video_finished(loaded_video)
+
+    def move_selected_video(self, delta: int) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            return
+
+        target = index + delta
+        if target < 0 or target >= len(self.videos):
+            return
+
+        self.videos[index], self.videos[target] = self.videos[target], self.videos[index]
+        self._refresh_video_picker(selected_index=target)
+        self._append_log(f"Reordered videos: moved item to position {target + 1}.")
+
+    def remove_selected_video(self) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            return
+
+        removed = self.videos.pop(index)
+        if not self.videos:
+            self._refresh_video_picker(selected_index=-1)
+            self.player.stop()
+            self.player.setSource(QUrl())
+            self.preview_seek_slider.blockSignals(True)
+            self.preview_seek_slider.setRange(0, 0)
+            self.preview_seek_slider.setValue(0)
+            self.preview_seek_slider.blockSignals(False)
+            self.preview_position_label.setText("00:00 / 00:00")
+        else:
+            self._refresh_video_picker(selected_index=min(index, len(self.videos) - 1))
+
+        self._append_log(f"Removed video from list: {removed.get('video_file_path', 'unknown')}")
+
+    def _format_time_ms(self, ms: int) -> str:
+        total_seconds = max(0, int(ms // 1000))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _on_preview_position_changed(self, position: int) -> None:
+        self.preview_seek_slider.blockSignals(True)
+        self.preview_seek_slider.setValue(position)
+        self.preview_seek_slider.blockSignals(False)
+        self.preview_position_label.setText(
+            f"{self._format_time_ms(position)} / {self._format_time_ms(self.player.duration())}"
+        )
+
+    def _on_preview_duration_changed(self, duration: int) -> None:
+        self.preview_seek_slider.blockSignals(True)
+        self.preview_seek_slider.setRange(0, max(0, duration))
+        self.preview_seek_slider.blockSignals(False)
+        self.preview_position_label.setText(
+            f"{self._format_time_ms(self.player.position())} / {self._format_time_ms(duration)}"
+        )
+
+    def seek_preview(self, position: int) -> None:
+        self.player.setPosition(max(0, int(position)))
+
+    def _ensure_preview_fullscreen_overlay(self) -> None:
+        if self.preview_fullscreen_overlay_btn is not None:
+            return
+
+        overlay_btn = QPushButton("🗗 Exit Fullscreen")
+        overlay_btn.setToolTip("Exit fullscreen preview")
+        overlay_btn.setStyleSheet(
+            "background-color: rgba(15, 24, 40, 0.85); color: white; font-weight: 700;"
+            "border: 1px solid #4fc3f7; border-radius: 8px; padding: 8px 12px;"
+        )
+        overlay_btn.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        overlay_btn.setWindowFlag(Qt.FramelessWindowHint, True)
+        overlay_btn.clicked.connect(self.toggle_preview_fullscreen)
+        self.preview_fullscreen_overlay_btn = overlay_btn
+
+    def _position_preview_fullscreen_overlay(self) -> None:
+        if self.preview_fullscreen_overlay_btn is None:
+            return
+
+        self.preview_fullscreen_overlay_btn.adjustSize()
+        preview_frame = self.preview.frameGeometry()
+        x = preview_frame.right() - self.preview_fullscreen_overlay_btn.width() - 24
+        y = preview_frame.top() + 20
+        self.preview_fullscreen_overlay_btn.move(max(10, x), max(10, y))
+
+    def _on_preview_fullscreen_changed(self, fullscreen: bool) -> None:
+        self.preview_fullscreen_btn.setText("🗗 Exit Fullscreen" if fullscreen else "⛶ Fullscreen")
+
+        if fullscreen:
+            self._ensure_preview_fullscreen_overlay()
+            self._position_preview_fullscreen_overlay()
+            if self.preview_fullscreen_overlay_btn is not None:
+                self.preview_fullscreen_overlay_btn.show()
+                self.preview_fullscreen_overlay_btn.raise_()
+            self._append_log("Preview entered fullscreen mode.")
+            return
+
+        if self.preview_fullscreen_overlay_btn is not None:
+            self.preview_fullscreen_overlay_btn.hide()
+        self._append_log("Preview exited fullscreen mode.")
+
+    def toggle_preview_fullscreen(self) -> None:
+        self.preview.setFullScreen(not self.preview.isFullScreen())
 
     def on_generation_error(self, error: str) -> None:
         self._append_log(f"ERROR: {error}")
@@ -3126,6 +3568,10 @@ class MainWindow(QMainWindow):
         self._append_log("Navigated embedded browser to grok.com/imagine.")
 
     def stitch_all_videos(self) -> None:
+        if self.stitch_worker and self.stitch_worker.isRunning():
+            QMessageBox.information(self, "Stitch In Progress", "A stitch operation is already running.")
+            return
+
         if len(self.videos) < 2:
             QMessageBox.warning(self, "Need More Videos", "At least two videos are required to stitch.")
             return
@@ -3137,25 +3583,23 @@ class MainWindow(QMainWindow):
         interpolate_enabled = self.stitch_interpolation_checkbox.isChecked()
         interpolation_fps = int(self.stitch_interpolation_fps.currentData())
         upscale_enabled = self.stitch_upscale_checkbox.isChecked()
+        upscale_target = str(self.stitch_upscale_target.currentData())
         crossfade_enabled = self.stitch_crossfade_checkbox.isChecked()
-        enhancement_enabled = interpolate_enabled or upscale_enabled
+        gpu_requested = self.stitch_gpu_checkbox.isChecked()
+        gpu_enabled = gpu_requested and self._ffmpeg_supports_nvenc()
+        if gpu_requested and not gpu_enabled:
+            self._append_log("GPU encoding requested, but ffmpeg NVENC is unavailable. Falling back to CPU encoding.")
 
         settings_summary = (
             f"Crossfade: {'on' if crossfade_enabled else 'off'}"
             + (f" ({self.crossfade_duration.value():.1f}s)" if crossfade_enabled else "")
             + f" | Interpolation: {f'{interpolation_fps} fps' if interpolate_enabled else 'off'}"
-            + f" | Upscaling: {'on' if upscale_enabled else 'off'}"
+            + f" | Upscaling: {upscale_target if upscale_enabled else 'off'}"
+            + f" | Encode: {'GPU' if gpu_enabled else 'CPU'}"
         )
 
-        progress_dialog = QProgressDialog("Preparing stitched video...", "", 0, 100, self)
-        progress_dialog.setWindowTitle("Stitching Videos")
-        progress_dialog.setCancelButton(None)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setWindowModality(Qt.WindowModal)
-        progress_dialog.setAutoClose(True)
-        progress_dialog.setAutoReset(True)
-
         started_at = time.time()
+        self.stitch_progress_bar.setVisible(True)
 
         def update_progress(value: int, stage: str) -> None:
             bounded_value = max(0, min(100, int(value)))
@@ -3165,81 +3609,54 @@ class MainWindow(QMainWindow):
                 eta_seconds = max(0.0, (elapsed / bounded_value) * (100 - bounded_value))
                 eta_label = f"~{eta_seconds:.0f}s"
 
-            progress_dialog.setValue(bounded_value)
-            progress_dialog.setLabelText(
-                f"{stage}\n"
-                f"Settings: {settings_summary}\n"
-                f"Elapsed: {elapsed:.1f}s | ETA: {eta_label}"
+            self.stitch_progress_bar.setValue(bounded_value)
+            self.stitch_progress_label.setText(
+                f"{stage} | {bounded_value}% | Elapsed: {elapsed:.1f}s | ETA: {eta_label} | {settings_summary}"
             )
-            QApplication.processEvents()
+
+        def on_stitch_failed(title: str, message: str) -> None:
+            self.stitch_progress_label.setText(f"Stitch progress: failed ({message[:120]})")
+            self.stitch_progress_bar.setVisible(False)
+            QMessageBox.critical(self, title, message)
+
+        def on_stitch_finished(stitched_video: dict) -> None:
+            self._append_log(f"Stitched video created: {stitched_video['video_file_path']}")
+            self.stitch_progress_label.setText("Stitch progress: complete")
+            self.stitch_progress_bar.setValue(100)
+            self.stitch_progress_bar.setVisible(False)
+            self.on_video_finished(stitched_video)
+
+        def on_stitch_complete() -> None:
+            self.stitch_worker = None
 
         update_progress(1, "Preparing stitch pipeline...")
 
-        try:
-            stitch_target = stitched_base_file if enhancement_enabled else output_file
-            if crossfade_enabled:
-                self._append_log(f"Stitching videos with {self.crossfade_duration.value():.1f}s crossfade transitions enabled.")
-                self._stitch_videos_with_crossfade(
-                    video_paths,
-                    stitch_target,
-                    crossfade_duration=self.crossfade_duration.value(),
-                    progress_callback=lambda p: update_progress(max(5, int(5 + (p * 0.70))), "Stitching clips with crossfade..."),
-                )
-            else:
-                self._append_log("Stitching videos with hard cuts (no crossfade).")
-                self._stitch_videos_concat(
-                    video_paths,
-                    stitch_target,
-                    progress_callback=lambda p: update_progress(max(5, int(5 + (p * 0.70))), "Stitching clips with hard cuts..."),
-                )
-
-            if enhancement_enabled:
-                interpolation_status = f"{interpolation_fps} fps" if interpolate_enabled else "off"
-                self._append_log(
-                    "Applying stitched video enhancements: "
-                    f"frame interpolation={interpolation_status}, "
-                    f"upscaling={'on' if upscale_enabled else 'off'}."
-                )
-                self._enhance_stitched_video(
-                    input_file=stitch_target,
-                    output_file=output_file,
-                    interpolate=interpolate_enabled,
-                    interpolation_fps=interpolation_fps,
-                    upscale=upscale_enabled,
-                    progress_callback=lambda p: update_progress(max(75, int(75 + (p * 0.25))), "Applying interpolation/upscaling..."),
-                )
-
-            update_progress(100, "Finalizing stitched video...")
-        except FileNotFoundError:
-            QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for stitching but was not found in PATH.")
-            return
-        except subprocess.CalledProcessError as exc:
-            QMessageBox.critical(self, "Stitch Failed", exc.stderr[-800:] or "ffmpeg failed.")
-            return
-        except RuntimeError as exc:
-            QMessageBox.critical(self, "Stitch Failed", str(exc))
-            return
-        finally:
-            if stitched_base_file.exists():
-                stitched_base_file.unlink()
-            progress_dialog.close()
-
-        self._append_log(f"Stitched video created: {output_file}")
-
-        stitched_video = {
-            "title": "Stitched Video",
-            "prompt": "stitched",
-            "resolution": "mixed",
-            "video_file_path": str(output_file),
-            "source_url": "local-stitch",
-        }
-        self.on_video_finished(stitched_video)
+        self.stitch_worker = StitchWorker(
+            window=self,
+            video_paths=video_paths,
+            output_file=output_file,
+            stitched_base_file=stitched_base_file,
+            crossfade_enabled=crossfade_enabled,
+            crossfade_duration=self.crossfade_duration.value(),
+            interpolate_enabled=interpolate_enabled,
+            interpolation_fps=interpolation_fps,
+            upscale_enabled=upscale_enabled,
+            upscale_target=upscale_target,
+            use_gpu_encoding=gpu_enabled,
+        )
+        self.stitch_worker.progress.connect(update_progress)
+        self.stitch_worker.status.connect(self._append_log)
+        self.stitch_worker.failed.connect(on_stitch_failed)
+        self.stitch_worker.finished_stitch.connect(on_stitch_finished)
+        self.stitch_worker.finished.connect(on_stitch_complete)
+        self.stitch_worker.start()
 
     def _stitch_videos_concat(
         self,
         video_paths: list[Path],
         output_file: Path,
         progress_callback: Callable[[float], None] | None = None,
+        use_gpu_encoding: bool = False,
     ) -> None:
         list_file = self.download_dir / f"stitch_list_{int(time.time() * 1000)}.txt"
 
@@ -3261,12 +3678,7 @@ class MainWindow(QMainWindow):
                     "0",
                     "-i",
                     str(list_file),
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "fast",
-                    "-crf",
-                    "20",
+                    *self._video_encoder_args(use_gpu_encoding),
                     "-c:a",
                     "aac",
                     str(output_file),
@@ -3353,24 +3765,60 @@ class MainWindow(QMainWindow):
         )
         return bool(result.stdout.strip())
 
+    def _ffmpeg_supports_nvenc(self) -> bool:
+        if self._ffmpeg_nvenc_checked:
+            return self._ffmpeg_nvenc_available
+
+        self._ffmpeg_nvenc_checked = True
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            encoders_output = f"{result.stdout}\n{result.stderr}"
+            self._ffmpeg_nvenc_available = "h264_nvenc" in encoders_output
+        except Exception:
+            self._ffmpeg_nvenc_available = False
+        self.preview_fullscreen_overlay_btn: QPushButton | None = None
+
+        return self._ffmpeg_nvenc_available
+
+    def _video_encoder_args(self, use_gpu_encoding: bool, crf: int = 20) -> list[str]:
+        if use_gpu_encoding and self._ffmpeg_supports_nvenc():
+            return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(max(18, min(30, crf + 1))), "-b:v", "0"]
+        return ["-c:v", "libx264", "-preset", "fast", "-crf", str(crf)]
+
     def _run_ffmpeg_with_progress(
         self,
         ffmpeg_cmd: list[str],
         total_duration: float,
         progress_callback: Callable[[float], None] | None = None,
     ) -> None:
-        command = ffmpeg_cmd[:-1] + ["-progress", "pipe:1", "-nostats", ffmpeg_cmd[-1]]
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        command = ffmpeg_cmd[:-1] + ["-progress", "pipe:1", "-nostats", "-loglevel", "error", ffmpeg_cmd[-1]]
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
 
         if progress_callback is not None:
             progress_callback(0.0)
 
         out_time_ms = 0
+        output_lines: list[str] = []
         if process.stdout is not None:
             for raw_line in process.stdout:
                 line = raw_line.strip()
                 if not line:
                     continue
+                output_lines.append(line)
+                if len(output_lines) > 200:
+                    output_lines = output_lines[-200:]
                 if line.startswith("out_time_ms="):
                     try:
                         out_time_ms = int(line.split("=", 1)[1])
@@ -3380,9 +3828,10 @@ class MainWindow(QMainWindow):
                         progress = (out_time_ms / 1_000_000.0) / total_duration
                         progress_callback(max(0.0, min(1.0, progress)))
 
-        _, stderr_text = process.communicate()
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr_text)
+        return_code = process.wait()
+        if return_code != 0:
+            stderr_text = "\n".join(output_lines[-80:])
+            raise subprocess.CalledProcessError(return_code, command, stderr=stderr_text)
 
         if progress_callback is not None:
             progress_callback(1.0)
@@ -3393,6 +3842,7 @@ class MainWindow(QMainWindow):
         output_file: Path,
         crossfade_duration: float,
         progress_callback: Callable[[float], None] | None = None,
+        use_gpu_encoding: bool = False,
     ) -> None:
         stream_infos = [self._probe_video_stream_info(path) for path in video_paths]
         durations = [info["duration"] for info in stream_infos]
@@ -3449,12 +3899,7 @@ class MainWindow(QMainWindow):
                 filter_complex,
                 "-map",
                 f"[{video_prev}]",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "20",
+                *self._video_encoder_args(use_gpu_encoding),
                 str(output_file),
             ]
         )
@@ -3474,7 +3919,9 @@ class MainWindow(QMainWindow):
         interpolate: bool,
         interpolation_fps: int,
         upscale: bool,
+        upscale_target: str = "2x",
         progress_callback: Callable[[float], None] | None = None,
+        use_gpu_encoding: bool = False,
     ) -> None:
         if not interpolate and not upscale:
             return
@@ -3486,7 +3933,23 @@ class MainWindow(QMainWindow):
                 f"minterpolate=fps={target_fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
             )
         if upscale:
-            vf_filters.append("scale='min(iw*2,3840)':'min(ih*2,2160)':flags=lanczos")
+            if upscale_target == "1080p":
+                vf_filters.append(
+                    "scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,"
+                    "pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+                )
+            elif upscale_target == "1440p":
+                vf_filters.append(
+                    "scale=2560:1440:force_original_aspect_ratio=decrease:flags=lanczos,"
+                    "pad=2560:1440:(ow-iw)/2:(oh-ih)/2"
+                )
+            elif upscale_target == "4k":
+                vf_filters.append(
+                    "scale=3840:2160:force_original_aspect_ratio=decrease:flags=lanczos,"
+                    "pad=3840:2160:(ow-iw)/2:(oh-ih)/2"
+                )
+            else:
+                vf_filters.append("scale='min(iw*2,3840)':'min(ih*2,2160)':flags=lanczos")
 
         command = [
             "ffmpeg",
@@ -3495,12 +3958,7 @@ class MainWindow(QMainWindow):
             str(input_file),
             "-vf",
             ",".join(vf_filters),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "18",
+            *self._video_encoder_args(use_gpu_encoding, crf=18),
             "-c:a",
             "copy",
             str(output_file),
@@ -3518,7 +3976,7 @@ class MainWindow(QMainWindow):
             return
 
         video_path = self.videos[index]["video_file_path"]
-        title, description, accepted = self._show_youtube_upload_dialog()
+        title, description, accepted = self._show_upload_dialog("YouTube")
         if not accepted:
             return
 
@@ -3549,17 +4007,87 @@ class MainWindow(QMainWindow):
         finally:
             self.upload_youtube_btn.setEnabled(True)
 
-    def _show_youtube_upload_dialog(self) -> tuple[str, str, bool]:
+    def upload_selected_to_facebook(self) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
+            return
+
+        video_path = self.videos[index]["video_file_path"]
+        title, description, accepted = self._show_upload_dialog("Facebook")
+        if not accepted:
+            return
+
+        self.upload_facebook_btn.setEnabled(False)
+        self._append_log("Starting Facebook upload...")
+        try:
+            video_id = upload_video_to_facebook_page(
+                page_id=self.facebook_page_id.text().strip(),
+                access_token=self.facebook_access_token.text().strip(),
+                video_path=video_path,
+                title=title,
+                description=description,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Facebook Upload Failed", str(exc))
+            self._append_log(f"ERROR: Facebook upload failed: {exc}")
+        else:
+            self._append_log(f"Facebook upload complete. Video ID: {video_id}")
+            QMessageBox.information(self, "Facebook Upload Complete", f"Video uploaded successfully. ID: {video_id}")
+        finally:
+            self.upload_facebook_btn.setEnabled(True)
+
+    def upload_selected_to_instagram(self) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
+            return
+
+        selected_video = self.videos[index]
+        source_url = str(selected_video.get("source_url") or "").strip()
+        if not source_url.startswith(("http://", "https://")):
+            QMessageBox.warning(
+                self,
+                "Instagram Upload Requires URL",
+                "Instagram Graph API video publishing requires a publicly reachable HTTP(S) URL. "
+                "This selected video only exists locally.",
+            )
+            return
+
+        _, caption, accepted = self._show_upload_dialog("Instagram", title_enabled=False)
+        if not accepted:
+            return
+
+        self.upload_instagram_btn.setEnabled(False)
+        self._append_log("Starting Instagram upload...")
+        try:
+            media_id = upload_video_to_instagram_reels(
+                ig_user_id=self.instagram_business_id.text().strip(),
+                access_token=self.instagram_access_token.text().strip(),
+                video_url=source_url,
+                caption=caption,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Instagram Upload Failed", str(exc))
+            self._append_log(f"ERROR: Instagram upload failed: {exc}")
+        else:
+            self._append_log(f"Instagram upload complete. Media ID: {media_id}")
+            QMessageBox.information(self, "Instagram Upload Complete", f"Media published successfully. ID: {media_id}")
+        finally:
+            self.upload_instagram_btn.setEnabled(True)
+
+    def _show_upload_dialog(self, platform_name: str, title_enabled: bool = True) -> tuple[str, str, bool]:
         dialog = QDialog(self)
-        dialog.setWindowTitle("YouTube Upload Details")
+        dialog.setWindowTitle(f"{platform_name} Upload Details")
         dialog_layout = QVBoxLayout(dialog)
 
-        dialog_layout.addWidget(QLabel("YouTube Title"))
         title_input = QLineEdit()
-        title_input.setText("AI Generated Video")
-        dialog_layout.addWidget(title_input)
+        if title_enabled:
+            dialog_layout.addWidget(QLabel(f"{platform_name} Title"))
+            title_input.setText("AI Generated Video")
+            dialog_layout.addWidget(title_input)
 
-        dialog_layout.addWidget(QLabel("YouTube Description"))
+        dialog_layout.addWidget(QLabel(f"{platform_name} Description / Caption"))
         description_input = QPlainTextEdit()
         description_input.setPlaceholderText("Describe this upload...")
         dialog_layout.addWidget(description_input)
