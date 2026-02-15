@@ -267,7 +267,6 @@ class GenerateWorker(QThread):
                 "model": self.prompt_config.openai_chat_model,
                 "instructions": system,
                 "input": user,
-                "temperature": 0.9,
             },
             timeout=90,
         )
@@ -1915,7 +1914,6 @@ class MainWindow(QMainWindow):
             "model": model,
             "input": "quota-check",
             "max_output_tokens": 1,
-            "temperature": 0,
         }
         response = requests.post(f"{OPENAI_API_BASE}/responses", headers=headers, json=payload, timeout=45)
         if response.ok:
@@ -2054,7 +2052,6 @@ class MainWindow(QMainWindow):
                     "model": model_name,
                     "instructions": system,
                     "input": user,
-                    "temperature": 0.4,
                 },
                 timeout=90,
             )
