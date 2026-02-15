@@ -4,6 +4,9 @@
 
 A desktop-first Python/PySide6 app for generating Grok videos, iterating quickly in-browser, stitching clips, and uploading finished results to social platforms.
 
+<img width="1500" height="900" alt="image" src="https://github.com/user-attachments/assets/aa6aec78-f12b-443d-b75e-0558591f3db9" />
+
+
 ## What it does
 
 - Generate videos from:
