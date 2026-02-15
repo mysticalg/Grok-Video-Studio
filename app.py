@@ -549,6 +549,9 @@ class MainWindow(QMainWindow):
         self.video_playback_hack_timer.setInterval(1800)
         self.video_playback_hack_timer.setSingleShot(True)
         self.video_playback_hack_timer.timeout.connect(self._ensure_browser_video_playback)
+        self.browser_option_sync_timer = QTimer(self)
+        self.browser_option_sync_timer.setSingleShot(True)
+        self.browser_option_sync_timer.timeout.connect(self._sync_browser_options_from_gui)
         self._playback_hack_success_logged = False
         self.last_extracted_frame_path: Path | None = None
         self.preview_muted = False
@@ -628,6 +631,9 @@ class MainWindow(QMainWindow):
         self.video_aspect_ratio.addItem("16:9", "16:9")
         self.video_aspect_ratio.setCurrentIndex(4)
         row.addWidget(self.video_aspect_ratio)
+        self.video_resolution.currentIndexChanged.connect(lambda _: self._schedule_browser_option_sync_from_gui())
+        self.video_duration.currentIndexChanged.connect(lambda _: self._schedule_browser_option_sync_from_gui())
+        self.video_aspect_ratio.currentIndexChanged.connect(lambda _: self._schedule_browser_option_sync_from_gui())
         prompt_group_layout.addLayout(row)
 
         left_layout.addWidget(prompt_group)
@@ -1524,6 +1530,7 @@ class MainWindow(QMainWindow):
             self._playback_hack_success_logged = False
             self.video_playback_hack_timer.start()
             self._ensure_browser_video_playback()
+            self._schedule_browser_option_sync_from_gui(delay_ms=900)
             if self.continue_from_frame_waiting_for_reload and self.continue_from_frame_active:
                 self.continue_from_frame_waiting_for_reload = False
                 self.continue_from_frame_reload_timeout_timer.stop()
@@ -1670,6 +1677,156 @@ class MainWindow(QMainWindow):
                 self._playback_hack_success_logged = True
 
         self.browser.page().runJavaScript(script, after)
+
+    def _schedule_browser_option_sync_from_gui(self, delay_ms: int = 300) -> None:
+        if not hasattr(self, "browser") or self.browser is None:
+            return
+        self.browser_option_sync_timer.start(max(50, int(delay_ms)))
+
+    def _sync_browser_options_from_gui(self) -> None:
+        if not hasattr(self, "browser") or self.browser is None:
+            return
+
+        current_url = self.browser.url().toString().lower()
+        if "grok.com/imagine" not in current_url:
+            return
+
+        selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
+        selected_duration_label = f"{int(self.video_duration.currentData() or 10)}s"
+        selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+
+        script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const emulateClick = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        return true;
+                    };
+
+                    const hasVisibleOptionsPanel = () => {
+                        const popupSelectors = [
+                            "[role='dialog']",
+                            "[role='menu']",
+                            "[role='listbox']",
+                            "[data-state='open']",
+                            "[data-expanded='true']",
+                            "[aria-modal='true']"
+                        ];
+                        return popupSelectors.some((selector) => [...document.querySelectorAll(selector)]
+                            .some((el) => isVisible(el) && /(video\s*duration|video\s*resolution|aspect\s*ratio)/i.test((el.textContent || "").trim())));
+                    };
+
+                    let openedHere = false;
+                    if (!hasVisibleOptionsPanel()) {
+                        const triggerCandidates = [
+                            "#model-select-trigger",
+                            "button[aria-haspopup='dialog']",
+                            "button[aria-haspopup='menu']",
+                            "button[aria-expanded='false']",
+                            "button[aria-expanded='true']",
+                            "[role='button'][aria-haspopup='dialog']",
+                            "[role='button'][aria-haspopup='menu']"
+                        ];
+                        let trigger = null;
+                        for (const selector of triggerCandidates) {
+                            const found = [...document.querySelectorAll(selector)].find((el) => isVisible(el) && !el.disabled);
+                            if (found) { trigger = found; break; }
+                        }
+                        if (trigger) {
+                            openedHere = emulateClick(trigger);
+                        }
+                    }
+
+                    if (!hasVisibleOptionsPanel()) {
+                        return { ok: false, error: "Options panel not available" };
+                    }
+
+                    const normalizeAria = (value) => (value || "").toLowerCase().replace(/\s+/g, "").trim();
+                    const isSelected = (button) => {
+                        if (!button) return false;
+                        const ariaPressed = button.getAttribute("aria-pressed") === "true";
+                        const ariaSelected = button.getAttribute("aria-selected") === "true";
+                        const ariaChecked = button.getAttribute("aria-checked") === "true";
+                        const dataSelected = button.getAttribute("data-selected") === "true";
+                        const dataState = (button.getAttribute("data-state") || "").toLowerCase();
+                        if (ariaPressed || ariaSelected || ariaChecked || dataSelected || dataState === "checked" || dataState === "active") return true;
+                        if (/\b(active|selected|checked|on|text-fg-primary|text-primary|font-semibold)\b/i.test(button.className || "")) return true;
+                        const selectedFill = button.querySelector(".bg-primary:not([class*='bg-primary/'])");
+                        return !!selectedFill;
+                    };
+                    const findByAria = (label) => {
+                        const desired = normalizeAria(label);
+                        return [...document.querySelectorAll("button[aria-label]")]
+                            .filter((el) => isVisible(el) && !el.disabled)
+                            .find((el) => {
+                                const actual = normalizeAria(el.getAttribute("aria-label") || "");
+                                return actual === desired || actual.includes(desired);
+                            }) || null;
+                    };
+
+                    const applyByAria = (label) => {
+                        const before = findByAria(label);
+                        if (!before) return { requested: false, applied: false };
+                        if (isSelected(before)) return { requested: false, applied: true };
+                        const clicked = emulateClick(before);
+                        const after = findByAria(label);
+                        return { requested: clicked, applied: !!after && isSelected(after) };
+                    };
+
+                    const desiredQuality = "{selected_quality_label}";
+                    const desiredDuration = "{selected_duration_label}";
+                    const desiredAspect = "{selected_aspect_ratio}";
+
+                    const quality = applyByAria(desiredQuality);
+                    const duration = applyByAria(desiredDuration);
+                    const aspect = applyByAria(desiredAspect);
+
+                    return {
+                        ok: true,
+                        openedHere,
+                        requested: [
+                            quality.requested ? desiredQuality : null,
+                            duration.requested ? desiredDuration : null,
+                            aspect.requested ? desiredAspect : null,
+                        ].filter(Boolean),
+                        applied: [
+                            quality.applied ? desiredQuality : null,
+                            duration.applied ? desiredDuration : null,
+                            aspect.applied ? desiredAspect : null,
+                        ].filter(Boolean),
+                        missing: [
+                            quality.applied ? null : desiredQuality,
+                            duration.applied ? null : desiredDuration,
+                            aspect.applied ? null : desiredAspect,
+                        ].filter(Boolean),
+                    };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+        script = script.replace('"{selected_quality_label}"', json.dumps(selected_quality_label))
+        script = script.replace('"{selected_duration_label}"', json.dumps(selected_duration_label))
+        script = script.replace('"{selected_aspect_ratio}"', json.dumps(selected_aspect_ratio))
+
+        def _after(result):
+            if not isinstance(result, dict):
+                return
+            if not result.get("ok"):
+                self._append_log(f"GUI→browser option sync warning: {result.get('error', 'unknown error')}")
+                return
+            missing = result.get("missing") or []
+            if missing:
+                self._append_log(f"GUI→browser option sync incomplete; missing: {', '.join(missing)}")
+
+        self.browser.page().runJavaScript(script, _after)
 
     def start_generation(self) -> None:
         self.stop_all_requested = False
