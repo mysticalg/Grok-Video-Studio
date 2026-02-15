@@ -1775,10 +1775,24 @@ class MainWindow(QMainWindow):
                         const before = findByAria(label);
                         if (!before) return { requested: false, applied: false };
                         if (isSelected(before)) return { requested: false, applied: true };
-                        const clicked = emulateClick(before);
+                        const clicked = emulateClick(before) || (typeof before.click === "function" ? (before.click(), true) : false);
                         const after = findByAria(label);
                         return { requested: clicked, applied: !!after && isSelected(after) };
                     };
+
+                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const videoModeNode = [...document.querySelectorAll("[role='menuitem'], button, [role='button']")]
+                        .filter((el) => isVisible(el) && /(^|\s)video(\s|$)/i.test(textOf(el)))
+                        .find((el) => /generate\s*a\s*video/i.test(textOf(el)) || /(^|\s)video(\s|$)/i.test(textOf(el)));
+                    const imageModeNode = [...document.querySelectorAll("[role='menuitem'], button, [role='button']")]
+                        .filter((el) => isVisible(el) && /(^|\s)image(\s|$)/i.test(textOf(el)))
+                        .find((el) => /generate\s*multiple\s*images/i.test(textOf(el)) || /(^|\s)image(\s|$)/i.test(textOf(el)));
+                    const videoModeSelected = !!videoModeNode && isSelected(videoModeNode);
+                    const imageModeSelected = !!imageModeNode && isSelected(imageModeNode);
+                    if (!videoModeSelected && imageModeSelected && videoModeNode) {
+                        emulateClick(videoModeNode) || (typeof videoModeNode.click === "function" ? (videoModeNode.click(), true) : false);
+                        return { ok: true, modeSwitched: true, requested: ["video"], applied: ["video"], missing: [] };
+                    }
 
                     const desiredQuality = "{selected_quality_label}";
                     const desiredDuration = "{selected_duration_label}";
@@ -1821,6 +1835,9 @@ class MainWindow(QMainWindow):
                 return
             if not result.get("ok"):
                 self._append_log(f"GUI→browser option sync warning: {result.get('error', 'unknown error')}")
+                return
+            if result.get("modeSwitched"):
+                self._schedule_browser_option_sync_from_gui(delay_ms=280)
                 return
             missing = result.get("missing") or []
             if missing:
