@@ -66,6 +66,7 @@ OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com"
 OPENAI_CODEX_CLIENT_ID = os.getenv("OPENAI_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 OPENAI_OAUTH_SCOPE = "openid profile email offline_access"
 OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455"))
+OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT = os.getenv("OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT", "").strip()
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
@@ -167,6 +168,8 @@ class PromptConfig:
     concept: str
     manual_prompt: str
     openai_access_token: str
+    openai_org_id: str
+    openai_project_id: str
     openai_chat_model: str
     video_resolution: str
     video_resolution_label: str
@@ -248,8 +251,12 @@ class GenerateWorker(QThread):
     def call_openai_chat(self, system: str, user: str) -> str:
         openai_token = self._openai_bearer_token()
         if not openai_token:
-            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+            raise RuntimeError("OpenAI API token is required. Use Browser Authorization to complete OAuth and token exchange.")
         headers = {"Authorization": f"Bearer {openai_token}", "Content-Type": "application/json"}
+        if self.prompt_config.openai_org_id:
+            headers["OpenAI-Organization"] = self.prompt_config.openai_org_id
+        if self.prompt_config.openai_project_id:
+            headers["OpenAI-Project"] = self.prompt_config.openai_project_id
         response = requests.post(
             f"{OPENAI_API_BASE}/chat/completions",
             headers=headers,
@@ -1102,16 +1109,27 @@ class MainWindow(QMainWindow):
 
         self.openai_access_token = QLineEdit()
         self.openai_access_token.setEchoMode(QLineEdit.Password)
-        self.openai_access_token.setPlaceholderText("Optional bearer token from OAuth/browser sign-in flow")
-        self.openai_access_token.setText(os.getenv("OPENAI_ACCESS_TOKEN", ""))
-        form_layout.addRow("OpenAI Access Token", self.openai_access_token)
+        self.openai_access_token.setPlaceholderText("Populated by Browser Authorization (OAuth)")
+        self.openai_access_token.setText("")
+        self.openai_access_token.setReadOnly(True)
+        form_layout.addRow("OpenAI API Token", self.openai_access_token)
+
+        self.openai_org_id = QLineEdit()
+        self.openai_org_id.setPlaceholderText("Detected from OpenAI OAuth; used for diagnostics")
+        self.openai_org_id.setReadOnly(True)
+        form_layout.addRow("OpenAI Organization", self.openai_org_id)
+
+        self.openai_project_id = QLineEdit()
+        self.openai_project_id.setPlaceholderText("Detected from OpenAI OAuth; used for diagnostics")
+        self.openai_project_id.setReadOnly(True)
+        form_layout.addRow("OpenAI Project", self.openai_project_id)
 
         self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-5.1-codex"))
         form_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
 
         self.ai_auth_method = QComboBox()
-        self.ai_auth_method.addItem("API key", "api_key")
-        self.ai_auth_method.addItem("Browser sign-in (preferred)", "browser")
+        self.ai_auth_method.addItem("Browser sign-in (OAuth, preferred)", "browser")
+        self.ai_auth_method.addItem("API key (Grok only)", "api_key")
         form_layout.addRow("AI Authorization", self.ai_auth_method)
 
         self.browser_auth_btn = QPushButton("Open Provider Login in Browser")
@@ -1337,6 +1355,8 @@ class MainWindow(QMainWindow):
             "image_model": self.image_model.text(),
             "prompt_source": self.prompt_source.currentData(),
             "openai_access_token": self.openai_access_token.text(),
+            "openai_org_id": self.openai_org_id.text(),
+            "openai_project_id": self.openai_project_id.text(),
             "openai_chat_model": self.openai_chat_model.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
             "youtube_api_key": self.youtube_api_key.text(),
@@ -1390,6 +1410,10 @@ class MainWindow(QMainWindow):
                 self.prompt_source.setCurrentIndex(source_index)
         if "openai_access_token" in preferences:
             self.openai_access_token.setText(str(preferences["openai_access_token"]))
+        if "openai_org_id" in preferences:
+            self.openai_org_id.setText(str(preferences["openai_org_id"]))
+        if "openai_project_id" in preferences:
+            self.openai_project_id.setText(str(preferences["openai_project_id"]))
         if "openai_chat_model" in preferences:
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
         if "ai_auth_method" in preferences:
@@ -1736,11 +1760,10 @@ class MainWindow(QMainWindow):
         source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
 
-        if source != "manual":
-            api_key = self.api_key.text().strip()
-            if not api_key:
-                QMessageBox.warning(self, "Missing API Key", "Please enter a Grok API key.")
-                return
+        api_key = self.api_key.text().strip()
+        if source == "grok" and not api_key:
+            QMessageBox.warning(self, "Missing API Key", "Please enter a Grok API key.")
+            return
 
         if source != "manual" and not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
@@ -1752,7 +1775,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Missing OpenAI Credentials",
-                "Please authorize OpenAI in browser (or paste an OpenAI access token).",
+                "Please authorize OpenAI in browser to mint an API token from OAuth.",
             )
             return
 
@@ -1776,6 +1799,8 @@ class MainWindow(QMainWindow):
             concept=concept,
             manual_prompt=manual_prompt,
             openai_access_token=self.openai_access_token.text().strip(),
+            openai_org_id=self.openai_org_id.text().strip(),
+            openai_project_id=self.openai_project_id.text().strip(),
             openai_chat_model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
             video_resolution=selected_resolution,
             video_resolution_label=selected_resolution_label,
@@ -1829,6 +1854,42 @@ class MainWindow(QMainWindow):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         return server, event, result
+
+    def _parse_jwt_claims(self, token: str) -> dict:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        try:
+            return json.loads(base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8"))
+        except Exception:
+            return {}
+
+    def _extract_org_project_context(self, token_payload: dict) -> tuple[str, str]:
+        org_id = str(token_payload.get("organization_id", "") or token_payload.get("org_id", "")).strip()
+        project_id = str(token_payload.get("project_id", "")).strip()
+        claims = self._parse_jwt_claims(str(token_payload.get("id_token", "")).strip())
+        if not org_id:
+            orgs = claims.get("organizations")
+            if isinstance(orgs, list) and orgs:
+                first_org = orgs[0]
+                if isinstance(first_org, dict):
+                    org_id = str(first_org.get("id", "")).strip()
+                elif isinstance(first_org, str):
+                    org_id = first_org.strip()
+        if not project_id:
+            project_id = str(claims.get("default_project_id", "") or claims.get("project_id", "")).strip()
+        return org_id, project_id
+
+    def _exchange_openai_id_token_for_api_token(self, id_token: str) -> dict:
+        endpoint = OPENAI_ID_TOKEN_EXCHANGE_ENDPOINT or f"{OPENAI_API_BASE}/auth/id_token/exchange"
+        response = requests.post(endpoint, json={"id_token": id_token}, timeout=60)
+        if not response.ok:
+            raise RuntimeError(f"ID token exchange failed: {response.status_code} {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("access_token"):
+            raise RuntimeError("ID token exchange response did not include access_token.")
+        return payload
 
     def _exchange_openai_oauth_code(self, code: str, redirect_uri: str, code_verifier: str) -> dict:
         token_endpoint = f"{OPENAI_OAUTH_ISSUER}/oauth/token"
@@ -1901,10 +1962,27 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("OpenAI OAuth callback did not include an authorization code.")
 
             token_payload = self._exchange_openai_oauth_code(code, redirect_uri, verifier)
-            access_token = str(token_payload.get("access_token", "")).strip()
+            id_token = str(token_payload.get("id_token", "")).strip()
+            access_token = ""
+            if id_token:
+                try:
+                    exchanged_payload = self._exchange_openai_id_token_for_api_token(id_token)
+                    access_token = str(exchanged_payload.get("access_token", "")).strip()
+                    token_payload = {**token_payload, **exchanged_payload}
+                    self._append_log("OpenAI OAuth complete. Exchanged id_token for API token (preferred path).")
+                except Exception as exc:
+                    self._append_log(f"WARN: id_token exchange failed; falling back to OAuth access_token. {exc}")
+            if not access_token:
+                access_token = str(token_payload.get("access_token", "")).strip()
+
             refresh_token = str(token_payload.get("refresh_token", "")).strip()
+            org_id, project_id = self._extract_org_project_context(token_payload)
             self.openai_access_token.setText(access_token)
-            self._append_log("OpenAI OAuth complete. Access token has been populated in OpenAI Access Token.")
+            self.openai_org_id.setText(org_id)
+            self.openai_project_id.setText(project_id)
+            self._append_log(
+                f"OpenAI API token ready. Org={org_id or '-'} Project={project_id or '-'} (for diagnostics)."
+            )
             if refresh_token:
                 self._append_log("Refresh token received (not persisted yet). Re-run browser authorization if token expires.")
         finally:
@@ -1940,8 +2018,12 @@ class MainWindow(QMainWindow):
         if source == "openai":
             openai_token = self.openai_access_token.text().strip()
             if not openai_token:
-                raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+                raise RuntimeError("OpenAI API token is required. Use Browser Authorization to complete OAuth and token exchange.")
             headers["Authorization"] = f"Bearer {openai_token}"
+            if self.openai_org_id.text().strip():
+                headers["OpenAI-Organization"] = self.openai_org_id.text().strip()
+            if self.openai_project_id.text().strip():
+                headers["OpenAI-Project"] = self.openai_project_id.text().strip()
             payload["model"] = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
             response = requests.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload, timeout=90)
             if not response.ok:
@@ -3960,6 +4042,8 @@ class MainWindow(QMainWindow):
         is_openai = source == "openai"
         self.manual_prompt.setEnabled(is_manual)
         self.openai_access_token.setEnabled(is_openai)
+        self.openai_org_id.setEnabled(is_openai)
+        self.openai_project_id.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
         self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "🎬 Generate Video")
