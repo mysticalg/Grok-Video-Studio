@@ -76,6 +76,9 @@ python app.py
 - `OPENAI_ACCESS_TOKEN` (optional bearer token from browser/OAuth-style sign-in)
 - `OPENAI_CHAT_MODEL` (default: `gpt-5.1-codex`)
 - `OPENAI_API_BASE` (default: `https://api.openai.com/v1`)
+- `OPENAI_OAUTH_ISSUER` (default: `https://auth.openai.com`)
+- `OPENAI_CODEX_CLIENT_ID` (default: `app_EMoamEEZ73f0CkXaXp7hrann`)
+- `OPENAI_OAUTH_CALLBACK_PORT` (default: `1455`)
 
 ### Embedded browser/runtime
 
@@ -93,7 +96,7 @@ For OpenAI prompt generation, the app now accepts either:
 - `OPENAI_ACCESS_TOKEN` (paste a bearer token obtained via your own browser authorization flow).
 
 In **Model/API Settings**, set Prompt Source to **OpenAI API**, then either provide API key or access token.
-Use **Open Provider Login in Browser** to launch `auth.openai.com` in your system browser (recommended over embedded WebView).
+Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex-style) in your system browser. On success, the app auto-fills **OpenAI Access Token**.
 
 ## Browser performance tuning (embedded Chromium)
 

@@ -1,13 +1,17 @@
 import os
 import json
+import base64
+import hashlib
+import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from typing import Callable
 
 import requests
@@ -58,6 +62,10 @@ QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
+OPENAI_CODEX_CLIENT_ID = os.getenv("OPENAI_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
+OPENAI_OAUTH_SCOPE = "openid profile email offline_access"
+OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455"))
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
@@ -1750,20 +1758,138 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self.on_generation_error)
         self.worker.start()
 
+    def _openai_pkce_challenge(self, verifier: str) -> str:
+        digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
+
+    def _start_oauth_callback_listener(self, port: int):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        result: dict[str, str] = {}
+        event = threading.Event()
+
+        class CallbackHandler(BaseHTTPRequestHandler):
+            def do_GET(self):  # type: ignore[override]
+                parsed = urlparse(self.path)
+                if parsed.path != "/auth/callback":
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(b"Not found")
+                    return
+
+                params = parse_qs(parsed.query)
+                for key in ("code", "state", "error", "error_description"):
+                    value = params.get(key, [""])[0]
+                    if value:
+                        result[key] = value
+
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body><h2>OpenAI authorization received.</h2><p>You can close this tab and return to the app.</p></body></html>"
+                )
+                event.set()
+
+            def log_message(self, format, *args):  # type: ignore[override]
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", port), CallbackHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, event, result
+
+    def _exchange_openai_oauth_code(self, code: str, redirect_uri: str, code_verifier: str) -> dict:
+        token_endpoint = f"{OPENAI_OAUTH_ISSUER}/oauth/token"
+        response = requests.post(
+            token_endpoint,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": OPENAI_CODEX_CLIENT_ID,
+                "code_verifier": code_verifier,
+            },
+            timeout=60,
+        )
+        if not response.ok:
+            raise RuntimeError(f"OAuth token exchange failed: {response.status_code} {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("access_token"):
+            raise RuntimeError("OAuth token response did not include access_token.")
+        return payload
+
+    def _run_openai_oauth_flow(self) -> None:
+        state = secrets.token_hex(16)
+        verifier = secrets.token_urlsafe(64)
+        challenge = self._openai_pkce_challenge(verifier)
+        redirect_uri = f"http://localhost:{OPENAI_OAUTH_CALLBACK_PORT}/auth/callback"
+
+        server, done_event, callback_result = self._start_oauth_callback_listener(OPENAI_OAUTH_CALLBACK_PORT)
+        try:
+            query = urlencode(
+                {
+                    "response_type": "code",
+                    "client_id": OPENAI_CODEX_CLIENT_ID,
+                    "redirect_uri": redirect_uri,
+                    "scope": OPENAI_OAUTH_SCOPE,
+                    "code_challenge": challenge,
+                    "code_challenge_method": "S256",
+                    "state": state,
+                    "id_token_add_organizations": "true",
+                }
+            )
+            authorize_url = f"{OPENAI_OAUTH_ISSUER}/oauth/authorize?{query}&codex_cli_simplified_flow"
+
+            opened = QDesktopServices.openUrl(QUrl(authorize_url))
+            if opened:
+                self._append_log("Opened OpenAI OAuth authorize URL in your system browser. Complete sign-in to continue.")
+            else:
+                self._append_log("Could not launch system browser for OAuth authorize URL.")
+                raise RuntimeError("Failed to open system browser for OpenAI OAuth authorization.")
+
+            timeout_s = 240
+            start = time.time()
+            while not done_event.is_set() and (time.time() - start) < timeout_s:
+                QApplication.processEvents()
+                time.sleep(0.1)
+
+            if not done_event.is_set():
+                raise TimeoutError("Timed out waiting for OpenAI OAuth callback.")
+
+            if callback_result.get("error"):
+                desc = callback_result.get("error_description") or callback_result["error"]
+                raise RuntimeError(f"OpenAI OAuth authorization failed: {desc}")
+
+            callback_state = callback_result.get("state", "")
+            if callback_state != state:
+                raise RuntimeError("OpenAI OAuth state mismatch; please retry authorization.")
+
+            code = callback_result.get("code", "")
+            if not code:
+                raise RuntimeError("OpenAI OAuth callback did not include an authorization code.")
+
+            token_payload = self._exchange_openai_oauth_code(code, redirect_uri, verifier)
+            access_token = str(token_payload.get("access_token", "")).strip()
+            refresh_token = str(token_payload.get("refresh_token", "")).strip()
+            self.openai_access_token.setText(access_token)
+            self._append_log("OpenAI OAuth complete. Access token has been populated in OpenAI Access Token.")
+            if refresh_token:
+                self._append_log("Refresh token received (not persisted yet). Re-run browser authorization if token expires.")
+        finally:
+            try:
+                server.shutdown()
+                server.server_close()
+            except Exception:
+                pass
+
     def open_ai_provider_login(self) -> None:
         source = self.prompt_source.currentData()
         if source == "openai":
-            auth_url = QUrl("https://auth.openai.com/")
-            opened = QDesktopServices.openUrl(auth_url)
-            if opened:
-                self._append_log(
-                    "Opened auth.openai.com in your system browser for app authorization. After approval, paste the bearer token into OpenAI Access Token."
-                )
-            else:
-                self.browser.setUrl(auth_url)
-                self._append_log(
-                    "Could not launch system browser. Opened auth.openai.com in embedded browser instead; if the page is blank, copy this URL into your normal browser."
-                )
+            try:
+                self._run_openai_oauth_flow()
+            except Exception as exc:
+                self._append_log(f"ERROR: OpenAI OAuth flow failed: {exc}")
             return
 
         self.browser.setUrl(QUrl("https://grok.com/"))
