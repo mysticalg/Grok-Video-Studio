@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import unquote, urlencode, urlparse
 from typing import Callable
 
 import requests
@@ -94,6 +94,18 @@ DEFAULT_MANUAL_PROMPT_TEXT = (
     "fast moving fractals morphing and intersecting, highly detailed"
 )
 
+
+def _parse_query_preserving_plus(query: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for part in query.split("&"):
+        if not part:
+            continue
+        key, sep, value = part.partition("=")
+        decoded_key = unquote(key)
+        decoded_value = unquote(value) if sep else ""
+        if decoded_key and decoded_key not in result:
+            result[decoded_key] = decoded_value
+    return result
 
 def _parse_json_object_from_text(raw: str) -> dict:
     """Parse a JSON object from a model response that may include wrappers."""
@@ -2086,9 +2098,9 @@ class MainWindow(QMainWindow):
                     self.wfile.write(b"Not found")
                     return
 
-                params = parse_qs(parsed.query)
+                params = _parse_query_preserving_plus(parsed.query)
                 for key in ("code", "state", "error", "error_description"):
-                    value = params.get(key, [""])[0]
+                    value = str(params.get(key, ""))
                     if value:
                         result[key] = value
 
@@ -2330,6 +2342,7 @@ class MainWindow(QMainWindow):
                 "redirect_uri": redirect_uri,
                 "code_verifier": code_verifier,
             },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=60,
         )
         if not response.ok:
