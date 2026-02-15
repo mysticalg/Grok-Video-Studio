@@ -3973,6 +3973,7 @@ class MainWindow(QMainWindow):
         if selected_index < 0 or selected_index >= len(self.videos):
             selected_index = len(self.videos) - 1
         self.video_picker.setCurrentIndex(selected_index)
+        self.show_selected_video(selected_index)
 
     def on_video_finished(self, video: dict) -> None:
         self.videos.append(video)
