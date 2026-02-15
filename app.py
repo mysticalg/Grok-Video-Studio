@@ -1950,26 +1950,59 @@ class MainWindow(QMainWindow):
                     const optionsRequested = [];
                     const optionsApplied = [];
 
-                    const applyOption = (name, patterns) => {
-                        const alreadySelected = hasSelectedByText(patterns, composer) || hasSelectedByText(patterns);
+                    const findVisibleButtonByAriaLabel = (ariaLabel, root = document) => {
+                        const candidates = [...root.querySelectorAll(`button[aria-label='${ariaLabel}']`)];
+                        return candidates.find((el) => isVisible(el) && !el.disabled) || null;
+                    };
+                    const isOptionButtonSelected = (button) => {
+                        if (!button) return false;
+                        const ariaPressed = button.getAttribute("aria-pressed") === "true";
+                        const ariaSelected = button.getAttribute("aria-selected") === "true";
+                        const dataSelected = button.getAttribute("data-selected") === "true";
+                        const dataState = (button.getAttribute("data-state") || "").toLowerCase();
+                        if (ariaPressed || ariaSelected || dataSelected || dataState === "checked" || dataState === "active") return true;
+                        if (/\b(active|selected|checked|on|text-fg-primary)\b/i.test(button.className || "")) return true;
+                        const selectedFill = button.querySelector(".bg-primary:not([class*='bg-primary/'])");
+                        return !!selectedFill;
+                    };
+                    const hasSelectedByAriaLabel = (ariaLabel, root = document) => {
+                        const button = findVisibleButtonByAriaLabel(ariaLabel, root);
+                        return isOptionButtonSelected(button);
+                    };
+                    const clickVisibleButtonByAriaLabel = (ariaLabel, root = document) => {
+                        const button = findVisibleButtonByAriaLabel(ariaLabel, root) || findVisibleButtonByAriaLabel(ariaLabel, document);
+                        if (!button) return false;
+                        return emulateClick(button);
+                    };
+
+                    const applyOption = (name, patterns, ariaLabel = null) => {
+                        const alreadySelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
+                            || hasSelectedByText(patterns, composer)
+                            || hasSelectedByText(patterns);
                         if (alreadySelected) {
                             optionsApplied.push(`${name}(already-selected)`);
                             return;
                         }
-                        const clicked = clickByText(patterns, composer) || clickByText(patterns);
+                        const clicked = (ariaLabel && (clickVisibleButtonByAriaLabel(ariaLabel, composer) || clickVisibleButtonByAriaLabel(ariaLabel)))
+                            || clickByText(patterns, composer)
+                            || clickByText(patterns);
                         if (clicked) optionsRequested.push(name);
-                        const selected = hasSelectedByText(patterns, composer) || hasSelectedByText(patterns);
+                        const selected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
+                            || hasSelectedByText(patterns, composer)
+                            || hasSelectedByText(patterns);
                         if (selected) optionsApplied.push(name);
                     };
 
                     applyOption("image", imagePatterns);
-                    applyOption(desiredAspect, desiredAspectPatterns);
+                    applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
 
                     const missingOptions = [];
                     if (!(hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
                         missingOptions.push("image");
                     }
-                    if (!(hasSelectedByText(desiredAspectPatterns, composer) || hasSelectedByText(desiredAspectPatterns))) {
+                    if (!(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
+                        || hasSelectedByText(desiredAspectPatterns, composer)
+                        || hasSelectedByText(desiredAspectPatterns))) {
                         missingOptions.push(desiredAspect);
                     }
 
@@ -2626,9 +2659,27 @@ class MainWindow(QMainWindow):
 
                     const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
                     const composer = (promptInput && (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section"))) || document;
-                    const clickVisibleButtonByAriaLabel = (ariaLabel) => {
-                        const button = [...document.querySelectorAll(`button[aria-label='${ariaLabel}']`)]
-                            .find((el) => isVisible(el) && !el.disabled);
+                    const findVisibleButtonByAriaLabel = (ariaLabel, root = document) => {
+                        const candidates = [...root.querySelectorAll(`button[aria-label='${ariaLabel}']`)];
+                        return candidates.find((el) => isVisible(el) && !el.disabled) || null;
+                    };
+                    const isOptionButtonSelected = (button) => {
+                        if (!button) return false;
+                        const ariaPressed = button.getAttribute("aria-pressed") === "true";
+                        const ariaSelected = button.getAttribute("aria-selected") === "true";
+                        const dataSelected = button.getAttribute("data-selected") === "true";
+                        const dataState = (button.getAttribute("data-state") || "").toLowerCase();
+                        if (ariaPressed || ariaSelected || dataSelected || dataState === "checked" || dataState === "active") return true;
+                        if (/\b(active|selected|checked|on|text-fg-primary)\b/i.test(button.className || "")) return true;
+                        const selectedFill = button.querySelector(".bg-primary:not([class*='bg-primary/'])");
+                        return !!selectedFill;
+                    };
+                    const hasSelectedByAriaLabel = (ariaLabel, root = document) => {
+                        const button = findVisibleButtonByAriaLabel(ariaLabel, root);
+                        return isOptionButtonSelected(button);
+                    };
+                    const clickVisibleButtonByAriaLabel = (ariaLabel, root = document) => {
+                        const button = findVisibleButtonByAriaLabel(ariaLabel, root) || findVisibleButtonByAriaLabel(ariaLabel, document);
                         if (!button) return false;
                         return emulateClick(button);
                     };
@@ -2657,22 +2708,32 @@ class MainWindow(QMainWindow):
                     const optionsApplied = [];
 
                     const applyOption = (name, patterns, ariaLabel) => {
-                        const isAlreadySelected = hasSelectedByText(patterns, composer) || hasSelectedByText(patterns);
+                        const isAlreadySelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
+                            || hasSelectedByText(patterns, composer)
+                            || hasSelectedByText(patterns);
                         if (isAlreadySelected) {
                             optionsApplied.push(`${name}(already-selected)`);
                             return;
                         }
-                        const clicked = (ariaLabel && clickVisibleButtonByAriaLabel(ariaLabel))
+                        const clicked = (ariaLabel && (clickVisibleButtonByAriaLabel(ariaLabel, composer) || clickVisibleButtonByAriaLabel(ariaLabel)))
                             || clickByText(patterns, composer)
                             || clickByText(patterns);
                         if (clicked) {
                             optionsRequested.push(name);
                         }
-                        const isNowSelected = hasSelectedByText(patterns, composer) || hasSelectedByText(patterns);
+                        const isNowSelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
+                            || hasSelectedByText(patterns, composer)
+                            || hasSelectedByText(patterns);
                         if (clicked && !isNowSelected) {
-                            clickByText(patterns, composer) || clickByText(patterns);
+                            if (ariaLabel) {
+                                clickVisibleButtonByAriaLabel(ariaLabel, composer) || clickVisibleButtonByAriaLabel(ariaLabel);
+                            } else {
+                                clickByText(patterns, composer) || clickByText(patterns);
+                            }
                         }
-                        const selected = hasSelectedByText(patterns, composer) || hasSelectedByText(patterns);
+                        const selected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
+                            || hasSelectedByText(patterns, composer)
+                            || hasSelectedByText(patterns);
                         if (selected) optionsApplied.push(name);
                     };
 
@@ -2689,7 +2750,9 @@ class MainWindow(QMainWindow):
                                 : option === desiredDuration
                                     ? (durationPatterns[desiredDuration] || durationPatterns["10s"])
                                     : (aspectPatterns[desiredAspect] || aspectPatterns["16:9"]);
-                        return !(hasSelectedByText(patterns, composer) || hasSelectedByText(patterns));
+                        const ariaLabel = option === "video" ? null : option;
+                        const selectedByAria = ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel));
+                        return !(selectedByAria || hasSelectedByText(patterns, composer) || hasSelectedByText(patterns));
                     });
 
                     return {
