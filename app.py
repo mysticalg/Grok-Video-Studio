@@ -2086,7 +2086,7 @@ class MainWindow(QMainWindow):
 
     def _generate_pkce_verifier(self, length: int = 64) -> str:
         length = max(43, min(128, int(length)))
-        alphabet = string.ascii_letters + string.digits + "-._~"
+        alphabet = string.ascii_letters + string.digits
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
     def _start_oauth_callback_listener(self, port: int):
