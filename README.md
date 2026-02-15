@@ -100,7 +100,7 @@ Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex
 The token exchange now tries both `https://auth.openai.com/token` and `https://auth.openai.com/oauth/token` so either issuer route works.
 When available in OAuth token claims, requests also include `OpenAI-Organization` and `OpenAI-Project` headers (in addition to `Authorization` and `Content-Type`).
 With ChatGPT/Codex OAuth login, the app prefers the ChatGPT Codex backend so usage follows subscription-authenticated behavior rather than API-key-only billing paths.
-With ChatGPT/Codex OAuth login, responses requests explicitly set `store: false` to satisfy backend requirements.
+With ChatGPT/Codex OAuth login, responses requests explicitly set `store: false` and `stream: true` to satisfy backend requirements.
 
 ## Browser performance tuning (embedded Chromium)
 

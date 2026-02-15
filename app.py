@@ -163,6 +163,53 @@ def _openai_chat_target(access_token: str) -> tuple[str, dict[str, str], bool]:
     return f"{OPENAI_API_BASE}/chat/completions", headers, False
 
 
+
+
+def _extract_text_from_responses_body(body: object) -> str:
+    if not isinstance(body, dict):
+        return ""
+    output_text = str(body.get("output_text", "")).strip()
+    if output_text:
+        return output_text
+
+    text_chunks: list[str] = []
+    for item in body.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content", []):
+            if isinstance(content, dict):
+                text_value = str(content.get("text", "")).strip()
+                if text_value:
+                    text_chunks.append(text_value)
+    return "\n".join(text_chunks).strip()
+
+
+def _extract_text_from_responses_sse(raw_text: str) -> str:
+    text_chunks: list[str] = []
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        data_str = line[5:].strip()
+        if not data_str or data_str == "[DONE]":
+            continue
+        try:
+            event = json.loads(data_str)
+        except Exception:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "response.output_text.delta":
+            delta = str(event.get("delta", ""))
+            if delta:
+                text_chunks.append(delta)
+            continue
+        text_value = _extract_text_from_responses_body(event)
+        if text_value:
+            text_chunks.append(text_value)
+
+    return "".join(text_chunks).strip()
+
 def _call_openai_chat_api(access_token: str, model: str, system: str, user: str, temperature: float) -> str:
     endpoint, headers, is_responses_api = _openai_chat_target(access_token)
 
@@ -176,6 +223,7 @@ def _call_openai_chat_api(access_token: str, model: str, system: str, user: str,
             ],
             "temperature": temperature,
             "store": False,
+            "stream": True,
         }
     else:
         payload = {
@@ -191,25 +239,19 @@ def _call_openai_chat_api(access_token: str, model: str, system: str, user: str,
     if not response.ok:
         raise RuntimeError(f"OpenAI request failed: {response.status_code} {response.text[:500]}")
 
-    body = response.json()
     if is_responses_api:
-        output_text = str(body.get("output_text", "")).strip()
-        if output_text:
-            return output_text
-        text_chunks: list[str] = []
-        for item in body.get("output", []):
-            if not isinstance(item, dict):
-                continue
-            for content in item.get("content", []):
-                if isinstance(content, dict):
-                    text_value = str(content.get("text", "")).strip()
-                    if text_value:
-                        text_chunks.append(text_value)
-        combined = "\n".join(text_chunks).strip()
-        if combined:
-            return combined
+        content_type = response.headers.get("Content-Type", "")
+        if "text/event-stream" in content_type:
+            streamed_text = _extract_text_from_responses_sse(response.text)
+            if streamed_text:
+                return streamed_text
+        body = response.json()
+        text_value = _extract_text_from_responses_body(body)
+        if text_value:
+            return text_value
         raise RuntimeError("OpenAI response did not include text output.")
 
+    body = response.json()
     return str(body["choices"][0]["message"]["content"]).strip()
 
 
