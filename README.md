@@ -11,6 +11,7 @@ A desktop-first Python/PySide6 app for generating Grok videos, iterating quickly
   - Grok API prompt generation
   - OpenAI API prompt generation
 - Queue multiple variants in one run.
+- Choose video resolution and aspect ratio before generating prompts/jobs.
 - Keep a generated-video list in-session.
 - Preview generated or local videos inside the app.
 - Continue from the latest frame or a local seed image.
