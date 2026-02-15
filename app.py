@@ -1934,6 +1934,14 @@ class MainWindow(QMainWindow):
         source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
 
+        if manual_prompt:
+            if source != "manual":
+                self._append_log(
+                    "Manual prompt detected; using browser prompt population flow (independent of AI prompt source)."
+                )
+            self._start_manual_browser_generation(manual_prompt, self.count.value())
+            return
+
         if source != "manual":
             api_key = self.api_key.text().strip()
             if not api_key:
@@ -1943,19 +1951,12 @@ class MainWindow(QMainWindow):
         if source != "manual" and not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
             return
-        if source == "manual" and not manual_prompt:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
-            return
         if source == "openai" and not self.openai_access_token.text().strip():
             QMessageBox.warning(
                 self,
                 "Missing OpenAI Credentials",
                 "Please authorize OpenAI in browser (or paste an OpenAI access token).",
             )
-            return
-
-        if source == "manual":
-            self._start_manual_browser_generation(manual_prompt, self.count.value())
             return
 
         config = GrokConfig(
@@ -2209,16 +2210,7 @@ class MainWindow(QMainWindow):
 
     def start_image_generation(self) -> None:
         self.stop_all_requested = False
-        source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
-
-        if source != "manual":
-            QMessageBox.warning(
-                self,
-                "Manual Prompt Required",
-                "Populate Image Prompt in Browser is only available when Prompt Source is set to Manual prompt (no API).",
-            )
-            return
 
         if not manual_prompt:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
@@ -4159,13 +4151,13 @@ class MainWindow(QMainWindow):
         source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
         is_manual = source == "manual"
         is_openai = source == "openai"
-        self.manual_prompt.setEnabled(is_manual)
+        self.manual_prompt.setEnabled(True)
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
-        self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "🎬 Generate Video")
+        self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "📝 Populate Video Prompt / 🎬 Generate Video")
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
-        self.generate_image_btn.setEnabled(is_manual)
+        self.generate_image_btn.setEnabled(True)
 
     def _resolve_download_extension(self, download, download_type: str) -> str:
         suggested = ""
