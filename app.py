@@ -344,6 +344,7 @@ class StitchWorker(QThread):
         interpolate_enabled: bool,
         interpolation_fps: int,
         upscale_enabled: bool,
+        use_gpu_encoding: bool,
     ):
         super().__init__()
         self.window = window
@@ -355,6 +356,7 @@ class StitchWorker(QThread):
         self.interpolate_enabled = interpolate_enabled
         self.interpolation_fps = interpolation_fps
         self.upscale_enabled = upscale_enabled
+        self.use_gpu_encoding = use_gpu_encoding
 
     def run(self) -> None:
         enhancement_enabled = self.interpolate_enabled or self.upscale_enabled
@@ -368,6 +370,7 @@ class StitchWorker(QThread):
                     stitch_target,
                     crossfade_duration=self.crossfade_duration,
                     progress_callback=lambda p: self.progress.emit(max(5, int(5 + (p * 0.70))), "Stitching clips with crossfade..."),
+                    use_gpu_encoding=self.use_gpu_encoding,
                 )
             else:
                 self.status.emit("Stitching videos with hard cuts (no crossfade).")
@@ -375,6 +378,7 @@ class StitchWorker(QThread):
                     self.video_paths,
                     stitch_target,
                     progress_callback=lambda p: self.progress.emit(max(5, int(5 + (p * 0.70))), "Stitching clips with hard cuts..."),
+                    use_gpu_encoding=self.use_gpu_encoding,
                 )
 
             if enhancement_enabled:
@@ -391,6 +395,7 @@ class StitchWorker(QThread):
                     interpolation_fps=self.interpolation_fps,
                     upscale=self.upscale_enabled,
                     progress_callback=lambda p: self.progress.emit(max(75, int(75 + (p * 0.25))), "Applying interpolation/upscaling..."),
+                    use_gpu_encoding=self.use_gpu_encoding,
                 )
 
             self.progress.emit(100, "Finalizing stitched video...")
@@ -455,6 +460,8 @@ class MainWindow(QMainWindow):
         self.videos: list[dict] = []
         self.worker: GenerateWorker | None = None
         self.stitch_worker: StitchWorker | None = None
+        self._ffmpeg_nvenc_checked = False
+        self._ffmpeg_nvenc_available = False
         self.stop_all_requested = False
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
@@ -694,6 +701,10 @@ class MainWindow(QMainWindow):
         )
         actions_layout.addWidget(self.stitch_upscale_checkbox, 6, 0, 1, 2)
 
+        self.stitch_gpu_checkbox = QCheckBox("Use GPU encoding for stitching (NVENC)")
+        self.stitch_gpu_checkbox.setToolTip("Use NVIDIA NVENC encoder when available to reduce CPU load.")
+        actions_layout.addWidget(self.stitch_gpu_checkbox, 7, 0, 1, 2)
+
         self.video_options_dropdown = QComboBox()
         self.video_options_dropdown.addItem("Video Options: Crossfade 0.5s", 0.5)
         self.video_options_dropdown.addItem("Crossfade 0.2s", 0.2)
@@ -705,7 +716,7 @@ class MainWindow(QMainWindow):
         self.video_options_dropdown.setCurrentIndex(0)
         self.video_options_dropdown.setToolTip("Video options including stitch crossfade duration.")
         self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
-        actions_layout.addWidget(self.video_options_dropdown, 7, 0, 1, 2)
+        actions_layout.addWidget(self.video_options_dropdown, 8, 0, 1, 2)
 
         self.upload_youtube_btn = QPushButton("▶ Upload Selected to YouTube")
         self.upload_youtube_btn.setToolTip("Upload the currently selected local video to your YouTube channel.")
@@ -714,7 +725,7 @@ class MainWindow(QMainWindow):
             "border: 1px solid #990000; border-radius: 6px; padding: 8px;"
         )
         self.upload_youtube_btn.clicked.connect(self.upload_selected_to_youtube)
-        actions_layout.addWidget(self.upload_youtube_btn, 8, 0, 1, 2)
+        actions_layout.addWidget(self.upload_youtube_btn, 9, 0, 1, 2)
 
         self.upload_facebook_btn = QPushButton("📘 Upload Selected to Facebook")
         self.upload_facebook_btn.setToolTip("Upload the selected local video to your Facebook Page as an unpublished video.")
@@ -723,7 +734,7 @@ class MainWindow(QMainWindow):
             "border: 1px solid #115bcc; border-radius: 6px; padding: 8px;"
         )
         self.upload_facebook_btn.clicked.connect(self.upload_selected_to_facebook)
-        actions_layout.addWidget(self.upload_facebook_btn, 9, 0, 1, 2)
+        actions_layout.addWidget(self.upload_facebook_btn, 10, 0, 1, 2)
 
         self.upload_instagram_btn = QPushButton("📸 Upload Selected to Instagram")
         self.upload_instagram_btn.setToolTip("Publish selected video to Instagram Reels using Meta Graph API (requires a public source URL).")
@@ -732,7 +743,7 @@ class MainWindow(QMainWindow):
             "border: 1px solid #6d2f94; border-radius: 6px; padding: 8px;"
         )
         self.upload_instagram_btn.clicked.connect(self.upload_selected_to_instagram)
-        actions_layout.addWidget(self.upload_instagram_btn, 10, 0, 1, 2)
+        actions_layout.addWidget(self.upload_instagram_btn, 11, 0, 1, 2)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
@@ -741,7 +752,7 @@ class MainWindow(QMainWindow):
             "background-color: #ffdd00; color: #222; border-radius: 8px;"
         )
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
-        actions_layout.addWidget(self.buy_coffee_btn, 11, 0, 1, 2)
+        actions_layout.addWidget(self.buy_coffee_btn, 12, 0, 1, 2)
 
         left_layout.addWidget(actions_group)
 
@@ -1128,6 +1139,7 @@ class MainWindow(QMainWindow):
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
             "stitch_interpolation_fps": int(self.stitch_interpolation_fps.currentData()),
             "stitch_upscale_enabled": self.stitch_upscale_checkbox.isChecked(),
+            "stitch_gpu_enabled": self.stitch_gpu_checkbox.isChecked(),
             "crossfade_duration": self.crossfade_duration.value(),
             "download_dir": str(self.download_dir),
             "preview_muted": self.preview_mute_checkbox.isChecked(),
@@ -1187,6 +1199,8 @@ class MainWindow(QMainWindow):
                 self.stitch_interpolation_fps.setCurrentIndex(fps_index)
         if "stitch_upscale_enabled" in preferences:
             self.stitch_upscale_checkbox.setChecked(bool(preferences["stitch_upscale_enabled"]))
+        if "stitch_gpu_enabled" in preferences:
+            self.stitch_gpu_checkbox.setChecked(bool(preferences["stitch_gpu_enabled"]))
         if "crossfade_duration" in preferences:
             try:
                 self.crossfade_duration.setValue(float(preferences["crossfade_duration"]))
@@ -3401,12 +3415,17 @@ class MainWindow(QMainWindow):
         interpolation_fps = int(self.stitch_interpolation_fps.currentData())
         upscale_enabled = self.stitch_upscale_checkbox.isChecked()
         crossfade_enabled = self.stitch_crossfade_checkbox.isChecked()
+        gpu_requested = self.stitch_gpu_checkbox.isChecked()
+        gpu_enabled = gpu_requested and self._ffmpeg_supports_nvenc()
+        if gpu_requested and not gpu_enabled:
+            self._append_log("GPU encoding requested, but ffmpeg NVENC is unavailable. Falling back to CPU encoding.")
 
         settings_summary = (
             f"Crossfade: {'on' if crossfade_enabled else 'off'}"
             + (f" ({self.crossfade_duration.value():.1f}s)" if crossfade_enabled else "")
             + f" | Interpolation: {f'{interpolation_fps} fps' if interpolate_enabled else 'off'}"
             + f" | Upscaling: {'on' if upscale_enabled else 'off'}"
+            + f" | Encode: {'GPU' if gpu_enabled else 'CPU'}"
         )
 
         started_at = time.time()
@@ -3452,6 +3471,7 @@ class MainWindow(QMainWindow):
             interpolate_enabled=interpolate_enabled,
             interpolation_fps=interpolation_fps,
             upscale_enabled=upscale_enabled,
+            use_gpu_encoding=gpu_enabled,
         )
         self.stitch_worker.progress.connect(update_progress)
         self.stitch_worker.status.connect(self._append_log)
@@ -3465,6 +3485,7 @@ class MainWindow(QMainWindow):
         video_paths: list[Path],
         output_file: Path,
         progress_callback: Callable[[float], None] | None = None,
+        use_gpu_encoding: bool = False,
     ) -> None:
         list_file = self.download_dir / f"stitch_list_{int(time.time() * 1000)}.txt"
 
@@ -3486,12 +3507,7 @@ class MainWindow(QMainWindow):
                     "0",
                     "-i",
                     str(list_file),
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "fast",
-                    "-crf",
-                    "20",
+                    *self._video_encoder_args(use_gpu_encoding),
                     "-c:a",
                     "aac",
                     str(output_file),
@@ -3578,6 +3594,31 @@ class MainWindow(QMainWindow):
         )
         return bool(result.stdout.strip())
 
+    def _ffmpeg_supports_nvenc(self) -> bool:
+        if self._ffmpeg_nvenc_checked:
+            return self._ffmpeg_nvenc_available
+
+        self._ffmpeg_nvenc_checked = True
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            encoders_output = f"{result.stdout}\n{result.stderr}"
+            self._ffmpeg_nvenc_available = "h264_nvenc" in encoders_output
+        except Exception:
+            self._ffmpeg_nvenc_available = False
+
+        return self._ffmpeg_nvenc_available
+
+    def _video_encoder_args(self, use_gpu_encoding: bool, crf: int = 20) -> list[str]:
+        if use_gpu_encoding and self._ffmpeg_supports_nvenc():
+            return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(max(18, min(30, crf + 1))), "-b:v", "0"]
+        return ["-c:v", "libx264", "-preset", "fast", "-crf", str(crf)]
+
     def _run_ffmpeg_with_progress(
         self,
         ffmpeg_cmd: list[str],
@@ -3629,6 +3670,7 @@ class MainWindow(QMainWindow):
         output_file: Path,
         crossfade_duration: float,
         progress_callback: Callable[[float], None] | None = None,
+        use_gpu_encoding: bool = False,
     ) -> None:
         stream_infos = [self._probe_video_stream_info(path) for path in video_paths]
         durations = [info["duration"] for info in stream_infos]
@@ -3685,12 +3727,7 @@ class MainWindow(QMainWindow):
                 filter_complex,
                 "-map",
                 f"[{video_prev}]",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "20",
+                *self._video_encoder_args(use_gpu_encoding),
                 str(output_file),
             ]
         )
@@ -3711,6 +3748,7 @@ class MainWindow(QMainWindow):
         interpolation_fps: int,
         upscale: bool,
         progress_callback: Callable[[float], None] | None = None,
+        use_gpu_encoding: bool = False,
     ) -> None:
         if not interpolate and not upscale:
             return
@@ -3731,12 +3769,7 @@ class MainWindow(QMainWindow):
             str(input_file),
             "-vf",
             ",".join(vf_filters),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "18",
+            *self._video_encoder_args(use_gpu_encoding, crf=18),
             "-c:a",
             "copy",
             str(output_file),
