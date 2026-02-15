@@ -1,13 +1,17 @@
 import os
 import json
+import base64
+import hashlib
+import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from typing import Callable
 
 import requests
@@ -58,6 +62,10 @@ QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
+OPENAI_CODEX_CLIENT_ID = os.getenv("OPENAI_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
+OPENAI_OAUTH_SCOPE = "openid profile email offline_access"
+OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455"))
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
@@ -158,7 +166,7 @@ class PromptConfig:
     source: str
     concept: str
     manual_prompt: str
-    openai_api_key: str
+    openai_access_token: str
     openai_chat_model: str
     video_resolution: str
     video_resolution_label: str
@@ -215,6 +223,9 @@ class GenerateWorker(QThread):
         except Exception:
             return response.text[:500] or response.reason
 
+    def _openai_bearer_token(self) -> str:
+        return self.prompt_config.openai_access_token
+
     def call_grok_chat(self, system: str, user: str) -> str:
         headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
         response = requests.post(
@@ -235,7 +246,10 @@ class GenerateWorker(QThread):
         return response.json()["choices"][0]["message"]["content"].strip()
 
     def call_openai_chat(self, system: str, user: str) -> str:
-        headers = {"Authorization": f"Bearer {self.prompt_config.openai_api_key}", "Content-Type": "application/json"}
+        openai_token = self._openai_bearer_token()
+        if not openai_token:
+            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+        headers = {"Authorization": f"Bearer {openai_token}", "Content-Type": "application/json"}
         response = requests.post(
             f"{OPENAI_API_BASE}/chat/completions",
             headers=headers,
@@ -480,6 +494,9 @@ class FilteredWebEnginePage(QWebEnginePage):
         "Permissions-Policy header: Unrecognized feature: 'pointer-lock'",
         "violates the following Content Security Policy directive",
         "Play failed: [object DOMException]",
+        "[Statsig] A networking error occurred during POST request",
+        "featureassets.org/v1/initialize",
+        "auth-cdn.oaistatic.com/assets/statsig",
     )
 
     def __init__(self, on_console_message, profile: QWebEngineProfile | None = None, parent=None):
@@ -1042,12 +1059,13 @@ class MainWindow(QMainWindow):
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
         form_layout.addRow("Prompt Source", self.prompt_source)
 
-        self.openai_api_key = QLineEdit()
-        self.openai_api_key.setEchoMode(QLineEdit.Password)
-        self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
-        form_layout.addRow("OpenAI API Key", self.openai_api_key)
+        self.openai_access_token = QLineEdit()
+        self.openai_access_token.setEchoMode(QLineEdit.Password)
+        self.openai_access_token.setPlaceholderText("Optional bearer token from OAuth/browser sign-in flow")
+        self.openai_access_token.setText(os.getenv("OPENAI_ACCESS_TOKEN", ""))
+        form_layout.addRow("OpenAI Access Token", self.openai_access_token)
 
-        self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
+        self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-5.1-codex"))
         form_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
 
         self.ai_auth_method = QComboBox()
@@ -1277,7 +1295,7 @@ class MainWindow(QMainWindow):
             "chat_model": self.chat_model.text(),
             "image_model": self.image_model.text(),
             "prompt_source": self.prompt_source.currentData(),
-            "openai_api_key": self.openai_api_key.text(),
+            "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
             "youtube_api_key": self.youtube_api_key.text(),
@@ -1329,8 +1347,8 @@ class MainWindow(QMainWindow):
             source_index = self.prompt_source.findData(str(preferences["prompt_source"]))
             if source_index >= 0:
                 self.prompt_source.setCurrentIndex(source_index)
-        if "openai_api_key" in preferences:
-            self.openai_api_key.setText(str(preferences["openai_api_key"]))
+        if "openai_access_token" in preferences:
+            self.openai_access_token.setText(str(preferences["openai_access_token"]))
         if "openai_chat_model" in preferences:
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
         if "ai_auth_method" in preferences:
@@ -1689,8 +1707,12 @@ class MainWindow(QMainWindow):
         if source == "manual" and not manual_prompt:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
-        if source == "openai" and not self.openai_api_key.text().strip():
-            QMessageBox.warning(self, "Missing OpenAI API Key", "Please enter an OpenAI API key.")
+        if source == "openai" and not self.openai_access_token.text().strip():
+            QMessageBox.warning(
+                self,
+                "Missing OpenAI Credentials",
+                "Please authorize OpenAI in browser (or paste an OpenAI access token).",
+            )
             return
 
         if source == "manual":
@@ -1712,8 +1734,8 @@ class MainWindow(QMainWindow):
             source=source,
             concept=concept,
             manual_prompt=manual_prompt,
-            openai_api_key=self.openai_api_key.text().strip(),
-            openai_chat_model=self.openai_chat_model.text().strip() or "gpt-4o-mini",
+            openai_access_token=self.openai_access_token.text().strip(),
+            openai_chat_model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
             video_resolution=selected_resolution,
             video_resolution_label=selected_resolution_label,
             video_aspect_ratio=selected_aspect_ratio,
@@ -1726,11 +1748,138 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self.on_generation_error)
         self.worker.start()
 
+    def _openai_pkce_challenge(self, verifier: str) -> str:
+        digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
+
+    def _start_oauth_callback_listener(self, port: int):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        result: dict[str, str] = {}
+        event = threading.Event()
+
+        class CallbackHandler(BaseHTTPRequestHandler):
+            def do_GET(self):  # type: ignore[override]
+                parsed = urlparse(self.path)
+                if parsed.path != "/auth/callback":
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(b"Not found")
+                    return
+
+                params = parse_qs(parsed.query)
+                for key in ("code", "state", "error", "error_description"):
+                    value = params.get(key, [""])[0]
+                    if value:
+                        result[key] = value
+
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body><h2>OpenAI authorization received.</h2><p>You can close this tab and return to the app.</p></body></html>"
+                )
+                event.set()
+
+            def log_message(self, format, *args):  # type: ignore[override]
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", port), CallbackHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, event, result
+
+    def _exchange_openai_oauth_code(self, code: str, redirect_uri: str, code_verifier: str) -> dict:
+        token_endpoint = f"{OPENAI_OAUTH_ISSUER}/oauth/token"
+        response = requests.post(
+            token_endpoint,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": OPENAI_CODEX_CLIENT_ID,
+                "code_verifier": code_verifier,
+            },
+            timeout=60,
+        )
+        if not response.ok:
+            raise RuntimeError(f"OAuth token exchange failed: {response.status_code} {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("access_token"):
+            raise RuntimeError("OAuth token response did not include access_token.")
+        return payload
+
+    def _run_openai_oauth_flow(self) -> None:
+        state = secrets.token_hex(16)
+        verifier = secrets.token_urlsafe(64)
+        challenge = self._openai_pkce_challenge(verifier)
+        redirect_uri = f"http://localhost:{OPENAI_OAUTH_CALLBACK_PORT}/auth/callback"
+
+        server, done_event, callback_result = self._start_oauth_callback_listener(OPENAI_OAUTH_CALLBACK_PORT)
+        try:
+            query = urlencode(
+                {
+                    "response_type": "code",
+                    "client_id": OPENAI_CODEX_CLIENT_ID,
+                    "redirect_uri": redirect_uri,
+                    "scope": OPENAI_OAUTH_SCOPE,
+                    "code_challenge": challenge,
+                    "code_challenge_method": "S256",
+                    "state": state,
+                    "id_token_add_organizations": "true",
+                }
+            )
+            authorize_url = f"{OPENAI_OAUTH_ISSUER}/oauth/authorize?{query}&codex_cli_simplified_flow"
+
+            opened = QDesktopServices.openUrl(QUrl(authorize_url))
+            if opened:
+                self._append_log("Opened OpenAI OAuth authorize URL in your system browser. Complete sign-in to continue.")
+            else:
+                self._append_log("Could not launch system browser for OAuth authorize URL.")
+                raise RuntimeError("Failed to open system browser for OpenAI OAuth authorization.")
+
+            timeout_s = 240
+            start = time.time()
+            while not done_event.is_set() and (time.time() - start) < timeout_s:
+                QApplication.processEvents()
+                time.sleep(0.1)
+
+            if not done_event.is_set():
+                raise TimeoutError("Timed out waiting for OpenAI OAuth callback.")
+
+            if callback_result.get("error"):
+                desc = callback_result.get("error_description") or callback_result["error"]
+                raise RuntimeError(f"OpenAI OAuth authorization failed: {desc}")
+
+            callback_state = callback_result.get("state", "")
+            if callback_state != state:
+                raise RuntimeError("OpenAI OAuth state mismatch; please retry authorization.")
+
+            code = callback_result.get("code", "")
+            if not code:
+                raise RuntimeError("OpenAI OAuth callback did not include an authorization code.")
+
+            token_payload = self._exchange_openai_oauth_code(code, redirect_uri, verifier)
+            access_token = str(token_payload.get("access_token", "")).strip()
+            refresh_token = str(token_payload.get("refresh_token", "")).strip()
+            self.openai_access_token.setText(access_token)
+            self._append_log("OpenAI OAuth complete. Access token has been populated in OpenAI Access Token.")
+            if refresh_token:
+                self._append_log("Refresh token received (not persisted yet). Re-run browser authorization if token expires.")
+        finally:
+            try:
+                server.shutdown()
+                server.server_close()
+            except Exception:
+                pass
+
     def open_ai_provider_login(self) -> None:
         source = self.prompt_source.currentData()
         if source == "openai":
-            self.browser.setUrl(QUrl("https://platform.openai.com/settings/organization/api-keys"))
-            self._append_log("Opened OpenAI platform in browser for sign-in/API key management.")
+            try:
+                self._run_openai_oauth_flow()
+            except Exception as exc:
+                self._append_log(f"ERROR: OpenAI OAuth flow failed: {exc}")
             return
 
         self.browser.setUrl(QUrl("https://grok.com/"))
@@ -1748,11 +1897,11 @@ class MainWindow(QMainWindow):
         }
 
         if source == "openai":
-            openai_key = self.openai_api_key.text().strip()
-            if not openai_key:
-                raise RuntimeError("OpenAI API key is required.")
-            headers["Authorization"] = f"Bearer {openai_key}"
-            payload["model"] = self.openai_chat_model.text().strip() or "gpt-4o-mini"
+            openai_token = self.openai_access_token.text().strip()
+            if not openai_token:
+                raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+            headers["Authorization"] = f"Bearer {openai_token}"
+            payload["model"] = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
             response = requests.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload, timeout=90)
             if not response.ok:
                 raise RuntimeError(f"OpenAI request failed: {response.status_code} {response.text[:400]}")
@@ -3769,7 +3918,7 @@ class MainWindow(QMainWindow):
         is_manual = source == "manual"
         is_openai = source == "openai"
         self.manual_prompt.setEnabled(is_manual)
-        self.openai_api_key.setEnabled(is_openai)
+        self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
         self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "🎬 Generate Video")
