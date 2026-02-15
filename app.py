@@ -1952,48 +1952,49 @@ class MainWindow(QMainWindow):
         errors: list[str] = []
 
         def _attempt_variants(endpoint: str) -> list[tuple[str, dict]]:
-            is_oauth_token_endpoint = endpoint.rstrip("/").endswith("/oauth/token")
-            if not is_oauth_token_endpoint:
-                return [("json", {"json": {"id_token": id_token}})]
+            normalized = endpoint.rstrip("/")
+            is_oauth_token_endpoint = normalized.endswith("/oauth/token")
+            if is_oauth_token_endpoint:
+                # /oauth/token requires form-encoded OAuth params with grant_type.
+                return [
+                    (
+                        "form-basic",
+                        {
+                            "data": {
+                                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                                "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+                                "subject_token": id_token,
+                                "client_id": OPENAI_CODEX_CLIENT_ID,
+                            }
+                        },
+                    ),
+                    (
+                        "form-jwt-type",
+                        {
+                            "data": {
+                                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                                "subject_token": id_token,
+                                "client_id": OPENAI_CODEX_CLIENT_ID,
+                            }
+                        },
+                    ),
+                    (
+                        "form-with-audience",
+                        {
+                            "data": {
+                                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                                "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+                                "subject_token": id_token,
+                                "client_id": OPENAI_CODEX_CLIENT_ID,
+                                "audience": "https://api.openai.com/v1",
+                            }
+                        },
+                    ),
+                ]
 
-            # Try multiple RFC-8693-style variants; providers differ on accepted fields.
-            return [
-                (
-                    "form-basic",
-                    {
-                        "data": {
-                            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                            "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
-                            "subject_token": id_token,
-                            "client_id": OPENAI_CODEX_CLIENT_ID,
-                        }
-                    },
-                ),
-                (
-                    "form-jwt-type",
-                    {
-                        "data": {
-                            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-                            "subject_token": id_token,
-                            "client_id": OPENAI_CODEX_CLIENT_ID,
-                        }
-                    },
-                ),
-                (
-                    "form-with-audience",
-                    {
-                        "data": {
-                            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                            "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
-                            "subject_token": id_token,
-                            "client_id": OPENAI_CODEX_CLIENT_ID,
-                            "audience": "https://api.openai.com/v1",
-                        }
-                    },
-                ),
-                ("json", {"json": {"id_token": id_token}}),
-            ]
+            # Non-oauth token exchange endpoints in current flow expect JSON id_token payloads.
+            return [("json", {"json": {"id_token": id_token}})]
 
         for endpoint in endpoints:
             for attempt_label, kwargs in _attempt_variants(endpoint):
