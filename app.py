@@ -345,6 +345,7 @@ class StitchWorker(QThread):
         interpolate_enabled: bool,
         interpolation_fps: int,
         upscale_enabled: bool,
+        upscale_target: str,
         use_gpu_encoding: bool,
     ):
         super().__init__()
@@ -357,6 +358,7 @@ class StitchWorker(QThread):
         self.interpolate_enabled = interpolate_enabled
         self.interpolation_fps = interpolation_fps
         self.upscale_enabled = upscale_enabled
+        self.upscale_target = upscale_target
         self.use_gpu_encoding = use_gpu_encoding
 
     def run(self) -> None:
@@ -387,7 +389,7 @@ class StitchWorker(QThread):
                 self.status.emit(
                     "Applying stitched video enhancements: "
                     f"frame interpolation={interpolation_status}, "
-                    f"upscaling={'on' if self.upscale_enabled else 'off'}."
+                    f"upscaling={self.upscale_target if self.upscale_enabled else 'off'}."
                 )
                 self.window._enhance_stitched_video(
                     input_file=stitch_target,
@@ -395,6 +397,7 @@ class StitchWorker(QThread):
                     interpolate=self.interpolate_enabled,
                     interpolation_fps=self.interpolation_fps,
                     upscale=self.upscale_enabled,
+                    upscale_target=self.upscale_target,
                     progress_callback=lambda p: self.progress.emit(max(75, int(75 + (p * 0.25))), "Applying interpolation/upscaling..."),
                     use_gpu_encoding=self.use_gpu_encoding,
                 )
@@ -698,11 +701,20 @@ class MainWindow(QMainWindow):
         self.stitch_interpolation_fps.setToolTip("Target frame rate used when frame interpolation is enabled.")
         actions_layout.addWidget(self.stitch_interpolation_fps, 5, 1, 1, 1)
 
-        self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling (2x Lanczos)")
+        self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling")
         self.stitch_upscale_checkbox.setToolTip(
-            "After stitching, upscale output up to 2x (capped at 4K) with high-quality Lanczos scaling."
+            "After stitching, upscale output to a selected target resolution using high-quality Lanczos scaling."
         )
-        actions_layout.addWidget(self.stitch_upscale_checkbox, 6, 0, 1, 2)
+        actions_layout.addWidget(self.stitch_upscale_checkbox, 6, 0, 1, 1)
+
+        self.stitch_upscale_target = QComboBox()
+        self.stitch_upscale_target.addItem("2x (max 4K)", "2x")
+        self.stitch_upscale_target.addItem("1080p (1920x1080)", "1080p")
+        self.stitch_upscale_target.addItem("1440p (2560x1440)", "1440p")
+        self.stitch_upscale_target.addItem("4K (3840x2160)", "4k")
+        self.stitch_upscale_target.setCurrentIndex(0)
+        self.stitch_upscale_target.setToolTip("Choose output upscale target resolution.")
+        actions_layout.addWidget(self.stitch_upscale_target, 6, 1, 1, 1)
 
         self.stitch_gpu_checkbox = QCheckBox("Use GPU encoding for stitching (NVENC)")
         self.stitch_gpu_checkbox.setToolTip("Use NVIDIA NVENC encoder when available to reduce CPU load.")
@@ -1175,6 +1187,7 @@ class MainWindow(QMainWindow):
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
             "stitch_interpolation_fps": int(self.stitch_interpolation_fps.currentData()),
             "stitch_upscale_enabled": self.stitch_upscale_checkbox.isChecked(),
+            "stitch_upscale_target": str(self.stitch_upscale_target.currentData()),
             "stitch_gpu_enabled": self.stitch_gpu_checkbox.isChecked(),
             "crossfade_duration": self.crossfade_duration.value(),
             "download_dir": str(self.download_dir),
@@ -1235,6 +1248,10 @@ class MainWindow(QMainWindow):
                 self.stitch_interpolation_fps.setCurrentIndex(fps_index)
         if "stitch_upscale_enabled" in preferences:
             self.stitch_upscale_checkbox.setChecked(bool(preferences["stitch_upscale_enabled"]))
+        if "stitch_upscale_target" in preferences:
+            target_index = self.stitch_upscale_target.findData(str(preferences["stitch_upscale_target"]))
+            if target_index >= 0:
+                self.stitch_upscale_target.setCurrentIndex(target_index)
         if "stitch_gpu_enabled" in preferences:
             self.stitch_gpu_checkbox.setChecked(bool(preferences["stitch_gpu_enabled"]))
         if "crossfade_duration" in preferences:
@@ -3562,6 +3579,7 @@ class MainWindow(QMainWindow):
         interpolate_enabled = self.stitch_interpolation_checkbox.isChecked()
         interpolation_fps = int(self.stitch_interpolation_fps.currentData())
         upscale_enabled = self.stitch_upscale_checkbox.isChecked()
+        upscale_target = str(self.stitch_upscale_target.currentData())
         crossfade_enabled = self.stitch_crossfade_checkbox.isChecked()
         gpu_requested = self.stitch_gpu_checkbox.isChecked()
         gpu_enabled = gpu_requested and self._ffmpeg_supports_nvenc()
@@ -3572,7 +3590,7 @@ class MainWindow(QMainWindow):
             f"Crossfade: {'on' if crossfade_enabled else 'off'}"
             + (f" ({self.crossfade_duration.value():.1f}s)" if crossfade_enabled else "")
             + f" | Interpolation: {f'{interpolation_fps} fps' if interpolate_enabled else 'off'}"
-            + f" | Upscaling: {'on' if upscale_enabled else 'off'}"
+            + f" | Upscaling: {upscale_target if upscale_enabled else 'off'}"
             + f" | Encode: {'GPU' if gpu_enabled else 'CPU'}"
         )
 
@@ -3619,6 +3637,7 @@ class MainWindow(QMainWindow):
             interpolate_enabled=interpolate_enabled,
             interpolation_fps=interpolation_fps,
             upscale_enabled=upscale_enabled,
+            upscale_target=upscale_target,
             use_gpu_encoding=gpu_enabled,
         )
         self.stitch_worker.progress.connect(update_progress)
@@ -3896,6 +3915,7 @@ class MainWindow(QMainWindow):
         interpolate: bool,
         interpolation_fps: int,
         upscale: bool,
+        upscale_target: str = "2x",
         progress_callback: Callable[[float], None] | None = None,
         use_gpu_encoding: bool = False,
     ) -> None:
@@ -3909,7 +3929,23 @@ class MainWindow(QMainWindow):
                 f"minterpolate=fps={target_fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
             )
         if upscale:
-            vf_filters.append("scale='min(iw*2,3840)':'min(ih*2,2160)':flags=lanczos")
+            if upscale_target == "1080p":
+                vf_filters.append(
+                    "scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,"
+                    "pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+                )
+            elif upscale_target == "1440p":
+                vf_filters.append(
+                    "scale=2560:1440:force_original_aspect_ratio=decrease:flags=lanczos,"
+                    "pad=2560:1440:(ow-iw)/2:(oh-ih)/2"
+                )
+            elif upscale_target == "4k":
+                vf_filters.append(
+                    "scale=3840:2160:force_original_aspect_ratio=decrease:flags=lanczos,"
+                    "pad=3840:2160:(ow-iw)/2:(oh-ih)/2"
+                )
+            else:
+                vf_filters.append("scale='min(iw*2,3840)':'min(ih*2,2160)':flags=lanczos")
 
         command = [
             "ffmpeg",
