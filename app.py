@@ -686,7 +686,7 @@ class MainWindow(QMainWindow):
 
         self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
-        actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 2)
+        actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 1)
 
         self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation")
         self.stitch_interpolation_checkbox.setToolTip(
@@ -723,19 +723,17 @@ class MainWindow(QMainWindow):
         actions_layout.addWidget(self.stitch_gpu_checkbox, 7, 0, 1, 2)
 
         self.video_options_dropdown = QComboBox()
-        self.video_options_dropdown.addItem("Video Options: Crossfade 0.5s", 0.5)
-        self.video_options_dropdown.addItem("Crossfade 0.2s", 0.2)
-        self.video_options_dropdown.addItem("Crossfade 0.3s", 0.3)
-        self.video_options_dropdown.addItem("Crossfade 0.5s", 0.5)
-        self.video_options_dropdown.addItem("Crossfade 0.8s", 0.8)
-        self.video_options_dropdown.addItem("Crossfade 1.0s", 1.0)
-        self.video_options_dropdown.addItem("GPU Encoding: On", "gpu_on")
-        self.video_options_dropdown.addItem("GPU Encoding: Off", "gpu_off")
-        self.video_options_dropdown.addItem("Open advanced video settings...", None)
-        self.video_options_dropdown.setCurrentIndex(0)
-        self.video_options_dropdown.setToolTip("Video options including stitch crossfade duration.")
+        self.video_options_dropdown.addItem("0.2s", 0.2)
+        self.video_options_dropdown.addItem("0.3s", 0.3)
+        self.video_options_dropdown.addItem("0.5s", 0.5)
+        self.video_options_dropdown.addItem("0.8s", 0.8)
+        self.video_options_dropdown.addItem("1.0s", 1.0)
+        self.video_options_dropdown.addItem("Advanced...", None)
+        self.video_options_dropdown.setCurrentIndex(2)
+        self.video_options_dropdown.setMaximumWidth(140)
+        self.video_options_dropdown.setToolTip("Crossfade duration for stitching.")
         self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
-        actions_layout.addWidget(self.video_options_dropdown, 8, 0, 1, 2)
+        actions_layout.addWidget(self.video_options_dropdown, 4, 1, 1, 1, alignment=Qt.AlignRight)
 
         upload_group = QGroupBox("Upload")
         upload_layout = QHBoxLayout(upload_group)
@@ -1152,17 +1150,6 @@ class MainWindow(QMainWindow):
         option_value = self.video_options_dropdown.itemData(index)
         if option_value is None:
             self.show_model_api_settings()
-            self.video_options_dropdown.blockSignals(True)
-            self.video_options_dropdown.setCurrentIndex(0)
-            self.video_options_dropdown.blockSignals(False)
-            return
-
-        if option_value == "gpu_on":
-            self.stitch_gpu_checkbox.setChecked(True)
-            self._sync_video_options_label()
-            return
-        if option_value == "gpu_off":
-            self.stitch_gpu_checkbox.setChecked(False)
             self._sync_video_options_label()
             return
 
@@ -1174,11 +1161,12 @@ class MainWindow(QMainWindow):
 
     def _sync_video_options_label(self) -> None:
         duration = self.crossfade_duration.value()
-        gpu_label = "GPU on" if self.stitch_gpu_checkbox.isChecked() else "GPU off"
-        label = f"Video Options: Crossfade {duration:.1f}s | {gpu_label}"
+        target_index = self.video_options_dropdown.findData(duration)
         self.video_options_dropdown.blockSignals(True)
-        self.video_options_dropdown.setItemText(0, label)
-        self.video_options_dropdown.setCurrentIndex(0)
+        if target_index >= 0:
+            self.video_options_dropdown.setCurrentIndex(target_index)
+        else:
+            self.video_options_dropdown.setCurrentIndex(2)
         self.video_options_dropdown.blockSignals(False)
 
     def _collect_preferences(self) -> dict:
