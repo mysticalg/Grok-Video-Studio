@@ -167,6 +167,8 @@ class PromptConfig:
     concept: str
     manual_prompt: str
     openai_access_token: str
+    openai_organization_id: str
+    openai_project_id: str
     openai_chat_model: str
     video_resolution: str
     video_resolution_label: str
@@ -226,6 +228,17 @@ class GenerateWorker(QThread):
     def _openai_bearer_token(self) -> str:
         return self.prompt_config.openai_access_token
 
+    def _openai_headers(self) -> dict[str, str]:
+        openai_token = self._openai_bearer_token()
+        if not openai_token:
+            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+        headers = {"Authorization": f"Bearer {openai_token}", "Content-Type": "application/json"}
+        if self.prompt_config.openai_organization_id:
+            headers["OpenAI-Organization"] = self.prompt_config.openai_organization_id
+        if self.prompt_config.openai_project_id:
+            headers["OpenAI-Project"] = self.prompt_config.openai_project_id
+        return headers
+
     def call_grok_chat(self, system: str, user: str) -> str:
         headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
         response = requests.post(
@@ -246,10 +259,7 @@ class GenerateWorker(QThread):
         return response.json()["choices"][0]["message"]["content"].strip()
 
     def call_openai_chat(self, system: str, user: str) -> str:
-        openai_token = self._openai_bearer_token()
-        if not openai_token:
-            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
-        headers = {"Authorization": f"Bearer {openai_token}", "Content-Type": "application/json"}
+        headers = self._openai_headers()
         response = requests.post(
             f"{OPENAI_API_BASE}/chat/completions",
             headers=headers,
@@ -525,6 +535,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Grok Video Desktop Studio")
         self.resize(1500, 900)
         self.download_dir = DOWNLOAD_DIR
+        self.openai_org_id = ""
+        self.openai_project_id = ""
         self.videos: list[dict] = []
         self.worker: GenerateWorker | None = None
         self.stitch_worker: StitchWorker | None = None
@@ -1296,6 +1308,8 @@ class MainWindow(QMainWindow):
             "image_model": self.image_model.text(),
             "prompt_source": self.prompt_source.currentData(),
             "openai_access_token": self.openai_access_token.text(),
+            "openai_org_id": self.openai_org_id,
+            "openai_project_id": self.openai_project_id,
             "openai_chat_model": self.openai_chat_model.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
             "youtube_api_key": self.youtube_api_key.text(),
@@ -1349,6 +1363,10 @@ class MainWindow(QMainWindow):
                 self.prompt_source.setCurrentIndex(source_index)
         if "openai_access_token" in preferences:
             self.openai_access_token.setText(str(preferences["openai_access_token"]))
+        if "openai_org_id" in preferences:
+            self.openai_org_id = str(preferences["openai_org_id"]).strip()
+        if "openai_project_id" in preferences:
+            self.openai_project_id = str(preferences["openai_project_id"]).strip()
         if "openai_chat_model" in preferences:
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
         if "ai_auth_method" in preferences:
@@ -1735,6 +1753,8 @@ class MainWindow(QMainWindow):
             concept=concept,
             manual_prompt=manual_prompt,
             openai_access_token=self.openai_access_token.text().strip(),
+            openai_organization_id=self.openai_org_id,
+            openai_project_id=self.openai_project_id,
             openai_chat_model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
             video_resolution=selected_resolution,
             video_resolution_label=selected_resolution_label,
@@ -1838,7 +1858,12 @@ class MainWindow(QMainWindow):
             payload_segment += "=" * (-len(payload_segment) % 4)
             decoded = base64.urlsafe_b64decode(payload_segment.encode("utf-8")).decode("utf-8")
             payload = json.loads(decoded)
-            return payload if isinstance(payload, dict) else {}
+            if not isinstance(payload, dict):
+                return {}
+            nested = payload.get("https://api.openai.com/auth")
+            if isinstance(nested, dict):
+                return nested
+            return payload
         except Exception:
             return {}
 
@@ -1860,13 +1885,22 @@ class MainWindow(QMainWindow):
                     org_ids.append(item.strip())
 
         active_org = str(claims.get("organization_id", "")).strip() or str(claims.get("org_id", "")).strip()
+        active_project = str(claims.get("project_id", "")).strip()
         if active_org:
+            self.openai_org_id = active_org
             self._append_log(f"OpenAI OAuth active organization: {active_org}")
+        if active_project:
+            self.openai_project_id = active_project
+            self._append_log(f"OpenAI OAuth active project: {active_project}")
         if org_ids:
             self._append_log(f"OpenAI OAuth token includes organizations: {', '.join(org_ids[:6])}")
 
     def _verify_openai_model_quota(self, access_token: str, model: str) -> None:
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        if self.openai_org_id:
+            headers["OpenAI-Organization"] = self.openai_org_id
+        if self.openai_project_id:
+            headers["OpenAI-Project"] = self.openai_project_id
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": "quota-check"}],
@@ -1998,6 +2032,10 @@ class MainWindow(QMainWindow):
             if not openai_token:
                 raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
             headers["Authorization"] = f"Bearer {openai_token}"
+            if self.openai_org_id:
+                headers["OpenAI-Organization"] = self.openai_org_id
+            if self.openai_project_id:
+                headers["OpenAI-Project"] = self.openai_project_id
             payload["model"] = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
             response = requests.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload, timeout=90)
             if not response.ok:
