@@ -67,6 +67,8 @@ OPENAI_CODEX_CLIENT_ID = os.getenv("OPENAI_CODEX_CLIENT_ID", "app_EMoamEEZ73f0Ck
 OPENAI_OAUTH_SCOPE = "openid profile email offline_access"
 OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455"))
 OPENAI_TOKEN_PATHS = ("/token", "/oauth/token")
+OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.com/backend-api/codex")
+OPENAI_USE_CHATGPT_BACKEND = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
@@ -138,6 +140,76 @@ def _openai_headers_from_oauth_token(access_token: str) -> dict[str, str]:
     if project_id:
         headers["OpenAI-Project"] = project_id
     return headers
+
+
+def _openai_chat_target(access_token: str) -> tuple[str, dict[str, str], bool]:
+    claims = _decode_openai_access_token(access_token)
+    issuer = str(claims.get("iss", "")).strip()
+    auth_claim = claims.get("https://api.openai.com/auth")
+
+    headers = _openai_headers_from_oauth_token(access_token)
+
+    use_chatgpt_backend = (
+        OPENAI_USE_CHATGPT_BACKEND
+        and OPENAI_API_BASE == "https://api.openai.com/v1"
+        and issuer == "https://auth.openai.com"
+    )
+    if use_chatgpt_backend:
+        account_id = _extract_claim_string(auth_claim, ("chatgpt_account_id",))
+        if account_id:
+            headers["ChatGPT-Account-ID"] = account_id
+        return f"{OPENAI_CHATGPT_API_BASE}/responses", headers, True
+
+    return f"{OPENAI_API_BASE}/chat/completions", headers, False
+
+
+def _call_openai_chat_api(access_token: str, model: str, system: str, user: str, temperature: float) -> str:
+    endpoint, headers, is_responses_api = _openai_chat_target(access_token)
+
+    payload: dict[str, object]
+    if is_responses_api:
+        payload = {
+            "model": model,
+            "input": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": temperature,
+        }
+    else:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": temperature,
+        }
+
+    response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+    if not response.ok:
+        raise RuntimeError(f"OpenAI request failed: {response.status_code} {response.text[:500]}")
+
+    body = response.json()
+    if is_responses_api:
+        output_text = str(body.get("output_text", "")).strip()
+        if output_text:
+            return output_text
+        text_chunks: list[str] = []
+        for item in body.get("output", []):
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content", []):
+                if isinstance(content, dict):
+                    text_value = str(content.get("text", "")).strip()
+                    if text_value:
+                        text_chunks.append(text_value)
+        combined = "\n".join(text_chunks).strip()
+        if combined:
+            return combined
+        raise RuntimeError("OpenAI response did not include text output.")
+
+    return str(body["choices"][0]["message"]["content"]).strip()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -310,23 +382,13 @@ class GenerateWorker(QThread):
         openai_token = self._openai_bearer_token()
         if not openai_token:
             raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
-        headers = _openai_headers_from_oauth_token(openai_token)
-        response = requests.post(
-            f"{OPENAI_API_BASE}/chat/completions",
-            headers=headers,
-            json={
-                "model": self.prompt_config.openai_chat_model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "temperature": 0.9,
-            },
-            timeout=90,
+        return _call_openai_chat_api(
+            access_token=openai_token,
+            model=self.prompt_config.openai_chat_model,
+            system=system,
+            user=user,
+            temperature=0.9,
         )
-        if not response.ok:
-            raise RuntimeError(f"OpenAI chat request failed: {response.status_code} {self._api_error_message(response)}")
-        return response.json()["choices"][0]["message"]["content"].strip()
 
     def build_prompt(self, variant: int) -> str:
         self._ensure_not_stopped()
@@ -2004,12 +2066,13 @@ class MainWindow(QMainWindow):
             openai_token = self.openai_access_token.text().strip()
             if not openai_token:
                 raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
-            headers = _openai_headers_from_oauth_token(openai_token)
-            payload["model"] = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
-            response = requests.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload, timeout=90)
-            if not response.ok:
-                raise RuntimeError(f"OpenAI request failed: {response.status_code} {response.text[:400]}")
-            return response.json()["choices"][0]["message"]["content"].strip()
+            return _call_openai_chat_api(
+                access_token=openai_token,
+                model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
+                system=system,
+                user=user,
+                temperature=0.4,
+            )
 
         grok_key = self.api_key.text().strip()
         if not grok_key:

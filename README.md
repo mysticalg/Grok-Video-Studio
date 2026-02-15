@@ -78,6 +78,8 @@ python app.py
 - `OPENAI_OAUTH_ISSUER` (default: `https://auth.openai.com`)
 - `OPENAI_CODEX_CLIENT_ID` (default: `app_EMoamEEZ73f0CkXaXp7hrann`)
 - `OPENAI_OAUTH_CALLBACK_PORT` (default: `1455`)
+- `OPENAI_CHATGPT_API_BASE` (default: `https://chatgpt.com/backend-api/codex`)
+- `OPENAI_USE_CHATGPT_BACKEND` (default: `1`; routes `auth.openai.com` OAuth tokens to ChatGPT Codex backend)
 
 ### Embedded browser/runtime
 
@@ -97,6 +99,7 @@ In **Model/API Settings**, set Prompt Source to **OpenAI API**, then run Browser
 Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex-style) in your system browser. On success, the app auto-fills **OpenAI Access Token**.
 The token exchange now tries both `https://auth.openai.com/token` and `https://auth.openai.com/oauth/token` so either issuer route works.
 When available in OAuth token claims, requests also include `OpenAI-Organization` and `OpenAI-Project` headers (in addition to `Authorization` and `Content-Type`).
+With ChatGPT/Codex OAuth login, the app prefers the ChatGPT Codex backend so usage follows subscription-authenticated behavior rather than API-key-only billing paths.
 
 ## Browser performance tuning (embedded Chromium)
 
