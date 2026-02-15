@@ -2119,8 +2119,10 @@ class MainWindow(QMainWindow):
                         if (selected) optionsApplied.push(name);
                     };
 
-                    applyOption("image", imagePatterns);
+                    // In Radix menus, clicking Image/Video menu items can close the panel.
+                    // Apply aspect first, then switch mode.
                     applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
+                    applyOption("image", imagePatterns);
 
                     const missingOptions = [];
                     if (!(hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
@@ -2737,7 +2739,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
+                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label";
                     const clickableAncestor = (el) => {
                         if (!el) return null;
                         if (typeof el.closest === 'function') {
@@ -2882,10 +2884,12 @@ class MainWindow(QMainWindow):
                         if (selected) optionsApplied.push(name);
                     };
 
-                    applyOption("video", [/^video$/i], null);
+                    // In Radix menus, clicking Image/Video menu items can close the panel.
+                    // Apply quality/duration/aspect first, then switch mode.
                     applyOption(desiredQuality, qualityPatterns[desiredQuality] || qualityPatterns["720p"], desiredQuality);
                     applyOption(desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"], desiredDuration);
                     applyOption(desiredAspect, aspectPatterns[desiredAspect] || aspectPatterns["16:9"], desiredAspect);
+                    applyOption("video", [/^video$/i], null);
 
                     const missingOptions = requiredOptions.filter((option) => {
                         const patterns = option === "video"
