@@ -6,6 +6,7 @@ import re
 import json
 import sys
 import time
+import base64
 from pathlib import Path
 
 import requests
@@ -208,14 +209,116 @@ def generate_video_via_web(
     return output_path
 
 
+
+
+def _decode_openai_access_token(access_token: str) -> dict:
+    try:
+        parts = access_token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
+        data = json.loads(decoded)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_claim_string(source: object, keys: tuple[str, ...]) -> str:
+    if not isinstance(source, dict):
+        return ""
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_openai_org_project_ids(access_token: str) -> tuple[str, str]:
+    claims = _decode_openai_access_token(access_token)
+    auth_claim = claims.get("https://api.openai.com/auth")
+
+    org_id = _extract_claim_string(auth_claim, ("organization_id", "org_id", "organization"))
+    project_id = _extract_claim_string(auth_claim, ("project_id", "project"))
+
+    if not org_id:
+        org_id = _extract_claim_string(claims, ("organization_id", "org_id", "organization"))
+    if not project_id:
+        project_id = _extract_claim_string(claims, ("project_id", "project"))
+
+    if not org_id:
+        organizations = claims.get("https://api.openai.com/organizations")
+        if isinstance(organizations, list):
+            for item in organizations:
+                org_id = _extract_claim_string(item, ("id", "organization_id", "org_id"))
+                if org_id:
+                    break
+
+    return org_id, project_id
+
+
+def _openai_headers_from_oauth_token(access_token: str) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    org_id, project_id = _extract_openai_org_project_ids(access_token)
+    if org_id:
+        headers["OpenAI-Organization"] = org_id
+    if project_id:
+        headers["OpenAI-Project"] = project_id
+    return headers
+
+
+def _openai_training_target(access_token: str) -> tuple[str, dict[str, str], bool]:
+    api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1").rstrip("/")
+    chatgpt_base = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.com/backend-api/codex").rstrip("/")
+    use_chatgpt_backend = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
+
+    claims = _decode_openai_access_token(access_token)
+    issuer = str(claims.get("iss", "")).strip()
+    auth_claim = claims.get("https://api.openai.com/auth")
+
+    headers = _openai_headers_from_oauth_token(access_token)
+
+    if use_chatgpt_backend and api_base == "https://api.openai.com/v1" and issuer == "https://auth.openai.com":
+        account_id = _extract_claim_string(auth_claim, ("chatgpt_account_id",))
+        if account_id:
+            headers["ChatGPT-Account-ID"] = account_id
+        return f"{chatgpt_base}/responses", headers, True
+
+    return f"{api_base}/responses", headers, False
+
+
+def _extract_text_from_responses_body(body: object) -> str:
+    if not isinstance(body, dict):
+        return ""
+    output_text = str(body.get("output_text", "")).strip()
+    if output_text:
+        return output_text
+
+    text_chunks: list[str] = []
+    for item in body.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content", []):
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") in {"output_text", "text"}:
+                text_value = content.get("text")
+                if isinstance(text_value, str) and text_value:
+                    text_chunks.append(text_value)
+
+    return "".join(text_chunks).strip()
+
 def _slugify(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
     return cleaned or "flow"
 
 
 def _openai_training_summary(access_token: str, model: str, payload: dict) -> dict:
-    api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1").rstrip("/")
-    endpoint = f"{api_base}/responses"
+    endpoint, headers, use_chatgpt_backend = _openai_training_target(access_token)
     instruction = (
         "You are an automation analyst. Convert the captured browser training log into a deterministic replay plan. "
         "Return strict JSON matching this schema: "
@@ -223,34 +326,36 @@ def _openai_training_summary(access_token: str, model: str, payload: dict) -> di
         '"value": str, "notes": str}], "risks": [str]}. '
         "Keep selectors CSS-compatible and preserve action order."
     )
+
+    request_body = {
+        "model": model,
+        "input": [
+            {"role": "system", "content": [{"type": "input_text", "text": instruction}]},
+            {"role": "user", "content": [{"type": "input_text", "text": json.dumps(payload)}]},
+        ],
+        "store": False,
+    }
+    if use_chatgpt_backend:
+        request_body["stream"] = True
+
     response = requests.post(
         endpoint,
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "input": [
-                {"role": "system", "content": [{"type": "input_text", "text": instruction}]},
-                {"role": "user", "content": [{"type": "input_text", "text": json.dumps(payload)}]},
-            ],
-            "store": False,
-        },
+        headers=headers,
+        json=request_body,
         timeout=120,
     )
     response.raise_for_status()
     data = response.json()
-    text = ""
-    for item in data.get("output", []):
-        for content in item.get("content", []):
-            if content.get("type") in {"output_text", "text"}:
-                text += content.get("text", "")
-    text = text.strip()
+
+    text = _extract_text_from_responses_body(data)
+    if not text:
+        raise RuntimeError("OpenAI training summary response did not include text output.")
+
     if text.startswith("```"):
         text = text.strip("`")
         if text.startswith("json"):
             text = text[4:].strip()
+
     return json.loads(text)
 
 
