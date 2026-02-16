@@ -834,6 +834,14 @@ class MainWindow(QMainWindow):
         self.stitch_worker: StitchWorker | None = None
         self.upload_worker: UploadWorker | None = None
         self.browser_training_worker: BrowserTrainingWorker | None = None
+        self.embedded_training_active = False
+        self.embedded_training_events: list[dict] = []
+        self.embedded_training_started_at = 0.0
+        self.embedded_training_event_counter = 0
+        self.embedded_training_output_dir: Path | None = None
+        self.embedded_training_poll_timer = QTimer(self)
+        self.embedded_training_poll_timer.setInterval(1000)
+        self.embedded_training_poll_timer.timeout.connect(self._poll_embedded_training_events)
         self._ffmpeg_nvenc_checked = False
         self._ffmpeg_nvenc_available = False
         self.preview_fullscreen_overlay_btn: QPushButton | None = None
@@ -1392,6 +1400,13 @@ class MainWindow(QMainWindow):
         self.training_openai_model = QLineEdit("gpt-5.1-codex")
         form.addRow("Planner Model", self.training_openai_model)
 
+        self.training_use_embedded_browser = QCheckBox("Use embedded browser for training")
+        self.training_use_embedded_browser.setChecked(True)
+        self.training_use_embedded_browser.setToolTip(
+            "Record training clicks and inputs directly from the in-app browser tab instead of launching a separate Playwright window."
+        )
+        form.addRow("Training Capture", self.training_use_embedded_browser)
+
         self.training_trace_path = QLineEdit()
         self.training_trace_path.setPlaceholderText("Path to raw_training_trace.json")
         form.addRow("Training Trace", self.training_trace_path)
@@ -1424,6 +1439,16 @@ class MainWindow(QMainWindow):
         )
         self.training_start_btn.clicked.connect(self.start_browser_training)
         run_actions.addWidget(self.training_start_btn)
+
+        self.training_stop_btn = QPushButton("Stop Training")
+        self.training_stop_btn.setToolTip("Stop embedded training capture and save raw_training_trace.json.")
+        self.training_stop_btn.setStyleSheet(
+            "background-color: #8b0000; color: white; font-weight: 700;"
+            "border: 1px solid #5c0000; border-radius: 6px; padding: 6px 10px;"
+        )
+        self.training_stop_btn.setEnabled(False)
+        self.training_stop_btn.clicked.connect(self.stop_browser_training)
+        run_actions.addWidget(self.training_stop_btn)
 
         self.training_build_btn = QPushButton("Build Process")
         self.training_build_btn.clicked.connect(self.build_browser_training_process)
@@ -1815,6 +1840,7 @@ class MainWindow(QMainWindow):
             "training_output_dir": self.training_output_dir.text(),
             "training_timeout": self.training_timeout.value(),
             "training_openai_model": self.training_openai_model.text(),
+            "training_use_embedded_browser": self.training_use_embedded_browser.isChecked(),
             "training_trace_path": self.training_trace_path.text(),
             "training_process_path": self.training_process_path.text(),
             "ai_social_metadata": {
@@ -1983,6 +2009,8 @@ class MainWindow(QMainWindow):
                 pass
         if "training_openai_model" in preferences:
             self.training_openai_model.setText(str(preferences["training_openai_model"]))
+        if "training_use_embedded_browser" in preferences:
+            self.training_use_embedded_browser.setChecked(bool(preferences["training_use_embedded_browser"]))
         if "training_trace_path" in preferences:
             self.training_trace_path.setText(str(preferences["training_trace_path"]))
         if "training_process_path" in preferences:
@@ -2070,6 +2098,8 @@ class MainWindow(QMainWindow):
                     "Continue-from-last-frame: detected page reload after image upload. Proceeding with prompt entry."
                 )
                 QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
+            if self.embedded_training_active and self.training_use_embedded_browser.isChecked():
+                self._inject_embedded_training_capture_script()
 
     def _retry_continue_after_small_download(self, variant: int) -> None:
         source_video = self.continue_from_frame_current_source_video
@@ -4966,6 +4996,147 @@ class MainWindow(QMainWindow):
         if file_path:
             self.training_process_path.setText(file_path)
 
+    def _set_training_button_states(self) -> None:
+        self.training_start_btn.setEnabled(not self.embedded_training_active)
+        self.training_stop_btn.setEnabled(self.embedded_training_active)
+
+    def _inject_embedded_training_capture_script(self) -> None:
+        script = r"""
+            (() => {
+              const createCssPath = (el) => {
+                if (!el || !(el instanceof Element)) return '';
+                const parts = [];
+                let node = el;
+                while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
+                  let part = node.nodeName.toLowerCase();
+                  if (node.id) {
+                    part += `#${node.id}`;
+                    parts.unshift(part);
+                    break;
+                  }
+                  const classes = (node.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0,2).join('.');
+                  if (classes) part += `.${classes}`;
+                  const parent = node.parentElement;
+                  if (parent) {
+                    const siblings = Array.from(parent.children).filter((x) => x.nodeName === node.nodeName);
+                    if (siblings.length > 1) {
+                      part += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+                    }
+                  }
+                  parts.unshift(part);
+                  node = node.parentElement;
+                }
+                return parts.join(' > ');
+              };
+
+              const scrub = (value) => (value || '').toString().slice(0, 400);
+
+              if (window.__grokTrainer && typeof window.__grokTrainer.cleanup === 'function') {
+                window.__grokTrainer.cleanup();
+              }
+
+              const state = { events: [] };
+              const push = (event) => {
+                state.events.push({ ...event, url: window.location.href });
+              };
+
+              const onClick = (event) => {
+                const el = event.target;
+                push({
+                  action: 'click',
+                  selector: createCssPath(el),
+                  text: scrub(el && el.innerText),
+                  tag: (el && el.tagName || '').toLowerCase(),
+                });
+              };
+
+              const onChange = (event) => {
+                const el = event.target;
+                if (!el) return;
+                const tag = (el.tagName || '').toLowerCase();
+                if (!['input', 'textarea', 'select'].includes(tag)) return;
+                push({
+                  action: 'fill',
+                  selector: createCssPath(el),
+                  value: scrub(el.value),
+                  tag,
+                });
+              };
+
+              const onKeyDown = (event) => {
+                if (!event.key || !['Enter', 'Tab', 'Escape'].includes(event.key)) return;
+                const el = event.target;
+                push({
+                  action: 'press',
+                  selector: createCssPath(el),
+                  value: event.key,
+                  tag: (el && el.tagName || '').toLowerCase(),
+                });
+              };
+
+              document.addEventListener('click', onClick, true);
+              document.addEventListener('change', onChange, true);
+              document.addEventListener('keydown', onKeyDown, true);
+
+              state.pull = () => {
+                const events = state.events.slice();
+                state.events = [];
+                return events;
+              };
+
+              state.cleanup = () => {
+                document.removeEventListener('click', onClick, true);
+                document.removeEventListener('change', onChange, true);
+                document.removeEventListener('keydown', onKeyDown, true);
+              };
+
+              window.__grokTrainer = state;
+              return true;
+            })();
+        """
+        self.browser.page().runJavaScript(script)
+
+    def _poll_embedded_training_events(self) -> None:
+        if not self.embedded_training_active:
+            return
+
+        script = "(() => { if (!window.__grokTrainer || !window.__grokTrainer.pull) return []; return window.__grokTrainer.pull(); })();"
+
+        def _after_poll(result):
+            if not self.embedded_training_active:
+                return
+            if not isinstance(result, list):
+                return
+            for item in result:
+                if isinstance(item, dict):
+                    self._record_embedded_training_event(item)
+
+        self.browser.page().runJavaScript(script, _after_poll)
+
+    def _record_embedded_training_event(self, event: dict) -> None:
+        if not self.embedded_training_active or self.embedded_training_output_dir is None:
+            return
+
+        self.embedded_training_event_counter += 1
+        event_record = {
+            "index": self.embedded_training_event_counter,
+            "source": "embedded-browser",
+            "ts": round(time.time() - self.embedded_training_started_at, 3),
+            **event,
+        }
+
+        screenshots_dir = self.embedded_training_output_dir / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_name = f"step-{self.embedded_training_event_counter:03d}.png"
+        screenshot_path = screenshots_dir / screenshot_name
+        pixmap = self.browser.grab()
+        if not pixmap.isNull() and pixmap.save(str(screenshot_path)):
+            event_record["screenshot"] = str(Path("screenshots") / screenshot_name)
+        else:
+            event_record["screenshot"] = ""
+
+        self.embedded_training_events.append(event_record)
+
     def _start_browser_training_worker(self, mode: str, payload: dict) -> None:
         if self.browser_training_worker is not None and self.browser_training_worker.isRunning():
             QMessageBox.information(self, "Training in Progress", "Please wait until the current training task finishes.")
@@ -5001,6 +5172,32 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "AI Flow Trainer", error_message)
 
     def start_browser_training(self) -> None:
+        if self.embedded_training_active:
+            QMessageBox.information(self, "Training In Progress", "Embedded training is already running. Use Stop Training first.")
+            return
+
+        if self.training_use_embedded_browser.isChecked():
+            output_dir = self._training_output_dir()
+            self.embedded_training_output_dir = output_dir
+            self.embedded_training_events = []
+            self.embedded_training_started_at = time.time()
+            self.embedded_training_event_counter = 0
+            self.embedded_training_active = True
+            self._set_training_button_states()
+
+            start_url = self.training_start_url.text().strip() or "https://grok.com/imagine"
+            self.browser_tabs.setCurrentIndex(0)
+            current_url = self.browser.url().toString().strip()
+            if current_url != start_url:
+                self.browser.setUrl(QUrl(start_url))
+            else:
+                self._inject_embedded_training_capture_script()
+
+            self.embedded_training_poll_timer.start()
+            self.training_status.setText("Status: embedded training started")
+            self._append_log("Embedded browser training started. Interact in the Browser tab, then click Stop Training.")
+            return
+
         output_dir = self._training_output_dir()
         start_url = self.training_start_url.text().strip() or "https://grok.com/imagine"
         timeout_s = self.training_timeout.value()
@@ -5012,6 +5209,34 @@ class MainWindow(QMainWindow):
                 "timeout_s": timeout_s,
             },
         )
+
+    def stop_browser_training(self) -> None:
+        if not self.embedded_training_active:
+            QMessageBox.information(self, "No Active Training", "Embedded training is not currently running.")
+            return
+
+        self.embedded_training_poll_timer.stop()
+        self.browser.page().runJavaScript(
+            "(() => { if (window.__grokTrainer && window.__grokTrainer.cleanup) { window.__grokTrainer.cleanup(); } return true; })();"
+        )
+
+        output_dir = self.embedded_training_output_dir or self._training_output_dir()
+        trace = {
+            "start_url": self.training_start_url.text().strip() or "https://grok.com/imagine",
+            "browser": "qtwebengine-embedded",
+            "created_at": int(time.time()),
+            "events": self.embedded_training_events,
+        }
+        trace_path = output_dir / "raw_training_trace.json"
+        trace_path.write_text(json.dumps(trace, indent=2), encoding="utf-8")
+
+        self.embedded_training_active = False
+        self.embedded_training_output_dir = None
+        self._set_training_button_states()
+        self.training_trace_path.setText(str(trace_path))
+        self.training_status.setText("Status: embedded training complete")
+        self._append_log(f"Embedded training stopped. Trace saved: {trace_path}")
+        QMessageBox.information(self, "AI Flow Trainer", f"Training completed.\n{trace_path}")
 
     def build_browser_training_process(self) -> None:
         trace_path_text = self.training_trace_path.text().strip()
