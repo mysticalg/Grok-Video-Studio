@@ -79,7 +79,7 @@ FACEBOOK_OAUTH_TOKEN_URL = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}
 FACEBOOK_OAUTH_CALLBACK_PORT = int(os.getenv("FACEBOOK_OAUTH_CALLBACK_PORT", "1456"))
 FACEBOOK_OAUTH_SCOPE = os.getenv(
     "FACEBOOK_OAUTH_SCOPE",
-    "pages_show_list,pages_manage_posts,pages_manage_videos,pages_read_engagement",
+    "pages_show_list,pages_manage_posts",
 )
 TIKTOK_OAUTH_AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/"
 TIKTOK_OAUTH_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
