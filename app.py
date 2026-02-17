@@ -6454,7 +6454,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        max_attempts = 2
+        max_attempts = 24 if platform_name == "TikTok" else 2
         if attempts > max_attempts:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
@@ -6462,6 +6462,7 @@ class MainWindow(QMainWindow):
                 f"WARNING: {platform_name} browser automation timed out after {attempts - 1} attempts."
             )
             self.social_upload_pending.pop(platform_name, None)
+            return
             
 
         payload_json = json.dumps(
@@ -6820,7 +6821,7 @@ class MainWindow(QMainWindow):
                     }
 
                     let tiktokPostButtonEnabled = false;
-                    if (platform === "tiktok" && fileReadySignal && captionReady && tiktokSubmitDelayElapsed) {
+                    if (platform === "tiktok" && captionReady) {
                         const explicitTiktokPostButton = bySelectors(['button[data-e2e="post_video_button"]']);
                         tiktokPostButtonEnabled = isTikTokPostButtonEnabled(explicitTiktokPostButton);
                         if (explicitTiktokPostButton && tiktokPostButtonEnabled) {
@@ -6896,6 +6897,7 @@ class MainWindow(QMainWindow):
             is_facebook = platform_name == "Facebook"
             caption_ok = text_filled or not caption_queued
             is_tiktok = platform_name == "TikTok"
+            file_stage_ok = True if is_tiktok else file_stage_ok
             submit_ok = submit_clicked if (is_facebook or is_tiktok) else True
             completion_attempt_ready = submit_ok if (is_facebook or is_tiktok) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
