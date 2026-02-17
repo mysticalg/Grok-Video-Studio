@@ -802,6 +802,7 @@ class FilteredWebEnginePage(QWebEnginePage):
         "[Statsig] A networking error occurred during POST request",
         "featureassets.org/v1/initialize",
         "auth-cdn.oaistatic.com/assets/statsig",
+        "upgrade-insecure-requests' is ignored when delivered in a report-only policy",
     )
 
     def __init__(self, on_console_message, profile: QWebEngineProfile | None = None, parent=None):
@@ -6291,55 +6292,78 @@ class MainWindow(QMainWindow):
             self.social_upload_pending.pop(platform_name, None)
             return
 
-        js_payload = json.dumps(
+        payload_json = json.dumps(
             {
                 "caption": str(pending.get("caption") or ""),
                 "title": str(pending.get("title") or ""),
                 "platform": platform_name.lower(),
-            }
+            },
+            ensure_ascii=True,
         )
-        script = f"""
-            (() => {{
-                const payload = {js_payload};
-                const norm = (s) => String(s || '').toLowerCase();
+        script = """
+            (() => {
+                const payload = JSON.parse(__PAYLOAD_JSON__);
+                const norm = (s) => String(s || "").toLowerCase();
                 const pick = (arr) => arr.find(Boolean) || null;
 
                 const fileInput = pick(Array.from(document.querySelectorAll('input[type="file"]')));
-                if (fileInput) {{
-                    fileInput.style.display = 'block';
-                    fileInput.style.visibility = 'visible';
-                    fileInput.removeAttribute('hidden');
-                }}
+                if (fileInput) {
+                    fileInput.style.display = "block";
+                    fileInput.style.visibility = "visible";
+                    fileInput.removeAttribute("hidden");
+                }
 
-                const textTargets = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]'));
-                const fullText = [payload.title, payload.caption].filter(Boolean).join('\n\n').trim();
+                const textTargets = Array.from(
+                    document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]')
+                );
+                const fullText = [payload.title, payload.caption].filter(Boolean).join("\n\n").trim();
                 let textFilled = false;
-                for (const node of textTargets) {{
-                    const hint = `${{norm(node.getAttribute('aria-label'))}} ${{norm(node.getAttribute('placeholder'))}} ${{norm(node.getAttribute('name'))}} ${{norm(node.id)}}`;
-                    const match = !hint || hint.includes('caption') || hint.includes('description') || hint.includes('title') || hint.includes('post');
+                for (const node of textTargets) {
+                    const hint = [
+                        norm(node.getAttribute("aria-label")),
+                        norm(node.getAttribute("placeholder")),
+                        norm(node.getAttribute("name")),
+                        norm(node.id),
+                    ].join(" ");
+                    const match =
+                        !hint
+                        || hint.includes("caption")
+                        || hint.includes("description")
+                        || hint.includes("title")
+                        || hint.includes("post");
                     if (!match) continue;
-                    try {{
+                    try {
                         if (node.isContentEditable) node.textContent = fullText;
                         else node.value = fullText;
-                        node.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        node.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        node.dispatchEvent(new Event("input", { bubbles: true }));
+                        node.dispatchEvent(new Event("change", { bubbles: true }));
                         textFilled = true;
                         break;
-                    }} catch (_) {{}}
-                }}
+                    } catch (_) {}
+                }
 
                 const clickables = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex]'));
                 let clicked = false;
-                for (const node of clickables) {{
-                    const joined = `${{norm(node.innerText || node.textContent)}} ${{norm(node.getAttribute('aria-label'))}}`;
-                    if (joined.includes('upload') || joined.includes('select file') || joined.includes('next') || joined.includes('share') || joined.includes('publish') || joined.includes('post')) {{
-                        try {{ node.click(); clicked = true; }} catch (_) {{}}
-                    }}
-                }}
+                for (const node of clickables) {
+                    const joined = [
+                        norm(node.innerText || node.textContent),
+                        norm(node.getAttribute("aria-label")),
+                    ].join(" ");
+                    if (
+                        joined.includes("upload")
+                        || joined.includes("select file")
+                        || joined.includes("next")
+                        || joined.includes("share")
+                        || joined.includes("publish")
+                        || joined.includes("post")
+                    ) {
+                        try { node.click(); clicked = true; } catch (_) {}
+                    }
+                }
 
-                return {{ fileInputFound: Boolean(fileInput), textFilled, clicked }};
-            }})()
-        """
+                return { fileInputFound: Boolean(fileInput), textFilled, clicked };
+            })()
+        """.replace("__PAYLOAD_JSON__", json.dumps(payload_json));
 
         def _after(result):
             if platform_name not in self.social_upload_pending:
