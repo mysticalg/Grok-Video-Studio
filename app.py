@@ -6482,6 +6482,39 @@ class MainWindow(QMainWindow):
                         }
                         return null;
                     };
+                    const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
+                    const normalizedNodeText = (node) => [
+                        norm(node.innerText || node.textContent),
+                        norm(node.getAttribute("aria-label")),
+                        norm(node.getAttribute("title")),
+                        norm(node.getAttribute("data-testid")),
+                    ].join(" ");
+                    const clickNodeOrAncestor = (node) => {
+                        if (!node) return false;
+                        const candidates = [
+                            node,
+                            node.closest && node.closest('button, [role="button"], a, div[tabindex], div'),
+                            node.parentElement,
+                        ].filter(Boolean);
+                        for (const candidate of candidates) {
+                            try { candidate.click(); return true; } catch (_) {}
+                        }
+                        return false;
+                    };
+                    const findClickableByHints = (hints) => {
+                        const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
+                        const clickableNodes = collectDeep('button, [role="button"], a, div[tabindex], span, div');
+                        for (const node of clickableNodes) {
+                            if (!isVisible(node)) continue;
+                            const text = normalizedNodeText(node);
+                            if (normalizedHints.some((hint) => text.includes(hint))) return node;
+                        }
+                        for (const node of clickableNodes) {
+                            const text = normalizedNodeText(node);
+                            if (normalizedHints.some((hint) => text.includes(hint))) return node;
+                        }
+                        return null;
+                    };
 
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
@@ -6489,11 +6522,28 @@ class MainWindow(QMainWindow):
                     const videoName = String(payload.video_name || "upload.mp4");
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
+
+                    if (platform === "instagram") {
+                        const createButton = findClickableByHints(["create"]);
+                        if (createButton) {
+                            openUploadClicked = clickNodeOrAncestor(createButton) || openUploadClicked;
+                        }
+                        const postButton = findClickableByHints(["post"]);
+                        if (postButton) {
+                            openUploadClicked = clickNodeOrAncestor(postButton) || openUploadClicked;
+                        }
+                    }
+
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
+                        const byExactInstagramAccept = fileInputs.find((node) => {
+                            const accept = norm(node.getAttribute("accept"));
+                            return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*");
+                        });
+                        if (byExactInstagramAccept) return byExactInstagramAccept;
                         const byAcceptVideo = fileInputs.find((node) => norm(node.getAttribute("accept")).includes("video"));
                         if (byAcceptVideo) return byAcceptVideo;
-                        const byClassVideo = fileInputs.find((node) => norm(node.className).includes("video"));
+                        const byClassVideo = fileInputs.find((node) => norm(node.className).includes("video") || norm(node.className).includes("x1s85apg"));
                         if (byClassVideo) return byClassVideo;
                         return pick(fileInputs);
                     };
