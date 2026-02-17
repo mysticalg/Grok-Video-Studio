@@ -6454,8 +6454,8 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        max_attempts = 120 if platform_name == "TikTok" else 2
-        if attempts > max_attempts:
+        max_attempts = 2 if platform_name != "TikTok" else None
+        if max_attempts is not None and attempts > max_attempts:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
             self._append_log(
@@ -6463,8 +6463,8 @@ class MainWindow(QMainWindow):
             )
             self.social_upload_pending.pop(platform_name, None)
             return
-            
 
+        tiktok_poll_only = bool(platform_name == "TikTok" and attempts > 1)
         payload_json = json.dumps(
             {
                 "caption": str(pending.get("caption") or ""),
@@ -6476,7 +6476,8 @@ class MainWindow(QMainWindow):
                 "video_mime": str(pending.get("video_mime") or "video/mp4"),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
                 "attempt": attempts,
-                "force_submit": bool(platform_name == "TikTok" and attempts >= 10),
+                "force_submit": False,
+                "tiktok_poll_only": tiktok_poll_only,
             },
             ensure_ascii=True,
         )
@@ -6661,6 +6662,7 @@ class MainWindow(QMainWindow):
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const forceSubmit = Boolean(payload.force_submit);
+                    const tiktokPollOnly = platform === "tiktok" && Boolean(payload.tiktok_poll_only);
                     const captionText = String(payload.caption || "").trim();
                     const captionRequired = (platform === "facebook" || platform === "tiktok") && Boolean(captionText);
 
@@ -6682,7 +6684,7 @@ class MainWindow(QMainWindow):
                         }
                     }
 
-                    if (platform === "tiktok") {
+                    if (platform === "tiktok" && !tiktokPollOnly) {
                         const tiktokUploadButton = findClickableByHints(["upload", "select video"]);
                         if (tiktokUploadButton) {
                             openUploadClicked = clickNodeOrAncestor(tiktokUploadButton) || openUploadClicked;
@@ -6756,10 +6758,12 @@ class MainWindow(QMainWindow):
                         return "";
                     };
                     if ((platform === "facebook" || platform === "tiktok") && captionRequired) {
-                        const textTarget = platform === "tiktok" ? findTikTokCaptionTarget() : findTextInputTarget();
-                        textFilled = setTextValue(textTarget, captionText);
-                        if (!textFilled && platform === "tiktok") {
-                            textFilled = setTextValue(findTextInputTarget(), captionText);
+                        if (!(platform === "tiktok" && tiktokPollOnly)) {
+                            const textTarget = platform === "tiktok" ? findTikTokCaptionTarget() : findTextInputTarget();
+                            textFilled = setTextValue(textTarget, captionText);
+                            if (!textFilled && platform === "tiktok") {
+                                textFilled = setTextValue(findTextInputTarget(), captionText);
+                            }
                         }
                     }
                     const existingTikTokCaptionText = platform === "tiktok" ? readTikTokCaptionText() : "";
@@ -6817,7 +6821,7 @@ class MainWindow(QMainWindow):
                         }
                     };
                     let fileDialogTriggered = false;
-                    if (fileInput && (platform !== "facebook" || captionReady)) {
+                    if (fileInput && (platform !== "facebook" || captionReady) && !(platform === "tiktok" && tiktokPollOnly)) {
                         if (requestedVideoPath) {
                             try { fileInput.setAttribute("data-codex-video-path", requestedVideoPath); } catch (_) {}
                         }
