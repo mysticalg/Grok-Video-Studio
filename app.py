@@ -816,6 +816,23 @@ class FilteredWebEnginePage(QWebEnginePage):
         if any(pattern in message for pattern in self._IGNORED_CONSOLE_PATTERNS):
             return
 
+        source = str(source_id or "")
+        if (
+            "Uncaught SyntaxError: Invalid or unexpected token" in str(message)
+            and any(
+                host in source
+                for host in (
+                    "instagram.com/create/reel",
+                    "facebook.com/reels/create",
+                    "tiktok.com/tiktokstudio/upload",
+                    "tiktok.com/upload",
+                )
+            )
+        ):
+            # Social sites sometimes emit their own transient parser errors from first-party scripts.
+            # These are noisy and not actionable for our automation flow.
+            return
+
         if self._on_console_message:
             self._on_console_message(f"Browser JS: {message} (source={source_id}:{line_number})")
 
