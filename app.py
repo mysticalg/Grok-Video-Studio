@@ -6707,6 +6707,20 @@ class MainWindow(QMainWindow):
                                 return norm(node.innerText || node.textContent) === norm(value);
                             }
                         } catch (_) {}
+                        try {
+                            const editableParent = node.closest && node.closest('[contenteditable="true"]');
+                            if (editableParent) {
+                                try { editableParent.focus(); } catch (_) {}
+                                node.textContent = "";
+                                for (const key of Array.from(value)) {
+                                    dispatchKeyboardSequence(editableParent, key);
+                                    node.textContent = String(node.textContent || "") + key;
+                                    editableParent.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                }
+                                editableParent.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                return norm(node.textContent || "") === norm(value);
+                            }
+                        } catch (_) {}
                         return false;
                     };
 
@@ -6937,18 +6951,22 @@ class MainWindow(QMainWindow):
                     let tiktokPostEnabled = false;
                     if (platform === "tiktok") {
                         if (captionText) {
-                            const draftEditorContainer = bySelectors(['div.DraftEditor-editorContainer']);
-                            const draftSpan = draftEditorContainer
-                                ? draftEditorContainer.querySelector('span[data-text="true"]')
+                            const draftEditable = bySelectors([
+                                'div.public-DraftEditor-content[contenteditable="true"]',
+                                'div[role="combobox"][contenteditable="true"].public-DraftEditor-content',
+                                'div.DraftEditor-editorContainer [contenteditable="true"]',
+                            ]) || bySelectors(['div.DraftEditor-editorContainer']);
+                            const draftSpan = draftEditable
+                                ? (draftEditable.querySelector('span[data-text="true"]') || draftEditable.querySelector('span[data-offset-key] span'))
                                 : null;
-                            const draftEditable = draftSpan
-                                ? draftSpan.closest('[contenteditable="true"]')
-                                : (draftEditorContainer
-                                    ? draftEditorContainer.querySelector('[contenteditable="true"]')
-                                    : null);
 
-                            const tiktokCaptionTarget = draftEditable || findTextInputTarget() || draftSpan;
+                            const tiktokCaptionTarget = draftSpan || draftEditable || findTextInputTarget();
                             textFilled = setTextValue(tiktokCaptionTarget, captionText) || textFilled;
+                            const tiktokSpanText = draftSpan ? norm(draftSpan.textContent || "") : "";
+                            const tiktokExpectedText = norm(captionText);
+                            if (!textFilled && tiktokSpanText && tiktokExpectedText) {
+                                textFilled = tiktokSpanText.includes(tiktokExpectedText);
+                            }
 
                         }
 
@@ -6980,6 +6998,7 @@ class MainWindow(QMainWindow):
                         nextClicked,
                         submitClicked,
                         tiktokPostEnabled,
+                        tiktokCaptionSpanMatched: Boolean(platform === "tiktok" && captionText && textFilled),
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
