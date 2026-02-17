@@ -6687,10 +6687,19 @@ class MainWindow(QMainWindow):
                     const pickVideoInput = () => {
                         if (platform === "instagram") {
                             const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
-                            if (instagramDialog) {
-                                const formInput = pick(Array.from(instagramDialog.querySelectorAll('form[role="presentation"] input[type="file"]')));
-                                if (formInput) return formInput;
-                            }
+                            if (!instagramDialog) return null;
+
+                            const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data"][method="POST"][role="presentation"] input[type="file"]'));
+                            const exactInstagramInput = formInputs.find((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                const className = norm(node.className);
+                                return accept.includes("video/mp4") && accept.includes("video/quicktime") && className.includes("x1s85apg");
+                            });
+                            if (exactInstagramInput) return exactInstagramInput;
+
+                            const dialogScopedInput = pick(Array.from(instagramDialog.querySelectorAll('form[role="presentation"] input[type="file"]')));
+                            if (dialogScopedInput) return dialogScopedInput;
+                            return null;
                         }
                         if (platform === "facebook") {
                             const byFacebookAccept = fileInputs.find((node) => {
