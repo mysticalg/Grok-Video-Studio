@@ -6372,6 +6372,7 @@ class MainWindow(QMainWindow):
                 "caption": str(pending.get("caption") or ""),
                 "title": str(pending.get("title") or ""),
                 "platform": platform_name.lower(),
+                "video_path": str(pending.get("video_path") or ""),
             },
             ensure_ascii=True,
         )
@@ -6392,7 +6393,9 @@ class MainWindow(QMainWindow):
                     }
 
                     const textTargets = Array.from(
-                        document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]')
+                        document.querySelectorAll(
+                            'textarea, [contenteditable="true"], input[type="text"], input:not([type]), div[role="textbox"], [aria-label*="caption" i], [placeholder*="caption" i], [aria-label*="description" i]'
+                        )
                     );
                     const fullText = [payload.title, payload.caption].filter(Boolean).join("\n\n").trim();
                     let textFilled = false;
@@ -6411,8 +6414,14 @@ class MainWindow(QMainWindow):
                             || hint.includes("post");
                         if (!match) continue;
                         try {
-                            if (node.isContentEditable) node.textContent = fullText;
-                            else node.value = fullText;
+                            if (node.isContentEditable) {
+                                node.textContent = fullText;
+                                if ('innerText' in node) node.innerText = fullText;
+                            } else if ('value' in node) {
+                                node.value = fullText;
+                            } else {
+                                node.textContent = fullText;
+                            }
                             node.dispatchEvent(new Event("input", { bubbles: true }));
                             node.dispatchEvent(new Event("change", { bubbles: true }));
                             textFilled = true;
@@ -6420,7 +6429,7 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                     }
 
-                    const clickables = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex]'));
+                    const clickables = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex], label, [aria-label*="upload" i], [aria-label*="select" i]'));
                     let clicked = false;
                     for (const node of clickables) {
                         const joined = [
@@ -6442,7 +6451,7 @@ class MainWindow(QMainWindow):
                         }
                     }
 
-                    return { fileInputFound: Boolean(fileInput), textFilled, clicked };
+                    return { fileInputFound: Boolean(fileInput), textFilled, clicked, videoPathQueued: Boolean(payload.video_path || payload.videoPath) };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
                 }
@@ -6461,11 +6470,14 @@ class MainWindow(QMainWindow):
             file_found = bool(isinstance(result, dict) and result.get("fileInputFound"))
             text_filled = bool(isinstance(result, dict) and result.get("textFilled"))
             clicked = bool(isinstance(result, dict) and result.get("clicked"))
+            video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
+            file_queued = bool(video_path and Path(video_path).exists())
+            caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
 
             progress_bar.setVisible(True)
             progress_bar.setValue(min(95, 20 + attempts * 6))
             status_label.setText(
-                f"Status: attempt {attempts} (file={'yes' if file_found else 'no'}, caption={'yes' if text_filled else 'no'})."
+                f"Status: attempt {attempts} (file={'ready' if file_queued else ('input' if file_found else 'no')}, caption={'ready' if caption_queued else ('yes' if text_filled else 'no')})."
             )
 
             if attempts >= 6 and (file_found or text_filled or clicked):
