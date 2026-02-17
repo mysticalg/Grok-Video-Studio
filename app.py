@@ -6609,6 +6609,17 @@ class MainWindow(QMainWindow):
                             'div[contenteditable="true"][aria-label*="post" i]',
                             'textarea',
                         ];
+                        const dialogRoots = collectDeep('div[role="dialog"]');
+                        for (const dialog of dialogRoots) {
+                            if (!dialog) continue;
+                            for (const selector of selectors) {
+                                let nodes = [];
+                                try { nodes = Array.from(dialog.querySelectorAll(selector)); } catch (_) {}
+                                const visibleMatch = nodes.find((node) => isVisible(node));
+                                if (visibleMatch) return visibleMatch;
+                                if (nodes.length) return nodes[0];
+                            }
+                        }
                         return bySelectors(selectors);
                     };
 
