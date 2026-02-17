@@ -6659,86 +6659,84 @@ class MainWindow(QMainWindow):
                         }
                     }
 
-                    const dispatchKeyboardSequence = (node, key) => {
-                        const keyCode = key && key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
-                        for (const eventName of ["keydown", "keypress", "keyup"]) {
-                            try {
-                                node.dispatchEvent(new KeyboardEvent(eventName, {
-                                    key,
-                                    code: key && key.length === 1 ? `Key${key.toUpperCase()}` : "",
-                                    keyCode,
-                                    which: keyCode,
-                                    bubbles: true,
-                                    cancelable: true,
-                                    composed: true,
-                                }));
-                            } catch (_) {}
+                    const resolveEditableRoot = (node) => {
+                        if (!node) return null;
+                        if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
+                            return node;
+                        }
+                        try {
+                            return node.closest('[contenteditable="true"]');
+                        } catch (_) {
+                            return null;
                         }
                     };
-                    const typeTextWithKeypress = (node, text) => {
-                        if (!node) return false;
+                    const setDraftJSCaption = (editorElement, text) => {
+                        const editableRoot = resolveEditableRoot(editorElement);
+                        if (!editableRoot) return false;
                         const value = String(text || "");
-                        try { node.focus(); } catch (_) {}
+                        try { editableRoot.focus(); } catch (_) {}
+
+                        try { document.execCommand("selectAll", false, null); } catch (_) {}
+                        try { document.execCommand("delete", false, null); } catch (_) {}
+
+                        let inserted = false;
+                        try {
+                            inserted = Boolean(document.execCommand("insertText", false, value));
+                        } catch (_) {
+                            inserted = false;
+                        }
+
+                        if (!inserted && value) {
+                            for (const char of Array.from(value)) {
+                                let charInserted = false;
+                                try {
+                                    charInserted = Boolean(document.execCommand("insertText", false, char));
+                                } catch (_) {
+                                    charInserted = false;
+                                }
+                                if (!charInserted) {
+                                    editableRoot.textContent = String(editableRoot.textContent || "") + char;
+                                }
+                            }
+                        }
+
+                        editableRoot.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                        editableRoot.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                        try { editableRoot.blur(); } catch (_) {}
+                        try { editableRoot.focus(); } catch (_) {}
+
+                        return norm(editableRoot.innerText || editableRoot.textContent) === norm(value);
+                    };
+                    const setTextValue = (node, value) => {
+                        if (!node) return false;
+                        const text = String(value || "");
                         try {
                             if ("value" in node) {
-                                node.value = "";
+                                node.focus();
+                                node.value = text;
                                 node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                                for (const key of Array.from(value)) {
-                                    dispatchKeyboardSequence(node, key);
-                                    const nextValue = String(node.value || "") + key;
-                                    node.value = nextValue;
-                                    node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                                }
                                 node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return norm(String(node.value || "")) === norm(value);
+                                return norm(String(node.value || "")) === norm(text);
                             }
                         } catch (_) {}
-                        try {
-                            if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
-                                while (node.firstChild) node.removeChild(node.firstChild);
-                                const textNode = document.createTextNode("");
-                                node.appendChild(textNode);
-                                for (const key of Array.from(value)) {
-                                    dispatchKeyboardSequence(node, key);
-                                    textNode.textContent = String(textNode.textContent || "") + key;
-                                    node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                                }
-                                node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return norm(node.innerText || node.textContent) === norm(value);
-                            }
-                        } catch (_) {}
-                        try {
-                            const editableParent = node.closest && node.closest('[contenteditable="true"]');
-                            if (editableParent) {
-                                try { editableParent.focus(); } catch (_) {}
-                                node.textContent = "";
-                                for (const key of Array.from(value)) {
-                                    dispatchKeyboardSequence(editableParent, key);
-                                    node.textContent = String(node.textContent || "") + key;
-                                    editableParent.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                                }
-                                editableParent.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return norm(node.textContent || "") === norm(value);
-                            }
-                        } catch (_) {}
-                        return false;
+                        return setDraftJSCaption(node, text);
                     };
 
-                    const setTextValue = (node, value) => {
-                        return typeTextWithKeypress(node, value);
-                    };
                     const findTextInputTarget = () => {
                         const selectors = [
-                            'div.caption span[data-text="true"]',
+                            'div.caption .public-DraftEditor-content[contenteditable="true"]',
+                            'div.caption-editor [contenteditable="true"]',
+                            'div.public-DraftEditor-content[contenteditable="true"]',
+                            'div.DraftEditor-root [contenteditable="true"]',
+                            'div[class*="editor"] [contenteditable="true"]',
+                            'div[role="textbox"][contenteditable="true"]',
+                            '[data-contents] [contenteditable="true"]',
                             'div.caption [contenteditable="true"]',
                             'div.caption textarea',
                             'textarea[aria-label*="caption" i]',
                             'textarea[placeholder*="caption" i]',
                             'textarea[aria-label*="write" i]',
                             'textarea[placeholder*="write" i]',
-                            'div[role="textbox"][contenteditable="true"]',
-                            'div[contenteditable="true"][aria-label*="write" i]',
-                            'div[contenteditable="true"][aria-label*="post" i]',
                             'textarea',
                         ];
                         const dialogRoots = collectDeep('div[role="dialog"]');
@@ -6956,25 +6954,27 @@ class MainWindow(QMainWindow):
                         if (captionText) {
                             const draftEditable = bySelectors([
                                 'div.caption .public-DraftEditor-content[contenteditable="true"]',
-                                'div.caption [contenteditable="true"]',
                                 'div.public-DraftEditor-content[contenteditable="true"]',
-                                'div[role="combobox"][contenteditable="true"].public-DraftEditor-content',
+                                'div.DraftEditor-root [contenteditable="true"]',
+                                'div[class*="editor"] [contenteditable="true"]',
+                                'div[role="textbox"][contenteditable="true"]',
+                                '[data-contents] [contenteditable="true"]',
+                                'div.caption-editor [contenteditable="true"]',
                                 'div.DraftEditor-editorContainer [contenteditable="true"]',
-                            ]) || bySelectors(['div.DraftEditor-editorContainer']);
-                            const draftSpan = draftEditable
-                                ? (
-                                    draftEditable.querySelector('span[data-text="true"]')
-                                    || draftEditable.querySelector('div.caption span[data-text="true"]')
-                                    || draftEditable.querySelector('span[data-offset-key] span')
-                                )
-                                : bySelectors(['div.caption span[data-text="true"]']);
-
-                            const tiktokCaptionTarget = draftSpan || draftEditable || bySelectors(['div.caption [contenteditable="true"]', 'div.caption span[data-text="true"]']) || findTextInputTarget();
+                            ]) || findTextInputTarget();
+                            const tiktokCaptionTarget = resolveEditableRoot(draftEditable) || draftEditable;
                             textFilled = setTextValue(tiktokCaptionTarget, captionText) || textFilled;
-                            const tiktokSpanText = draftSpan ? norm(draftSpan.textContent || "") : "";
+                            const draftSpan = tiktokCaptionTarget
+                                ? (tiktokCaptionTarget.querySelector('span[data-text="true"]') || tiktokCaptionTarget.querySelector('span[data-offset-key] span'))
+                                : null;
+                            const tiktokVisibleText = norm(
+                                (draftSpan && draftSpan.textContent)
+                                || (tiktokCaptionTarget && (tiktokCaptionTarget.innerText || tiktokCaptionTarget.textContent))
+                                || ""
+                            );
                             const tiktokExpectedText = norm(captionText);
-                            if (!textFilled && tiktokSpanText && tiktokExpectedText) {
-                                textFilled = tiktokSpanText.includes(tiktokExpectedText);
+                            if (!textFilled && tiktokVisibleText && tiktokExpectedText) {
+                                textFilled = tiktokVisibleText.includes(tiktokExpectedText);
                             }
 
                         }
