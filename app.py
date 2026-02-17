@@ -6605,6 +6605,7 @@ class MainWindow(QMainWindow):
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
                             instagramState.dialogSeen = true;
+                            instagramState.postClicked = true;
                         } else {
                             if (!instagramState.createClicked) {
                                 const createSpanButton = pick(collectDeep('span.html-span[aria-describedby="_r_m_"], span[aria-describedby="_r_m_"], span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
@@ -6620,14 +6621,20 @@ class MainWindow(QMainWindow):
                                     openUploadClicked = clicked || openUploadClicked;
                                     if (clicked) instagramState.createClicked = true;
                                 }
-                            } else {
+                            } else if (!instagramState.dialogSeen) {
                                 const menuContexts = [
                                     ...collectDeep('div[role="menu"]'),
-                                    ...collectDeep('div[role="dialog"]'),
-                                    document,
+                                    ...collectDeep('div[role="dialog"]:not([aria-label*="create new post" i])'),
                                 ];
-                                const postButton = pick(collectDeep('a[href="#"][role="link"][tabindex="0"] > div.html-div, a[href="#"][role="link"][tabindex="0"], a[role="link"][href="#"], a[role="link"]'))
-                                    || findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel"] });
+                                const postButton = pick(
+                                    menuContexts.flatMap((ctx) => {
+                                        try {
+                                            return Array.from(ctx.querySelectorAll('a[href="#"][role="link"][tabindex="0"] > div.html-div, a[href="#"][role="link"][tabindex="0"], a[role="link"][href="#"][tabindex="0"]'));
+                                        } catch (_) {
+                                            return [];
+                                        }
+                                    })
+                                ) || findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel"] });
                                 if (postButton) {
                                     const postText = normalizedNodeText(postButton);
                                     if (postText.includes("post") && !postText.includes("reel")) {
