@@ -6429,12 +6429,32 @@ class MainWindow(QMainWindow):
                     const norm = (s) => String(s || "").toLowerCase();
                     const platform = norm(payload.platform);
                     const pick = (arr) => arr.find(Boolean) || null;
+                    const collectDeep = (selector) => {
+                        const results = [];
+                        const seen = new Set();
+                        const roots = [document];
+                        while (roots.length) {
+                            const root = roots.pop();
+                            let nodes = [];
+                            try { nodes = Array.from(root.querySelectorAll(selector)); } catch (_) {}
+                            for (const node of nodes) {
+                                if (!seen.has(node)) {
+                                    seen.add(node);
+                                    results.push(node);
+                                }
+                            }
+                            let all = [];
+                            try { all = Array.from(root.querySelectorAll('*')); } catch (_) {}
+                            for (const el of all) {
+                                if (el && el.shadowRoot) roots.push(el.shadowRoot);
+                            }
+                        }
+                        return results;
+                    };
                     const bySelectors = (selectors) => {
                         for (const selector of selectors) {
-                            try {
-                                const node = document.querySelector(selector);
-                                if (node) return node;
-                            } catch (_) {}
+                            const nodes = collectDeep(selector);
+                            if (nodes.length) return nodes[0];
                         }
                         return null;
                     };
@@ -6443,11 +6463,13 @@ class MainWindow(QMainWindow):
                         facebook: [
                             'input[type="file"][accept*="video" i]',
                             'input[type="file"][name*="video" i]',
+                            'input[type="file"][accept*="mp4" i]',
                             'input[type="file"]',
                         ],
                         instagram: [
                             'input[type="file"][accept*="video" i]',
                             'input[type="file"][name*="video" i]',
+                            'input[type="file"][accept*="mp4" i]',
                             'input[type="file"]',
                         ],
                         tiktok: [
@@ -6459,8 +6481,9 @@ class MainWindow(QMainWindow):
                     };
 
                     const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
-                    const clickableNodes = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex], label, a, span, [aria-label], [data-testid], [type="button"]'));
+                    const clickableNodes = collectDeep('button, [role="button"], div[tabindex], label, a, span, [aria-label], [data-testid], [type="button"]');
                     const findClickableByHints = (hints) => {
+                        const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
                         for (const node of clickableNodes) {
                             if (!isVisible(node)) continue;
                             const joined = [
@@ -6469,24 +6492,33 @@ class MainWindow(QMainWindow):
                                 norm(node.getAttribute("data-testid")),
                                 norm(node.className),
                             ].join(" ");
-                            if (hints.some((hint) => joined.includes(hint))) return node;
+                            if (normalizedHints.some((hint) => joined.includes(hint))) return node;
+                        }
+                        for (const node of clickableNodes) {
+                            const joined = [
+                                norm(node.innerText || node.textContent),
+                                norm(node.getAttribute("aria-label")),
+                                norm(node.getAttribute("data-testid")),
+                                norm(node.className),
+                            ].join(" ");
+                            if (normalizedHints.some((hint) => joined.includes(hint))) return node;
                         }
                         return null;
                     };
 
                     const platformOpenUploadHints = {
-                        facebook: ["add video", "photo/video", "upload video", "choose video", "create reel", "create", "add reel", "video/reel"],
-                        instagram: ["select from computer", "select video", "upload", "new post", "create", "create new", "post"],
+                        facebook: ["add video", "photo/video", "upload video", "choose video", "create reel", "create", "add reel", "video/reel", "reels"],
+                        instagram: ["select from computer", "select video", "upload", "new post", "create", "create new", "post", "reel"],
                         tiktok: ["select video", "upload", "choose file"],
                     };
 
                     const urlHints = [];
                     const currentHref = norm(window.location.href || "");
-                    if (platform === "facebook" && currentHref.includes("facebook.com/reel")) {
-                        urlHints.push("create reel", "create", "add reel", "video/reel");
+                    if (platform === "facebook" && (currentHref.includes("facebook.com/reel") || currentHref.includes("facebook.com/reels"))) {
+                        urlHints.push("create reel", "reels", "create", "add reel", "video/reel");
                     }
                     if (platform === "instagram" && currentHref.includes("instagram.com")) {
-                        urlHints.push("create", "new post", "select from computer", "post");
+                        urlHints.push("create", "new post", "select from computer", "post", "reel");
                     }
 
                     let openUploadClicked = false;
@@ -6506,11 +6538,7 @@ class MainWindow(QMainWindow):
                     }
 
                     const fullText = [payload.title, payload.caption].filter(Boolean).join("\n\n").trim();
-                    const textTargets = Array.from(
-                        document.querySelectorAll(
-                            'textarea, [contenteditable="true"], input[type="text"], input:not([type]), div[role="textbox"], [aria-label*="caption" i], [placeholder*="caption" i], [aria-label*="description" i]'
-                        )
-                    );
+                    const textTargets = collectDeep('textarea, [contenteditable="true"], input[type="text"], input:not([type]), div[role="textbox"], [aria-label*="caption" i], [placeholder*="caption" i], [aria-label*="description" i]');
                     let textFilled = false;
                     if (fullText) {
                         for (const node of textTargets) {
