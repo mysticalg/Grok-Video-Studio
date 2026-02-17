@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlencode, urlparse
 from typing import Callable
 
 import requests
-from PySide6.QtCore import QMimeData, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -893,8 +893,27 @@ class MainWindow(QMainWindow):
             category="22",
         )
         self._build_ui()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
         self._load_startup_preferences()
         self._apply_default_theme()
+
+    def eventFilter(self, watched, event):
+        if (
+            self.stop_all_requested
+            and isinstance(watched, QPushButton)
+            and watched is not self.stop_all_btn
+            and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress)
+        ):
+            self._clear_stop_all_flag(watched.text())
+        return super().eventFilter(watched, event)
+
+    def _clear_stop_all_flag(self, button_label: str) -> None:
+        if not self.stop_all_requested:
+            return
+        self.stop_all_requested = False
+        self._append_log(f"Stop-all flag cleared by button click: {button_label or 'Unnamed button'}")
 
     def _apply_default_theme(self) -> None:
         self.setStyleSheet("")
