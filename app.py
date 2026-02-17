@@ -6454,7 +6454,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        max_attempts = 3
+        max_attempts = 2
         if attempts > max_attempts:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
@@ -6462,7 +6462,7 @@ class MainWindow(QMainWindow):
                 f"WARNING: {platform_name} browser automation timed out after {attempts - 1} attempts."
             )
             self.social_upload_pending.pop(platform_name, None)
-            return
+            
 
         payload_json = json.dumps(
             {
