@@ -6598,6 +6598,19 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                         return false;
                     };
+                    const findTikTokPostNowButton = () => {
+                        const candidates = collectDeep('button.TUXButton, button[type="button"]');
+                        for (const node of candidates) {
+                            if (!isVisible(node)) continue;
+                            const label = normalizedNodeText(node);
+                            if (!label.includes('post now')) continue;
+                            const ariaDisabled = String(node.getAttribute('aria-disabled') || '').trim().toLowerCase();
+                            if (ariaDisabled === 'true') continue;
+                            if (node.disabled) continue;
+                            return node;
+                        }
+                        return null;
+                    };
 
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
@@ -6900,6 +6913,21 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    let tiktokConfirmClicked = false;
+                    if (platform === "tiktok") {
+                        const postNowButton = findTikTokPostNowButton();
+                        if (postNowButton) {
+                            tiktokConfirmClicked = clickNodeOrAncestor(postNowButton) || false;
+                            if (!tiktokConfirmClicked) {
+                                try {
+                                    postNowButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+                                    tiktokConfirmClicked = true;
+                                } catch (_) {}
+                            }
+                            submitClicked = submitClicked || tiktokConfirmClicked;
+                        }
+                    }
+
                     return {
                         fileInputFound: Boolean(fileInput),
                         fileDialogTriggered,
@@ -6911,6 +6939,7 @@ class MainWindow(QMainWindow):
                         facebookSubmitDelayElapsed,
                         tiktokSubmitDelayElapsed,
                         tiktokPostButtonEnabled,
+                        tiktokConfirmClicked,
                         nextClicked,
                         submitClicked,
                         videoPathQueued: Boolean(requestedVideoPath),
@@ -6941,6 +6970,7 @@ class MainWindow(QMainWindow):
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostButtonEnabled"))
+            tiktok_confirm_clicked = bool(isinstance(result, dict) and result.get("tiktokConfirmClicked"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -6952,7 +6982,7 @@ class MainWindow(QMainWindow):
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} tiktok_post_enabled={tiktok_post_enabled}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} tiktok_post_enabled={tiktok_post_enabled} tiktok_confirm_clicked={tiktok_confirm_clicked}"
             )
             pending["allow_file_dialog"] = False
 
