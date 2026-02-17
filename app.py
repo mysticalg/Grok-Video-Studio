@@ -18,11 +18,10 @@ from urllib.parse import unquote, urlencode, urlparse
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtTest import QTest
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWidgets import (
     QApplication,
@@ -6355,6 +6354,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Social Upload", f"{platform_name} upload tab is not initialized.")
             return
 
+        video_file = Path(str(video_path))
+        encoded_video = ""
+        if video_file.exists() and video_file.is_file():
+            try:
+                encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+            except Exception:
+                encoded_video = ""
+
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
             "video_path": str(video_path),
@@ -6362,6 +6369,9 @@ class MainWindow(QMainWindow):
             "title": str(title or ""),
             "attempts": 0,
             "allow_file_dialog": True,
+            "video_base64": encoded_video,
+            "video_name": video_file.name or "upload.mp4",
+            "video_mime": "video/mp4",
         }
         self._append_log(
             f"{platform_name}: queued browser upload video path={video_path} (exists={Path(str(video_path)).exists()})"
@@ -6374,81 +6384,7 @@ class MainWindow(QMainWindow):
             f"Browser-based {platform_name} upload: using current social tab and attempting automated file staging."
         )
         self.browser_tabs.setCurrentIndex(tab_index)
-        # Trigger a native click on the file input immediately while the user action context is still fresh.
-        self._trigger_social_file_input_with_native_click(platform_name)
-        # Then continue polling/staging in retries.
         self._run_social_browser_upload_step(platform_name)
-
-    def _trigger_social_file_input_with_native_click(self, platform_name: str) -> bool:
-        browser = self.social_upload_browsers.get(platform_name)
-        pending = self.social_upload_pending.get(platform_name)
-        if not browser or not pending:
-            return False
-
-        if not bool(pending.get("allow_file_dialog", False)):
-            return False
-
-        payload_json = json.dumps(
-            {
-                "video_path": str(pending.get("video_path") or ""),
-            },
-            ensure_ascii=True,
-        )
-        payload_b64 = base64.b64encode(payload_json.encode("utf-8")).decode("ascii")
-        script = """
-            (() => {
-                try {
-                    const payload = JSON.parse(atob("__PAYLOAD_B64__"));
-                    const allInputs = Array.from(document.querySelectorAll('input[type="file"]'));
-                    const first = allInputs.find(Boolean) || null;
-                    if (!first) return { found: false };
-                    const requestedVideoPath = String(payload.video_path || "");
-                    if (requestedVideoPath) {
-                        try { first.setAttribute("data-codex-video-path", requestedVideoPath); } catch (_) {}
-                    }
-                    first.style.display = "block";
-                    first.style.visibility = "visible";
-                    first.removeAttribute("hidden");
-                    try { first.removeAttribute("disabled"); } catch (_) {}
-                    const rect = first.getBoundingClientRect();
-                    return {
-                        found: true,
-                        hasFile: Boolean(first.files && first.files.length > 0),
-                        x: Math.max(1, Math.floor(rect.left + (rect.width / 2))),
-                        y: Math.max(1, Math.floor(rect.top + (rect.height / 2))),
-                    };
-                } catch (err) {
-                    return { found: false, error: String(err && err.stack ? err.stack : err) };
-                }
-            })()
-        """.replace("__PAYLOAD_B64__", payload_b64)
-
-        def _after(result):
-            if platform_name not in self.social_upload_pending:
-                return
-            if isinstance(result, dict) and result.get("error"):
-                self._append_log(f"WARNING: {platform_name} native click prep script error: {result.get('error')}")
-                return
-            if not isinstance(result, dict) or not result.get("found"):
-                self._append_log(f"{platform_name}: native click prep did not find a file input in current frame.")
-                return
-            if bool(result.get("hasFile")):
-                self._append_log(f"{platform_name}: file input already has a file; skipping native click.")
-                pending["allow_file_dialog"] = False
-                return
-
-            try:
-                x = int(result.get("x") or 1)
-                y = int(result.get("y") or 1)
-                QTest.mouseClick(browser, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, y))
-                self._append_log(f"{platform_name}: triggered native click on file input at ({x}, {y}).")
-            except Exception as exc:
-                self._append_log(f"WARNING: {platform_name} native click failed: {exc}")
-            finally:
-                pending["allow_file_dialog"] = False
-
-        browser.page().runJavaScript(script, _after)
-        return True
 
     def _run_social_browser_upload_step(self, platform_name: str) -> None:
         pending = self.social_upload_pending.get(platform_name)
@@ -6477,6 +6413,9 @@ class MainWindow(QMainWindow):
                 "title": str(pending.get("title") or ""),
                 "platform": platform_name.lower(),
                 "video_path": str(pending.get("video_path") or ""),
+                "video_base64": str(pending.get("video_base64") or ""),
+                "video_name": str(pending.get("video_name") or "upload.mp4"),
+                "video_mime": str(pending.get("video_mime") or "video/mp4"),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
             },
             ensure_ascii=True,
@@ -6521,8 +6460,26 @@ class MainWindow(QMainWindow):
 
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
+                    const videoBase64 = String(payload.video_base64 || "");
+                    const videoName = String(payload.video_name || "upload.mp4");
+                    const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const fileInput = pick(collectDeep('input[type="file"]'));
+                    const setInputFiles = (input, files) => {
+                        try {
+                            const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+                            if (descriptor && typeof descriptor.set === "function") {
+                                descriptor.set.call(input, files);
+                                return true;
+                            }
+                        } catch (_) {}
+                        try {
+                            Object.defineProperty(input, "files", { value: files, configurable: true });
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
                     let fileDialogTriggered = false;
                     if (fileInput) {
                         if (requestedVideoPath) {
@@ -6532,9 +6489,22 @@ class MainWindow(QMainWindow):
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
+
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
-                        if (!alreadyHasFile) {
-                            fileDialogTriggered = false;
+                        if (!alreadyHasFile && videoBase64) {
+                            try {
+                                const binary = atob(videoBase64);
+                                const bytes = new Uint8Array(binary.length);
+                                for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                                const file = new File([bytes], videoName, { type: videoMime });
+                                const dt = new DataTransfer();
+                                dt.items.add(file);
+                                if (setInputFiles(fileInput, dt.files)) {
+                                    fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                    fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                    fileDialogTriggered = true;
+                                }
+                            } catch (_) {}
                         }
                     }
 
