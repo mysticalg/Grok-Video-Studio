@@ -6614,6 +6614,45 @@ class MainWindow(QMainWindow):
                         }
                         return null;
                     };
+                    const clickTikTokPostNowButton = (button) => {
+                        if (!button) return false;
+                        const disabled = String(button.getAttribute('aria-disabled') || '').trim().toLowerCase() === 'true' || Boolean(button.disabled);
+                        if (disabled) return false;
+                        const targets = [
+                            button,
+                            button.querySelector('.TUXButton-content'),
+                            button.querySelector('.TUXButton-label'),
+                        ].filter(Boolean);
+
+                        for (const target of targets) {
+                            try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                            try { target.focus && target.focus(); } catch (_) {}
+                            try {
+                                target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse', isPrimary: true }));
+                                target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse', isPrimary: true }));
+                            } catch (_) {}
+                            try {
+                                target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
+                                target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
+                                target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+                            } catch (_) {}
+                            try { target.click && target.click(); } catch (_) {}
+                        }
+
+                        const rect = button.getBoundingClientRect();
+                        if (rect && rect.width > 0 && rect.height > 0) {
+                            const x = rect.left + (rect.width / 2);
+                            const y = rect.top + (rect.height / 2);
+                            const topNode = document.elementFromPoint(x, y);
+                            if (topNode && topNode !== button) {
+                                try {
+                                    topNode.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y }));
+                                } catch (_) {}
+                            }
+                        }
+
+                        return true;
+                    };
 
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
@@ -6932,13 +6971,7 @@ class MainWindow(QMainWindow):
                         }
 
                         if (postNowButton && tiktokPostNowDelayElapsed) {
-                            tiktokConfirmClicked = clickNodeOrAncestor(postNowButton) || false;
-                            if (!tiktokConfirmClicked) {
-                                try {
-                                    postNowButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
-                                    tiktokConfirmClicked = true;
-                                } catch (_) {}
-                            }
+                            tiktokConfirmClicked = clickTikTokPostNowButton(postNowButton) || false;
                             submitClicked = submitClicked || tiktokConfirmClicked;
                         }
                     }
