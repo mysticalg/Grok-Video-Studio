@@ -15,7 +15,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlparse
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 import requests
 from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
@@ -805,12 +805,35 @@ class FilteredWebEnginePage(QWebEnginePage):
         "upgrade-insecure-requests' is ignored when delivered in a report-only policy",
     )
 
-    def __init__(self, on_console_message, profile: QWebEngineProfile | None = None, parent=None):
+    def __init__(
+        self,
+        on_console_message,
+        profile: QWebEngineProfile | None = None,
+        parent=None,
+        auto_file_selector: Callable[[str, object, list[str], list[str]], list[str]] | None = None,
+    ):
         if profile is not None:
             super().__init__(profile, parent)
         else:
             super().__init__(parent)
         self._on_console_message = on_console_message
+        self._auto_file_selector = auto_file_selector
+
+
+    def chooseFiles(self, mode, old_files, accepted_mime_types):  # type: ignore[override]
+        if self._auto_file_selector:
+            try:
+                selected = self._auto_file_selector(
+                    self.url().toString(),
+                    mode,
+                    list(old_files or []),
+                    list(accepted_mime_types or []),
+                )
+                if selected:
+                    return [str(path) for path in selected if str(path).strip()]
+            except Exception:
+                pass
+        return super().chooseFiles(mode, old_files, accepted_mime_types)
 
     def javaScriptConsoleMessage(self, level, message, line_number, source_id):  # type: ignore[override]
         if any(pattern in message for pattern in self._IGNORED_CONSOLE_PATTERNS):
@@ -1447,7 +1470,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(progress_bar)
 
         browser = QWebEngineView()
-        browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, browser))
+        browser.setPage(
+            FilteredWebEnginePage(
+                self._append_log,
+                self.browser_profile,
+                browser,
+                auto_file_selector=self._resolve_social_auto_file_selection,
+            )
+        )
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
         browser.setUrl(QUrl(upload_url))
@@ -1479,6 +1509,34 @@ class MainWindow(QMainWindow):
             timer = self.social_upload_timers.get(platform_name)
             if timer is not None:
                 timer.start(900)
+
+    def _resolve_social_auto_file_selection(
+        self,
+        source_url: str,
+        _mode: object,
+        _old_files: list[str],
+        _accepted_mime_types: list[str],
+    ) -> list[str]:
+        url = str(source_url or "").lower()
+        platform_map: list[tuple[str, Iterable[str]]] = [
+            ("Facebook", ("facebook.com/reels/create",)),
+            ("Instagram", ("instagram.com/create/reel",)),
+            ("TikTok", ("tiktok.com/tiktokstudio/upload", "tiktok.com/upload")),
+        ]
+        for platform_name, patterns in platform_map:
+            if not any(pattern in url for pattern in patterns):
+                continue
+            pending = self.social_upload_pending.get(platform_name)
+            if not pending:
+                continue
+            video_path = str(pending.get("video_path") or "").strip()
+            if not video_path:
+                continue
+            candidate = Path(video_path)
+            if candidate.exists() and candidate.is_file():
+                self._append_log(f"{platform_name}: auto-selected file for upload dialog: {candidate.name}")
+                return [str(candidate)]
+        return []
 
     def _build_browser_training_tab(self) -> QWidget:
         tab = QWidget()
@@ -6330,6 +6388,7 @@ class MainWindow(QMainWindow):
                         fileInput.style.display = "block";
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
+                        try { fileInput.click(); } catch (_) {}
                     }
 
                     const textTargets = Array.from(
@@ -6375,6 +6434,9 @@ class MainWindow(QMainWindow):
                             || joined.includes("share")
                             || joined.includes("publish")
                             || joined.includes("post")
+                            || joined.includes("video")
+                            || joined.includes("choose file")
+                            || joined.includes("add video")
                         ) {
                             try { node.click(); clicked = true; } catch (_) {}
                         }
