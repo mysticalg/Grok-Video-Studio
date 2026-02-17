@@ -6428,6 +6428,7 @@ class MainWindow(QMainWindow):
             "video_base64": encoded_video,
             "video_name": video_file.name or "upload.mp4",
             "video_mime": "video/mp4",
+            "submit_already_triggered": False,
         }
         self._append_log(
             f"{platform_name}: queued browser upload video path={video_path} (exists={Path(str(video_path)).exists()})"
@@ -6474,6 +6475,7 @@ class MainWindow(QMainWindow):
                 "video_name": str(pending.get("video_name") or "upload.mp4"),
                 "video_mime": str(pending.get("video_mime") or "video/mp4"),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
+                "submit_already_triggered": bool(pending.get("submit_already_triggered", False)),
             },
             ensure_ascii=True,
         )
@@ -6554,6 +6556,7 @@ class MainWindow(QMainWindow):
                     const videoName = String(payload.video_name || "upload.mp4");
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
+                    const submitAlreadyTriggered = Boolean(payload.submit_already_triggered);
 
                     if (platform === "instagram") {
                         const createButton = findClickableByHints(["create"]);
@@ -6699,7 +6702,7 @@ class MainWindow(QMainWindow):
 
                     const nextClicked = false;
                     let submitClicked = false;
-                    if (platform === "facebook" && fileReadySignal) {
+                    if (platform === "facebook" && fileReadySignal && !submitAlreadyTriggered) {
                         const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
                         if (explicitPostButton) {
                             submitClicked = clickNodeOrAncestor(explicitPostButton) || submitClicked;
@@ -6761,6 +6764,7 @@ class MainWindow(QMainWindow):
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
+                        submitAlreadyTriggered,
                     };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
@@ -6785,6 +6789,10 @@ class MainWindow(QMainWindow):
             text_filled = bool(isinstance(result, dict) and result.get("textFilled"))
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
+            submit_already_triggered = bool(pending.get("submit_already_triggered", False))
+            if submit_clicked:
+                pending["submit_already_triggered"] = True
+                submit_already_triggered = True
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -6796,14 +6804,14 @@ class MainWindow(QMainWindow):
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} submit_latched={submit_already_triggered}"
             )
             pending["allow_file_dialog"] = False
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             is_facebook = platform_name == "Facebook"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if is_facebook else True
+            submit_ok = submit_already_triggered if is_facebook else True
             completion_attempt_ready = submit_ok if is_facebook else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
                 status_label.setText("Status: post submitted." if is_facebook else "Status: staged. Confirm/finalize post in this tab if needed.")
