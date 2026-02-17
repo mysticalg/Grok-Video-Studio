@@ -6555,7 +6555,7 @@ class MainWindow(QMainWindow):
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const captionText = String(payload.caption || "").trim();
-                    const captionRequired = platform === "facebook" && Boolean(captionText);
+                    const captionRequired = (platform === "facebook" || platform === "tiktok") && Boolean(captionText);
 
                     if (platform === "instagram") {
                         const createButton = findClickableByHints(["create"]);
@@ -6599,22 +6599,37 @@ class MainWindow(QMainWindow):
                         return false;
                     };
                     const findTextInputTarget = () => {
-                        const selectors = [
-                            'textarea[aria-label*="caption" i]',
-                            'textarea[placeholder*="caption" i]',
-                            'textarea[aria-label*="write" i]',
-                            'textarea[placeholder*="write" i]',
-                            'div[role="textbox"][contenteditable="true"]',
-                            'div[contenteditable="true"][aria-label*="write" i]',
-                            'div[contenteditable="true"][aria-label*="post" i]',
-                            'textarea',
-                        ];
-                        const dialogRoots = collectDeep('div[role="dialog"]');
-                        for (const dialog of dialogRoots) {
-                            if (!dialog) continue;
+                        const selectors = platform === "tiktok"
+                            ? [
+                                'textarea[data-e2e*="caption" i]',
+                                'textarea[data-e2e*="description" i]',
+                                'textarea[placeholder*="describe" i]',
+                                'textarea[aria-label*="describe" i]',
+                                'div[role="textbox"][contenteditable="true"][aria-label*="caption" i]',
+                                'div[role="textbox"][contenteditable="true"][aria-label*="description" i]',
+                                'div[contenteditable="true"][data-e2e*="caption" i]',
+                                'div[contenteditable="true"][data-e2e*="description" i]',
+                                'textarea',
+                                'div[role="textbox"][contenteditable="true"]',
+                            ]
+                            : [
+                                'textarea[aria-label*="caption" i]',
+                                'textarea[placeholder*="caption" i]',
+                                'textarea[aria-label*="write" i]',
+                                'textarea[placeholder*="write" i]',
+                                'div[role="textbox"][contenteditable="true"]',
+                                'div[contenteditable="true"][aria-label*="write" i]',
+                                'div[contenteditable="true"][aria-label*="post" i]',
+                                'textarea',
+                            ];
+                        const scopedRoots = platform === "tiktok"
+                            ? collectDeep('[data-e2e*="upload" i], [data-e2e*="publish" i], form, section, main')
+                            : collectDeep('div[role="dialog"]');
+                        for (const root of scopedRoots) {
+                            if (!root) continue;
                             for (const selector of selectors) {
                                 let nodes = [];
-                                try { nodes = Array.from(dialog.querySelectorAll(selector)); } catch (_) {}
+                                try { nodes = Array.from(root.querySelectorAll(selector)); } catch (_) {}
                                 const visibleMatch = nodes.find((node) => isVisible(node));
                                 if (visibleMatch) return visibleMatch;
                                 if (nodes.length) return nodes[0];
@@ -6624,7 +6639,7 @@ class MainWindow(QMainWindow):
                     };
 
                     let textFilled = false;
-                    if (platform === "facebook" && captionRequired) {
+                    if (captionRequired) {
                         const textTarget = findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
                     }
@@ -6743,17 +6758,21 @@ class MainWindow(QMainWindow):
 
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
-                    if (platform === "facebook") {
+                    const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
+                    if (platform === "facebook" || platform === "tiktok") {
+                        const platformState = platform === "facebook" ? facebookState : tiktokState;
                         if (fileReadySignal) {
-                            if (!facebookState.fileReadyAtMs) {
-                                facebookState.fileReadyAtMs = Date.now();
+                            if (!platformState.fileReadyAtMs) {
+                                platformState.fileReadyAtMs = Date.now();
                             }
                         } else {
-                            facebookState.fileReadyAtMs = 0;
+                            platformState.fileReadyAtMs = 0;
                         }
                     }
                     const facebookSubmitDelayElapsed = platform !== "facebook"
                         || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= 2000);
+                    const tiktokReadyForTextOrSubmit = platform !== "tiktok"
+                        || Boolean(tiktokState.fileReadyAtMs && (Date.now() - Number(tiktokState.fileReadyAtMs)) >= 2500);
 
                     const nextClicked = false;
                     let submitClicked = false;
@@ -6808,6 +6827,18 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    if (platform === "tiktok" && fileReadySignal && captionReady && tiktokReadyForTextOrSubmit) {
+                        const tiktokSubmitButton = bySelectors([
+                            'button[data-e2e*="post" i]',
+                            'button[data-e2e*="publish" i]',
+                            'button[aria-label*="post" i]',
+                            'button[aria-label*="publish" i]',
+                        ]) || findClickableByHints(["post", "publish"]);
+                        if (tiktokSubmitButton) {
+                            submitClicked = clickNodeOrAncestor(tiktokSubmitButton) || submitClicked;
+                        }
+                    }
+
                     return {
                         fileInputFound: Boolean(fileInput),
                         fileDialogTriggered,
@@ -6816,6 +6847,7 @@ class MainWindow(QMainWindow):
                         textFilled,
                         captionReady,
                         facebookSubmitDelayElapsed,
+                        tiktokReadyForTextOrSubmit,
                         nextClicked,
                         submitClicked,
                         videoPathQueued: Boolean(requestedVideoPath),
@@ -6862,14 +6894,15 @@ class MainWindow(QMainWindow):
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             is_facebook = platform_name == "Facebook"
+            is_tiktok = platform_name == "TikTok"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if is_facebook else True
-            completion_attempt_ready = submit_ok if is_facebook else (attempts >= 2)
+            submit_ok = submit_clicked if (is_facebook or is_tiktok) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_tiktok) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
-                status_label.setText("Status: post submitted." if is_facebook else "Status: staged. Confirm/finalize post in this tab if needed.")
+                status_label.setText("Status: post submitted." if (is_facebook or is_tiktok) else "Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if is_facebook else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_tiktok) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
