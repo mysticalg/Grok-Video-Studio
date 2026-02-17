@@ -1546,7 +1546,7 @@ class MainWindow(QMainWindow):
             candidate = Path(video_path)
             if candidate.exists() and candidate.is_file():
                 self._append_log(
-                    f"{platform_name}: auto-selected file for upload dialog from {url or 'unknown page'}: {candidate.name}"
+                    f"{platform_name}: auto-selected file for upload dialog from {url or 'unknown page'}: {candidate.name} ({candidate})"
                 )
                 return [str(candidate)]
         return []
@@ -6553,9 +6553,13 @@ class MainWindow(QMainWindow):
                         openUploadClicked = clickNodeOrAncestor(uploadButton);
                     }
 
+                    const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
                     const fileInput = bySelectors(platformFileSelectors[platform] || platformFileSelectors.tiktok);
                     let fileDialogTriggered = false;
                     if (fileInput) {
+                        if (requestedVideoPath) {
+                            try { fileInput.setAttribute("data-codex-video-path", requestedVideoPath); } catch (_) {}
+                        }
                         fileInput.style.display = "block";
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
@@ -6585,7 +6589,8 @@ class MainWindow(QMainWindow):
                         textFilled,
                         nextClicked,
                         submitClicked,
-                        videoPathQueued: Boolean(payload.video_path || payload.videoPath),
+                        videoPathQueued: Boolean(requestedVideoPath),
+                        requestedVideoPath,
                     };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
@@ -6610,19 +6615,20 @@ class MainWindow(QMainWindow):
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
+            video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
 
             progress_bar.setVisible(True)
             progress_bar.setValue(min(95, 20 + attempts * 6))
             status_label.setText(
-                f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, caption={'manual' if caption_queued else 'none'})."
+                f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, source={'ready' if video_path_exists else 'missing'}, caption={'manual' if caption_queued else 'none'})."
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked}"
             )
 
-            file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered)
+            file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             caption_ok = True
             if attempts >= 2 and file_stage_ok and caption_ok:
                 status_label.setText("Status: staged. Confirm/finalize post in this tab if needed.")
