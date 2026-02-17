@@ -6689,6 +6689,17 @@ class MainWindow(QMainWindow):
                     };
 
                     let textFilled = false;
+                    const readTikTokCaptionText = () => {
+                        const draftSpan = bySelectors(['.DraftEditor-editorContainer span[data-text="true"]']);
+                        if (draftSpan) {
+                            return String(draftSpan.textContent || draftSpan.innerText || "").trim();
+                        }
+                        const editorContainer = bySelectors(['.DraftEditor-editorContainer']);
+                        if (editorContainer) {
+                            return String(editorContainer.textContent || editorContainer.innerText || "").trim();
+                        }
+                        return "";
+                    };
                     if ((platform === "facebook" || platform === "tiktok") && captionRequired) {
                         const textTarget = platform === "tiktok" ? findTikTokCaptionTarget() : findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
@@ -6696,7 +6707,9 @@ class MainWindow(QMainWindow):
                             textFilled = setTextValue(findTextInputTarget(), captionText);
                         }
                     }
-                    const captionReady = !captionRequired || textFilled;
+                    const existingTikTokCaptionText = platform === "tiktok" ? readTikTokCaptionText() : "";
+                    const tiktokCaptionAlreadyPresent = platform === "tiktok" && Boolean(existingTikTokCaptionText);
+                    const captionReady = !captionRequired || textFilled || tiktokCaptionAlreadyPresent;
 
                     if (platform === "facebook" && captionReady) {
                         const facebookUploadButton = findClickableByHints([
@@ -6862,7 +6875,7 @@ class MainWindow(QMainWindow):
                     }
 
                     let tiktokPostButtonEnabled = false;
-                    if (platform === "tiktok" && captionReady) {
+                    if (platform === "tiktok" && (captionReady || forceSubmit)) {
                         const explicitTiktokPostButton = findEnabledTikTokPostButton();
                         tiktokPostButtonEnabled = Boolean(explicitTiktokPostButton);
                         if (explicitTiktokPostButton) {
@@ -6894,6 +6907,7 @@ class MainWindow(QMainWindow):
                         fileReadySignal,
                         textFilled,
                         captionReady,
+                        tiktokCaptionAlreadyPresent,
                         facebookSubmitDelayElapsed,
                         tiktokSubmitDelayElapsed,
                         tiktokPostButtonEnabled,
