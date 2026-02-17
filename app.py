@@ -6699,9 +6699,16 @@ class MainWindow(QMainWindow):
                     const nextClicked = false;
                     let submitClicked = false;
                     if (platform === "facebook" && fileReadySignal) {
-                        const submitButton = findClickableByHints(["post", "share"]);
-                        if (submitButton) {
-                            submitClicked = clickNodeOrAncestor(submitButton) || submitClicked;
+                        const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
+                        if (explicitPostButton) {
+                            submitClicked = clickNodeOrAncestor(explicitPostButton) || submitClicked;
+                        }
+
+                        if (!submitClicked) {
+                            const submitButton = findClickableByHints(["post", "share"]);
+                            if (submitButton) {
+                                submitClicked = clickNodeOrAncestor(submitButton) || submitClicked;
+                            }
                         }
 
                         if (!submitClicked) {
