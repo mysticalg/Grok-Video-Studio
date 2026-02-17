@@ -6158,10 +6158,14 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
+        caption_text = self._compose_social_text(description, hashtags)
+        if not caption_text:
+            caption_text = self._compose_social_text(self.ai_social_metadata.description, self.ai_social_metadata.hashtags)
+
         self._start_social_browser_upload(
             platform_name="Facebook",
             video_path=video_path,
-            caption=self._compose_social_text(description, hashtags),
+            caption=caption_text,
             title=title,
         )
 
@@ -6640,7 +6644,51 @@ class MainWindow(QMainWindow):
                         }
                     }
 
-                    const textFilled = false;
+                    const setTextValue = (node, value) => {
+                        if (!node) return false;
+                        const text = String(value || "");
+                        try {
+                            if ("value" in node) {
+                                node.focus();
+                                node.value = text;
+                                node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                return true;
+                            }
+                        } catch (_) {}
+                        try {
+                            if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
+                                node.focus();
+                                node.textContent = text;
+                                node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
+                                node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                return true;
+                            }
+                        } catch (_) {}
+                        return false;
+                    };
+                    const findTextInputTarget = () => {
+                        const selectors = [
+                            'textarea[aria-label*="caption" i]',
+                            'textarea[placeholder*="caption" i]',
+                            'textarea[aria-label*="write" i]',
+                            'textarea[placeholder*="write" i]',
+                            'div[role="textbox"][contenteditable="true"]',
+                            'div[contenteditable="true"][aria-label*="write" i]',
+                            'div[contenteditable="true"][aria-label*="post" i]',
+                            'textarea',
+                        ];
+                        return bySelectors(selectors);
+                    };
+
+                    let textFilled = false;
+                    if (platform === "facebook") {
+                        const captionText = String(payload.caption || "").trim();
+                        if (captionText) {
+                            const textTarget = findTextInputTarget();
+                            textFilled = setTextValue(textTarget, captionText);
+                        }
+                    }
 
                     const fileReadySignal = Boolean(
                         (fileInput && fileInput.files && fileInput.files.length > 0)
@@ -6649,7 +6697,13 @@ class MainWindow(QMainWindow):
                     );
 
                     const nextClicked = false;
-                    const submitClicked = false;
+                    let submitClicked = false;
+                    if (platform === "facebook" && fileReadySignal) {
+                        const submitButton = findClickableByHints(["post", "share"]);
+                        if (submitButton) {
+                            submitClicked = clickNodeOrAncestor(submitButton);
+                        }
+                    }
 
                     return {
                         fileInputFound: Boolean(fileInput),
@@ -6702,11 +6756,15 @@ class MainWindow(QMainWindow):
             pending["allow_file_dialog"] = False
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
-            caption_ok = True
-            if attempts >= 2 and file_stage_ok and caption_ok:
-                status_label.setText("Status: staged. Confirm/finalize post in this tab if needed.")
+            is_facebook = platform_name == "Facebook"
+            caption_ok = text_filled or not caption_queued
+            submit_ok = submit_clicked if is_facebook else True
+            if attempts >= 2 and file_stage_ok and caption_ok and submit_ok:
+                status_label.setText("Status: post submitted." if is_facebook else "Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
-                self._append_log(f"{platform_name} browser automation staged successfully in its tab.")
+                self._append_log(
+                    f"{platform_name} browser automation {'submitted post' if is_facebook else 'staged successfully'} in its tab."
+                )
                 self.social_upload_pending.pop(platform_name, None)
                 return
 
