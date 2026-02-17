@@ -6555,16 +6555,55 @@ class MainWindow(QMainWindow):
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const captionText = String(payload.caption || "").trim();
-                    const captionRequired = platform === "facebook" && Boolean(captionText);
+                    const captionRequired = (platform === "facebook" || platform === "tiktok" || platform === "instagram") && Boolean(captionText);
 
                     if (platform === "instagram") {
-                        const createButton = findClickableByHints(["create"]);
+                        const findInstagramCreateButton = () => {
+                            const explicitCreate = bySelectors([
+                                'button[aria-label*="create" i]',
+                                '[role="button"][aria-label*="create" i]',
+                                'span.html-span[aria-describedby]',
+                                'span[aria-describedby^="_r_"]',
+                            ]);
+                            if (explicitCreate) return explicitCreate;
+
+                            const createLauncherCandidates = collectDeep('span.html-span[aria-describedby], span[aria-describedby^="_r_"], a[role="link"], [role="button"], button');
+                            for (const node of createLauncherCandidates) {
+                                const text = normalizedNodeText(node);
+                                if (text && text.includes("create")) return node;
+                            }
+                            return findClickableByHints(["create", "new post"]);
+                        };
+                        const findInstagramPostMenuItem = () => {
+                            const menuSelectors = [
+                                '[role="menu"] [role="menuitem"]',
+                                '[role="menu"] a[role="link"]',
+                                '[role="menu"] button',
+                                'div[role="dialog"] [role="menuitem"]',
+                                'div[role="dialog"] a[role="link"]',
+                                '[role="menuitem"]',
+                                'a[role="link"][href="#"]',
+                                'div[role="dialog"] button',
+                                'div[role="dialog"] [role="button"]',
+                            ];
+                            for (const selector of menuSelectors) {
+                                const nodes = collectDeep(selector);
+                                for (const node of nodes) {
+                                    const text = normalizedNodeText(node);
+                                    if (!text) continue;
+                                    if (text.includes("post") && !text.includes("reel")) return node;
+                                }
+                            }
+                            return findClickableByHints(["post", "feed post"]);
+                        };
+
+                        const createButton = findInstagramCreateButton();
                         if (createButton) {
                             openUploadClicked = clickNodeOrAncestor(createButton) || openUploadClicked;
                         }
-                        const postButton = findClickableByHints(["post"]);
-                        if (postButton) {
-                            openUploadClicked = clickNodeOrAncestor(postButton) || openUploadClicked;
+                        const postMenuItem = findInstagramPostMenuItem();
+                        if (postMenuItem) {
+                            openUploadClicked = clickNodeOrAncestor(postMenuItem) || openUploadClicked;
                         }
                     }
 
@@ -6599,22 +6638,52 @@ class MainWindow(QMainWindow):
                         return false;
                     };
                     const findTextInputTarget = () => {
-                        const selectors = [
-                            'textarea[aria-label*="caption" i]',
-                            'textarea[placeholder*="caption" i]',
-                            'textarea[aria-label*="write" i]',
-                            'textarea[placeholder*="write" i]',
-                            'div[role="textbox"][contenteditable="true"]',
-                            'div[contenteditable="true"][aria-label*="write" i]',
-                            'div[contenteditable="true"][aria-label*="post" i]',
-                            'textarea',
-                        ];
-                        const dialogRoots = collectDeep('div[role="dialog"]');
-                        for (const dialog of dialogRoots) {
-                            if (!dialog) continue;
+                        const selectors = platform === "tiktok"
+                            ? [
+                                'textarea[data-e2e*="caption" i]',
+                                'textarea[data-e2e*="description" i]',
+                                'textarea[placeholder*="describe" i]',
+                                'textarea[aria-label*="describe" i]',
+                                'div[role="textbox"][contenteditable="true"][aria-label*="caption" i]',
+                                'div[role="textbox"][contenteditable="true"][aria-label*="description" i]',
+                                'div[contenteditable="true"][data-e2e*="caption" i]',
+                                'div[contenteditable="true"][data-e2e*="description" i]',
+                                'textarea',
+                                'div[role="textbox"][contenteditable="true"]',
+                            ]
+                            : platform === "instagram"
+                                ? [
+                                    'div[role="dialog"][aria-label*="create new post" i] textarea[aria-label*="caption" i]',
+                                    'div[role="dialog"][aria-label*="create new post" i] textarea[placeholder*="write" i]',
+                                    'div[role="dialog"][aria-label*="create new post" i] textarea[placeholder*="caption" i]',
+                                    'div[role="dialog"][aria-label*="create new post" i] div[role="textbox"][contenteditable="true"]',
+                                    'div[role="dialog"] textarea[aria-label*="caption" i]',
+                                    'div[role="dialog"] textarea[placeholder*="write" i]',
+                                    'div[role="dialog"] div[role="textbox"][contenteditable="true"]',
+                                    'textarea[aria-label*="caption" i]',
+                                    'textarea[placeholder*="write" i]',
+                                    'textarea',
+                                ]
+                                : [
+                                    'textarea[aria-label*="caption" i]',
+                                    'textarea[placeholder*="caption" i]',
+                                    'textarea[aria-label*="write" i]',
+                                    'textarea[placeholder*="write" i]',
+                                    'div[role="textbox"][contenteditable="true"]',
+                                    'div[contenteditable="true"][aria-label*="write" i]',
+                                    'div[contenteditable="true"][aria-label*="post" i]',
+                                    'textarea',
+                                ];
+                        const scopedRoots = platform === "tiktok"
+                            ? collectDeep('[data-e2e*="upload" i], [data-e2e*="publish" i], form, section, main')
+                            : platform === "instagram"
+                                ? collectDeep('div[role="dialog"][aria-label*="create new post" i], div[role="dialog"]')
+                                : collectDeep('div[role="dialog"]');
+                        for (const root of scopedRoots) {
+                            if (!root) continue;
                             for (const selector of selectors) {
                                 let nodes = [];
-                                try { nodes = Array.from(dialog.querySelectorAll(selector)); } catch (_) {}
+                                try { nodes = Array.from(root.querySelectorAll(selector)); } catch (_) {}
                                 const visibleMatch = nodes.find((node) => isVisible(node));
                                 if (visibleMatch) return visibleMatch;
                                 if (nodes.length) return nodes[0];
@@ -6624,7 +6693,7 @@ class MainWindow(QMainWindow):
                     };
 
                     let textFilled = false;
-                    if (platform === "facebook" && captionRequired) {
+                    if (captionRequired) {
                         const textTarget = findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
                     }
@@ -6652,6 +6721,26 @@ class MainWindow(QMainWindow):
                             if (byFacebookAccept) return byFacebookAccept;
                             const byFacebookClass = fileInputs.find((node) => norm(node.className).includes("x1s85apg"));
                             if (byFacebookClass) return byFacebookClass;
+                        }
+                        if (platform === "instagram") {
+                            const createPostDialog = bySelectors([
+                                'div[role="dialog"][aria-label*="create new post" i]',
+                                '[role="dialog"][aria-label*="create new post" i]',
+                            ]);
+                            if (!createPostDialog) return null;
+
+                            let dialogFileInputs = [];
+                            try { dialogFileInputs = Array.from(createPostDialog.querySelectorAll('input[type="file"]')); } catch (_) {}
+                            const instagramFormInputs = dialogFileInputs.filter((node) => {
+                                const form = node.closest && node.closest('form[enctype="multipart/form-data"][method="POST"][role="presentation"]');
+                                if (!form) return false;
+                                const accept = norm(node.getAttribute("accept"));
+                                return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*") || accept.includes("video");
+                            });
+                            const visibleInstagramFormInput = instagramFormInputs.find((node) => isVisible(node));
+                            if (visibleInstagramFormInput) return visibleInstagramFormInput;
+                            if (instagramFormInputs.length) return instagramFormInputs[0];
+                            return null;
                         }
                         const byExactInstagramAccept = fileInputs.find((node) => {
                             const accept = norm(node.getAttribute("accept"));
@@ -6716,19 +6805,32 @@ class MainWindow(QMainWindow):
 
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
-                    if (platform === "facebook") {
+                    const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
+                    const instagramState = uploadState.instagram = uploadState.instagram || {};
+                    if (platform === "facebook" || platform === "tiktok" || platform === "instagram") {
+                        const platformState = platform === "facebook" ? facebookState : (platform === "tiktok" ? tiktokState : instagramState);
                         if (fileReadySignal) {
-                            if (!facebookState.fileReadyAtMs) {
-                                facebookState.fileReadyAtMs = Date.now();
+                            if (!platformState.fileReadyAtMs) {
+                                platformState.fileReadyAtMs = Date.now();
                             }
                         } else {
-                            facebookState.fileReadyAtMs = 0;
+                            platformState.fileReadyAtMs = 0;
+                            if (platform === "instagram") {
+                                instagramState.nextClicks = 0;
+                            }
                         }
                     }
                     const facebookSubmitDelayElapsed = platform !== "facebook"
                         || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= 2000);
+                    const tiktokReadyForTextOrSubmit = platform !== "tiktok"
+                        || Boolean(tiktokState.fileReadyAtMs && (Date.now() - Number(tiktokState.fileReadyAtMs)) >= 2500);
+                    const instagramReadyForAdvance = platform !== "instagram"
+                        || Boolean(instagramState.fileReadyAtMs && (Date.now() - Number(instagramState.fileReadyAtMs)) >= 3000);
+                    const instagramUploadInProgress = platform === "instagram" && Boolean(
+                        document.querySelector('[aria-label*="uploading" i], [aria-label*="processing" i], [aria-label*="preparing" i], progress')
+                    );
 
-                    const nextClicked = false;
+                    let nextClicked = false;
                     let submitClicked = false;
                     if (platform === "facebook" && fileReadySignal && captionReady && facebookSubmitDelayElapsed) {
                         const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
@@ -6781,6 +6883,67 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    if (platform === "tiktok" && fileReadySignal && captionReady && tiktokReadyForTextOrSubmit) {
+                        const tiktokSubmitButton = bySelectors([
+                            'button[data-e2e*="post" i]',
+                            'button[data-e2e*="publish" i]',
+                            'button[aria-label*="post" i]',
+                            'button[aria-label*="publish" i]',
+                        ]) || findClickableByHints(["post", "publish"]);
+                        if (tiktokSubmitButton) {
+                            submitClicked = clickNodeOrAncestor(tiktokSubmitButton) || submitClicked;
+                        }
+                    }
+
+                    if (platform === "instagram" && fileReadySignal && instagramReadyForAdvance && !instagramUploadInProgress) {
+                        instagramState.nextClicks = Number(instagramState.nextClicks || 0);
+                        const nextButton = bySelectors([
+                            'div[role="button"][tabindex="0"]',
+                            'button[tabindex="0"]',
+                            'button',
+                        ]);
+                        const clickNextButton = () => {
+                            const candidates = collectDeep('div[role="button"][tabindex="0"], button[tabindex], button, [role="button"]');
+                            for (const node of candidates) {
+                                const text = normalizedNodeText(node);
+                                if (!text || !text.includes("next")) continue;
+                                if (text.includes("not now")) continue;
+                                if (clickNodeOrAncestor(node)) return true;
+                            }
+                            return false;
+                        };
+                        if (instagramState.nextClicks < 2) {
+                            const clickedNext = clickNextButton() || (nextButton && normalizedNodeText(nextButton).includes("next") && clickNodeOrAncestor(nextButton));
+                            if (clickedNext) {
+                                instagramState.nextClicks += 1;
+                                nextClicked = true;
+                            }
+                        }
+
+                        if (instagramState.nextClicks >= 2 && captionReady) {
+                            const shareButton = bySelectors([
+                                'div[role="button"][tabindex="0"]',
+                                'button[tabindex="0"]',
+                                'button[aria-label*="share" i]',
+                                '[role="button"][aria-label*="share" i]',
+                            ]) || findClickableByHints(["share"]);
+                            const shareCandidates = collectDeep('div[role="button"], button, [role="button"]');
+                            let clickedShare = false;
+                            for (const node of shareCandidates) {
+                                const text = normalizedNodeText(node);
+                                if (!text) continue;
+                                if (text.includes("share") && !text.includes("reshare")) {
+                                    clickedShare = clickNodeOrAncestor(node) || clickedShare;
+                                    if (clickedShare) break;
+                                }
+                            }
+                            if (!clickedShare && shareButton) {
+                                clickedShare = clickNodeOrAncestor(shareButton) || clickedShare;
+                            }
+                            submitClicked = clickedShare || submitClicked;
+                        }
+                    }
+
                     return {
                         fileInputFound: Boolean(fileInput),
                         fileDialogTriggered,
@@ -6789,6 +6952,9 @@ class MainWindow(QMainWindow):
                         textFilled,
                         captionReady,
                         facebookSubmitDelayElapsed,
+                        tiktokReadyForTextOrSubmit,
+                        instagramReadyForAdvance,
+                        instagramUploadInProgress,
                         nextClicked,
                         submitClicked,
                         videoPathQueued: Boolean(requestedVideoPath),
@@ -6835,14 +7001,16 @@ class MainWindow(QMainWindow):
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             is_facebook = platform_name == "Facebook"
+            is_tiktok = platform_name == "TikTok"
+            is_instagram = platform_name == "Instagram"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if is_facebook else True
-            completion_attempt_ready = submit_ok if is_facebook else (attempts >= 2)
+            submit_ok = submit_clicked if (is_facebook or is_tiktok or is_instagram) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_tiktok or is_instagram) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
-                status_label.setText("Status: post submitted." if is_facebook else "Status: staged. Confirm/finalize post in this tab if needed.")
+                status_label.setText("Status: post submitted." if (is_facebook or is_tiktok or is_instagram) else "Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if is_facebook else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_tiktok or is_instagram) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
