@@ -1539,6 +1539,12 @@ class MainWindow(QMainWindow):
                 return [str(candidate)]
         return []
 
+    def _selected_video_path_for_upload(self) -> str:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            return ""
+        return str(self.videos[index].get("video_file_path") or "").strip()
+
     def _build_browser_training_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -6076,12 +6082,14 @@ class MainWindow(QMainWindow):
         return video_id  # This is what your worker expects
 
     def start_facebook_browser_upload(self) -> None:
-        index = self.video_picker.currentIndex()
-        if index < 0 or index >= len(self.videos):
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
 
-        video_path = self.videos[index]["video_file_path"]
         title, description, hashtags, _, accepted = self._show_upload_dialog("Facebook")
         if not accepted:
             return
@@ -6094,30 +6102,34 @@ class MainWindow(QMainWindow):
         )
 
     def start_instagram_browser_upload(self) -> None:
-        index = self.video_picker.currentIndex()
-        if index < 0 or index >= len(self.videos):
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
 
-        selected_video = self.videos[index]
         _, caption, hashtags, _, accepted = self._show_upload_dialog("Instagram", title_enabled=False)
         if not accepted:
             return
 
         self._start_social_browser_upload(
             platform_name="Instagram",
-            video_path=selected_video["video_file_path"],
+            video_path=video_path,
             caption=self._compose_social_text(caption, hashtags),
             title="",
         )
 
     def start_tiktok_browser_upload(self) -> None:
-        index = self.video_picker.currentIndex()
-        if index < 0 or index >= len(self.videos):
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
 
-        video_path = self.videos[index]["video_file_path"]
         _, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=False)
         if not accepted:
             return
@@ -6386,13 +6398,40 @@ class MainWindow(QMainWindow):
                 try {
                     const payload = JSON.parse(atob("__PAYLOAD_B64__"));
                     const norm = (s) => String(s || "").toLowerCase();
+                    const platform = norm(payload.platform);
                     const pick = (arr) => arr.find(Boolean) || null;
+                    const bySelectors = (selectors) => {
+                        for (const selector of selectors) {
+                            try {
+                                const node = document.querySelector(selector);
+                                if (node) return node;
+                            } catch (_) {}
+                        }
+                        return null;
+                    };
 
-                    const fileInput = pick(Array.from(document.querySelectorAll('input[type="file"]')));
+                    const platformFileSelectors = {
+                        facebook: [
+                            'input[type="file"][accept*="video" i]',
+                            'input[type="file"]',
+                        ],
+                        instagram: [
+                            'input[type="file"][accept*="video" i]',
+                            'input[type="file"]',
+                        ],
+                        tiktok: [
+                            'input[type="file"][accept*="video" i]',
+                            'input[type="file"][accept*="mp4" i]',
+                            'input[type="file"]',
+                        ],
+                    };
+
+                    const fileInput = bySelectors(platformFileSelectors[platform] || platformFileSelectors.tiktok);
                     if (fileInput) {
                         fileInput.style.display = "block";
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
+                        try { fileInput.removeAttribute("disabled"); } catch (_) {}
                         try { fileInput.click(); } catch (_) {}
                     }
 
@@ -6433,24 +6472,23 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                     }
 
-                    const clickables = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex], label, [aria-label*="upload" i], [aria-label*="select" i]'));
+                    const platformTriggerHints = {
+                        facebook: ["add video", "photo/video", "upload video", "next", "publish", "post"],
+                        instagram: ["select from computer", "next", "share", "post"],
+                        tiktok: ["select video", "upload", "choose file", "post", "publish"],
+                    };
+                    const activeHints = platformTriggerHints[platform] || platformTriggerHints.tiktok;
+
+                    const clickables = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex], label, [aria-label*="upload" i], [aria-label*="select" i], [data-testid], [class]'));
                     let clicked = false;
                     for (const node of clickables) {
                         const joined = [
                             norm(node.innerText || node.textContent),
                             norm(node.getAttribute("aria-label")),
+                            norm(node.getAttribute("data-testid")),
+                            norm(node.className),
                         ].join(" ");
-                        if (
-                            joined.includes("upload")
-                            || joined.includes("select file")
-                            || joined.includes("next")
-                            || joined.includes("share")
-                            || joined.includes("publish")
-                            || joined.includes("post")
-                            || joined.includes("video")
-                            || joined.includes("choose file")
-                            || joined.includes("add video")
-                        ) {
+                        if (activeHints.some((hint) => joined.includes(hint))) {
                             try { node.click(); clicked = true; } catch (_) {}
                         }
                     }
