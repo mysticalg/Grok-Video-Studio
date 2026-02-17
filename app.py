@@ -6555,7 +6555,7 @@ class MainWindow(QMainWindow):
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const captionText = String(payload.caption || "").trim();
-                    const captionRequired = platform === "facebook" && Boolean(captionText);
+                    const captionRequired = (platform === "facebook" || platform === "tiktok") && Boolean(captionText);
 
                     if (platform === "instagram") {
                         const createButton = findClickableByHints(["create"]);
@@ -6572,6 +6572,13 @@ class MainWindow(QMainWindow):
                         const facebookCreatePostButton = findClickableByHints(["create post", "what's on your mind"]);
                         if (facebookCreatePostButton) {
                             openUploadClicked = clickNodeOrAncestor(facebookCreatePostButton) || openUploadClicked;
+                        }
+                    }
+
+                    if (platform === "tiktok") {
+                        const tiktokUploadButton = findClickableByHints(["upload", "select video"]);
+                        if (tiktokUploadButton) {
+                            openUploadClicked = clickNodeOrAncestor(tiktokUploadButton) || openUploadClicked;
                         }
                     }
 
@@ -6624,7 +6631,7 @@ class MainWindow(QMainWindow):
                     };
 
                     let textFilled = false;
-                    if (platform === "facebook" && captionRequired) {
+                    if ((platform === "facebook" || platform === "tiktok") && captionRequired) {
                         const textTarget = findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
                     }
@@ -6716,6 +6723,7 @@ class MainWindow(QMainWindow):
 
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
+                    const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
                     if (platform === "facebook") {
                         if (fileReadySignal) {
                             if (!facebookState.fileReadyAtMs) {
@@ -6725,8 +6733,19 @@ class MainWindow(QMainWindow):
                             facebookState.fileReadyAtMs = 0;
                         }
                     }
+                    if (platform === "tiktok") {
+                        if (fileReadySignal) {
+                            if (!tiktokState.fileReadyAtMs) {
+                                tiktokState.fileReadyAtMs = Date.now();
+                            }
+                        } else {
+                            tiktokState.fileReadyAtMs = 0;
+                        }
+                    }
                     const facebookSubmitDelayElapsed = platform !== "facebook"
                         || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= 2000);
+                    const tiktokSubmitDelayElapsed = platform !== "tiktok"
+                        || Boolean(tiktokState.fileReadyAtMs && (Date.now() - Number(tiktokState.fileReadyAtMs)) >= 2000);
 
                     const nextClicked = false;
                     let submitClicked = false;
@@ -6781,6 +6800,13 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    if (platform === "tiktok" && fileReadySignal && captionReady && tiktokSubmitDelayElapsed) {
+                        const tiktokPostButton = findClickableByHints(["post", "publish"]);
+                        if (tiktokPostButton) {
+                            submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
+                        }
+                    }
+
                     return {
                         fileInputFound: Boolean(fileInput),
                         fileDialogTriggered,
@@ -6789,6 +6815,7 @@ class MainWindow(QMainWindow):
                         textFilled,
                         captionReady,
                         facebookSubmitDelayElapsed,
+                        tiktokSubmitDelayElapsed,
                         nextClicked,
                         submitClicked,
                         videoPathQueued: Boolean(requestedVideoPath),
@@ -6836,13 +6863,14 @@ class MainWindow(QMainWindow):
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             is_facebook = platform_name == "Facebook"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if is_facebook else True
-            completion_attempt_ready = submit_ok if is_facebook else (attempts >= 2)
+            is_tiktok = platform_name == "TikTok"
+            submit_ok = submit_clicked if (is_facebook or is_tiktok) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_tiktok) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
-                status_label.setText("Status: post submitted." if is_facebook else "Status: staged. Confirm/finalize post in this tab if needed.")
+                status_label.setText("Status: post submitted." if (is_facebook or is_tiktok) else "Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if is_facebook else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_tiktok) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
