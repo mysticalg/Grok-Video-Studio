@@ -6973,11 +6973,7 @@ class MainWindow(QMainWindow):
                         } else {
                             tiktokState.postNowReadyAtMs = 0;
                         }
-
-                        if (postNowButton && tiktokPostNowDelayElapsed) {
-                            tiktokConfirmClicked = clickTikTokPostNowButton(postNowButton) || false;
-                            submitClicked = submitClicked || tiktokConfirmClicked;
-                        }
+                        // Final TikTok confirmation click intentionally disabled for now.
                     }
 
                     return {
