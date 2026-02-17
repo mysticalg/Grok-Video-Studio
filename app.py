@@ -6925,16 +6925,13 @@ class MainWindow(QMainWindow):
                                 } catch (_) {}
                             }
 
-                            if (draftEditable) {
-                                textFilled = setTextValue(draftEditable, captionText) || textFilled;
-                            }
                         }
 
                         captionReady = !captionText || textFilled;
 
                         const tiktokPostButton = bySelectors([
-                            'button[data-e2e="post_video_button"]',
-                            'button[aria-disabled="false"][data-e2e="post_video_button"]',
+                            'button[data-e2e="save_draft_button"]',
+                            'button[aria-disabled="false"][data-e2e="save_draft_button"]',
                         ]);
                         if (tiktokPostButton) {
                             const ariaDisabled = String(tiktokPostButton.getAttribute("aria-disabled") || "").toLowerCase();
