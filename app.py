@@ -6936,10 +6936,16 @@ class MainWindow(QMainWindow):
                                         range.selectNodeContents(editableNode);
                                         selection.removeAllRanges();
                                         selection.addRange(range);
-                                    }
-                                    if (typeof document.execCommand === "function") {
-                                        try { document.execCommand("delete", false, null); } catch (_) {}
-                                        try { document.execCommand("insertText", false, nextText); } catch (_) {}
+
+                                        try {
+                                            range.deleteContents();
+                                            const textNode = document.createTextNode(nextText);
+                                            range.insertNode(textNode);
+                                            range.setStartAfter(textNode);
+                                            range.collapse(true);
+                                            selection.removeAllRanges();
+                                            selection.addRange(range);
+                                        } catch (_) {}
                                     }
                                 } catch (_) {}
 
