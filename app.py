@@ -6914,9 +6914,21 @@ class MainWindow(QMainWindow):
                     }
 
                     let tiktokConfirmClicked = false;
+                    let tiktokPostNowReady = false;
+                    let tiktokPostNowDelayElapsed = false;
                     if (platform === "tiktok") {
                         const postNowButton = findTikTokPostNowButton();
-                        if (postNowButton) {
+                        tiktokPostNowReady = Boolean(postNowButton);
+                        if (tiktokPostNowReady) {
+                            if (!tiktokState.postNowReadyAtMs) {
+                                tiktokState.postNowReadyAtMs = Date.now();
+                            }
+                            tiktokPostNowDelayElapsed = (Date.now() - Number(tiktokState.postNowReadyAtMs)) >= 2000;
+                        } else {
+                            tiktokState.postNowReadyAtMs = 0;
+                        }
+
+                        if (postNowButton && tiktokPostNowDelayElapsed) {
                             tiktokConfirmClicked = clickNodeOrAncestor(postNowButton) || false;
                             if (!tiktokConfirmClicked) {
                                 try {
@@ -6940,6 +6952,8 @@ class MainWindow(QMainWindow):
                         tiktokSubmitDelayElapsed,
                         tiktokPostButtonEnabled,
                         tiktokConfirmClicked,
+                        tiktokPostNowReady,
+                        tiktokPostNowDelayElapsed,
                         nextClicked,
                         submitClicked,
                         videoPathQueued: Boolean(requestedVideoPath),
@@ -6971,6 +6985,8 @@ class MainWindow(QMainWindow):
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostButtonEnabled"))
             tiktok_confirm_clicked = bool(isinstance(result, dict) and result.get("tiktokConfirmClicked"))
+            tiktok_post_now_ready = bool(isinstance(result, dict) and result.get("tiktokPostNowReady"))
+            tiktok_post_now_delay_elapsed = bool(isinstance(result, dict) and result.get("tiktokPostNowDelayElapsed"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -6982,7 +6998,7 @@ class MainWindow(QMainWindow):
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} tiktok_post_enabled={tiktok_post_enabled} tiktok_confirm_clicked={tiktok_confirm_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} tiktok_post_enabled={tiktok_post_enabled} tiktok_confirm_clicked={tiktok_confirm_clicked} tiktok_post_now_ready={tiktok_post_now_ready} tiktok_post_now_delay_elapsed={tiktok_post_now_delay_elapsed}"
             )
             pending["allow_file_dialog"] = False
 
