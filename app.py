@@ -6403,7 +6403,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        if attempts > 30:
+        if attempts > 5:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
             self._append_log(
@@ -6461,6 +6461,7 @@ class MainWindow(QMainWindow):
 
                     const platformFileSelectors = {
                         facebook: [
+                            'input[type="file"].x1s85apg[accept*="video/*" i]',
                             'input[type="file"][accept*="video" i]',
                             'input[type="file"][name*="video" i]',
                             'input[type="file"][accept*="mp4" i]',
@@ -6473,6 +6474,8 @@ class MainWindow(QMainWindow):
                             'input[type="file"]',
                         ],
                         tiktok: [
+                            'input[type="file"].jsx-2995057667[accept*="video/*" i]',
+                            'input[type="file"][accept*="video" i][multiple]',
                             'input[type="file"][accept*="video" i]',
                             'input[type="file"][accept*="mp4" i]',
                             'input[type="file"][name*="file" i]',
@@ -6605,8 +6608,19 @@ class MainWindow(QMainWindow):
                     if (fileReadySignal) {
                         const nextButton = findClickableByHints(platformNextHints[platform] || platformNextHints.tiktok);
                         if (nextButton) {
-                            try { nextButton.click(); nextClicked = true; } catch (_) {}
+                            nextClicked = clickNodeOrAncestor(nextButton);
                         }
+                    }
+
+                    const platformSubmitHints = {
+                        facebook: ["publish", "post", "share reel", "share"],
+                        instagram: ["share", "post"],
+                        tiktok: ["post", "publish"],
+                    };
+                    let submitClicked = false;
+                    if (fileReadySignal) {
+                        const submitButton = findClickableByHints(platformSubmitHints[platform] || []);
+                        submitClicked = clickNodeOrAncestor(submitButton);
                     }
 
                     return {
@@ -6616,6 +6630,7 @@ class MainWindow(QMainWindow):
                         fileReadySignal,
                         textFilled,
                         nextClicked,
+                        submitClicked,
                         videoPathQueued: Boolean(payload.video_path || payload.videoPath),
                     };
                 } catch (err) {
@@ -6639,6 +6654,7 @@ class MainWindow(QMainWindow):
             file_ready_signal = bool(isinstance(result, dict) and result.get("fileReadySignal"))
             text_filled = bool(isinstance(result, dict) and result.get("textFilled"))
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
+            submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
 
@@ -6649,10 +6665,10 @@ class MainWindow(QMainWindow):
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked}"
             )
 
-            if attempts in {6, 12, 18} and not file_found and not open_upload_clicked and not file_dialog_triggered:
+            if attempts in {3} and not file_found and not open_upload_clicked and not file_dialog_triggered:
                 upload_urls = {
                     "Facebook": "https://www.facebook.com/reels/create/",
                     "Instagram": "https://www.instagram.com/create/reel/",
@@ -6669,7 +6685,7 @@ class MainWindow(QMainWindow):
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered)
             caption_ok = (not caption_queued) or text_filled
-            if attempts >= 4 and file_stage_ok and caption_ok:
+            if attempts >= 3 and file_stage_ok and caption_ok and (next_clicked or submit_clicked or platform_name == "TikTok"):
                 status_label.setText("Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(f"{platform_name} browser automation staged successfully in its tab.")
