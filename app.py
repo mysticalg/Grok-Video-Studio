@@ -15,7 +15,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlparse
-from typing import Callable
+from typing import Any, Callable
 
 import requests
 from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
@@ -834,6 +834,10 @@ class MainWindow(QMainWindow):
         self.worker: GenerateWorker | None = None
         self.stitch_worker: StitchWorker | None = None
         self.upload_worker: UploadWorker | None = None
+        self.browser_upload_pending: dict[str, Any] | None = None
+        self.browser_upload_retry_timer = QTimer(self)
+        self.browser_upload_retry_timer.setSingleShot(True)
+        self.browser_upload_retry_timer.timeout.connect(self._run_social_browser_upload_step)
         self.browser_training_worker: BrowserTrainingWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
@@ -1189,7 +1193,13 @@ class MainWindow(QMainWindow):
         self.upload_tiktok_btn.clicked.connect(self.upload_selected_to_tiktok)
         upload_layout.addWidget(self.upload_tiktok_btn)
 
-        actions_layout.addWidget(upload_group, 13, 0, 1, 2)
+        self.use_browser_social_upload = QCheckBox("Use browser-based social upload automation")
+        self.use_browser_social_upload.setToolTip(
+            "When enabled, Facebook/Instagram/TikTok uploads use the embedded browser UI instead of API endpoints."
+        )
+        actions_layout.addWidget(self.use_browser_social_upload, 13, 0, 1, 2)
+
+        actions_layout.addWidget(upload_group, 14, 0, 1, 2)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
@@ -1198,7 +1208,7 @@ class MainWindow(QMainWindow):
             "background-color: #ffdd00; color: #222; border-radius: 8px;"
         )
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
-        actions_layout.addWidget(self.buy_coffee_btn, 14, 0, 1, 2)
+        actions_layout.addWidget(self.buy_coffee_btn, 15, 0, 1, 2)
 
         left_layout.addWidget(actions_group)
 
@@ -1288,6 +1298,9 @@ class MainWindow(QMainWindow):
 
         self.upload_progress_label = QLabel("Upload progress: idle")
         self.upload_progress_label.setStyleSheet("color: #9fb3c8;")
+        self.upload_progress_label.setWordWrap(True)
+        self.upload_progress_label.setMaximumWidth(560)
+        self.upload_progress_label.setToolTip("Upload progress details")
         log_layout.addWidget(self.upload_progress_label)
 
         self.upload_progress_bar = QProgressBar()
@@ -1861,6 +1874,7 @@ class MainWindow(QMainWindow):
             "training_timeout": self.training_timeout.value(),
             "training_openai_model": self.training_openai_model.text(),
             "training_use_embedded_browser": self.training_use_embedded_browser.isChecked(),
+            "use_browser_social_upload": self.use_browser_social_upload.isChecked(),
             "training_trace_path": self.training_trace_path.text(),
             "training_process_path": self.training_process_path.text(),
             "ai_social_metadata": {
@@ -2031,6 +2045,8 @@ class MainWindow(QMainWindow):
             self.training_openai_model.setText(str(preferences["training_openai_model"]))
         if "training_use_embedded_browser" in preferences:
             self.training_use_embedded_browser.setChecked(bool(preferences["training_use_embedded_browser"]))
+        if "use_browser_social_upload" in preferences:
+            self.use_browser_social_upload.setChecked(bool(preferences["use_browser_social_upload"]))
         if "training_trace_path" in preferences:
             self.training_trace_path.setText(str(preferences["training_trace_path"]))
         if "training_process_path" in preferences:
@@ -2120,6 +2136,8 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
             if self.embedded_training_active and self.training_use_embedded_browser.isChecked():
                 self._inject_embedded_training_capture_script()
+            if self.browser_upload_pending is not None:
+                self.browser_upload_retry_timer.start(900)
 
     def _retry_continue_after_small_download(self, variant: int) -> None:
         source_video = self.continue_from_frame_current_source_video
@@ -5939,6 +5957,16 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
         
+        if self.use_browser_social_upload.isChecked():
+            caption = self._compose_social_text(description, hashtags)
+            self._start_social_browser_upload(
+                platform_name="Facebook",
+                video_path=video_path,
+                caption=caption,
+                title=title,
+            )
+            return
+
         access_token = self.facebook_access_token.text().strip()
         page_id = self.facebook_page_id.text().strip()
         if not access_token or len(access_token) < 50:  # rough check for validity
@@ -5968,6 +5996,15 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
+        if self.use_browser_social_upload.isChecked():
+            self._start_social_browser_upload(
+                platform_name="Instagram",
+                video_path=selected_video["video_file_path"],
+                caption=self._compose_social_text(caption, hashtags),
+                title="",
+            )
+            return
+
         self._start_upload(
             platform_name="Instagram",
             upload_fn=upload_video_to_instagram_reels,
@@ -5991,6 +6028,16 @@ class MainWindow(QMainWindow):
         _, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=False)
         if not accepted:
             return
+
+        if self.use_browser_social_upload.isChecked():
+            self._start_social_browser_upload(
+                platform_name="TikTok",
+                video_path=video_path,
+                caption=self._compose_social_text(caption, hashtags),
+                title="",
+            )
+            return
+
         video_size = os.path.getsize(video_path)  # MUST be exact bytes!
         MIN_CHUNK = 5 * 1024 * 1024     # 5242880
         MAX_CHUNK = 64 * 1024 * 1024    # 67108864
@@ -6118,6 +6165,171 @@ class MainWindow(QMainWindow):
         else:
             print("Status check failed:", resp.text)
 
+    def _start_social_browser_upload(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
+        if self.upload_worker is not None and self.upload_worker.isRunning():
+            QMessageBox.information(self, "Upload In Progress", "Please wait for the current upload to finish.")
+            return
+
+        social_urls = {
+            "Facebook": "https://www.facebook.com/reels/create/",
+            "Instagram": "https://www.instagram.com/create/reel/",
+            "TikTok": "https://www.tiktok.com/upload",
+        }
+        target_url = social_urls.get(platform_name, "")
+        if not target_url:
+            QMessageBox.warning(self, "Unsupported Platform", f"No browser upload URL configured for {platform_name}.")
+            return
+
+        self.browser_upload_pending = {
+            "platform": platform_name,
+            "video_path": str(video_path),
+            "caption": str(caption or ""),
+            "title": str(title or ""),
+            "attempts": 0,
+        }
+
+        self.upload_progress_bar.setVisible(True)
+        self.upload_progress_bar.setValue(10)
+        self.upload_progress_label.setText(
+            f"Upload progress: opening {platform_name} upload page in embedded browser..."
+        )
+        self._append_log(
+            f"Browser-based {platform_name} upload mode enabled: opening {target_url} and attempting automated form fill/post."
+        )
+        self.browser_tabs.setCurrentIndex(0)
+        self.browser.setUrl(QUrl(target_url))
+        self.browser_upload_retry_timer.start(2000)
+
+    def _run_social_browser_upload_step(self) -> None:
+        if not self.browser_upload_pending:
+            return
+
+        pending = self.browser_upload_pending
+        pending["attempts"] = int(pending.get("attempts", 0)) + 1
+        platform_name = str(pending.get("platform") or "Social")
+        attempts = int(pending["attempts"])
+
+        if attempts > 12:
+            self.upload_progress_label.setText(
+                f"Upload progress: {platform_name} browser automation timed out; finish manually in browser."
+            )
+            self.upload_progress_bar.setVisible(False)
+            self._append_log(
+                f"WARNING: {platform_name} browser automation timed out after {attempts - 1} attempts. "
+                "Page remains open for manual completion."
+            )
+            self.browser_upload_pending = None
+            return
+
+        js_payload = json.dumps(
+            {
+                "caption": str(pending.get("caption") or ""),
+                "title": str(pending.get("title") or ""),
+                "video_path": str(pending.get("video_path") or ""),
+                "platform": platform_name.lower(),
+            }
+        )
+        script = f"""
+            (() => {{
+                const payload = {js_payload};
+                const norm = (s) => String(s || '').toLowerCase();
+                const pick = (arr) => arr.find(Boolean) || null;
+
+                const fileInput = pick(Array.from(document.querySelectorAll('input[type="file"]')));
+                if (fileInput) {{
+                    fileInput.style.display = 'block';
+                    fileInput.style.visibility = 'visible';
+                    fileInput.removeAttribute('hidden');
+                    fileInput.scrollIntoView({{ behavior: 'instant', block: 'center' }});
+                    fileInput.focus();
+                }}
+
+                const textTargets = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]'));
+                const fullText = [payload.title, payload.caption].filter(Boolean).join('\n\n').trim();
+                let textFilled = false;
+                for (const node of textTargets) {{
+                    const aria = norm(node.getAttribute('aria-label'));
+                    const ph = norm(node.getAttribute('placeholder'));
+                    const name = norm(node.getAttribute('name'));
+                    const id = norm(node.id);
+                    const hint = `${{aria}} ${{ph}} ${{name}} ${{id}}`;
+                    const match = !hint || hint.includes('caption') || hint.includes('description') || hint.includes('title') || hint.includes('post');
+                    if (!match) continue;
+                    try {{
+                        if (node.isContentEditable) {{
+                            node.focus();
+                            node.textContent = fullText;
+                        }} else {{
+                            node.focus();
+                            node.value = fullText;
+                        }}
+                        node.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        node.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        textFilled = true;
+                        break;
+                    }} catch (_) {{}}
+                }}
+
+                const clickables = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex]'));
+                let clicked = false;
+                for (const node of clickables) {{
+                    const txt = norm((node.innerText || node.textContent || '').trim());
+                    const aria = norm(node.getAttribute('aria-label'));
+                    const joined = `${{txt}} ${{aria}}`;
+                    if (joined.includes('upload') || joined.includes('select file') || joined.includes('next') || joined.includes('share') || joined.includes('publish') || joined.includes('post')) {{
+                        try {{
+                            node.click();
+                            clicked = true;
+                        }} catch (_) {{}}
+                    }}
+                }}
+
+                return {{
+                    url: location.href,
+                    fileInputFound: Boolean(fileInput),
+                    textFilled,
+                    clicked,
+                }};
+            }})()
+        """
+
+        def _after(result):
+            if not self.browser_upload_pending:
+                return
+            file_found = bool(isinstance(result, dict) and result.get("fileInputFound"))
+            text_filled = bool(isinstance(result, dict) and result.get("textFilled"))
+            clicked = bool(isinstance(result, dict) and result.get("clicked"))
+
+            self.upload_progress_bar.setValue(min(95, 15 + attempts * 6))
+            self.upload_progress_label.setText(
+                f"Upload progress: {platform_name} browser automation attempt {attempts} "
+                f"(file input={'yes' if file_found else 'no'}, caption={'yes' if text_filled else 'no'})."
+            )
+
+            if attempts == 1:
+                self._append_log(
+                    f"{platform_name} browser upload started. If prompted, log in and keep this tab open while automation continues."
+                )
+            if attempts == 3 and not file_found:
+                self._append_log(
+                    f"WARNING: {platform_name} page does not expose a standard file input yet. "
+                    "You may need to click the visible upload area once."
+                )
+            if attempts >= 6 and (file_found or text_filled or clicked):
+                self.upload_progress_label.setText(
+                    f"Upload progress: {platform_name} browser automation staged. Confirm/finalize in the social site if needed."
+                )
+                self.upload_progress_bar.setValue(100)
+                self._append_log(
+                    f"{platform_name} browser automation completed staging steps; verify the final post confirmation in the browser page."
+                )
+                self.browser_upload_pending = None
+                return
+
+            self.browser_upload_retry_timer.start(1600)
+
+        self.browser.page().runJavaScript(script, _after)
+
     def _start_upload(
         self,
         platform_name: str,
@@ -6151,9 +6363,17 @@ class MainWindow(QMainWindow):
 
     def _on_upload_progress(self, value: int, message: str) -> None:
         bounded_value = max(0, min(100, int(value)))
-        self.upload_progress_label.setText(f"Upload progress: {message}")
+        formatted_message = self._format_upload_progress_message(message)
+        self.upload_progress_label.setText(f"Upload progress: {formatted_message}")
+        self.upload_progress_label.setToolTip(str(message or ""))
         self.upload_progress_bar.setVisible(True)
         self.upload_progress_bar.setValue(bounded_value)
+
+    def _format_upload_progress_message(self, message: str, max_length: int = 180) -> str:
+        text = " ".join(str(message or "").split())
+        if len(text) <= max_length:
+            return text
+        return text[: max_length - 1].rstrip() + "…"
 
     def _on_upload_finished(self, platform_name: str, upload_id: str, dialog_title: str, success_prefix: str) -> None:
         self.upload_progress_label.setText("Upload progress: complete")
