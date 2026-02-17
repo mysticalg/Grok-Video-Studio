@@ -6554,6 +6554,8 @@ class MainWindow(QMainWindow):
                     const videoName = String(payload.video_name || "upload.mp4");
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
+                    const captionText = String(payload.caption || "").trim();
+                    const captionRequired = platform === "facebook" && Boolean(captionText);
 
                     if (platform === "instagram") {
                         const createButton = findClickableByHints(["create"]);
@@ -6567,12 +6569,62 @@ class MainWindow(QMainWindow):
                     }
 
                     if (platform === "facebook") {
+                        const facebookCreatePostButton = findClickableByHints(["create post", "what's on your mind"]);
+                        if (facebookCreatePostButton) {
+                            openUploadClicked = clickNodeOrAncestor(facebookCreatePostButton) || openUploadClicked;
+                        }
+                    }
+
+                    const setTextValue = (node, value) => {
+                        if (!node) return false;
+                        const text = String(value || "");
+                        try {
+                            if ("value" in node) {
+                                node.focus();
+                                node.value = text;
+                                node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                return true;
+                            }
+                        } catch (_) {}
+                        try {
+                            if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
+                                node.focus();
+                                node.textContent = text;
+                                node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
+                                node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                return true;
+                            }
+                        } catch (_) {}
+                        return false;
+                    };
+                    const findTextInputTarget = () => {
+                        const selectors = [
+                            'textarea[aria-label*="caption" i]',
+                            'textarea[placeholder*="caption" i]',
+                            'textarea[aria-label*="write" i]',
+                            'textarea[placeholder*="write" i]',
+                            'div[role="textbox"][contenteditable="true"]',
+                            'div[contenteditable="true"][aria-label*="write" i]',
+                            'div[contenteditable="true"][aria-label*="post" i]',
+                            'textarea',
+                        ];
+                        return bySelectors(selectors);
+                    };
+
+                    let textFilled = false;
+                    if (platform === "facebook" && captionRequired) {
+                        const textTarget = findTextInputTarget();
+                        textFilled = setTextValue(textTarget, captionText);
+                    }
+                    const captionReady = !captionRequired || textFilled;
+
+                    if (platform === "facebook" && captionReady) {
                         const facebookUploadButton = findClickableByHints([
                             "photo/video",
                             "photo or video",
                             "add photo",
                             "add video",
-                            "create post",
                         ]);
                         if (facebookUploadButton) {
                             openUploadClicked = clickNodeOrAncestor(facebookUploadButton) || openUploadClicked;
@@ -6618,7 +6670,7 @@ class MainWindow(QMainWindow):
                         }
                     };
                     let fileDialogTriggered = false;
-                    if (fileInput) {
+                    if (fileInput && (platform !== "facebook" || captionReady)) {
                         if (requestedVideoPath) {
                             try { fileInput.setAttribute("data-codex-video-path", requestedVideoPath); } catch (_) {}
                         }
@@ -6645,61 +6697,29 @@ class MainWindow(QMainWindow):
                         }
                     }
 
-                    const setTextValue = (node, value) => {
-                        if (!node) return false;
-                        const text = String(value || "");
-                        try {
-                            if ("value" in node) {
-                                node.focus();
-                                node.value = text;
-                                node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                                node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return true;
-                            }
-                        } catch (_) {}
-                        try {
-                            if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
-                                node.focus();
-                                node.textContent = text;
-                                node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
-                                node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return true;
-                            }
-                        } catch (_) {}
-                        return false;
-                    };
-                    const findTextInputTarget = () => {
-                        const selectors = [
-                            'textarea[aria-label*="caption" i]',
-                            'textarea[placeholder*="caption" i]',
-                            'textarea[aria-label*="write" i]',
-                            'textarea[placeholder*="write" i]',
-                            'div[role="textbox"][contenteditable="true"]',
-                            'div[contenteditable="true"][aria-label*="write" i]',
-                            'div[contenteditable="true"][aria-label*="post" i]',
-                            'textarea',
-                        ];
-                        return bySelectors(selectors);
-                    };
-
-                    let textFilled = false;
-                    if (platform === "facebook") {
-                        const captionText = String(payload.caption || "").trim();
-                        if (captionText) {
-                            const textTarget = findTextInputTarget();
-                            textFilled = setTextValue(textTarget, captionText);
-                        }
-                    }
-
                     const fileReadySignal = Boolean(
                         (fileInput && fileInput.files && fileInput.files.length > 0)
                         || document.querySelector('video')
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
                     );
 
+                    const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
+                    const facebookState = uploadState.facebook = uploadState.facebook || {};
+                    if (platform === "facebook") {
+                        if (fileReadySignal) {
+                            if (!facebookState.fileReadyAtMs) {
+                                facebookState.fileReadyAtMs = Date.now();
+                            }
+                        } else {
+                            facebookState.fileReadyAtMs = 0;
+                        }
+                    }
+                    const facebookSubmitDelayElapsed = platform !== "facebook"
+                        || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= 2000);
+
                     const nextClicked = false;
                     let submitClicked = false;
-                    if (platform === "facebook" && fileReadySignal) {
+                    if (platform === "facebook" && fileReadySignal && captionReady && facebookSubmitDelayElapsed) {
                         const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
                         if (explicitPostButton) {
                             submitClicked = clickNodeOrAncestor(explicitPostButton) || submitClicked;
@@ -6756,6 +6776,8 @@ class MainWindow(QMainWindow):
                         openUploadClicked,
                         fileReadySignal,
                         textFilled,
+                        captionReady,
+                        facebookSubmitDelayElapsed,
                         nextClicked,
                         submitClicked,
                         videoPathQueued: Boolean(requestedVideoPath),
