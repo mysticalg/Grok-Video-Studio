@@ -6906,6 +6906,11 @@ class MainWindow(QMainWindow):
                     let tiktokPostEnabled = false;
                     const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
                     if (platform === "tiktok") {
+                        const nowMs = Date.now();
+                        const minTikTokActionGapMs = 900;
+                        const actionSpacingElapsed = !tiktokState.lastActionAtMs
+                            || (nowMs - Number(tiktokState.lastActionAtMs)) >= minTikTokActionGapMs;
+
                         if (captionText) {
                             const draftEditorContainer = bySelectors(['div.DraftEditor-editorContainer']);
                             const draftSpan = draftEditorContainer
@@ -6964,11 +6969,17 @@ class MainWindow(QMainWindow):
                                 return wroteText || normalizedNodeText(editableNode) === norm(nextText);
                             };
 
-                            if (draftEditable || draftSpan) {
+                            const captionAlreadyPresent = draftEditable
+                                ? normalizedNodeText(draftEditable) === norm(captionText)
+                                : false;
+                            if (captionAlreadyPresent) {
+                                textFilled = true;
+                            } else if (actionSpacingElapsed && (draftEditable || draftSpan)) {
                                 try {
                                     textFilled = setTikTokCaption(draftEditable, draftSpan, captionText) || textFilled;
                                     if (textFilled) {
                                         tiktokState.captionSetAtMs = Date.now();
+                                        tiktokState.lastActionAtMs = tiktokState.captionSetAtMs;
                                     }
                                 } catch (_) {}
                             }
@@ -6978,6 +6989,8 @@ class MainWindow(QMainWindow):
                         captionReady = !captionText || textFilled;
                         const tiktokSubmitDelayElapsed = !captionText
                             || Boolean(tiktokState.captionSetAtMs && (Date.now() - Number(tiktokState.captionSetAtMs)) >= 1200);
+                        const tiktokSubmitSpacingElapsed = !tiktokState.lastSubmitAttemptAtMs
+                            || (Date.now() - Number(tiktokState.lastSubmitAttemptAtMs)) >= 1500;
 
                         const tiktokPostButton = bySelectors([
                             'button[data-e2e="save_draft_button"]',
@@ -6988,8 +7001,13 @@ class MainWindow(QMainWindow):
                             const dataDisabled = String(tiktokPostButton.getAttribute("data-disabled") || "").toLowerCase();
                             const nativeDisabled = Boolean(tiktokPostButton.disabled);
                             tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
-                            if (captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed) {
+                            if (captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed) {
                                 submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
+                                if (submitClicked) {
+                                    const clickedAtMs = Date.now();
+                                    tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
+                                    tiktokState.lastActionAtMs = clickedAtMs;
+                                }
                             }
                         }
                     }
