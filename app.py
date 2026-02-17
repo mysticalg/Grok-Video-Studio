@@ -1305,7 +1305,9 @@ class MainWindow(QMainWindow):
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
+        developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
+        if developer_extras_attr is not None:
+            browser_settings.setAttribute(developer_extras_attr, True)
 
         self.browser.setUrl(QUrl("https://grok.com/imagine"))
         self.browser.loadFinished.connect(self._on_browser_load_finished)
@@ -1502,7 +1504,9 @@ class MainWindow(QMainWindow):
         )
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
-        browser.settings().setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
+        developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
+        if developer_extras_attr is not None:
+            browser.settings().setAttribute(developer_extras_attr, True)
         browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
         layout.addWidget(browser, 1)
