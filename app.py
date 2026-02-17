@@ -6701,7 +6701,44 @@ class MainWindow(QMainWindow):
                     if (platform === "facebook" && fileReadySignal) {
                         const submitButton = findClickableByHints(["post", "share"]);
                         if (submitButton) {
-                            submitClicked = clickNodeOrAncestor(submitButton);
+                            submitClicked = clickNodeOrAncestor(submitButton) || submitClicked;
+                        }
+
+                        if (!submitClicked) {
+                            const submitInput = bySelectors(['input[type="submit"]']);
+                            if (submitInput) {
+                                const form = submitInput.form || submitInput.closest('form');
+                                try {
+                                    submitInput.removeAttribute('disabled');
+                                    submitInput.style.display = 'block';
+                                    submitInput.style.visibility = 'visible';
+                                    submitInput.style.opacity = '1';
+                                } catch (_) {}
+                                try {
+                                    if (form && typeof form.requestSubmit === 'function') {
+                                        form.requestSubmit(submitInput);
+                                        submitClicked = true;
+                                    }
+                                } catch (_) {}
+                                if (!submitClicked) {
+                                    try {
+                                        submitInput.click();
+                                        submitClicked = true;
+                                    } catch (_) {}
+                                }
+                                if (!submitClicked) {
+                                    try {
+                                        submitInput.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+                                        submitClicked = true;
+                                    } catch (_) {}
+                                }
+                                if (!submitClicked && form) {
+                                    try {
+                                        form.submit();
+                                        submitClicked = true;
+                                    } catch (_) {}
+                                }
+                            }
                         }
                     }
 
