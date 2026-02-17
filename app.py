@@ -6665,7 +6665,12 @@ class MainWindow(QMainWindow):
                         try {
                             if ("value" in node) {
                                 node.focus();
-                                node.value = text;
+                                const valueSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), "value")?.set;
+                                if (valueSetter) {
+                                    valueSetter.call(node, text);
+                                } else {
+                                    node.value = text;
+                                }
                                 node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
                                 node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
                                 return true;
@@ -6674,7 +6679,17 @@ class MainWindow(QMainWindow):
                         try {
                             if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
                                 node.focus();
-                                node.textContent = text;
+                                const selection = window.getSelection();
+                                if (selection) {
+                                    const range = document.createRange();
+                                    range.selectNodeContents(node);
+                                    selection.removeAllRanges();
+                                    selection.addRange(range);
+                                }
+                                try { document.execCommand("insertText", false, text); } catch (_) {}
+                                if (!norm(node.innerText || node.textContent).includes(norm(text))) {
+                                    node.textContent = text;
+                                }
                                 node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
                                 node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
                                 return true;
@@ -6916,14 +6931,7 @@ class MainWindow(QMainWindow):
                                     ? draftEditorContainer.querySelector('[contenteditable="true"]')
                                     : null);
 
-                            if (draftSpan) {
-                                try {
-                                    draftSpan.textContent = captionText;
-                                    draftSpan.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: captionText, inputType: "insertText" }));
-                                    draftSpan.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                    textFilled = true;
-                                } catch (_) {}
-                            }
+                            textFilled = setTextValue(draftEditable || draftSpan, captionText) || textFilled;
 
                         }
 
