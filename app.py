@@ -2766,7 +2766,7 @@ class MainWindow(QMainWindow):
         self._start_manual_browser_image_generation(manual_prompt, self.count.value())
 
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
-        self.manual_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
+        self.manual_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._append_log(
             "Manual mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
@@ -2776,7 +2776,7 @@ class MainWindow(QMainWindow):
         self._submit_next_manual_variant()
 
     def _start_manual_browser_image_generation(self, prompt: str, count: int) -> None:
-        self.manual_image_generation_queue = [{"prompt": prompt, "variant": idx} for idx in range(1, count + 1)]
+        self.manual_image_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._append_log(
             "Manual image mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
@@ -2795,9 +2795,15 @@ class MainWindow(QMainWindow):
 
         item = self.manual_image_generation_queue.pop(0)
         variant = item["variant"]
-        prompt = item["prompt"]
         attempts = int(item.get("attempts", 0)) + 1
         item["attempts"] = attempts
+        prompt = self.manual_prompt.toPlainText().strip()
+        if not prompt:
+            self._append_log(
+                f"ERROR: Manual image variant {variant} skipped because the Manual Prompt box is empty."
+            )
+            QTimer.singleShot(0, self._submit_next_manual_image_variant)
+            return
         self.pending_manual_variant_for_download = variant
         self.pending_manual_download_type = "image"
         self.pending_manual_image_prompt = prompt
@@ -3467,8 +3473,18 @@ class MainWindow(QMainWindow):
         )
 
     def _resolve_latest_video_for_continuation(self) -> str | None:
-        if self.videos:
-            return self.videos[-1]["video_file_path"]
+        in_session_files: list[Path] = []
+        for video in self.videos:
+            video_path_raw = video.get("video_file_path")
+            if not video_path_raw:
+                continue
+            video_path = Path(str(video_path_raw))
+            if video_path.is_file():
+                in_session_files.append(video_path)
+
+        if in_session_files:
+            latest_in_session = max(in_session_files, key=lambda path: path.stat().st_mtime)
+            return str(latest_in_session)
 
         candidates: list[Path] = []
         for pattern in ("*.mp4", "*.mov", "*.webm"):
@@ -3496,8 +3512,14 @@ class MainWindow(QMainWindow):
 
         item = self.manual_generation_queue.pop(0)
         remaining_count = len(self.manual_generation_queue)
-        prompt = item["prompt"]
         variant = item["variant"]
+        prompt = self.manual_prompt.toPlainText().strip()
+        if not prompt:
+            self._append_log(
+                f"ERROR: Manual variant {variant} skipped because the Manual Prompt box is empty."
+            )
+            QTimer.singleShot(0, self._submit_next_manual_variant)
+            return
         self.pending_manual_variant_for_download = variant
         self.pending_manual_download_type = "video"
         self.manual_download_click_sent = False
