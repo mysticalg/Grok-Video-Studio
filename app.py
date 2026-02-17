@@ -6454,7 +6454,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        max_attempts = 2
+        max_attempts = 6 if platform_name == "Instagram" else 2
         if attempts > max_attempts:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
@@ -6462,6 +6462,7 @@ class MainWindow(QMainWindow):
                 f"WARNING: {platform_name} browser automation timed out after {attempts - 1} attempts."
             )
             self.social_upload_pending.pop(platform_name, None)
+            return
             
 
         payload_json = json.dumps(
@@ -6521,29 +6522,71 @@ class MainWindow(QMainWindow):
                         norm(node.getAttribute("title")),
                         norm(node.getAttribute("data-testid")),
                     ].join(" ");
+                    const injectClickActions = (target) => {
+                        if (!target) return false;
+                        try { target.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                        const events = [
+                            ["pointerdown", PointerEvent],
+                            ["mousedown", MouseEvent],
+                            ["pointerup", PointerEvent],
+                            ["mouseup", MouseEvent],
+                            ["click", MouseEvent],
+                        ];
+                        let dispatched = false;
+                        for (const [eventName, EventCtor] of events) {
+                            try {
+                                const ev = new EventCtor(eventName, { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 });
+                                target.dispatchEvent(ev);
+                                dispatched = true;
+                            } catch (_) {}
+                        }
+                        try {
+                            if (typeof target.click === "function") {
+                                target.click();
+                                dispatched = true;
+                            }
+                        } catch (_) {}
+                        return dispatched;
+                    };
                     const clickNodeOrAncestor = (node) => {
                         if (!node) return false;
                         const candidates = [
                             node,
-                            node.closest && node.closest('button, [role="button"], a, div[tabindex], div'),
+                            node.closest && node.closest('button, [role="button"], a, [role="link"], div[tabindex], div'),
                             node.parentElement,
                         ].filter(Boolean);
                         for (const candidate of candidates) {
-                            try { candidate.click(); return true; } catch (_) {}
+                            if (injectClickActions(candidate)) return true;
                         }
                         return false;
                     };
-                    const findClickableByHints = (hints) => {
+                    const findClickableByHints = (hints, options = {}) => {
                         const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
-                        const clickableNodes = collectDeep('button, [role="button"], a, div[tabindex], span, div');
+                        const excludeHints = (options.excludeHints || []).map((hint) => norm(hint)).filter(Boolean);
+                        const contexts = (options.contexts && options.contexts.length)
+                            ? options.contexts
+                            : [document];
+                        const clickableNodes = [];
+                        for (const contextNode of contexts) {
+                            let nodes = [];
+                            try {
+                                nodes = Array.from(contextNode.querySelectorAll('button, [role="button"], a, [role="link"], div[tabindex], span, div'));
+                            } catch (_) {}
+                            clickableNodes.push(...nodes);
+                        }
+                        const isValidMatch = (text) => {
+                            if (!normalizedHints.some((hint) => text.includes(hint))) return false;
+                            if (excludeHints.length && excludeHints.some((hint) => text.includes(hint))) return false;
+                            return true;
+                        };
                         for (const node of clickableNodes) {
                             if (!isVisible(node)) continue;
                             const text = normalizedNodeText(node);
-                            if (normalizedHints.some((hint) => text.includes(hint))) return node;
+                            if (isValidMatch(text)) return node;
                         }
                         for (const node of clickableNodes) {
                             const text = normalizedNodeText(node);
-                            if (normalizedHints.some((hint) => text.includes(hint))) return node;
+                            if (isValidMatch(text)) return node;
                         }
                         return null;
                     };
@@ -6555,16 +6598,52 @@ class MainWindow(QMainWindow):
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const captionText = String(payload.caption || "").trim();
-                    const captionRequired = platform === "facebook" && Boolean(captionText);
-
+                    const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
+                    const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
+                    const instagramState = uploadState.instagram = uploadState.instagram || {};
                     if (platform === "instagram") {
-                        const createButton = findClickableByHints(["create"]);
-                        if (createButton) {
-                            openUploadClicked = clickNodeOrAncestor(createButton) || openUploadClicked;
-                        }
-                        const postButton = findClickableByHints(["post"]);
-                        if (postButton) {
-                            openUploadClicked = clickNodeOrAncestor(postButton) || openUploadClicked;
+                        const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
+                        if (instagramDialog) {
+                            instagramState.dialogSeen = true;
+                            instagramState.postClicked = true;
+                        } else {
+                            if (!instagramState.createClicked) {
+                                const createSpanButton = pick(collectDeep('span.html-span[aria-describedby="_r_m_"], span[aria-describedby="_r_m_"], span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
+                                const createButton = createSpanButton
+                                    || bySelectors([
+                                        'div[role="button"][tabindex="0"]',
+                                        'button',
+                                        'a[role="link"]',
+                                    ])
+                                    || findClickableByHints(["create", "new post"]);
+                                if (createButton) {
+                                    const clicked = clickNodeOrAncestor(createButton);
+                                    openUploadClicked = clicked || openUploadClicked;
+                                    if (clicked) instagramState.createClicked = true;
+                                }
+                            } else if (!instagramState.dialogSeen) {
+                                const menuContexts = [
+                                    ...collectDeep('div[role="menu"]'),
+                                    ...collectDeep('div[role="dialog"]:not([aria-label*="create new post" i])'),
+                                ];
+                                const postButton = pick(
+                                    menuContexts.flatMap((ctx) => {
+                                        try {
+                                            return Array.from(ctx.querySelectorAll('a[href="#"][role="link"][tabindex="0"] > div.html-div, a[href="#"][role="link"][tabindex="0"], a[role="link"][href="#"][tabindex="0"]'));
+                                        } catch (_) {
+                                            return [];
+                                        }
+                                    })
+                                ) || findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel"] });
+                                if (postButton) {
+                                    const postText = normalizedNodeText(postButton);
+                                    if (postText.includes("post") && !postText.includes("reel")) {
+                                        const clicked = clickNodeOrAncestor(postButton);
+                                        openUploadClicked = clicked || openUploadClicked;
+                                        if (clicked) instagramState.postClicked = true;
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -6624,11 +6703,12 @@ class MainWindow(QMainWindow):
                     };
 
                     let textFilled = false;
+                    let captionReady = !captionRequired;
                     if (platform === "facebook" && captionRequired) {
                         const textTarget = findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
+                        captionReady = textFilled;
                     }
-                    const captionReady = !captionRequired || textFilled;
 
                     if (platform === "facebook" && captionReady) {
                         const facebookUploadButton = findClickableByHints([
@@ -6644,6 +6724,19 @@ class MainWindow(QMainWindow):
 
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
+                        if (platform === "instagram") {
+                            const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
+                            if (!instagramDialog) return null;
+
+                            const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data" i][method="post" i][role="presentation"] input[type="file"]'));
+                            const exactInstagramInput = formInputs.find((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                const className = norm(node.className);
+                                return accept.includes("video/mp4") && accept.includes("video/quicktime") && className.includes("x1s85apg");
+                            });
+                            if (exactInstagramInput) return exactInstagramInput;
+                            return null;
+                        }
                         if (platform === "facebook") {
                             const byFacebookAccept = fileInputs.find((node) => {
                                 const accept = norm(node.getAttribute("accept"));
@@ -6714,7 +6807,6 @@ class MainWindow(QMainWindow):
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
                     );
 
-                    const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     if (platform === "facebook") {
                         if (fileReadySignal) {
@@ -6728,8 +6820,33 @@ class MainWindow(QMainWindow):
                     const facebookSubmitDelayElapsed = platform !== "facebook"
                         || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= 2000);
 
-                    const nextClicked = false;
+                    let nextClicked = false;
                     let submitClicked = false;
+                    if (platform === "instagram" && fileReadySignal) {
+                        const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']) || document;
+                        const nextButton = pick(Array.from(instagramDialog.querySelectorAll('div[role="button"][tabindex="0"], button')).filter((node) => normalizedNodeText(node).includes("next"))) || findClickableByHints(["next"]);
+                        const nextClicks = Number(instagramState.nextClicks || 0);
+                        if (nextButton && nextClicks < 2) {
+                            nextClicked = clickNodeOrAncestor(nextButton) || nextClicked;
+                            if (nextClicked) {
+                                instagramState.nextClicks = nextClicks + 1;
+                            }
+                        }
+
+                        if (Number(instagramState.nextClicks || 0) >= 2 && captionRequired) {
+                            const textTarget = findTextInputTarget();
+                            textFilled = setTextValue(textTarget, captionText) || textFilled;
+                        }
+                        captionReady = !captionRequired || textFilled;
+
+                        if (Number(instagramState.nextClicks || 0) >= 2 && captionReady) {
+                            const shareButton = pick(Array.from(instagramDialog.querySelectorAll('div[role="button"][tabindex="0"], button, a')).filter((node) => normalizedNodeText(node).includes("share"))) || findClickableByHints(["share"]);
+                            if (shareButton) {
+                                submitClicked = clickNodeOrAncestor(shareButton) || submitClicked;
+                            }
+                        }
+                    }
+
                     if (platform === "facebook" && fileReadySignal && captionReady && facebookSubmitDelayElapsed) {
                         const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
                         if (explicitPostButton) {
@@ -6835,14 +6952,19 @@ class MainWindow(QMainWindow):
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             is_facebook = platform_name == "Facebook"
+            is_instagram = platform_name == "Instagram"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if is_facebook else True
-            completion_attempt_ready = submit_ok if is_facebook else (attempts >= 2)
+            submit_ok = submit_clicked if (is_facebook or is_instagram) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_instagram) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
-                status_label.setText("Status: post submitted." if is_facebook else "Status: staged. Confirm/finalize post in this tab if needed.")
+                status_label.setText(
+                    "Status: post submitted."
+                    if (is_facebook or is_instagram)
+                    else "Status: staged. Confirm/finalize post in this tab if needed."
+                )
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if is_facebook else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
