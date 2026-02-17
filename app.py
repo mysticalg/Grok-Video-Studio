@@ -6569,6 +6569,7 @@ class MainWindow(QMainWindow):
                         const findInstagramPostMenuItem = () => {
                             const menuSelectors = [
                                 '[role="menu"] [role="menuitem"]',
+                                '[role="menu"] button',
                                 'div[role="dialog"] [role="menuitem"]',
                                 '[role="menuitem"]',
                                 'div[role="dialog"] button',
@@ -6696,7 +6697,15 @@ class MainWindow(QMainWindow):
                             if (byFacebookClass) return byFacebookClass;
                         }
                         if (platform === "instagram") {
-                            const instagramFormInputs = fileInputs.filter((node) => {
+                            const createPostDialog = bySelectors([
+                                'div[role="dialog"][aria-label*="create new post" i]',
+                                '[role="dialog"][aria-label*="create new post" i]',
+                            ]);
+                            if (!createPostDialog) return null;
+
+                            let dialogFileInputs = [];
+                            try { dialogFileInputs = Array.from(createPostDialog.querySelectorAll('input[type="file"]')); } catch (_) {}
+                            const instagramFormInputs = dialogFileInputs.filter((node) => {
                                 const form = node.closest && node.closest('form[enctype="multipart/form-data"][method="POST"][role="presentation"]');
                                 if (!form) return false;
                                 const accept = norm(node.getAttribute("accept"));
