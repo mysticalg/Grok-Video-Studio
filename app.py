@@ -6475,6 +6475,8 @@ class MainWindow(QMainWindow):
                 "video_name": str(pending.get("video_name") or "upload.mp4"),
                 "video_mime": str(pending.get("video_mime") or "video/mp4"),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
+                "attempt": attempts,
+                "force_submit": bool(platform_name == "TikTok" and attempts >= 10),
             },
             ensure_ascii=True,
         )
@@ -6577,6 +6579,25 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                         return false;
                     };
+                    const forceSubmitTikTokPostButton = (node) => {
+                        if (!node) return false;
+                        try {
+                            node.removeAttribute('disabled');
+                            node.setAttribute('aria-disabled', 'false');
+                            node.setAttribute('data-disabled', 'false');
+                            node.setAttribute('data-loading', 'false');
+                            node.disabled = false;
+                        } catch (_) {}
+                        try { node.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        if (clickNodeOrAncestor(node)) return true;
+                        try {
+                            node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
+                            node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
+                            node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+                            return true;
+                        } catch (_) {}
+                        return false;
+                    };
 
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
@@ -6584,6 +6605,7 @@ class MainWindow(QMainWindow):
                     const videoName = String(payload.video_name || "upload.mp4");
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
+                    const forceSubmit = Boolean(payload.force_submit);
                     const captionText = String(payload.caption || "").trim();
                     const captionRequired = (platform === "facebook" || platform === "tiktok") && Boolean(captionText);
 
@@ -6853,6 +6875,14 @@ class MainWindow(QMainWindow):
                             }
                             if (tiktokPostButton && tiktokPostButtonEnabled) {
                                 submitClicked = clickTikTokPostButton(tiktokPostButton) || submitClicked;
+                            }
+                        }
+                        if (!submitClicked && forceSubmit) {
+                            const forcedButton = bySelectors(['button[data-e2e="post_video_button"]'])
+                                || findClickableByHints(["post", "publish"]);
+                            submitClicked = forceSubmitTikTokPostButton(forcedButton) || submitClicked;
+                            if (submitClicked) {
+                                tiktokPostButtonEnabled = true;
                             }
                         }
                     }
