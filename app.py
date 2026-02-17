@@ -6573,33 +6573,42 @@ class MainWindow(QMainWindow):
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const captionText = String(payload.caption || "").trim();
                     const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
-
+                    const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
+                    const instagramState = uploadState.instagram = uploadState.instagram || {};
                     if (platform === "instagram") {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
-                        if (!instagramDialog) {
-                            const createSpanButton = pick(collectDeep('span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
-                            const createButton = createSpanButton
-                                || bySelectors([
-                                    'div[role="button"][tabindex="0"]',
-                                    'button',
-                                    'a[role="link"]',
-                                ])
-                                || findClickableByHints(["create", "new post"]);
-                            if (createButton) {
-                                openUploadClicked = clickNodeOrAncestor(createButton) || openUploadClicked;
-                            }
-
-                            const menuContexts = [
-                                ...collectDeep('div[role="menu"]'),
-                                ...collectDeep('div[role="dialog"]'),
-                                document,
-                            ];
-                            const postButton = pick(collectDeep('a[role="link"][href="#"], a[role="link"]'))
-                                || findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel"] });
-                            if (postButton) {
-                                const postText = normalizedNodeText(postButton);
-                                if (postText.includes("post") && !postText.includes("reel")) {
-                                    openUploadClicked = clickNodeOrAncestor(postButton) || openUploadClicked;
+                        if (instagramDialog) {
+                            instagramState.dialogSeen = true;
+                        } else {
+                            if (!instagramState.createClicked) {
+                                const createSpanButton = pick(collectDeep('span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
+                                const createButton = createSpanButton
+                                    || bySelectors([
+                                        'div[role="button"][tabindex="0"]',
+                                        'button',
+                                        'a[role="link"]',
+                                    ])
+                                    || findClickableByHints(["create", "new post"]);
+                                if (createButton) {
+                                    const clicked = clickNodeOrAncestor(createButton);
+                                    openUploadClicked = clicked || openUploadClicked;
+                                    if (clicked) instagramState.createClicked = true;
+                                }
+                            } else {
+                                const menuContexts = [
+                                    ...collectDeep('div[role="menu"]'),
+                                    ...collectDeep('div[role="dialog"]'),
+                                    document,
+                                ];
+                                const postButton = pick(collectDeep('a[role="link"][href="#"], a[role="link"]'))
+                                    || findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel"] });
+                                if (postButton) {
+                                    const postText = normalizedNodeText(postButton);
+                                    if (postText.includes("post") && !postText.includes("reel")) {
+                                        const clicked = clickNodeOrAncestor(postButton);
+                                        openUploadClicked = clicked || openUploadClicked;
+                                        if (clicked) instagramState.postClicked = true;
+                                    }
                                 }
                             }
                         }
@@ -6660,9 +6669,6 @@ class MainWindow(QMainWindow):
                         return bySelectors(selectors);
                     };
 
-                    const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
-                    const instagramState = uploadState.instagram = uploadState.instagram || {};
-
                     let textFilled = false;
                     let captionReady = !captionRequired;
                     if (platform === "facebook" && captionRequired) {
@@ -6689,16 +6695,13 @@ class MainWindow(QMainWindow):
                             const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                             if (!instagramDialog) return null;
 
-                            const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data"][method="POST"][role="presentation"] input[type="file"]'));
+                            const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data" i][method="post" i][role="presentation"] input[type="file"]'));
                             const exactInstagramInput = formInputs.find((node) => {
                                 const accept = norm(node.getAttribute("accept"));
                                 const className = norm(node.className);
                                 return accept.includes("video/mp4") && accept.includes("video/quicktime") && className.includes("x1s85apg");
                             });
                             if (exactInstagramInput) return exactInstagramInput;
-
-                            const dialogScopedInput = pick(Array.from(instagramDialog.querySelectorAll('form[role="presentation"] input[type="file"]')));
-                            if (dialogScopedInput) return dialogScopedInput;
                             return null;
                         }
                         if (platform === "facebook") {
