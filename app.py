@@ -6803,7 +6803,8 @@ class MainWindow(QMainWindow):
             is_facebook = platform_name == "Facebook"
             caption_ok = text_filled or not caption_queued
             submit_ok = submit_clicked if is_facebook else True
-            if attempts >= 2 and file_stage_ok and caption_ok and submit_ok:
+            completion_attempt_ready = submit_ok if is_facebook else (attempts >= 2)
+            if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
                 status_label.setText("Status: post submitted." if is_facebook else "Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(
