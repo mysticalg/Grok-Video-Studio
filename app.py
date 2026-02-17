@@ -6562,7 +6562,7 @@ class MainWindow(QMainWindow):
                         return true;
                     };
                     const findEnabledTikTokPostButton = () => {
-                        const buttons = collectDeep('button[data-e2e="post_video_button"]');
+                        const buttons = collectDeep('button[data-e2e="save_draft_button"]');
                         let firstEnabled = null;
                         for (const btn of buttons) {
                             if (!isTikTokPostButtonEnabled(btn)) continue;
@@ -6950,7 +6950,7 @@ class MainWindow(QMainWindow):
                             }
                         }
                         if (!submitClicked && forceSubmit) {
-                            const forcedButton = bySelectors(['button[data-e2e="post_video_button"]'])
+                            const forcedButton = bySelectors(['button[data-e2e="save_draft_button"]'])
                                 || findClickableByHints(["post", "publish"]);
                             submitClicked = forceSubmitTikTokPostButton(forcedButton) || submitClicked;
                             if (submitClicked) {
