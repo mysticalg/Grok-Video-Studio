@@ -6398,7 +6398,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        if attempts > 5:
+        if attempts > 3:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
             self._append_log(
@@ -6464,7 +6464,15 @@ class MainWindow(QMainWindow):
                     const videoName = String(payload.video_name || "upload.mp4");
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
-                    const fileInput = pick(collectDeep('input[type="file"]'));
+                    const fileInputs = collectDeep('input[type="file"]');
+                    const pickVideoInput = () => {
+                        const byAcceptVideo = fileInputs.find((node) => norm(node.getAttribute("accept")).includes("video"));
+                        if (byAcceptVideo) return byAcceptVideo;
+                        const byClassVideo = fileInputs.find((node) => norm(node.className).includes("video"));
+                        if (byClassVideo) return byClassVideo;
+                        return pick(fileInputs);
+                    };
+                    const fileInput = pickVideoInput();
                     const setInputFiles = (input, files) => {
                         try {
                             const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
