@@ -724,7 +724,11 @@ class MainWindow(QMainWindow):
 
             options_requested = result.get("optionsRequested") if isinstance(result, dict) else []
             options_applied = result.get("optionsApplied") if isinstance(result, dict) else []
-            missing_options = result.get("missingOptions") if isinstance(result, dict) else []
+            missing_options = (
+                result.get("missingOptions")
+                if isinstance(result, dict) and "missingOptions" in result
+                else None
+            )
             options_window_closed = bool(result.get("optionsWindowClosed")) if isinstance(result, dict) else False
             requested_summary = ", ".join(options_requested) if options_requested else "none"
             applied_summary = ", ".join(options_applied) if options_applied else "none detected"
@@ -734,6 +738,15 @@ class MainWindow(QMainWindow):
                 f"options applied: {applied_summary}; missing required options: {missing_summary}; "
                 f"options window closed: {options_window_closed}."
             )
+
+            if missing_options is None:
+                self.pending_manual_variant_for_download = None
+                self._append_log(
+                    "ERROR: Option validation metadata was missing from the manual submit pre-check "
+                    f"for variant {variant}. Submission has been canceled so options can be re-validated."
+                )
+                self.generate_btn.setEnabled(True)
+                return
 
             if missing_options:
                 self.pending_manual_variant_for_download = None
