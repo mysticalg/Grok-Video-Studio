@@ -6607,7 +6607,7 @@ class MainWindow(QMainWindow):
                             instagramState.dialogSeen = true;
                         } else {
                             if (!instagramState.createClicked) {
-                                const createSpanButton = pick(collectDeep('span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
+                                const createSpanButton = pick(collectDeep('span.html-span[aria-describedby="_r_m_"], span[aria-describedby="_r_m_"], span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
                                 const createButton = createSpanButton
                                     || bySelectors([
                                         'div[role="button"][tabindex="0"]',
@@ -6626,7 +6626,7 @@ class MainWindow(QMainWindow):
                                     ...collectDeep('div[role="dialog"]'),
                                     document,
                                 ];
-                                const postButton = pick(collectDeep('a[role="link"][href="#"], a[role="link"]'))
+                                const postButton = pick(collectDeep('a[href="#"][role="link"][tabindex="0"] > div.html-div, a[href="#"][role="link"][tabindex="0"], a[role="link"][href="#"], a[role="link"]'))
                                     || findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel"] });
                                 if (postButton) {
                                     const postText = normalizedNodeText(postButton);
