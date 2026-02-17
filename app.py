@@ -6702,7 +6702,9 @@ class MainWindow(QMainWindow):
 
                     const nextClicked = false;
                     let submitClicked = false;
+                    let submitAttempted = false;
                     if (platform === "facebook" && fileReadySignal && !submitAlreadyTriggered) {
+                        submitAttempted = true;
                         const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
                         if (explicitPostButton) {
                             submitClicked = clickNodeOrAncestor(explicitPostButton) || submitClicked;
@@ -6761,6 +6763,7 @@ class MainWindow(QMainWindow):
                         textFilled,
                         nextClicked,
                         submitClicked,
+                        submitAttempted,
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
@@ -6789,8 +6792,9 @@ class MainWindow(QMainWindow):
             text_filled = bool(isinstance(result, dict) and result.get("textFilled"))
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
+            submit_attempted = bool(isinstance(result, dict) and result.get("submitAttempted"))
             submit_already_triggered = bool(pending.get("submit_already_triggered", False))
-            if submit_clicked:
+            if submit_clicked or submit_attempted:
                 pending["submit_already_triggered"] = True
                 submit_already_triggered = True
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
@@ -6804,7 +6808,7 @@ class MainWindow(QMainWindow):
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} submit_latched={submit_already_triggered}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} submit_attempted={submit_attempted} submit_latched={submit_already_triggered}"
             )
             pending["allow_file_dialog"] = False
 
