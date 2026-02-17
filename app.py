@@ -6481,26 +6481,34 @@ class MainWindow(QMainWindow):
                     };
 
                     const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
-                    const clickableNodes = collectDeep('button, [role="button"], div[tabindex], label, a, span, [aria-label], [data-testid], [type="button"]');
+                    const clickableNodes = collectDeep('button, [role="button"], div, label, a, span, [aria-label], [data-testid], [type="button"]');
+                    const normalizedNodeText = (node) => [
+                        norm(node.innerText || node.textContent),
+                        norm(node.getAttribute("aria-label")),
+                        norm(node.getAttribute("data-testid")),
+                        norm(node.className),
+                    ].join(" ");
+                    const clickNodeOrAncestor = (node) => {
+                        if (!node) return false;
+                        const candidates = [
+                            node,
+                            node.closest && node.closest('button, [role="button"], a, label, div[tabindex], div'),
+                            node.parentElement,
+                        ].filter(Boolean);
+                        for (const candidate of candidates) {
+                            try { candidate.click(); return true; } catch (_) {}
+                        }
+                        return false;
+                    };
                     const findClickableByHints = (hints) => {
                         const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
                         for (const node of clickableNodes) {
                             if (!isVisible(node)) continue;
-                            const joined = [
-                                norm(node.innerText || node.textContent),
-                                norm(node.getAttribute("aria-label")),
-                                norm(node.getAttribute("data-testid")),
-                                norm(node.className),
-                            ].join(" ");
+                            const joined = normalizedNodeText(node);
                             if (normalizedHints.some((hint) => joined.includes(hint))) return node;
                         }
                         for (const node of clickableNodes) {
-                            const joined = [
-                                norm(node.innerText || node.textContent),
-                                norm(node.getAttribute("aria-label")),
-                                norm(node.getAttribute("data-testid")),
-                                norm(node.className),
-                            ].join(" ");
+                            const joined = normalizedNodeText(node);
                             if (normalizedHints.some((hint) => joined.includes(hint))) return node;
                         }
                         return null;
@@ -6509,22 +6517,37 @@ class MainWindow(QMainWindow):
                     const platformOpenUploadHints = {
                         facebook: ["add video", "photo/video", "upload video", "choose video", "create reel", "create", "add reel", "video/reel", "reels"],
                         instagram: ["select from computer", "select video", "upload", "new post", "create", "create new", "post", "reel"],
-                        tiktok: ["select video", "upload", "choose file"],
+                        tiktok: ["select videos", "select video", "upload", "choose file"],
                     };
 
                     const urlHints = [];
                     const currentHref = norm(window.location.href || "");
                     if (platform === "facebook" && (currentHref.includes("facebook.com/reel") || currentHref.includes("facebook.com/reels"))) {
-                        urlHints.push("create reel", "reels", "create", "add reel", "video/reel");
+                        urlHints.push("create reel", "reels", "create", "add reel", "video/reel", "add video");
                     }
                     if (platform === "instagram" && currentHref.includes("instagram.com")) {
                         urlHints.push("create", "new post", "select from computer", "post", "reel");
                     }
 
                     let openUploadClicked = false;
-                    const uploadButton = findClickableByHints([...(platformOpenUploadHints[platform] || platformOpenUploadHints.tiktok), ...urlHints]);
-                    if (uploadButton) {
-                        try { uploadButton.click(); openUploadClicked = true; } catch (_) {}
+
+                    if (platform === "tiktok") {
+                        const tiktokPrimary = pick(collectDeep('div.Button__content--type-primary, div.Button__content--size-large, div.Button__content'));
+                        if (tiktokPrimary && normalizedNodeText(tiktokPrimary).includes("select videos")) {
+                            openUploadClicked = clickNodeOrAncestor(tiktokPrimary);
+                        }
+                    }
+
+                    if (!openUploadClicked && platform === "facebook") {
+                        const facebookAddVideoSpan = collectDeep('span').find((node) => normalizedNodeText(node).includes("add video"));
+                        if (facebookAddVideoSpan) {
+                            openUploadClicked = clickNodeOrAncestor(facebookAddVideoSpan);
+                        }
+                    }
+
+                    if (!openUploadClicked) {
+                        const uploadButton = findClickableByHints([...(platformOpenUploadHints[platform] || platformOpenUploadHints.tiktok), ...urlHints]);
+                        openUploadClicked = clickNodeOrAncestor(uploadButton);
                     }
 
                     const fileInput = bySelectors(platformFileSelectors[platform] || platformFileSelectors.tiktok);
