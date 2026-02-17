@@ -6729,6 +6729,9 @@ class MainWindow(QMainWindow):
                     };
                     const findTextInputTarget = () => {
                         const selectors = [
+                            'div.caption span[data-text="true"]',
+                            'div.caption [contenteditable="true"]',
+                            'div.caption textarea',
                             'textarea[aria-label*="caption" i]',
                             'textarea[placeholder*="caption" i]',
                             'textarea[aria-label*="write" i]',
@@ -6952,15 +6955,21 @@ class MainWindow(QMainWindow):
                     if (platform === "tiktok") {
                         if (captionText) {
                             const draftEditable = bySelectors([
+                                'div.caption .public-DraftEditor-content[contenteditable="true"]',
+                                'div.caption [contenteditable="true"]',
                                 'div.public-DraftEditor-content[contenteditable="true"]',
                                 'div[role="combobox"][contenteditable="true"].public-DraftEditor-content',
                                 'div.DraftEditor-editorContainer [contenteditable="true"]',
                             ]) || bySelectors(['div.DraftEditor-editorContainer']);
                             const draftSpan = draftEditable
-                                ? (draftEditable.querySelector('span[data-text="true"]') || draftEditable.querySelector('span[data-offset-key] span'))
-                                : null;
+                                ? (
+                                    draftEditable.querySelector('span[data-text="true"]')
+                                    || draftEditable.querySelector('div.caption span[data-text="true"]')
+                                    || draftEditable.querySelector('span[data-offset-key] span')
+                                )
+                                : bySelectors(['div.caption span[data-text="true"]']);
 
-                            const tiktokCaptionTarget = draftSpan || draftEditable || findTextInputTarget();
+                            const tiktokCaptionTarget = draftSpan || draftEditable || bySelectors(['div.caption [contenteditable="true"]', 'div.caption span[data-text="true"]']) || findTextInputTarget();
                             textFilled = setTextValue(tiktokCaptionTarget, captionText) || textFilled;
                             const tiktokSpanText = draftSpan ? norm(draftSpan.textContent || "") : "";
                             const tiktokExpectedText = norm(captionText);
