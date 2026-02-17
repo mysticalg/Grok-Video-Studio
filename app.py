@@ -6454,7 +6454,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        max_attempts = 2
+        max_attempts = 6 if platform_name == "Instagram" else 2
         if attempts > max_attempts:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
@@ -6462,6 +6462,7 @@ class MainWindow(QMainWindow):
                 f"WARNING: {platform_name} browser automation timed out after {attempts - 1} attempts."
             )
             self.social_upload_pending.pop(platform_name, None)
+            return
             
 
         payload_json = json.dumps(
@@ -6555,16 +6556,27 @@ class MainWindow(QMainWindow):
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const captionText = String(payload.caption || "").trim();
-                    const captionRequired = platform === "facebook" && Boolean(captionText);
+                    const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
 
                     if (platform === "instagram") {
-                        const createButton = findClickableByHints(["create"]);
-                        if (createButton) {
-                            openUploadClicked = clickNodeOrAncestor(createButton) || openUploadClicked;
-                        }
-                        const postButton = findClickableByHints(["post"]);
-                        if (postButton) {
-                            openUploadClicked = clickNodeOrAncestor(postButton) || openUploadClicked;
+                        const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
+                        if (!instagramDialog) {
+                            const createButton = bySelectors([
+                                'span[aria-describedby]',
+                                'div[role="button"][tabindex="0"]',
+                                'button',
+                            ]) || findClickableByHints(["create"]);
+                            if (createButton) {
+                                openUploadClicked = clickNodeOrAncestor(createButton) || openUploadClicked;
+                            }
+
+                            const postButton = bySelectors([
+                                'a[href="#"][role="link"][tabindex="0"]',
+                                'a[role="link"][tabindex="0"]',
+                            ]) || findClickableByHints(["post"]);
+                            if (postButton && normalizedNodeText(postButton).includes("post")) {
+                                openUploadClicked = clickNodeOrAncestor(postButton) || openUploadClicked;
+                            }
                         }
                     }
 
@@ -6623,12 +6635,16 @@ class MainWindow(QMainWindow):
                         return bySelectors(selectors);
                     };
 
+                    const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
+                    const instagramState = uploadState.instagram = uploadState.instagram || {};
+
                     let textFilled = false;
+                    let captionReady = !captionRequired;
                     if (platform === "facebook" && captionRequired) {
                         const textTarget = findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
+                        captionReady = textFilled;
                     }
-                    const captionReady = !captionRequired || textFilled;
 
                     if (platform === "facebook" && captionReady) {
                         const facebookUploadButton = findClickableByHints([
@@ -6644,6 +6660,13 @@ class MainWindow(QMainWindow):
 
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
+                        if (platform === "instagram") {
+                            const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
+                            if (instagramDialog) {
+                                const formInput = pick(Array.from(instagramDialog.querySelectorAll('form[role="presentation"] input[type="file"]')));
+                                if (formInput) return formInput;
+                            }
+                        }
                         if (platform === "facebook") {
                             const byFacebookAccept = fileInputs.find((node) => {
                                 const accept = norm(node.getAttribute("accept"));
@@ -6714,7 +6737,6 @@ class MainWindow(QMainWindow):
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
                     );
 
-                    const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     if (platform === "facebook") {
                         if (fileReadySignal) {
@@ -6728,8 +6750,33 @@ class MainWindow(QMainWindow):
                     const facebookSubmitDelayElapsed = platform !== "facebook"
                         || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= 2000);
 
-                    const nextClicked = false;
+                    let nextClicked = false;
                     let submitClicked = false;
+                    if (platform === "instagram" && fileReadySignal) {
+                        const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']) || document;
+                        const nextButton = pick(Array.from(instagramDialog.querySelectorAll('div[role="button"][tabindex="0"], button')).filter((node) => normalizedNodeText(node).includes("next"))) || findClickableByHints(["next"]);
+                        const nextClicks = Number(instagramState.nextClicks || 0);
+                        if (nextButton && nextClicks < 2) {
+                            nextClicked = clickNodeOrAncestor(nextButton) || nextClicked;
+                            if (nextClicked) {
+                                instagramState.nextClicks = nextClicks + 1;
+                            }
+                        }
+
+                        if (Number(instagramState.nextClicks || 0) >= 2 && captionRequired) {
+                            const textTarget = findTextInputTarget();
+                            textFilled = setTextValue(textTarget, captionText) || textFilled;
+                        }
+                        captionReady = !captionRequired || textFilled;
+
+                        if (Number(instagramState.nextClicks || 0) >= 2 && captionReady) {
+                            const shareButton = pick(Array.from(instagramDialog.querySelectorAll('div[role="button"][tabindex="0"], button, a')).filter((node) => normalizedNodeText(node).includes("share"))) || findClickableByHints(["share"]);
+                            if (shareButton) {
+                                submitClicked = clickNodeOrAncestor(shareButton) || submitClicked;
+                            }
+                        }
+                    }
+
                     if (platform === "facebook" && fileReadySignal && captionReady && facebookSubmitDelayElapsed) {
                         const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
                         if (explicitPostButton) {
@@ -6835,14 +6882,19 @@ class MainWindow(QMainWindow):
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             is_facebook = platform_name == "Facebook"
+            is_instagram = platform_name == "Instagram"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if is_facebook else True
-            completion_attempt_ready = submit_ok if is_facebook else (attempts >= 2)
+            submit_ok = submit_clicked if (is_facebook or is_instagram) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_instagram) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
-                status_label.setText("Status: post submitted." if is_facebook else "Status: staged. Confirm/finalize post in this tab if needed.")
+                status_label.setText(
+                    "Status: post submitted."
+                    if (is_facebook or is_instagram)
+                    else "Status: staged. Confirm/finalize post in this tab if needed."
+                )
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if is_facebook else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
