@@ -6558,14 +6558,17 @@ class MainWindow(QMainWindow):
                         if (attr('aria-disabled') === 'true') return false;
                         if (attr('data-disabled') === 'true') return false;
                         if (attr('data-loading') === 'true') return false;
-                        return isVisible(node);
+                        return true;
                     };
                     const findEnabledTikTokPostButton = () => {
                         const buttons = collectDeep('button[data-e2e="post_video_button"]');
+                        let firstEnabled = null;
                         for (const btn of buttons) {
-                            if (isTikTokPostButtonEnabled(btn)) return btn;
+                            if (!isTikTokPostButtonEnabled(btn)) continue;
+                            if (!firstEnabled) firstEnabled = btn;
+                            if (isVisible(btn)) return btn;
                         }
-                        return null;
+                        return firstEnabled;
                     };
                     const clickTikTokPostButton = (node) => {
                         if (!node || !isTikTokPostButtonEnabled(node)) return false;
@@ -7009,10 +7012,10 @@ class MainWindow(QMainWindow):
             file_stage_ok = True if is_tiktok else file_stage_ok
 
             if is_tiktok and tiktok_post_enabled and not submit_clicked:
-                status_label.setText("Status: post button enabled. Review and confirm post in this tab.")
+                status_label.setText("Status: post button enabled. Automation paused to avoid retry loop.")
                 progress_bar.setValue(100)
                 self._append_log(
-                    "TikTok browser automation paused after detecting enabled Post button to avoid repeated submit attempts."
+                    "TikTok browser automation paused after detecting enabled Post button (aria/data-disabled=false) to avoid repeated submit attempts."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
