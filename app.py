@@ -6360,6 +6360,7 @@ class MainWindow(QMainWindow):
             "caption": str(caption or ""),
             "title": str(title or ""),
             "attempts": 0,
+            "allow_file_dialog": True,
         }
         self._append_log(
             f"{platform_name}: queued browser upload video path={video_path} (exists={Path(str(video_path)).exists()})"
@@ -6372,7 +6373,8 @@ class MainWindow(QMainWindow):
             f"Browser-based {platform_name} upload: using current social tab and attempting automated file staging."
         )
         self.browser_tabs.setCurrentIndex(tab_index)
-        timer.start(250)
+        # Run first staging attempt immediately from the initiating button event to preserve user activation.
+        self._run_social_browser_upload_step(platform_name)
 
     def _run_social_browser_upload_step(self, platform_name: str) -> None:
         pending = self.social_upload_pending.get(platform_name)
@@ -6401,6 +6403,7 @@ class MainWindow(QMainWindow):
                 "title": str(pending.get("title") or ""),
                 "platform": platform_name.lower(),
                 "video_path": str(pending.get("video_path") or ""),
+                "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
             },
             ensure_ascii=True,
         )
@@ -6444,6 +6447,7 @@ class MainWindow(QMainWindow):
 
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
+                    const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const fileInput = pick(collectDeep('input[type="file"]'));
                     let fileDialogTriggered = false;
                     if (fileInput) {
@@ -6455,7 +6459,7 @@ class MainWindow(QMainWindow):
                         fileInput.removeAttribute("hidden");
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
-                        if (!alreadyHasFile) {
+                        if (!alreadyHasFile && allowFileDialog) {
                             try { fileInput.click(); fileDialogTriggered = true; } catch (_) {}
                         }
                     }
@@ -6481,6 +6485,7 @@ class MainWindow(QMainWindow):
                         submitClicked,
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
+                        allowFileDialog,
                     };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
@@ -6498,6 +6503,7 @@ class MainWindow(QMainWindow):
                 return
 
             file_found = bool(isinstance(result, dict) and result.get("fileInputFound"))
+            allow_file_dialog = bool(isinstance(result, dict) and result.get("allowFileDialog"))
             file_dialog_triggered = bool(isinstance(result, dict) and result.get("fileDialogTriggered"))
             open_upload_clicked = bool(isinstance(result, dict) and result.get("openUploadClicked"))
             file_ready_signal = bool(isinstance(result, dict) and result.get("fileReadySignal"))
@@ -6515,8 +6521,9 @@ class MainWindow(QMainWindow):
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked}"
             )
+            pending["allow_file_dialog"] = False
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             caption_ok = True
