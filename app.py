@@ -6904,6 +6904,7 @@ class MainWindow(QMainWindow):
                     }
 
                     let tiktokPostEnabled = false;
+                    const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
                     if (platform === "tiktok") {
                         if (captionText) {
                             const draftEditorContainer = bySelectors(['div.DraftEditor-editorContainer']);
@@ -6916,18 +6917,67 @@ class MainWindow(QMainWindow):
                                     ? draftEditorContainer.querySelector('[contenteditable="true"]')
                                     : null);
 
-                            if (draftSpan) {
+                            const setTikTokCaption = (editableNode, spanNode, value) => {
+                                if (!editableNode) return false;
+                                const nextText = String(value || "");
                                 try {
-                                    draftSpan.textContent = captionText;
-                                    draftSpan.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: captionText, inputType: "insertText" }));
-                                    draftSpan.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                    textFilled = true;
+                                    editableNode.focus();
+                                } catch (_) {}
+
+                                try {
+                                    const selection = window.getSelection();
+                                    if (selection && typeof selection.removeAllRanges === "function") {
+                                        const range = document.createRange();
+                                        range.selectNodeContents(editableNode);
+                                        selection.removeAllRanges();
+                                        selection.addRange(range);
+                                    }
+                                    if (typeof document.execCommand === "function") {
+                                        try { document.execCommand("delete", false, null); } catch (_) {}
+                                        try { document.execCommand("insertText", false, nextText); } catch (_) {}
+                                    }
+                                } catch (_) {}
+
+                                let wroteText = false;
+                                try {
+                                    editableNode.textContent = nextText;
+                                    wroteText = normalizedNodeText(editableNode) === norm(nextText);
+                                } catch (_) {}
+
+                                if (spanNode) {
+                                    try { spanNode.textContent = nextText; } catch (_) {}
+                                }
+
+                                const eventOptions = { bubbles: true, composed: true };
+                                try {
+                                    editableNode.dispatchEvent(new InputEvent("beforeinput", { ...eventOptions, data: nextText, inputType: "insertText" }));
+                                } catch (_) {}
+                                try {
+                                    editableNode.dispatchEvent(new InputEvent("input", { ...eventOptions, data: nextText, inputType: "insertText" }));
+                                } catch (_) {
+                                    try { editableNode.dispatchEvent(new Event("input", eventOptions)); } catch (_) {}
+                                }
+                                try { editableNode.dispatchEvent(new KeyboardEvent("keyup", { key: " ", bubbles: true })); } catch (_) {}
+                                try { editableNode.dispatchEvent(new Event("change", eventOptions)); } catch (_) {}
+                                try { editableNode.dispatchEvent(new Event("blur", eventOptions)); } catch (_) {}
+
+                                return wroteText || normalizedNodeText(editableNode) === norm(nextText);
+                            };
+
+                            if (draftEditable || draftSpan) {
+                                try {
+                                    textFilled = setTikTokCaption(draftEditable, draftSpan, captionText) || textFilled;
+                                    if (textFilled) {
+                                        tiktokState.captionSetAtMs = Date.now();
+                                    }
                                 } catch (_) {}
                             }
 
                         }
 
                         captionReady = !captionText || textFilled;
+                        const tiktokSubmitDelayElapsed = !captionText
+                            || Boolean(tiktokState.captionSetAtMs && (Date.now() - Number(tiktokState.captionSetAtMs)) >= 1200);
 
                         const tiktokPostButton = bySelectors([
                             'button[data-e2e="save_draft_button"]',
@@ -6938,7 +6988,7 @@ class MainWindow(QMainWindow):
                             const dataDisabled = String(tiktokPostButton.getAttribute("data-disabled") || "").toLowerCase();
                             const nativeDisabled = Boolean(tiktokPostButton.disabled);
                             tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
-                            if (captionReady && tiktokPostEnabled) {
+                            if (captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed) {
                                 submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
                             }
                         }
