@@ -6522,15 +6522,41 @@ class MainWindow(QMainWindow):
                         norm(node.getAttribute("title")),
                         norm(node.getAttribute("data-testid")),
                     ].join(" ");
+                    const injectClickActions = (target) => {
+                        if (!target) return false;
+                        try { target.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                        const events = [
+                            ["pointerdown", PointerEvent],
+                            ["mousedown", MouseEvent],
+                            ["pointerup", PointerEvent],
+                            ["mouseup", MouseEvent],
+                            ["click", MouseEvent],
+                        ];
+                        let dispatched = false;
+                        for (const [eventName, EventCtor] of events) {
+                            try {
+                                const ev = new EventCtor(eventName, { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 });
+                                target.dispatchEvent(ev);
+                                dispatched = true;
+                            } catch (_) {}
+                        }
+                        try {
+                            if (typeof target.click === "function") {
+                                target.click();
+                                dispatched = true;
+                            }
+                        } catch (_) {}
+                        return dispatched;
+                    };
                     const clickNodeOrAncestor = (node) => {
                         if (!node) return false;
                         const candidates = [
                             node,
-                            node.closest && node.closest('button, [role="button"], a, div[tabindex], div'),
+                            node.closest && node.closest('button, [role="button"], a, [role="link"], div[tabindex], div'),
                             node.parentElement,
                         ].filter(Boolean);
                         for (const candidate of candidates) {
-                            try { candidate.click(); return true; } catch (_) {}
+                            if (injectClickActions(candidate)) return true;
                         }
                         return false;
                     };
