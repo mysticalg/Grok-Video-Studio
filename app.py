@@ -6659,43 +6659,59 @@ class MainWindow(QMainWindow):
                         }
                     }
 
-                    const setTextValue = (node, value) => {
+                    const dispatchKeyboardSequence = (node, key) => {
+                        const keyCode = key && key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
+                        for (const eventName of ["keydown", "keypress", "keyup"]) {
+                            try {
+                                node.dispatchEvent(new KeyboardEvent(eventName, {
+                                    key,
+                                    code: key && key.length === 1 ? `Key${key.toUpperCase()}` : "",
+                                    keyCode,
+                                    which: keyCode,
+                                    bubbles: true,
+                                    cancelable: true,
+                                    composed: true,
+                                }));
+                            } catch (_) {}
+                        }
+                    };
+                    const typeTextWithKeypress = (node, text) => {
                         if (!node) return false;
-                        const text = String(value || "");
+                        const value = String(text || "");
+                        try { node.focus(); } catch (_) {}
                         try {
                             if ("value" in node) {
-                                node.focus();
-                                if (
-                                    typeof node.setRangeText === "function"
-                                    && typeof node.selectionStart === "number"
-                                    && typeof node.selectionEnd === "number"
-                                ) {
-                                    try {
-                                        node.selectionStart = 0;
-                                        node.selectionEnd = String(node.value || "").length;
-                                        node.setRangeText(text);
-                                    } catch (_) {
-                                        node.value = text;
-                                    }
-                                } else {
-                                    node.value = text;
-                                }
+                                node.value = "";
                                 node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                for (const key of Array.from(value)) {
+                                    dispatchKeyboardSequence(node, key);
+                                    const nextValue = String(node.value || "") + key;
+                                    node.value = nextValue;
+                                    node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                }
                                 node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return norm(String(node.value || "")) === norm(text);
+                                return norm(String(node.value || "")) === norm(value);
                             }
                         } catch (_) {}
                         try {
                             if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
-                                node.focus();
                                 while (node.firstChild) node.removeChild(node.firstChild);
-                                node.appendChild(document.createTextNode(text));
-                                node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                const textNode = document.createTextNode("");
+                                node.appendChild(textNode);
+                                for (const key of Array.from(value)) {
+                                    dispatchKeyboardSequence(node, key);
+                                    textNode.textContent = String(textNode.textContent || "") + key;
+                                    node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                }
                                 node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return norm(node.innerText || node.textContent) === norm(text);
+                                return norm(node.innerText || node.textContent) === norm(value);
                             }
                         } catch (_) {}
                         return false;
+                    };
+
+                    const setTextValue = (node, value) => {
+                        return typeTextWithKeypress(node, value);
                     };
                     const findTextInputTarget = () => {
                         const selectors = [
