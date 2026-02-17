@@ -6706,7 +6706,21 @@ class MainWindow(QMainWindow):
                         try {
                             if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
                                 node.focus();
-                                node.textContent = text;
+                                try {
+                                    const selection = window.getSelection && window.getSelection();
+                                    if (selection && typeof selection.removeAllRanges === 'function') {
+                                        selection.removeAllRanges();
+                                        const range = document.createRange();
+                                        range.selectNodeContents(node);
+                                        selection.addRange(range);
+                                    }
+                                    document.execCommand && document.execCommand('selectAll', false, null);
+                                    document.execCommand && document.execCommand('delete', false, null);
+                                    document.execCommand && document.execCommand('insertText', false, text);
+                                } catch (_) {}
+                                if (String(node.textContent || '').trim() !== String(text).trim()) {
+                                    node.textContent = text;
+                                }
                                 node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
                                 node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
                                 return true;
@@ -6739,6 +6753,13 @@ class MainWindow(QMainWindow):
                         return bySelectors(selectors);
                     };
                     const findTikTokCaptionTarget = () => {
+                        const editorContainer = bySelectors(['.DraftEditor-editorContainer']);
+                        if (editorContainer) {
+                            const editableInContainer = editorContainer.querySelector('[contenteditable="true"]');
+                            if (editableInContainer) return editableInContainer;
+                        }
+                        const draftEditable = bySelectors(['.DraftEditor-editorContainer [contenteditable="true"]']);
+                        if (draftEditable) return draftEditable;
                         const draftSpan = bySelectors(['.DraftEditor-editorContainer span[data-text="true"]']);
                         if (!draftSpan) return null;
                         const contentEditable = draftSpan.closest('[contenteditable="true"]');
