@@ -6694,10 +6694,27 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    const uploadProgressNodes = collectDeep('progress, [role="progressbar"], [aria-valuenow], [aria-label*="upload" i], [aria-busy="true"], [data-testid*="upload" i]');
+                    const uploadInProgressTextHints = ["uploading", "processing", "preparing", "encoding", "transcoding", "publishing", "finalizing"];
+                    const uploadInProgress = uploadProgressNodes.some((node) => {
+                        const text = normalizedNodeText(node);
+                        const ariaBusy = norm(node.getAttribute("aria-busy"));
+                        if (ariaBusy === "true") return true;
+                        if (uploadInProgressTextHints.some((hint) => text.includes(hint))) return true;
+                        const now = Number(node.getAttribute("aria-valuenow"));
+                        const max = Number(node.getAttribute("aria-valuemax"));
+                        if (Number.isFinite(now) && Number.isFinite(max) && max > 0 && now < max) return true;
+                        if (node.tagName && node.tagName.toLowerCase() === "progress") {
+                            const value = Number(node.value);
+                            const progressMax = Number(node.max);
+                            if (Number.isFinite(value) && Number.isFinite(progressMax) && progressMax > 0 && value < progressMax) return true;
+                        }
+                        return false;
+                    });
+                    const uploadCompleteSignal = Boolean(document.querySelector('[aria-label*="uploaded" i], [aria-label*="upload complete" i], [data-testid*="uploaded" i]'));
                     const fileReadySignal = Boolean(
-                        (fileInput && fileInput.files && fileInput.files.length > 0)
-                        || document.querySelector('video')
-                        || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
+                        ((fileInput && fileInput.files && fileInput.files.length > 0) || document.querySelector('video') || uploadCompleteSignal)
+                        && !uploadInProgress
                     );
 
                     const nextClicked = false;
@@ -6760,6 +6777,7 @@ class MainWindow(QMainWindow):
                         fileDialogTriggered,
                         openUploadClicked,
                         fileReadySignal,
+                        uploadInProgress,
                         textFilled,
                         nextClicked,
                         submitClicked,
@@ -6789,6 +6807,7 @@ class MainWindow(QMainWindow):
             file_dialog_triggered = bool(isinstance(result, dict) and result.get("fileDialogTriggered"))
             open_upload_clicked = bool(isinstance(result, dict) and result.get("openUploadClicked"))
             file_ready_signal = bool(isinstance(result, dict) and result.get("fileReadySignal"))
+            upload_in_progress = bool(isinstance(result, dict) and result.get("uploadInProgress"))
             text_filled = bool(isinstance(result, dict) and result.get("textFilled"))
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
@@ -6804,11 +6823,11 @@ class MainWindow(QMainWindow):
             progress_bar.setVisible(True)
             progress_bar.setValue(min(95, 20 + attempts * 6))
             status_label.setText(
-                f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, source={'ready' if video_path_exists else 'missing'}, caption={'manual' if caption_queued else 'none'})."
+                f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('uploading' if upload_in_progress else ('picker' if file_dialog_triggered else ('input' if file_found else 'no')))}, source={'ready' if video_path_exists else 'missing'}, caption={'manual' if caption_queued else 'none'})."
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} submit_attempted={submit_attempted} submit_latched={submit_already_triggered}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} upload_in_progress={upload_in_progress} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked} submit_attempted={submit_attempted} submit_latched={submit_already_triggered}"
             )
             pending["allow_file_dialog"] = False
 
