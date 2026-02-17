@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import os
 import platform
+import re
+import json
 import sys
+import time
+import base64
 from pathlib import Path
+
+import requests
 
 
 def _require_playwright():
@@ -201,3 +207,362 @@ def generate_video_via_web(
         browser.close()
 
     return output_path
+
+
+
+
+def _decode_openai_access_token(access_token: str) -> dict:
+    try:
+        parts = access_token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
+        data = json.loads(decoded)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_claim_string(source: object, keys: tuple[str, ...]) -> str:
+    if not isinstance(source, dict):
+        return ""
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_openai_org_project_ids(access_token: str) -> tuple[str, str]:
+    claims = _decode_openai_access_token(access_token)
+    auth_claim = claims.get("https://api.openai.com/auth")
+
+    org_id = _extract_claim_string(auth_claim, ("organization_id", "org_id", "organization"))
+    project_id = _extract_claim_string(auth_claim, ("project_id", "project"))
+
+    if not org_id:
+        org_id = _extract_claim_string(claims, ("organization_id", "org_id", "organization"))
+    if not project_id:
+        project_id = _extract_claim_string(claims, ("project_id", "project"))
+
+    if not org_id:
+        organizations = claims.get("https://api.openai.com/organizations")
+        if isinstance(organizations, list):
+            for item in organizations:
+                org_id = _extract_claim_string(item, ("id", "organization_id", "org_id"))
+                if org_id:
+                    break
+
+    return org_id, project_id
+
+
+def _openai_headers_from_oauth_token(access_token: str) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    org_id, project_id = _extract_openai_org_project_ids(access_token)
+    if org_id:
+        headers["OpenAI-Organization"] = org_id
+    if project_id:
+        headers["OpenAI-Project"] = project_id
+    return headers
+
+
+def _openai_training_target(access_token: str) -> tuple[str, dict[str, str], bool]:
+    api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1").rstrip("/")
+    chatgpt_base = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.com/backend-api/codex").rstrip("/")
+    use_chatgpt_backend = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
+
+    claims = _decode_openai_access_token(access_token)
+    issuer = str(claims.get("iss", "")).strip()
+    auth_claim = claims.get("https://api.openai.com/auth")
+
+    headers = _openai_headers_from_oauth_token(access_token)
+
+    if use_chatgpt_backend and api_base == "https://api.openai.com/v1" and issuer == "https://auth.openai.com":
+        account_id = _extract_claim_string(auth_claim, ("chatgpt_account_id",))
+        if account_id:
+            headers["ChatGPT-Account-ID"] = account_id
+        return f"{chatgpt_base}/responses", headers, True
+
+    return f"{api_base}/responses", headers, False
+
+
+def _extract_text_from_responses_body(body: object) -> str:
+    if not isinstance(body, dict):
+        return ""
+    output_text = str(body.get("output_text", "")).strip()
+    if output_text:
+        return output_text
+
+    text_chunks: list[str] = []
+    for item in body.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content", []):
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") in {"output_text", "text"}:
+                text_value = content.get("text")
+                if isinstance(text_value, str) and text_value:
+                    text_chunks.append(text_value)
+
+    return "".join(text_chunks).strip()
+
+def _slugify(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
+    return cleaned or "flow"
+
+
+def _openai_training_summary(access_token: str, model: str, payload: dict) -> dict:
+    endpoint, headers, use_chatgpt_backend = _openai_training_target(access_token)
+    instruction = (
+        "You are an automation analyst. Convert the captured browser training log into a deterministic replay plan. "
+        "Return strict JSON matching this schema: "
+        '{"process_name": str, "goal": str, "steps": [{"index": int, "action": "click|fill|press", "selector": str, '
+        '"value": str, "notes": str}], "risks": [str]}. '
+        "Keep selectors CSS-compatible and preserve action order."
+    )
+
+    request_body = {
+        "model": model,
+        "input": [
+            {"role": "system", "content": [{"type": "input_text", "text": instruction}]},
+            {"role": "user", "content": [{"type": "input_text", "text": json.dumps(payload)}]},
+        ],
+        "store": False,
+    }
+    if use_chatgpt_backend:
+        request_body["stream"] = True
+
+    response = requests.post(
+        endpoint,
+        headers=headers,
+        json=request_body,
+        timeout=120,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    text = _extract_text_from_responses_body(data)
+    if not text:
+        raise RuntimeError("OpenAI training summary response did not include text output.")
+
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:].strip()
+
+    return json.loads(text)
+
+
+def train_browser_flow(
+    start_url: str,
+    output_dir: Path,
+    storage_state_path: Path | None = None,
+    timeout_s: int = 900,
+    screenshot_every_event: bool = True,
+) -> Path:
+    """Record a browser flow by observing user clicks/inputs and persist the raw trace.
+
+    User flow: call function, guide the browser manually, then close the browser tab/window to stop training.
+    """
+
+    sync_playwright = _require_playwright()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    screenshots_dir = output_dir / "screenshots"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+    events: list[dict] = []
+    started_at = time.time()
+    event_counter = {"value": 0}
+
+    with sync_playwright() as p:
+        browser_type, browser_name = _get_browser_type(p)
+        context_options = {}
+        if storage_state_path and storage_state_path.exists():
+            context_options["storage_state"] = str(storage_state_path)
+        browser = browser_type.launch(headless=False)
+        context = browser.new_context(**context_options)
+        page = context.new_page()
+
+        def _record_event(source, event):
+            event_counter["value"] += 1
+            event["index"] = event_counter["value"]
+            event["source"] = source
+            event["ts"] = round(time.time() - started_at, 3)
+            if screenshot_every_event:
+                screenshot_name = f"step-{event['index']:03d}.png"
+                screenshot_path = screenshots_dir / screenshot_name
+                try:
+                    page.screenshot(path=str(screenshot_path), full_page=True)
+                    event["screenshot"] = str(Path("screenshots") / screenshot_name)
+                except Exception:  # noqa: BLE001
+                    event["screenshot"] = ""
+            events.append(event)
+
+        context.expose_binding("pyRecordEvent", _record_event)
+
+        page.add_init_script(
+            r"""
+            (() => {
+              const cssPath = (el) => {
+                if (!el || !(el instanceof Element)) return '';
+                const parts = [];
+                let node = el;
+                while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
+                  let part = node.nodeName.toLowerCase();
+                  if (node.id) {
+                    part += `#${node.id}`;
+                    parts.unshift(part);
+                    break;
+                  }
+                  const className = (node.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0,2).join('.');
+                  if (className) part += `.${className}`;
+                  const parent = node.parentElement;
+                  if (parent) {
+                    const siblings = Array.from(parent.children).filter((x) => x.nodeName === node.nodeName);
+                    if (siblings.length > 1) {
+                      part += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+                    }
+                  }
+                  parts.unshift(part);
+                  node = node.parentElement;
+                }
+                return parts.join(' > ');
+              };
+
+              const scrub = (value) => (value || '').toString().slice(0, 400);
+              document.addEventListener('click', (event) => {
+                const el = event.target;
+                window.pyRecordEvent({
+                  action: 'click',
+                  selector: cssPath(el),
+                  text: scrub(el && el.innerText),
+                  tag: (el && el.tagName || '').toLowerCase(),
+                });
+              }, true);
+
+              document.addEventListener('change', (event) => {
+                const el = event.target;
+                if (!el) return;
+                const tag = (el.tagName || '').toLowerCase();
+                if (!['input', 'textarea', 'select'].includes(tag)) return;
+                window.pyRecordEvent({
+                  action: 'fill',
+                  selector: cssPath(el),
+                  value: scrub(el.value),
+                  tag,
+                });
+              }, true);
+
+              document.addEventListener('keydown', (event) => {
+                if (!event.key || !['Enter', 'Tab', 'Escape'].includes(event.key)) return;
+                const el = event.target;
+                window.pyRecordEvent({
+                  action: 'press',
+                  selector: cssPath(el),
+                  value: event.key,
+                  tag: (el && el.tagName || '').toLowerCase(),
+                });
+              }, true);
+            })();
+            """
+        )
+
+        page.goto(start_url, wait_until="domcontentloaded")
+        print("Training started. Interact with the browser, then close the browser window to stop training.")
+        page.wait_for_event("close", timeout=timeout_s * 1000)
+        context.close()
+        browser.close()
+
+        trace = {
+            "start_url": start_url,
+            "browser": browser_name,
+            "created_at": int(time.time()),
+            "events": events,
+        }
+        trace_path = output_dir / "raw_training_trace.json"
+        trace_path.write_text(json.dumps(trace, indent=2), encoding="utf-8")
+        return trace_path
+
+
+def build_trained_process(trace_path: Path, access_token: str, model: str = "gpt-5.1-codex") -> Path:
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    summary = _openai_training_summary(access_token=access_token, model=model, payload=trace)
+    process_name = _slugify(summary.get("process_name") or "trained-process")
+    output_path = trace_path.parent / f"{process_name}.process.json"
+    output_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return output_path
+
+
+def run_trained_process(
+    process_path: Path,
+    start_url: str,
+    output_dir: Path,
+    storage_state_path: Path | None = None,
+    timeout_s: int = 180,
+) -> Path:
+    sync_playwright = _require_playwright()
+    process = json.loads(process_path.read_text(encoding="utf-8"))
+    steps = process.get("steps", [])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as p:
+        browser_type, _browser_name = _get_browser_type(p)
+        context_options = {}
+        if storage_state_path and storage_state_path.exists():
+            context_options["storage_state"] = str(storage_state_path)
+        browser = browser_type.launch(headless=False)
+        context = browser.new_context(**context_options)
+        page = context.new_page()
+        page.goto(start_url, wait_until="domcontentloaded")
+
+        execution_log: list[dict] = []
+        for idx, step in enumerate(steps, start=1):
+            selector = step.get("selector", "")
+            action = step.get("action", "")
+            value = step.get("value", "")
+            status = "ok"
+            error = ""
+            try:
+                locator = page.locator(selector).first
+                locator.wait_for(state="visible", timeout=timeout_s * 1000)
+                if action == "click":
+                    locator.click()
+                elif action == "fill":
+                    locator.fill(value)
+                elif action == "press":
+                    locator.press(value or "Enter")
+                else:
+                    status = "skipped"
+                    error = f"Unsupported action: {action}"
+            except Exception as exc:  # noqa: BLE001
+                status = "error"
+                error = str(exc)
+
+            shot = output_dir / f"run-step-{idx:03d}.png"
+            try:
+                page.screenshot(path=str(shot), full_page=True)
+            except Exception:  # noqa: BLE001
+                pass
+            execution_log.append(
+                {
+                    "index": idx,
+                    "action": action,
+                    "selector": selector,
+                    "value": value,
+                    "status": status,
+                    "error": error,
+                    "screenshot": shot.name,
+                }
+            )
+
+        report_path = output_dir / "run_report.json"
+        report_path.write_text(json.dumps(execution_log, indent=2), encoding="utf-8")
+        context.close()
+        browser.close()
+        return report_path
