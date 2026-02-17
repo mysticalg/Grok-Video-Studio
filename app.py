@@ -6454,7 +6454,8 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        if attempts > 3:
+        max_attempts = 1 if platform_name == "Facebook" else 3
+        if attempts > max_attempts:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
             self._append_log(
@@ -6810,6 +6811,13 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"{platform_name} browser automation {'submitted post' if is_facebook else 'staged successfully'} in its tab."
                 )
+                self.social_upload_pending.pop(platform_name, None)
+                return
+
+            if is_facebook:
+                status_label.setText("Status: single Facebook attempt finished; verify or submit manually in this tab.")
+                progress_bar.setVisible(False)
+                self._append_log("Facebook: single-attempt mode complete; no automatic retry will run.")
                 self.social_upload_pending.pop(platform_name, None)
                 return
 
