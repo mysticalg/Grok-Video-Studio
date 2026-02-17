@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+import math
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,7 +80,7 @@ FACEBOOK_OAUTH_TOKEN_URL = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}
 FACEBOOK_OAUTH_CALLBACK_PORT = int(os.getenv("FACEBOOK_OAUTH_CALLBACK_PORT", "1456"))
 FACEBOOK_OAUTH_SCOPE = os.getenv(
     "FACEBOOK_OAUTH_SCOPE",
-    "pages_show_list,pages_manage_posts",
+    "pages_show_list,pages_manage_posts,publish_video",
 )
 TIKTOK_OAUTH_AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/"
 TIKTOK_OAUTH_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
@@ -5835,24 +5836,26 @@ class MainWindow(QMainWindow):
         headers = {"Authorization": f"Bearer {access_token}"}  # sometimes not needed if in params
 
         # Step 1: Start upload session
-        start_url = f"https://graph.facebook.com/{version}/{page_id}/videos"
+        start_url = f"https://graph-video.facebook.com/{version}/{page_id}/videos"
         start_params = {
             "access_token": access_token,
             "upload_phase": "start",
             "file_size": video_size,
             "title": title,
             "description": description,
+            "published": False,
         }
         start_resp = requests.post(start_url, params=start_params)
         #start_resp.raise_for_status()
         start_data = start_resp.json()
-
+        
         print("DEBUG Start response:", start_data)
 
         if 'video_id' not in start_data or 'upload_url' not in start_data:
             raise ValueError(f"Start failed, no video_id/upload_url: {start_data}")
 
         video_id = start_data['video_id']
+        upload_session_id = start_data.get('upload_session_id', video_id)
         upload_url = start_data['upload_url']  # or construct if needed
 
         # Step 2: Upload the file (single chunk for small videos; chunk for large)
@@ -5870,6 +5873,16 @@ class MainWindow(QMainWindow):
         # Step 3: Finish / publish (sometimes automatic, sometimes explicit)
         # If needed: POST again with upload_phase=finish, upload_session_id, etc.
 
+        # ── Step 3: Finish / publish ──
+        finish_url = f"https://graph-video.facebook.com/{version}/{page_id}/videos"
+        finish_params = {
+            "access_token": access_token,
+            "upload_phase": "finish",
+            "upload_session_id": upload_session_id,
+            "title": title,
+            "description": description,
+            "published": False,                     # ← key: do NOT publish
+        }
         return video_id  # This is what your worker expects
 
     def upload_selected_to_facebook(self) -> None:
@@ -6002,7 +6015,14 @@ class MainWindow(QMainWindow):
         #resp.raise_for_status()
 
         data = resp.json()
-
+        if resp.status_code == 200:
+            print("Status response:", data)
+            # Look for data['data']['status'] — possible values:
+            # "PROCESSING_UPLOAD", "UPLOAD_SUCCESS", "POSTED", "FAILED", etc.
+            
+        else:
+            print("Status check failed:", data)
+            return
         print(f"DEBUG: access token={data}")
         upload_url = data['data']['upload_url']  # or check exact key in response
         publish_id = data['data'].get('publish_id')  # save for status check later
@@ -6028,10 +6048,10 @@ class MainWindow(QMainWindow):
         print(f"DEBUG: Upload status code: {upload_resp.status_code}")
         print(f"DEBUG: Upload response: {upload_resp}")
         self.check_tiktok_status(access_token, publish_id)
-
+        
         if upload_resp.status_code != 201:
             raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
-
+        self._append_log(f"TikTok Upload complete")
         # Success! Video is in user's TikTok inbox/drafts.
         # Optionally: poll status with publish_id
         return
