@@ -6791,22 +6791,31 @@ class MainWindow(QMainWindow):
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
-                    if (platform === "facebook" || platform === "tiktok") {
-                        const platformState = platform === "facebook" ? facebookState : tiktokState;
+                    const instagramState = uploadState.instagram = uploadState.instagram || {};
+                    if (platform === "facebook" || platform === "tiktok" || platform === "instagram") {
+                        const platformState = platform === "facebook" ? facebookState : (platform === "tiktok" ? tiktokState : instagramState);
                         if (fileReadySignal) {
                             if (!platformState.fileReadyAtMs) {
                                 platformState.fileReadyAtMs = Date.now();
                             }
                         } else {
                             platformState.fileReadyAtMs = 0;
+                            if (platform === "instagram") {
+                                instagramState.nextClicks = 0;
+                            }
                         }
                     }
                     const facebookSubmitDelayElapsed = platform !== "facebook"
                         || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= 2000);
                     const tiktokReadyForTextOrSubmit = platform !== "tiktok"
                         || Boolean(tiktokState.fileReadyAtMs && (Date.now() - Number(tiktokState.fileReadyAtMs)) >= 2500);
+                    const instagramReadyForAdvance = platform !== "instagram"
+                        || Boolean(instagramState.fileReadyAtMs && (Date.now() - Number(instagramState.fileReadyAtMs)) >= 3000);
+                    const instagramUploadInProgress = platform === "instagram" && Boolean(
+                        document.querySelector('[aria-label*="uploading" i], [aria-label*="processing" i], [aria-label*="preparing" i], progress')
+                    );
 
-                    const nextClicked = false;
+                    let nextClicked = false;
                     let submitClicked = false;
                     if (platform === "facebook" && fileReadySignal && captionReady && facebookSubmitDelayElapsed) {
                         const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
@@ -6871,6 +6880,55 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    if (platform === "instagram" && fileReadySignal && instagramReadyForAdvance && !instagramUploadInProgress) {
+                        instagramState.nextClicks = Number(instagramState.nextClicks || 0);
+                        const nextButton = bySelectors([
+                            'div[role="button"][tabindex="0"]',
+                            'button[tabindex="0"]',
+                            'button',
+                        ]);
+                        const clickNextButton = () => {
+                            const candidates = collectDeep('div[role="button"][tabindex="0"], button[tabindex], button, [role="button"]');
+                            for (const node of candidates) {
+                                const text = normalizedNodeText(node);
+                                if (!text || !text.includes("next")) continue;
+                                if (text.includes("not now")) continue;
+                                if (clickNodeOrAncestor(node)) return true;
+                            }
+                            return false;
+                        };
+                        if (instagramState.nextClicks < 2) {
+                            const clickedNext = clickNextButton() || (nextButton && normalizedNodeText(nextButton).includes("next") && clickNodeOrAncestor(nextButton));
+                            if (clickedNext) {
+                                instagramState.nextClicks += 1;
+                                nextClicked = true;
+                            }
+                        }
+
+                        if (instagramState.nextClicks >= 2) {
+                            const shareButton = bySelectors([
+                                'div[role="button"][tabindex="0"]',
+                                'button[tabindex="0"]',
+                                'button[aria-label*="share" i]',
+                                '[role="button"][aria-label*="share" i]',
+                            ]) || findClickableByHints(["share"]);
+                            const shareCandidates = collectDeep('div[role="button"], button, [role="button"]');
+                            let clickedShare = false;
+                            for (const node of shareCandidates) {
+                                const text = normalizedNodeText(node);
+                                if (!text) continue;
+                                if (text.includes("share") && !text.includes("reshare")) {
+                                    clickedShare = clickNodeOrAncestor(node) || clickedShare;
+                                    if (clickedShare) break;
+                                }
+                            }
+                            if (!clickedShare && shareButton) {
+                                clickedShare = clickNodeOrAncestor(shareButton) || clickedShare;
+                            }
+                            submitClicked = clickedShare || submitClicked;
+                        }
+                    }
+
                     return {
                         fileInputFound: Boolean(fileInput),
                         fileDialogTriggered,
@@ -6880,6 +6938,8 @@ class MainWindow(QMainWindow):
                         captionReady,
                         facebookSubmitDelayElapsed,
                         tiktokReadyForTextOrSubmit,
+                        instagramReadyForAdvance,
+                        instagramUploadInProgress,
                         nextClicked,
                         submitClicked,
                         videoPathQueued: Boolean(requestedVideoPath),
@@ -6927,14 +6987,15 @@ class MainWindow(QMainWindow):
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists)
             is_facebook = platform_name == "Facebook"
             is_tiktok = platform_name == "TikTok"
+            is_instagram = platform_name == "Instagram"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if (is_facebook or is_tiktok) else True
-            completion_attempt_ready = submit_ok if (is_facebook or is_tiktok) else (attempts >= 2)
+            submit_ok = submit_clicked if (is_facebook or is_tiktok or is_instagram) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_tiktok or is_instagram) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
-                status_label.setText("Status: post submitted." if (is_facebook or is_tiktok) else "Status: staged. Confirm/finalize post in this tab if needed.")
+                status_label.setText("Status: post submitted." if (is_facebook or is_tiktok or is_instagram) else "Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_tiktok) else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_tiktok or is_instagram) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
