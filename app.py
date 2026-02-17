@@ -6669,18 +6669,24 @@ class MainWindow(QMainWindow):
                             if (byFacebookClass) return byFacebookClass;
                         }
                         if (platform === "instagram") {
+                            const instagramFormInput = fileInputs.find((node) => {
+                                const form = node.closest && node.closest('form[enctype="multipart/form-data"][method="POST"][role="presentation"]');
+                                if (!form) return false;
+                                const accept = norm(node.getAttribute("accept"));
+                                return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*") || accept.includes("video");
+                            });
+                            if (instagramFormInput) return instagramFormInput;
+
                             const instagramCandidates = fileInputs.filter((node) => {
                                 const accept = norm(node.getAttribute("accept"));
                                 if (!accept) return false;
-                                const hasVideo = accept.includes("video");
-                                const hasImage = accept.includes("image");
-                                return hasVideo && !hasImage;
+                                return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*") || accept.includes("video");
                             });
                             const visibleInstagramCandidate = instagramCandidates.find((node) => isVisible(node));
                             if (visibleInstagramCandidate) return visibleInstagramCandidate;
                             if (instagramCandidates.length) return instagramCandidates[0];
 
-                            const instagramVideoOnlyByAttributes = fileInputs.filter((node) => {
+                            const instagramLikelyUploadInput = fileInputs.find((node) => {
                                 const combined = [
                                     norm(node.getAttribute("accept")),
                                     norm(node.getAttribute("aria-label")),
@@ -6688,11 +6694,9 @@ class MainWindow(QMainWindow):
                                     norm(node.id),
                                     norm(node.className),
                                 ].join(" ");
-                                return combined.includes("video") && !combined.includes("image");
+                                return combined.includes("video") || combined.includes("x1s85apg");
                             });
-                            const visibleByAttributes = instagramVideoOnlyByAttributes.find((node) => isVisible(node));
-                            if (visibleByAttributes) return visibleByAttributes;
-                            if (instagramVideoOnlyByAttributes.length) return instagramVideoOnlyByAttributes[0];
+                            if (instagramLikelyUploadInput) return instagramLikelyUploadInput;
                             return null;
                         }
                         const byExactInstagramAccept = fileInputs.find((node) => {
