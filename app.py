@@ -6413,87 +6413,122 @@ class MainWindow(QMainWindow):
                     const platformFileSelectors = {
                         facebook: [
                             'input[type="file"][accept*="video" i]',
+                            'input[type="file"][name*="video" i]',
                             'input[type="file"]',
                         ],
                         instagram: [
                             'input[type="file"][accept*="video" i]',
+                            'input[type="file"][name*="video" i]',
                             'input[type="file"]',
                         ],
                         tiktok: [
                             'input[type="file"][accept*="video" i]',
                             'input[type="file"][accept*="mp4" i]',
+                            'input[type="file"][name*="file" i]',
                             'input[type="file"]',
                         ],
                     };
 
+                    const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
+                    const clickableNodes = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex], label, a, span'));
+                    const findClickableByHints = (hints) => {
+                        for (const node of clickableNodes) {
+                            if (!isVisible(node)) continue;
+                            const joined = [
+                                norm(node.innerText || node.textContent),
+                                norm(node.getAttribute("aria-label")),
+                                norm(node.getAttribute("data-testid")),
+                                norm(node.className),
+                            ].join(" ");
+                            if (hints.some((hint) => joined.includes(hint))) return node;
+                        }
+                        return null;
+                    };
+
+                    const platformOpenUploadHints = {
+                        facebook: ["add video", "photo/video", "upload video", "choose video"],
+                        instagram: ["select from computer", "select video", "upload"],
+                        tiktok: ["select video", "upload", "choose file"],
+                    };
+
+                    let openUploadClicked = false;
+                    const uploadButton = findClickableByHints(platformOpenUploadHints[platform] || platformOpenUploadHints.tiktok);
+                    if (uploadButton) {
+                        try { uploadButton.click(); openUploadClicked = true; } catch (_) {}
+                    }
+
                     const fileInput = bySelectors(platformFileSelectors[platform] || platformFileSelectors.tiktok);
+                    let fileDialogTriggered = false;
                     if (fileInput) {
                         fileInput.style.display = "block";
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
-                        try { fileInput.click(); } catch (_) {}
+                        try { fileInput.click(); fileDialogTriggered = true; } catch (_) {}
                     }
 
+                    const fullText = [payload.title, payload.caption].filter(Boolean).join("\n\n").trim();
                     const textTargets = Array.from(
                         document.querySelectorAll(
                             'textarea, [contenteditable="true"], input[type="text"], input:not([type]), div[role="textbox"], [aria-label*="caption" i], [placeholder*="caption" i], [aria-label*="description" i]'
                         )
                     );
-                    const fullText = [payload.title, payload.caption].filter(Boolean).join("\n\n").trim();
                     let textFilled = false;
-                    for (const node of textTargets) {
-                        const hint = [
-                            norm(node.getAttribute("aria-label")),
-                            norm(node.getAttribute("placeholder")),
-                            norm(node.getAttribute("name")),
-                            norm(node.id),
-                        ].join(" ");
-                        const match =
-                            !hint
-                            || hint.includes("caption")
-                            || hint.includes("description")
-                            || hint.includes("title")
-                            || hint.includes("post");
-                        if (!match) continue;
-                        try {
-                            if (node.isContentEditable) {
-                                node.textContent = fullText;
-                                if ('innerText' in node) node.innerText = fullText;
-                            } else if ('value' in node) {
-                                node.value = fullText;
-                            } else {
-                                node.textContent = fullText;
-                            }
-                            node.dispatchEvent(new Event("input", { bubbles: true }));
-                            node.dispatchEvent(new Event("change", { bubbles: true }));
-                            textFilled = true;
-                            break;
-                        } catch (_) {}
-                    }
-
-                    const platformTriggerHints = {
-                        facebook: ["add video", "photo/video", "upload video", "next", "publish", "post"],
-                        instagram: ["select from computer", "next", "share", "post"],
-                        tiktok: ["select video", "upload", "choose file", "post", "publish"],
-                    };
-                    const activeHints = platformTriggerHints[platform] || platformTriggerHints.tiktok;
-
-                    const clickables = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex], label, [aria-label*="upload" i], [aria-label*="select" i], [data-testid], [class]'));
-                    let clicked = false;
-                    for (const node of clickables) {
-                        const joined = [
-                            norm(node.innerText || node.textContent),
-                            norm(node.getAttribute("aria-label")),
-                            norm(node.getAttribute("data-testid")),
-                            norm(node.className),
-                        ].join(" ");
-                        if (activeHints.some((hint) => joined.includes(hint))) {
-                            try { node.click(); clicked = true; } catch (_) {}
+                    if (fullText) {
+                        for (const node of textTargets) {
+                            const hint = [
+                                norm(node.getAttribute("aria-label")),
+                                norm(node.getAttribute("placeholder")),
+                                norm(node.getAttribute("name")),
+                                norm(node.id),
+                            ].join(" ");
+                            const match = !hint || hint.includes("caption") || hint.includes("description") || hint.includes("title") || hint.includes("post");
+                            if (!match) continue;
+                            try {
+                                if (node.isContentEditable) {
+                                    node.textContent = fullText;
+                                    if ('innerText' in node) node.innerText = fullText;
+                                } else if ('value' in node) {
+                                    node.value = fullText;
+                                } else {
+                                    node.textContent = fullText;
+                                }
+                                node.dispatchEvent(new Event("input", { bubbles: true }));
+                                node.dispatchEvent(new Event("change", { bubbles: true }));
+                                textFilled = true;
+                                break;
+                            } catch (_) {}
                         }
                     }
 
-                    return { fileInputFound: Boolean(fileInput), textFilled, clicked, videoPathQueued: Boolean(payload.video_path || payload.videoPath) };
+                    const fileReadySignal = Boolean(
+                        (fileInput && fileInput.files && fileInput.files.length > 0)
+                        || document.querySelector('video')
+                        || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
+                    );
+
+                    const platformNextHints = {
+                        facebook: ["next", "continue"],
+                        instagram: ["next"],
+                        tiktok: ["next"],
+                    };
+                    let nextClicked = false;
+                    if (fileReadySignal) {
+                        const nextButton = findClickableByHints(platformNextHints[platform] || platformNextHints.tiktok);
+                        if (nextButton) {
+                            try { nextButton.click(); nextClicked = true; } catch (_) {}
+                        }
+                    }
+
+                    return {
+                        fileInputFound: Boolean(fileInput),
+                        fileDialogTriggered,
+                        openUploadClicked,
+                        fileReadySignal,
+                        textFilled,
+                        nextClicked,
+                        videoPathQueued: Boolean(payload.video_path || payload.videoPath),
+                    };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
                 }
@@ -6510,19 +6545,26 @@ class MainWindow(QMainWindow):
                 return
 
             file_found = bool(isinstance(result, dict) and result.get("fileInputFound"))
+            file_dialog_triggered = bool(isinstance(result, dict) and result.get("fileDialogTriggered"))
+            open_upload_clicked = bool(isinstance(result, dict) and result.get("openUploadClicked"))
+            file_ready_signal = bool(isinstance(result, dict) and result.get("fileReadySignal"))
             text_filled = bool(isinstance(result, dict) and result.get("textFilled"))
-            clicked = bool(isinstance(result, dict) and result.get("clicked"))
+            next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
-            file_queued = bool(video_path and Path(video_path).exists())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
 
             progress_bar.setVisible(True)
             progress_bar.setValue(min(95, 20 + attempts * 6))
             status_label.setText(
-                f"Status: attempt {attempts} (file={'ready' if file_queued else ('input' if file_found else 'no')}, caption={'ready' if caption_queued else ('yes' if text_filled else 'no')})."
+                f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, caption={'ready' if (caption_queued and text_filled) else ('queued' if caption_queued else 'none')})."
+            )
+            self._append_log(
+                f"{platform_name}: attempt {attempts} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked}"
             )
 
-            if attempts >= 6 and (file_found or text_filled or clicked):
+            file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered)
+            caption_ok = (not caption_queued) or text_filled
+            if attempts >= 4 and file_stage_ok and caption_ok:
                 status_label.setText("Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(f"{platform_name} browser automation staged successfully in its tab.")
