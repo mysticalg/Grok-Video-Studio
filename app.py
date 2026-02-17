@@ -6454,7 +6454,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        max_attempts = 24 if platform_name == "TikTok" else 2
+        max_attempts = 120 if platform_name == "TikTok" else 2
         if attempts > max_attempts:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
@@ -6557,6 +6557,25 @@ class MainWindow(QMainWindow):
                         if (attr('data-disabled') === 'true') return false;
                         if (attr('data-loading') === 'true') return false;
                         return isVisible(node);
+                    };
+                    const findEnabledTikTokPostButton = () => {
+                        const buttons = collectDeep('button[data-e2e="post_video_button"]');
+                        for (const btn of buttons) {
+                            if (isTikTokPostButtonEnabled(btn)) return btn;
+                        }
+                        return null;
+                    };
+                    const clickTikTokPostButton = (node) => {
+                        if (!node || !isTikTokPostButtonEnabled(node)) return false;
+                        try { node.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        if (clickNodeOrAncestor(node)) return true;
+                        try {
+                            node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
+                            node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
+                            node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+                            return true;
+                        } catch (_) {}
+                        return false;
                     };
 
                     let openUploadClicked = false;
@@ -6822,10 +6841,10 @@ class MainWindow(QMainWindow):
 
                     let tiktokPostButtonEnabled = false;
                     if (platform === "tiktok" && captionReady) {
-                        const explicitTiktokPostButton = bySelectors(['button[data-e2e="post_video_button"]']);
-                        tiktokPostButtonEnabled = isTikTokPostButtonEnabled(explicitTiktokPostButton);
-                        if (explicitTiktokPostButton && tiktokPostButtonEnabled) {
-                            submitClicked = clickNodeOrAncestor(explicitTiktokPostButton) || submitClicked;
+                        const explicitTiktokPostButton = findEnabledTikTokPostButton();
+                        tiktokPostButtonEnabled = Boolean(explicitTiktokPostButton);
+                        if (explicitTiktokPostButton) {
+                            submitClicked = clickTikTokPostButton(explicitTiktokPostButton) || submitClicked;
                         }
                         if (!submitClicked) {
                             const tiktokPostButton = findClickableByHints(["post", "publish"]);
@@ -6833,7 +6852,7 @@ class MainWindow(QMainWindow):
                                 tiktokPostButtonEnabled = isTikTokPostButtonEnabled(tiktokPostButton);
                             }
                             if (tiktokPostButton && tiktokPostButtonEnabled) {
-                                submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
+                                submitClicked = clickTikTokPostButton(tiktokPostButton) || submitClicked;
                             }
                         }
                     }
