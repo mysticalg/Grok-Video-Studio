@@ -7007,6 +7007,16 @@ class MainWindow(QMainWindow):
             caption_ok = text_filled or not caption_queued
             is_tiktok = platform_name == "TikTok"
             file_stage_ok = True if is_tiktok else file_stage_ok
+
+            if is_tiktok and tiktok_post_enabled and not submit_clicked:
+                status_label.setText("Status: post button enabled. Review and confirm post in this tab.")
+                progress_bar.setValue(100)
+                self._append_log(
+                    "TikTok browser automation paused after detecting enabled Post button to avoid repeated submit attempts."
+                )
+                self.social_upload_pending.pop(platform_name, None)
+                return
+
             submit_ok = submit_clicked if (is_facebook or is_tiktok) else True
             completion_attempt_ready = submit_ok if (is_facebook or is_tiktok) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
