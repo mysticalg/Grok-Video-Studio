@@ -981,6 +981,11 @@ class MainWindow(QMainWindow):
         if instagram_browser is not None:
             instagram_browser.setUrl(QUrl(self._instagram_reels_create_url()))
 
+    def _refresh_facebook_upload_tab_url(self) -> None:
+        facebook_browser = self.social_upload_browsers.get("Facebook")
+        if facebook_browser is not None:
+            facebook_browser.setUrl(QUrl(self._facebook_upload_home_url()))
+
     def _build_ui(self) -> None:
         splitter = QSplitter()
 
@@ -1404,7 +1409,7 @@ class MainWindow(QMainWindow):
         self.browser_tabs = QTabWidget()
         self.browser_tabs.addTab(self.browser, "Browser")
         self.social_upload_tab_indices["Facebook"] = self.browser_tabs.addTab(
-            self._build_social_upload_tab("Facebook", "https://www.facebook.com/reels/create/"),
+            self._build_social_upload_tab("Facebook", self._facebook_upload_home_url()),
             "Facebook Upload",
         )
         self.social_upload_tab_indices["Instagram"] = self.browser_tabs.addTab(
@@ -1469,7 +1474,7 @@ class MainWindow(QMainWindow):
             api_btn.clicked.connect(self.upload_selected_to_tiktok)
             browser_btn.clicked.connect(self.start_tiktok_browser_upload)
 
-        open_btn.clicked.connect(lambda _=False, u=upload_url, p=platform_name: self._open_social_upload_page(p, u))
+        open_btn.clicked.connect(lambda _=False, p=platform_name, u=upload_url: self._open_social_upload_page(p, self._social_upload_url_for_platform(p, u)))
         controls.addWidget(api_btn)
         controls.addWidget(browser_btn)
         controls.addWidget(open_btn)
@@ -1496,7 +1501,7 @@ class MainWindow(QMainWindow):
         )
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
-        browser.setUrl(QUrl(upload_url))
+        browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
         layout.addWidget(browser, 1)
 
@@ -1510,6 +1515,17 @@ class MainWindow(QMainWindow):
         self.social_upload_timers[platform_name] = timer
 
         return tab
+
+    def _facebook_upload_home_url(self) -> str:
+        configured = self.facebook_profile_url.text().strip() if hasattr(self, "facebook_profile_url") else ""
+        if configured:
+            return configured
+        return "https://www.facebook.com/"
+
+    def _social_upload_url_for_platform(self, platform_name: str, fallback_url: str) -> str:
+        if platform_name == "Facebook":
+            return self._facebook_upload_home_url()
+        return fallback_url
 
     def _open_social_upload_page(self, platform_name: str, upload_url: str) -> None:
         browser = self.social_upload_browsers.get(platform_name)
@@ -1743,6 +1759,12 @@ class MainWindow(QMainWindow):
         self.facebook_app_secret.setEchoMode(QLineEdit.Password)
         self.facebook_app_secret.setText(os.getenv("FACEBOOK_APP_SECRET", ""))
         facebook_layout.addRow("Facebook App Secret", self.facebook_app_secret)
+
+        self.facebook_profile_url = QLineEdit(os.getenv("FACEBOOK_PROFILE_URL", "https://www.facebook.com/"))
+        self.facebook_profile_url.setPlaceholderText("e.g. https://www.facebook.com/dave.hook.94")
+        self.facebook_profile_url.setToolTip("Used for the Facebook web upload tab URL.")
+        self.facebook_profile_url.editingFinished.connect(self._refresh_facebook_upload_tab_url)
+        facebook_layout.addRow("Facebook Profile URL (web upload)", self.facebook_profile_url)
 
         self.facebook_oauth_btn = QPushButton("Authorize Facebook for Pages")
         self.facebook_oauth_btn.setToolTip("Open Facebook OAuth in browser and populate Page ID + Page access token.")
@@ -2014,6 +2036,7 @@ class MainWindow(QMainWindow):
             "facebook_access_token": self.facebook_access_token.text(),
             "facebook_app_id": self.facebook_app_id.text(),
             "facebook_app_secret": self.facebook_app_secret.text(),
+            "facebook_profile_url": self.facebook_profile_url.text(),
             "instagram_business_id": self.instagram_business_id.text(),
             "instagram_access_token": self.instagram_access_token.text(),
             "instagram_username": self.instagram_username.text(),
@@ -2090,6 +2113,9 @@ class MainWindow(QMainWindow):
             self.facebook_app_id.setText(str(preferences["facebook_app_id"]))
         if "facebook_app_secret" in preferences:
             self.facebook_app_secret.setText(str(preferences["facebook_app_secret"]))
+        if "facebook_profile_url" in preferences:
+            self.facebook_profile_url.setText(str(preferences["facebook_profile_url"]))
+            self._refresh_facebook_upload_tab_url()
         if "instagram_business_id" in preferences:
             self.instagram_business_id.setText(str(preferences["instagram_business_id"]))
         if "instagram_access_token" in preferences:
@@ -6119,6 +6145,7 @@ class MainWindow(QMainWindow):
         return video_id  # This is what your worker expects
 
     def start_facebook_browser_upload(self) -> None:
+        self._refresh_facebook_upload_tab_url()
         video_path = self._selected_video_path_for_upload()
         if not video_path:
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
@@ -6534,8 +6561,30 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    if (platform === "facebook") {
+                        const facebookUploadButton = findClickableByHints([
+                            "photo/video",
+                            "photo or video",
+                            "add photo",
+                            "add video",
+                            "create post",
+                        ]);
+                        if (facebookUploadButton) {
+                            openUploadClicked = clickNodeOrAncestor(facebookUploadButton) || openUploadClicked;
+                        }
+                    }
+
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
+                        if (platform === "facebook") {
+                            const byFacebookAccept = fileInputs.find((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                return accept.includes("video/*") && accept.includes("image/*");
+                            });
+                            if (byFacebookAccept) return byFacebookAccept;
+                            const byFacebookClass = fileInputs.find((node) => norm(node.className).includes("x1s85apg"));
+                            if (byFacebookClass) return byFacebookClass;
+                        }
                         const byExactInstagramAccept = fileInputs.find((node) => {
                             const accept = norm(node.getAttribute("accept"));
                             return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*");
