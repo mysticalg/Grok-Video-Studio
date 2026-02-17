@@ -1520,13 +1520,23 @@ class MainWindow(QMainWindow):
     ) -> list[str]:
         url = str(source_url or "").lower()
         platform_map: list[tuple[str, Iterable[str]]] = [
-            ("Facebook", ("facebook.com/reels/create", "facebook.com/reel/")),
-            ("Instagram", ("instagram.com/create/reel",)),
-            ("TikTok", ("tiktok.com/tiktokstudio/upload", "tiktok.com/upload")),
+            ("Facebook", ("facebook.com",)),
+            ("Instagram", ("instagram.com",)),
+            ("TikTok", ("tiktok.com",)),
         ]
+
+        matched_platform: str | None = None
         for platform_name, patterns in platform_map:
-            if not any(pattern in url for pattern in patterns):
-                continue
+            if any(pattern in url for pattern in patterns):
+                matched_platform = platform_name
+                break
+
+        candidates: list[str] = []
+        if matched_platform:
+            candidates.append(matched_platform)
+        candidates.extend([name for name in self.social_upload_pending.keys() if name not in candidates])
+
+        for platform_name in candidates:
             pending = self.social_upload_pending.get(platform_name)
             if not pending:
                 continue
@@ -1535,7 +1545,9 @@ class MainWindow(QMainWindow):
                 continue
             candidate = Path(video_path)
             if candidate.exists() and candidate.is_file():
-                self._append_log(f"{platform_name}: auto-selected file for upload dialog: {candidate.name}")
+                self._append_log(
+                    f"{platform_name}: auto-selected file for upload dialog from {url or 'unknown page'}: {candidate.name}"
+                )
                 return [str(candidate)]
         return []
 
@@ -6342,6 +6354,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Social Upload", f"{platform_name} upload tab is not initialized.")
             return
 
+        upload_urls = {
+            "Facebook": "https://www.facebook.com/reels/create/",
+            "Instagram": "https://www.instagram.com/create/reel/",
+            "TikTok": "https://www.tiktok.com/upload",
+        }
+        upload_url = upload_urls.get(platform_name, "")
+
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
             "video_path": str(video_path),
@@ -6357,9 +6376,19 @@ class MainWindow(QMainWindow):
         progress_bar.setValue(10)
         status_label.setText("Status: opening upload page in embedded browser...")
         self._append_log(
-            f"Browser-based {platform_name} upload: opening social tab and attempting automated form fill/post."
+            f"Browser-based {platform_name} upload: opening social tab and attempting automated upload staging."
         )
         self.browser_tabs.setCurrentIndex(tab_index)
+
+        current_url = browser.url().toString().strip()
+        if upload_url and upload_url not in current_url:
+            self._append_log(
+                f"{platform_name}: navigating upload tab to expected URL: {upload_url} (current={current_url or 'empty'})"
+            )
+            browser.setUrl(QUrl(upload_url))
+            timer.start(1200)
+            return
+
         timer.start(250)
 
     def _run_social_browser_upload_step(self, platform_name: str) -> None:
@@ -6558,8 +6587,9 @@ class MainWindow(QMainWindow):
             status_label.setText(
                 f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, caption={'ready' if (caption_queued and text_filled) else ('queued' if caption_queued else 'none')})."
             )
+            current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked}"
             )
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered)
