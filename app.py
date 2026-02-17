@@ -1520,13 +1520,23 @@ class MainWindow(QMainWindow):
     ) -> list[str]:
         url = str(source_url or "").lower()
         platform_map: list[tuple[str, Iterable[str]]] = [
-            ("Facebook", ("facebook.com/reels/create", "facebook.com/reel/")),
-            ("Instagram", ("instagram.com/create/reel",)),
-            ("TikTok", ("tiktok.com/tiktokstudio/upload", "tiktok.com/upload")),
+            ("Facebook", ("facebook.com",)),
+            ("Instagram", ("instagram.com",)),
+            ("TikTok", ("tiktok.com",)),
         ]
+
+        matched_platform: str | None = None
         for platform_name, patterns in platform_map:
-            if not any(pattern in url for pattern in patterns):
-                continue
+            if any(pattern in url for pattern in patterns):
+                matched_platform = platform_name
+                break
+
+        candidates: list[str] = []
+        if matched_platform:
+            candidates.append(matched_platform)
+        candidates.extend([name for name in self.social_upload_pending.keys() if name not in candidates])
+
+        for platform_name in candidates:
             pending = self.social_upload_pending.get(platform_name)
             if not pending:
                 continue
@@ -1535,9 +1545,17 @@ class MainWindow(QMainWindow):
                 continue
             candidate = Path(video_path)
             if candidate.exists() and candidate.is_file():
-                self._append_log(f"{platform_name}: auto-selected file for upload dialog: {candidate.name}")
+                self._append_log(
+                    f"{platform_name}: auto-selected file for upload dialog from {url or 'unknown page'}: {candidate.name}"
+                )
                 return [str(candidate)]
         return []
+
+    def _selected_video_path_for_upload(self) -> str:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            return ""
+        return str(self.videos[index].get("video_file_path") or "").strip()
 
     def _build_browser_training_tab(self) -> QWidget:
         tab = QWidget()
@@ -6076,12 +6094,14 @@ class MainWindow(QMainWindow):
         return video_id  # This is what your worker expects
 
     def start_facebook_browser_upload(self) -> None:
-        index = self.video_picker.currentIndex()
-        if index < 0 or index >= len(self.videos):
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
 
-        video_path = self.videos[index]["video_file_path"]
         title, description, hashtags, _, accepted = self._show_upload_dialog("Facebook")
         if not accepted:
             return
@@ -6094,30 +6114,34 @@ class MainWindow(QMainWindow):
         )
 
     def start_instagram_browser_upload(self) -> None:
-        index = self.video_picker.currentIndex()
-        if index < 0 or index >= len(self.videos):
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
 
-        selected_video = self.videos[index]
         _, caption, hashtags, _, accepted = self._show_upload_dialog("Instagram", title_enabled=False)
         if not accepted:
             return
 
         self._start_social_browser_upload(
             platform_name="Instagram",
-            video_path=selected_video["video_file_path"],
+            video_path=video_path,
             caption=self._compose_social_text(caption, hashtags),
             title="",
         )
 
     def start_tiktok_browser_upload(self) -> None:
-        index = self.video_picker.currentIndex()
-        if index < 0 or index >= len(self.videos):
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
 
-        video_path = self.videos[index]["video_file_path"]
         _, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=False)
         if not accepted:
             return
@@ -6330,6 +6354,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Social Upload", f"{platform_name} upload tab is not initialized.")
             return
 
+        upload_urls = {
+            "Facebook": "https://www.facebook.com/reels/create/",
+            "Instagram": "https://www.instagram.com/create/reel/",
+            "TikTok": "https://www.tiktok.com/upload",
+        }
+        upload_url = upload_urls.get(platform_name, "")
+
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
             "video_path": str(video_path),
@@ -6345,9 +6376,19 @@ class MainWindow(QMainWindow):
         progress_bar.setValue(10)
         status_label.setText("Status: opening upload page in embedded browser...")
         self._append_log(
-            f"Browser-based {platform_name} upload: opening social tab and attempting automated form fill/post."
+            f"Browser-based {platform_name} upload: opening social tab and attempting automated upload staging."
         )
         self.browser_tabs.setCurrentIndex(tab_index)
+
+        current_url = browser.url().toString().strip()
+        if upload_url and upload_url not in current_url:
+            self._append_log(
+                f"{platform_name}: navigating upload tab to expected URL: {upload_url} (current={current_url or 'empty'})"
+            )
+            browser.setUrl(QUrl(upload_url))
+            timer.start(1200)
+            return
+
         timer.start(250)
 
     def _run_social_browser_upload_step(self, platform_name: str) -> None:
@@ -6362,7 +6403,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        if attempts > 30:
+        if attempts > 5:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
             self._append_log(
@@ -6386,76 +6427,212 @@ class MainWindow(QMainWindow):
                 try {
                     const payload = JSON.parse(atob("__PAYLOAD_B64__"));
                     const norm = (s) => String(s || "").toLowerCase();
+                    const platform = norm(payload.platform);
                     const pick = (arr) => arr.find(Boolean) || null;
+                    const collectDeep = (selector) => {
+                        const results = [];
+                        const seen = new Set();
+                        const roots = [document];
+                        while (roots.length) {
+                            const root = roots.pop();
+                            let nodes = [];
+                            try { nodes = Array.from(root.querySelectorAll(selector)); } catch (_) {}
+                            for (const node of nodes) {
+                                if (!seen.has(node)) {
+                                    seen.add(node);
+                                    results.push(node);
+                                }
+                            }
+                            let all = [];
+                            try { all = Array.from(root.querySelectorAll('*')); } catch (_) {}
+                            for (const el of all) {
+                                if (el && el.shadowRoot) roots.push(el.shadowRoot);
+                            }
+                        }
+                        return results;
+                    };
+                    const bySelectors = (selectors) => {
+                        for (const selector of selectors) {
+                            const nodes = collectDeep(selector);
+                            if (nodes.length) return nodes[0];
+                        }
+                        return null;
+                    };
 
-                    const fileInput = pick(Array.from(document.querySelectorAll('input[type="file"]')));
+                    const platformFileSelectors = {
+                        facebook: [
+                            'input[type="file"].x1s85apg[accept*="video/*" i]',
+                            'input[type="file"][accept*="video" i]',
+                            'input[type="file"][name*="video" i]',
+                            'input[type="file"][accept*="mp4" i]',
+                            'input[type="file"]',
+                        ],
+                        instagram: [
+                            'input[type="file"][accept*="video" i]',
+                            'input[type="file"][name*="video" i]',
+                            'input[type="file"][accept*="mp4" i]',
+                            'input[type="file"]',
+                        ],
+                        tiktok: [
+                            'input[type="file"].jsx-2995057667[accept*="video/*" i]',
+                            'input[type="file"][accept*="video" i][multiple]',
+                            'input[type="file"][accept*="video" i]',
+                            'input[type="file"][accept*="mp4" i]',
+                            'input[type="file"][name*="file" i]',
+                            'input[type="file"]',
+                        ],
+                    };
+
+                    const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
+                    const clickableNodes = collectDeep('button, [role="button"], div, label, a, span, [aria-label], [data-testid], [type="button"]');
+                    const normalizedNodeText = (node) => [
+                        norm(node.innerText || node.textContent),
+                        norm(node.getAttribute("aria-label")),
+                        norm(node.getAttribute("data-testid")),
+                        norm(node.className),
+                    ].join(" ");
+                    const clickNodeOrAncestor = (node) => {
+                        if (!node) return false;
+                        const candidates = [
+                            node,
+                            node.closest && node.closest('button, [role="button"], a, label, div[tabindex], div'),
+                            node.parentElement,
+                        ].filter(Boolean);
+                        for (const candidate of candidates) {
+                            try { candidate.click(); return true; } catch (_) {}
+                        }
+                        return false;
+                    };
+                    const findClickableByHints = (hints) => {
+                        const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
+                        for (const node of clickableNodes) {
+                            if (!isVisible(node)) continue;
+                            const joined = normalizedNodeText(node);
+                            if (normalizedHints.some((hint) => joined.includes(hint))) return node;
+                        }
+                        for (const node of clickableNodes) {
+                            const joined = normalizedNodeText(node);
+                            if (normalizedHints.some((hint) => joined.includes(hint))) return node;
+                        }
+                        return null;
+                    };
+
+                    const platformOpenUploadHints = {
+                        facebook: ["add video", "photo/video", "upload video", "choose video", "create reel", "create", "add reel", "video/reel", "reels"],
+                        instagram: ["select from computer", "select video", "upload", "new post", "create", "create new", "post", "reel"],
+                        tiktok: ["select videos", "select video", "upload", "choose file"],
+                    };
+
+                    const urlHints = [];
+                    const currentHref = norm(window.location.href || "");
+                    if (platform === "facebook" && (currentHref.includes("facebook.com/reel") || currentHref.includes("facebook.com/reels"))) {
+                        urlHints.push("create reel", "reels", "create", "add reel", "video/reel", "add video");
+                    }
+                    if (platform === "instagram" && currentHref.includes("instagram.com")) {
+                        urlHints.push("create", "new post", "select from computer", "post", "reel");
+                    }
+
+                    let openUploadClicked = false;
+
+                    if (platform === "tiktok") {
+                        const tiktokPrimary = pick(collectDeep('div.Button__content--type-primary, div.Button__content--size-large, div.Button__content'));
+                        if (tiktokPrimary && normalizedNodeText(tiktokPrimary).includes("select videos")) {
+                            openUploadClicked = clickNodeOrAncestor(tiktokPrimary);
+                        }
+                    }
+
+                    if (!openUploadClicked && platform === "facebook") {
+                        const facebookAddVideoSpan = collectDeep('span').find((node) => normalizedNodeText(node).includes("add video"));
+                        if (facebookAddVideoSpan) {
+                            openUploadClicked = clickNodeOrAncestor(facebookAddVideoSpan);
+                        }
+                    }
+
+                    if (!openUploadClicked) {
+                        const uploadButton = findClickableByHints([...(platformOpenUploadHints[platform] || platformOpenUploadHints.tiktok), ...urlHints]);
+                        openUploadClicked = clickNodeOrAncestor(uploadButton);
+                    }
+
+                    const fileInput = bySelectors(platformFileSelectors[platform] || platformFileSelectors.tiktok);
+                    let fileDialogTriggered = false;
                     if (fileInput) {
                         fileInput.style.display = "block";
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
-                        try { fileInput.click(); } catch (_) {}
+                        try { fileInput.removeAttribute("disabled"); } catch (_) {}
+                        try { fileInput.click(); fileDialogTriggered = true; } catch (_) {}
                     }
 
-                    const textTargets = Array.from(
-                        document.querySelectorAll(
-                            'textarea, [contenteditable="true"], input[type="text"], input:not([type]), div[role="textbox"], [aria-label*="caption" i], [placeholder*="caption" i], [aria-label*="description" i]'
-                        )
-                    );
                     const fullText = [payload.title, payload.caption].filter(Boolean).join("\n\n").trim();
+                    const textTargets = collectDeep('textarea, [contenteditable="true"], input[type="text"], input:not([type]), div[role="textbox"], [aria-label*="caption" i], [placeholder*="caption" i], [aria-label*="description" i]');
                     let textFilled = false;
-                    for (const node of textTargets) {
-                        const hint = [
-                            norm(node.getAttribute("aria-label")),
-                            norm(node.getAttribute("placeholder")),
-                            norm(node.getAttribute("name")),
-                            norm(node.id),
-                        ].join(" ");
-                        const match =
-                            !hint
-                            || hint.includes("caption")
-                            || hint.includes("description")
-                            || hint.includes("title")
-                            || hint.includes("post");
-                        if (!match) continue;
-                        try {
-                            if (node.isContentEditable) {
-                                node.textContent = fullText;
-                                if ('innerText' in node) node.innerText = fullText;
-                            } else if ('value' in node) {
-                                node.value = fullText;
-                            } else {
-                                node.textContent = fullText;
-                            }
-                            node.dispatchEvent(new Event("input", { bubbles: true }));
-                            node.dispatchEvent(new Event("change", { bubbles: true }));
-                            textFilled = true;
-                            break;
-                        } catch (_) {}
-                    }
-
-                    const clickables = Array.from(document.querySelectorAll('button, [role="button"], div[tabindex], label, [aria-label*="upload" i], [aria-label*="select" i]'));
-                    let clicked = false;
-                    for (const node of clickables) {
-                        const joined = [
-                            norm(node.innerText || node.textContent),
-                            norm(node.getAttribute("aria-label")),
-                        ].join(" ");
-                        if (
-                            joined.includes("upload")
-                            || joined.includes("select file")
-                            || joined.includes("next")
-                            || joined.includes("share")
-                            || joined.includes("publish")
-                            || joined.includes("post")
-                            || joined.includes("video")
-                            || joined.includes("choose file")
-                            || joined.includes("add video")
-                        ) {
-                            try { node.click(); clicked = true; } catch (_) {}
+                    if (fullText) {
+                        for (const node of textTargets) {
+                            const hint = [
+                                norm(node.getAttribute("aria-label")),
+                                norm(node.getAttribute("placeholder")),
+                                norm(node.getAttribute("name")),
+                                norm(node.id),
+                            ].join(" ");
+                            const match = !hint || hint.includes("caption") || hint.includes("description") || hint.includes("title") || hint.includes("post");
+                            if (!match) continue;
+                            try {
+                                if (node.isContentEditable) {
+                                    node.textContent = fullText;
+                                    if ('innerText' in node) node.innerText = fullText;
+                                } else if ('value' in node) {
+                                    node.value = fullText;
+                                } else {
+                                    node.textContent = fullText;
+                                }
+                                node.dispatchEvent(new Event("input", { bubbles: true }));
+                                node.dispatchEvent(new Event("change", { bubbles: true }));
+                                textFilled = true;
+                                break;
+                            } catch (_) {}
                         }
                     }
 
-                    return { fileInputFound: Boolean(fileInput), textFilled, clicked, videoPathQueued: Boolean(payload.video_path || payload.videoPath) };
+                    const fileReadySignal = Boolean(
+                        (fileInput && fileInput.files && fileInput.files.length > 0)
+                        || document.querySelector('video')
+                        || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
+                    );
+
+                    const platformNextHints = {
+                        facebook: ["next", "continue"],
+                        instagram: ["next"],
+                        tiktok: ["next"],
+                    };
+                    let nextClicked = false;
+                    if (fileReadySignal) {
+                        const nextButton = findClickableByHints(platformNextHints[platform] || platformNextHints.tiktok);
+                        if (nextButton) {
+                            nextClicked = clickNodeOrAncestor(nextButton);
+                        }
+                    }
+
+                    const platformSubmitHints = {
+                        facebook: ["publish", "post", "share reel", "share"],
+                        instagram: ["share", "post"],
+                        tiktok: ["post", "publish"],
+                    };
+                    let submitClicked = false;
+                    if (fileReadySignal) {
+                        const submitButton = findClickableByHints(platformSubmitHints[platform] || []);
+                        submitClicked = clickNodeOrAncestor(submitButton);
+                    }
+
+                    return {
+                        fileInputFound: Boolean(fileInput),
+                        fileDialogTriggered,
+                        openUploadClicked,
+                        fileReadySignal,
+                        textFilled,
+                        nextClicked,
+                        submitClicked,
+                        videoPathQueued: Boolean(payload.video_path || payload.videoPath),
+                    };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
                 }
@@ -6472,19 +6649,28 @@ class MainWindow(QMainWindow):
                 return
 
             file_found = bool(isinstance(result, dict) and result.get("fileInputFound"))
+            file_dialog_triggered = bool(isinstance(result, dict) and result.get("fileDialogTriggered"))
+            open_upload_clicked = bool(isinstance(result, dict) and result.get("openUploadClicked"))
+            file_ready_signal = bool(isinstance(result, dict) and result.get("fileReadySignal"))
             text_filled = bool(isinstance(result, dict) and result.get("textFilled"))
-            clicked = bool(isinstance(result, dict) and result.get("clicked"))
+            next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
+            submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
-            file_queued = bool(video_path and Path(video_path).exists())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
 
             progress_bar.setVisible(True)
             progress_bar.setValue(min(95, 20 + attempts * 6))
             status_label.setText(
-                f"Status: attempt {attempts} (file={'ready' if file_queued else ('input' if file_found else 'no')}, caption={'ready' if caption_queued else ('yes' if text_filled else 'no')})."
+                f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, caption={'ready' if (caption_queued and text_filled) else ('queued' if caption_queued else 'none')})."
+            )
+            current_url = browser.url().toString().strip()
+            self._append_log(
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked}"
             )
 
-            if attempts >= 6 and (file_found or text_filled or clicked):
+            file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered)
+            caption_ok = (not caption_queued) or text_filled
+            if attempts >= 3 and file_stage_ok and caption_ok and (next_clicked or submit_clicked or platform_name == "TikTok"):
                 status_label.setText("Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(f"{platform_name} browser automation staged successfully in its tab.")
