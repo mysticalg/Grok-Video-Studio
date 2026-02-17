@@ -6665,34 +6665,34 @@ class MainWindow(QMainWindow):
                         try {
                             if ("value" in node) {
                                 node.focus();
-                                const valueSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), "value")?.set;
-                                if (valueSetter) {
-                                    valueSetter.call(node, text);
+                                if (
+                                    typeof node.setRangeText === "function"
+                                    && typeof node.selectionStart === "number"
+                                    && typeof node.selectionEnd === "number"
+                                ) {
+                                    try {
+                                        node.selectionStart = 0;
+                                        node.selectionEnd = String(node.value || "").length;
+                                        node.setRangeText(text);
+                                    } catch (_) {
+                                        node.value = text;
+                                    }
                                 } else {
                                     node.value = text;
                                 }
                                 node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
                                 node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return true;
+                                return norm(String(node.value || "")) === norm(text);
                             }
                         } catch (_) {}
                         try {
                             if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
                                 node.focus();
-                                const selection = window.getSelection();
-                                if (selection) {
-                                    const range = document.createRange();
-                                    range.selectNodeContents(node);
-                                    selection.removeAllRanges();
-                                    selection.addRange(range);
-                                }
-                                try { document.execCommand("insertText", false, text); } catch (_) {}
-                                if (!norm(node.innerText || node.textContent).includes(norm(text))) {
-                                    node.textContent = text;
-                                }
-                                node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
+                                while (node.firstChild) node.removeChild(node.firstChild);
+                                node.appendChild(document.createTextNode(text));
+                                node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
                                 node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                return true;
+                                return norm(node.innerText || node.textContent) === norm(text);
                             }
                         } catch (_) {}
                         return false;
@@ -6931,7 +6931,8 @@ class MainWindow(QMainWindow):
                                     ? draftEditorContainer.querySelector('[contenteditable="true"]')
                                     : null);
 
-                            textFilled = setTextValue(draftEditable || draftSpan, captionText) || textFilled;
+                            const tiktokCaptionTarget = draftEditable || findTextInputTarget() || draftSpan;
+                            textFilled = setTextValue(tiktokCaptionTarget, captionText) || textFilled;
 
                         }
 
