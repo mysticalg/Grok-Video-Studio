@@ -6653,6 +6653,33 @@ class MainWindow(QMainWindow):
                             const byFacebookClass = fileInputs.find((node) => norm(node.className).includes("x1s85apg"));
                             if (byFacebookClass) return byFacebookClass;
                         }
+                        if (platform === "instagram") {
+                            const instagramCandidates = fileInputs.filter((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                if (!accept) return false;
+                                const hasVideo = accept.includes("video");
+                                const hasImage = accept.includes("image");
+                                return hasVideo && !hasImage;
+                            });
+                            const visibleInstagramCandidate = instagramCandidates.find((node) => isVisible(node));
+                            if (visibleInstagramCandidate) return visibleInstagramCandidate;
+                            if (instagramCandidates.length) return instagramCandidates[0];
+
+                            const instagramVideoOnlyByAttributes = fileInputs.filter((node) => {
+                                const combined = [
+                                    norm(node.getAttribute("accept")),
+                                    norm(node.getAttribute("aria-label")),
+                                    norm(node.getAttribute("name")),
+                                    norm(node.id),
+                                    norm(node.className),
+                                ].join(" ");
+                                return combined.includes("video") && !combined.includes("image");
+                            });
+                            const visibleByAttributes = instagramVideoOnlyByAttributes.find((node) => isVisible(node));
+                            if (visibleByAttributes) return visibleByAttributes;
+                            if (instagramVideoOnlyByAttributes.length) return instagramVideoOnlyByAttributes[0];
+                            return null;
+                        }
                         const byExactInstagramAccept = fileInputs.find((node) => {
                             const accept = norm(node.getAttribute("accept"));
                             return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*");
