@@ -6534,17 +6534,33 @@ class MainWindow(QMainWindow):
                         }
                         return false;
                     };
-                    const findClickableByHints = (hints) => {
+                    const findClickableByHints = (hints, options = {}) => {
                         const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
-                        const clickableNodes = collectDeep('button, [role="button"], a, div[tabindex], span, div');
+                        const excludeHints = (options.excludeHints || []).map((hint) => norm(hint)).filter(Boolean);
+                        const contexts = (options.contexts && options.contexts.length)
+                            ? options.contexts
+                            : [document];
+                        const clickableNodes = [];
+                        for (const contextNode of contexts) {
+                            let nodes = [];
+                            try {
+                                nodes = Array.from(contextNode.querySelectorAll('button, [role="button"], a, [role="link"], div[tabindex], span, div'));
+                            } catch (_) {}
+                            clickableNodes.push(...nodes);
+                        }
+                        const isValidMatch = (text) => {
+                            if (!normalizedHints.some((hint) => text.includes(hint))) return false;
+                            if (excludeHints.length && excludeHints.some((hint) => text.includes(hint))) return false;
+                            return true;
+                        };
                         for (const node of clickableNodes) {
                             if (!isVisible(node)) continue;
                             const text = normalizedNodeText(node);
-                            if (normalizedHints.some((hint) => text.includes(hint))) return node;
+                            if (isValidMatch(text)) return node;
                         }
                         for (const node of clickableNodes) {
                             const text = normalizedNodeText(node);
-                            if (normalizedHints.some((hint) => text.includes(hint))) return node;
+                            if (isValidMatch(text)) return node;
                         }
                         return null;
                     };
@@ -6561,21 +6577,30 @@ class MainWindow(QMainWindow):
                     if (platform === "instagram") {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (!instagramDialog) {
-                            const createButton = bySelectors([
-                                'span[aria-describedby]',
-                                'div[role="button"][tabindex="0"]',
-                                'button',
-                            ]) || findClickableByHints(["create"]);
+                            const createSpanButton = pick(collectDeep('span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
+                            const createButton = createSpanButton
+                                || bySelectors([
+                                    'div[role="button"][tabindex="0"]',
+                                    'button',
+                                    'a[role="link"]',
+                                ])
+                                || findClickableByHints(["create", "new post"]);
                             if (createButton) {
                                 openUploadClicked = clickNodeOrAncestor(createButton) || openUploadClicked;
                             }
 
-                            const postButton = bySelectors([
-                                'a[href="#"][role="link"][tabindex="0"]',
-                                'a[role="link"][tabindex="0"]',
-                            ]) || findClickableByHints(["post"]);
-                            if (postButton && normalizedNodeText(postButton).includes("post")) {
-                                openUploadClicked = clickNodeOrAncestor(postButton) || openUploadClicked;
+                            const menuContexts = [
+                                ...collectDeep('div[role="menu"]'),
+                                ...collectDeep('div[role="dialog"]'),
+                                document,
+                            ];
+                            const postButton = pick(collectDeep('a[role="link"][href="#"], a[role="link"]'))
+                                || findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel"] });
+                            if (postButton) {
+                                const postText = normalizedNodeText(postButton);
+                                if (postText.includes("post") && !postText.includes("reel")) {
+                                    openUploadClicked = clickNodeOrAncestor(postButton) || openUploadClicked;
+                                }
                             }
                         }
                     }
