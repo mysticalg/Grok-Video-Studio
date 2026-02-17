@@ -6629,11 +6629,20 @@ class MainWindow(QMainWindow):
                         }
                         return bySelectors(selectors);
                     };
+                    const findTikTokCaptionTarget = () => {
+                        const draftSpan = bySelectors(['.DraftEditor-editorContainer span[data-text="true"]']);
+                        if (!draftSpan) return null;
+                        const contentEditable = draftSpan.closest('[contenteditable="true"]');
+                        return contentEditable || draftSpan;
+                    };
 
                     let textFilled = false;
                     if ((platform === "facebook" || platform === "tiktok") && captionRequired) {
-                        const textTarget = findTextInputTarget();
+                        const textTarget = platform === "tiktok" ? findTikTokCaptionTarget() : findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
+                        if (!textFilled && platform === "tiktok") {
+                            textFilled = setTextValue(findTextInputTarget(), captionText);
+                        }
                     }
                     const captionReady = !captionRequired || textFilled;
 
@@ -6801,9 +6810,15 @@ class MainWindow(QMainWindow):
                     }
 
                     if (platform === "tiktok" && fileReadySignal && captionReady && tiktokSubmitDelayElapsed) {
-                        const tiktokPostButton = findClickableByHints(["post", "publish"]);
-                        if (tiktokPostButton) {
-                            submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
+                        const explicitTiktokPostButton = bySelectors(['button[data-e2e="post_video_button"]']);
+                        if (explicitTiktokPostButton) {
+                            submitClicked = clickNodeOrAncestor(explicitTiktokPostButton) || submitClicked;
+                        }
+                        if (!submitClicked) {
+                            const tiktokPostButton = findClickableByHints(["post", "publish"]);
+                            if (tiktokPostButton) {
+                                submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
+                            }
                         }
                     }
 
