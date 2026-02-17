@@ -6354,13 +6354,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Social Upload", f"{platform_name} upload tab is not initialized.")
             return
 
-        upload_urls = {
-            "Facebook": "https://www.facebook.com/reels/create/",
-            "Instagram": "https://www.instagram.com/create/reel/",
-            "TikTok": "https://www.tiktok.com/upload",
-        }
-        upload_url = upload_urls.get(platform_name, "")
-
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
             "video_path": str(video_path),
@@ -6374,21 +6367,11 @@ class MainWindow(QMainWindow):
 
         progress_bar.setVisible(True)
         progress_bar.setValue(10)
-        status_label.setText("Status: opening upload page in embedded browser...")
+        status_label.setText("Status: staging video in current tab...")
         self._append_log(
-            f"Browser-based {platform_name} upload: opening social tab and attempting automated upload staging."
+            f"Browser-based {platform_name} upload: using current social tab and attempting automated file staging."
         )
         self.browser_tabs.setCurrentIndex(tab_index)
-
-        current_url = browser.url().toString().strip()
-        if upload_url and upload_url not in current_url:
-            self._append_log(
-                f"{platform_name}: navigating upload tab to expected URL: {upload_url} (current={current_url or 'empty'})"
-            )
-            browser.setUrl(QUrl(upload_url))
-            timer.start(1200)
-            return
-
         timer.start(250)
 
     def _run_social_browser_upload_step(self, platform_name: str) -> None:
@@ -6459,102 +6442,9 @@ class MainWindow(QMainWindow):
                         return null;
                     };
 
-                    const platformFileSelectors = {
-                        facebook: [
-                            'input[type="file"].x1s85apg[accept*="video/*" i]',
-                            'input[type="file"][accept*="video" i]',
-                            'input[type="file"][name*="video" i]',
-                            'input[type="file"][accept*="mp4" i]',
-                            'input[type="file"]',
-                        ],
-                        instagram: [
-                            'input[type="file"][accept*="video" i]',
-                            'input[type="file"][name*="video" i]',
-                            'input[type="file"][accept*="mp4" i]',
-                            'input[type="file"]',
-                        ],
-                        tiktok: [
-                            'input[type="file"].jsx-2995057667[accept*="video/*" i]',
-                            'input[type="file"][accept*="video" i][multiple]',
-                            'input[type="file"][accept*="video" i]',
-                            'input[type="file"][accept*="mp4" i]',
-                            'input[type="file"][name*="file" i]',
-                            'input[type="file"]',
-                        ],
-                    };
-
-                    const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
-                    const clickableNodes = collectDeep('button, [role="button"], div, label, a, span, [aria-label], [data-testid], [type="button"]');
-                    const normalizedNodeText = (node) => [
-                        norm(node.innerText || node.textContent),
-                        norm(node.getAttribute("aria-label")),
-                        norm(node.getAttribute("data-testid")),
-                        norm(node.className),
-                    ].join(" ");
-                    const clickNodeOrAncestor = (node) => {
-                        if (!node) return false;
-                        const candidates = [
-                            node,
-                            node.closest && node.closest('button, [role="button"], a, label, div[tabindex], div'),
-                            node.parentElement,
-                        ].filter(Boolean);
-                        for (const candidate of candidates) {
-                            try { candidate.click(); return true; } catch (_) {}
-                        }
-                        return false;
-                    };
-                    const findClickableByHints = (hints) => {
-                        const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
-                        for (const node of clickableNodes) {
-                            if (!isVisible(node)) continue;
-                            const joined = normalizedNodeText(node);
-                            if (normalizedHints.some((hint) => joined.includes(hint))) return node;
-                        }
-                        for (const node of clickableNodes) {
-                            const joined = normalizedNodeText(node);
-                            if (normalizedHints.some((hint) => joined.includes(hint))) return node;
-                        }
-                        return null;
-                    };
-
-                    const platformOpenUploadHints = {
-                        facebook: ["add video", "photo/video", "upload video", "choose video", "create reel", "create", "add reel", "video/reel", "reels"],
-                        instagram: ["select from computer", "select video", "upload", "new post", "create", "create new", "post", "reel"],
-                        tiktok: ["select videos", "select video", "upload", "choose file"],
-                    };
-
-                    const urlHints = [];
-                    const currentHref = norm(window.location.href || "");
-                    if (platform === "facebook" && (currentHref.includes("facebook.com/reel") || currentHref.includes("facebook.com/reels"))) {
-                        urlHints.push("create reel", "reels", "create", "add reel", "video/reel", "add video");
-                    }
-                    if (platform === "instagram" && currentHref.includes("instagram.com")) {
-                        urlHints.push("create", "new post", "select from computer", "post", "reel");
-                    }
-
                     let openUploadClicked = false;
-
-                    if (platform === "tiktok") {
-                        const tiktokPrimary = pick(collectDeep('div.Button__content--type-primary, div.Button__content--size-large, div.Button__content'));
-                        if (tiktokPrimary && normalizedNodeText(tiktokPrimary).includes("select videos")) {
-                            openUploadClicked = clickNodeOrAncestor(tiktokPrimary);
-                        }
-                    }
-
-                    if (!openUploadClicked && platform === "facebook") {
-                        const facebookAddVideoSpan = collectDeep('span').find((node) => normalizedNodeText(node).includes("add video"));
-                        if (facebookAddVideoSpan) {
-                            openUploadClicked = clickNodeOrAncestor(facebookAddVideoSpan);
-                        }
-                    }
-
-                    if (!openUploadClicked) {
-                        const uploadButton = findClickableByHints([...(platformOpenUploadHints[platform] || platformOpenUploadHints.tiktok), ...urlHints]);
-                        openUploadClicked = clickNodeOrAncestor(uploadButton);
-                    }
-
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
-                    const fileInput = bySelectors(platformFileSelectors[platform] || platformFileSelectors.tiktok);
+                    const fileInput = pick(collectDeep('input[type="file"]'));
                     let fileDialogTriggered = false;
                     if (fileInput) {
                         if (requestedVideoPath) {
