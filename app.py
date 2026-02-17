@@ -5852,7 +5852,9 @@ class MainWindow(QMainWindow):
         print("DEBUG Start response:", start_data)
 
         if 'video_id' not in start_data or 'upload_url' not in start_data:
-            raise ValueError(f"Start failed, no video_id/upload_url: {start_data}")
+            QMessageBox.warning(self, "Facebook Upload","Start failed, no video_id/upload_url: {start_data}")
+            return
+        
 
         video_id = start_data['video_id']
         upload_session_id = start_data.get('upload_session_id', video_id)
@@ -6042,7 +6044,7 @@ class MainWindow(QMainWindow):
 
         print(f"DEBUG: Uploading {video_size} bytes with range: bytes 0-{last_byte}/{video_size}")
 
-        upload_resp = requests.post(upload_url, headers=upload_headers, data=video_bytes)
+        upload_resp = requests.put(upload_url, headers=upload_headers, data=video_bytes)
         data = upload_resp.json()
         print("Status response:", data)
         print(f"DEBUG: Upload status code: {upload_resp.status_code}")
@@ -6056,7 +6058,7 @@ class MainWindow(QMainWindow):
         # Optionally: poll status with publish_id
         return
 
-    def check_tiktok_status(access_token, publish_id):
+    def check_tiktok_status(self, access_token, publish_id):
         url = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
         headers = {
             "Authorization": f"Bearer {access_token}",
