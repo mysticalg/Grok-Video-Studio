@@ -847,6 +847,7 @@ class FilteredWebEnginePage(QWebEnginePage):
                 for host in (
                     "instagram.com/create/reel",
                     "facebook.com/reels/create",
+                    "facebook.com/reel/",
                     "tiktok.com/tiktokstudio/upload",
                     "tiktok.com/upload",
                 )
@@ -1519,7 +1520,7 @@ class MainWindow(QMainWindow):
     ) -> list[str]:
         url = str(source_url or "").lower()
         platform_map: list[tuple[str, Iterable[str]]] = [
-            ("Facebook", ("facebook.com/reels/create",)),
+            ("Facebook", ("facebook.com/reels/create", "facebook.com/reel/")),
             ("Instagram", ("instagram.com/create/reel",)),
             ("TikTok", ("tiktok.com/tiktokstudio/upload", "tiktok.com/upload")),
         ]
@@ -6336,6 +6337,9 @@ class MainWindow(QMainWindow):
             "title": str(title or ""),
             "attempts": 0,
         }
+        self._append_log(
+            f"{platform_name}: queued browser upload video path={video_path} (exists={Path(str(video_path)).exists()})"
+        )
 
         progress_bar.setVisible(True)
         progress_bar.setValue(10)
@@ -6358,7 +6362,7 @@ class MainWindow(QMainWindow):
         pending["attempts"] = int(pending.get("attempts", 0)) + 1
         attempts = int(pending["attempts"])
 
-        if attempts > 12:
+        if attempts > 30:
             status_label.setText("Status: automation timed out; finish manually in this tab.")
             progress_bar.setVisible(False)
             self._append_log(
