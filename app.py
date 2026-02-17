@@ -6668,21 +6668,6 @@ class MainWindow(QMainWindow):
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} submit_clicked={submit_clicked}"
             )
 
-            if attempts in {3} and not file_found and not open_upload_clicked and not file_dialog_triggered:
-                upload_urls = {
-                    "Facebook": "https://www.facebook.com/reels/create/",
-                    "Instagram": "https://www.instagram.com/create/reel/",
-                    "TikTok": "https://www.tiktok.com/upload",
-                }
-                reload_url = upload_urls.get(platform_name)
-                if reload_url:
-                    self._append_log(
-                        f"{platform_name}: still no upload controls at attempt {attempts}; reloading upload page {reload_url}."
-                    )
-                    browser.setUrl(QUrl(reload_url))
-                    timer.start(1800)
-                    return
-
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered)
             caption_ok = (not caption_queued) or text_filled
             if attempts >= 3 and file_stage_ok and caption_ok and (next_clicked or submit_clicked or platform_name == "TikTok"):
