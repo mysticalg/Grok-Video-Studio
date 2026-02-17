@@ -6562,16 +6562,27 @@ class MainWindow(QMainWindow):
                             const explicitCreate = bySelectors([
                                 'button[aria-label*="create" i]',
                                 '[role="button"][aria-label*="create" i]',
+                                'span.html-span[aria-describedby]',
+                                'span[aria-describedby^="_r_"]',
                             ]);
                             if (explicitCreate) return explicitCreate;
-                            return findClickableByHints(["create"]);
+
+                            const createLauncherCandidates = collectDeep('span.html-span[aria-describedby], span[aria-describedby^="_r_"], a[role="link"], [role="button"], button');
+                            for (const node of createLauncherCandidates) {
+                                const text = normalizedNodeText(node);
+                                if (text && text.includes("create")) return node;
+                            }
+                            return findClickableByHints(["create", "new post"]);
                         };
                         const findInstagramPostMenuItem = () => {
                             const menuSelectors = [
                                 '[role="menu"] [role="menuitem"]',
+                                '[role="menu"] a[role="link"]',
                                 '[role="menu"] button',
                                 'div[role="dialog"] [role="menuitem"]',
+                                'div[role="dialog"] a[role="link"]',
                                 '[role="menuitem"]',
+                                'a[role="link"][href="#"]',
                                 'div[role="dialog"] button',
                                 'div[role="dialog"] [role="button"]',
                             ];
@@ -6583,7 +6594,7 @@ class MainWindow(QMainWindow):
                                     if (text.includes("post") && !text.includes("reel")) return node;
                                 }
                             }
-                            return findClickableByHints(["post"]);
+                            return findClickableByHints(["post", "feed post"]);
                         };
 
                         const createButton = findInstagramCreateButton();
