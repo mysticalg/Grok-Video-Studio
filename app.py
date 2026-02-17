@@ -6292,7 +6292,7 @@ class MainWindow(QMainWindow):
             self.social_upload_pending.pop(platform_name, None)
             return
 
-        payload_object_json = json.dumps(
+        payload_json = json.dumps(
             {
                 "caption": str(pending.get("caption") or ""),
                 "title": str(pending.get("title") or ""),
@@ -6300,10 +6300,11 @@ class MainWindow(QMainWindow):
             },
             ensure_ascii=True,
         )
+        payload_b64 = base64.b64encode(payload_json.encode("utf-8")).decode("ascii")
         script = """
             (() => {
                 try {
-                    const payload = __PAYLOAD_OBJECT__;
+                    const payload = JSON.parse(atob("__PAYLOAD_B64__"));
                     const norm = (s) => String(s || "").toLowerCase();
                     const pick = (arr) => arr.find(Boolean) || null;
 
@@ -6367,7 +6368,7 @@ class MainWindow(QMainWindow):
                     return { error: String(err && err.stack ? err.stack : err) };
                 }
             })()
-        """.replace("__PAYLOAD_OBJECT__", payload_object_json)
+        """.replace("__PAYLOAD_B64__", payload_b64)
 
         def _after(result):
             if platform_name not in self.social_upload_pending:
