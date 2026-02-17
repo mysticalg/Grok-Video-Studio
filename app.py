@@ -966,6 +966,21 @@ class MainWindow(QMainWindow):
     def _apply_default_theme(self) -> None:
         self.setStyleSheet("")
 
+    def _instagram_reels_create_url(self) -> str:
+        username = ""
+        if hasattr(self, "instagram_username") and self.instagram_username is not None:
+            username = self.instagram_username.text().strip()
+        if not username:
+            username = os.getenv("INSTAGRAM_USERNAME", "").strip()
+        if username:
+            return f"https://www.instagram.com/{username}/reels/create"
+        return "https://www.instagram.com/create/reel/"
+
+    def _refresh_instagram_upload_tab_url(self) -> None:
+        instagram_browser = self.social_upload_browsers.get("Instagram")
+        if instagram_browser is not None:
+            instagram_browser.setUrl(QUrl(self._instagram_reels_create_url()))
+
     def _build_ui(self) -> None:
         splitter = QSplitter()
 
@@ -1393,7 +1408,7 @@ class MainWindow(QMainWindow):
             "Facebook Upload",
         )
         self.social_upload_tab_indices["Instagram"] = self.browser_tabs.addTab(
-            self._build_social_upload_tab("Instagram", "https://www.instagram.com/create/reel/"),
+            self._build_social_upload_tab("Instagram", self._instagram_reels_create_url()),
             "Instagram Upload",
         )
         self.social_upload_tab_indices["TikTok"] = self.browser_tabs.addTab(
@@ -1745,6 +1760,12 @@ class MainWindow(QMainWindow):
         self.instagram_access_token.setText(os.getenv("INSTAGRAM_ACCESS_TOKEN", ""))
         instagram_layout.addRow("Instagram Access Token", self.instagram_access_token)
 
+        self.instagram_username = QLineEdit(os.getenv("INSTAGRAM_USERNAME", ""))
+        self.instagram_username.setPlaceholderText("e.g. funkymonk66")
+        self.instagram_username.setToolTip("Used for the Instagram web upload tab URL: https://www.instagram.com/<username>/reels/create")
+        self.instagram_username.editingFinished.connect(self._refresh_instagram_upload_tab_url)
+        instagram_layout.addRow("Instagram Username (web upload URL)", self.instagram_username)
+
         tiktok_group = QGroupBox("TikTok")
         tiktok_layout = QFormLayout(tiktok_group)
 
@@ -1995,6 +2016,7 @@ class MainWindow(QMainWindow):
             "facebook_app_secret": self.facebook_app_secret.text(),
             "instagram_business_id": self.instagram_business_id.text(),
             "instagram_access_token": self.instagram_access_token.text(),
+            "instagram_username": self.instagram_username.text(),
             "tiktok_access_token": self.tiktok_access_token.text(),
             "tiktok_client_key": self.tiktok_client_key.text(),
             "tiktok_client_secret": self.tiktok_client_secret.text(),
@@ -2072,6 +2094,9 @@ class MainWindow(QMainWindow):
             self.instagram_business_id.setText(str(preferences["instagram_business_id"]))
         if "instagram_access_token" in preferences:
             self.instagram_access_token.setText(str(preferences["instagram_access_token"]))
+        if "instagram_username" in preferences:
+            self.instagram_username.setText(str(preferences["instagram_username"]))
+            self._refresh_instagram_upload_tab_url()
         if "tiktok_access_token" in preferences:
             self.tiktok_access_token.setText(str(preferences["tiktok_access_token"]))
         if "tiktok_client_key" in preferences:
