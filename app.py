@@ -6560,38 +6560,13 @@ class MainWindow(QMainWindow):
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
-                        try { fileInput.click(); fileDialogTriggered = true; } catch (_) {}
-                    }
-
-                    const fullText = [payload.title, payload.caption].filter(Boolean).join("\n\n").trim();
-                    const textTargets = collectDeep('textarea, [contenteditable="true"], input[type="text"], input:not([type]), div[role="textbox"], [aria-label*="caption" i], [placeholder*="caption" i], [aria-label*="description" i]');
-                    let textFilled = false;
-                    if (fullText) {
-                        for (const node of textTargets) {
-                            const hint = [
-                                norm(node.getAttribute("aria-label")),
-                                norm(node.getAttribute("placeholder")),
-                                norm(node.getAttribute("name")),
-                                norm(node.id),
-                            ].join(" ");
-                            const match = !hint || hint.includes("caption") || hint.includes("description") || hint.includes("title") || hint.includes("post");
-                            if (!match) continue;
-                            try {
-                                if (node.isContentEditable) {
-                                    node.textContent = fullText;
-                                    if ('innerText' in node) node.innerText = fullText;
-                                } else if ('value' in node) {
-                                    node.value = fullText;
-                                } else {
-                                    node.textContent = fullText;
-                                }
-                                node.dispatchEvent(new Event("input", { bubbles: true }));
-                                node.dispatchEvent(new Event("change", { bubbles: true }));
-                                textFilled = true;
-                                break;
-                            } catch (_) {}
+                        const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
+                        if (!alreadyHasFile) {
+                            try { fileInput.click(); fileDialogTriggered = true; } catch (_) {}
                         }
                     }
+
+                    const textFilled = false;
 
                     const fileReadySignal = Boolean(
                         (fileInput && fileInput.files && fileInput.files.length > 0)
@@ -6599,29 +6574,8 @@ class MainWindow(QMainWindow):
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
                     );
 
-                    const platformNextHints = {
-                        facebook: ["next", "continue"],
-                        instagram: ["next"],
-                        tiktok: ["next"],
-                    };
-                    let nextClicked = false;
-                    if (fileReadySignal) {
-                        const nextButton = findClickableByHints(platformNextHints[platform] || platformNextHints.tiktok);
-                        if (nextButton) {
-                            nextClicked = clickNodeOrAncestor(nextButton);
-                        }
-                    }
-
-                    const platformSubmitHints = {
-                        facebook: ["publish", "post", "share reel", "share"],
-                        instagram: ["share", "post"],
-                        tiktok: ["post", "publish"],
-                    };
-                    let submitClicked = false;
-                    if (fileReadySignal) {
-                        const submitButton = findClickableByHints(platformSubmitHints[platform] || []);
-                        submitClicked = clickNodeOrAncestor(submitButton);
-                    }
+                    const nextClicked = false;
+                    const submitClicked = false;
 
                     return {
                         fileInputFound: Boolean(fileInput),
@@ -6661,7 +6615,7 @@ class MainWindow(QMainWindow):
             progress_bar.setVisible(True)
             progress_bar.setValue(min(95, 20 + attempts * 6))
             status_label.setText(
-                f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, caption={'ready' if (caption_queued and text_filled) else ('queued' if caption_queued else 'none')})."
+                f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, caption={'manual' if caption_queued else 'none'})."
             )
             current_url = browser.url().toString().strip()
             self._append_log(
@@ -6669,8 +6623,8 @@ class MainWindow(QMainWindow):
             )
 
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered)
-            caption_ok = (not caption_queued) or text_filled
-            if attempts >= 3 and file_stage_ok and caption_ok and (next_clicked or submit_clicked or platform_name == "TikTok"):
+            caption_ok = True
+            if attempts >= 2 and file_stage_ok and caption_ok:
                 status_label.setText("Status: staged. Confirm/finalize post in this tab if needed.")
                 progress_bar.setValue(100)
                 self._append_log(f"{platform_name} browser automation staged successfully in its tab.")
