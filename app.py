@@ -6429,7 +6429,8 @@ class MainWindow(QMainWindow):
         if platform_name == "TikTok" and raw_caption:
             safe_stem = re.sub(r'[\\/:*?"<>|]+', "", raw_caption)
             safe_stem = re.sub(r"[_]+", "", safe_stem)
-            safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" .")[:80]
+            safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" .")
+            safe_stem = safe_stem.title()[:80]
             suffix = video_file.suffix if video_file.suffix else ".mp4"
             upload_filename = f"{safe_stem or 'upload'}{suffix}"
 
