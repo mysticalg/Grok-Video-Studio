@@ -4,6 +4,7 @@ import re
 import base64
 import hashlib
 import secrets
+import shutil
 import subprocess
 import string
 import sys
@@ -6208,10 +6209,13 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
+        description_for_filename = self._compose_social_text(caption, hashtags)
+        renamed_video_path = self._stage_tiktok_browser_video(video_path, description_for_filename)
+
         self._start_social_browser_upload(
             platform_name="TikTok",
-            video_path=video_path,
-            caption=self._compose_social_text(caption, hashtags),
+            video_path=renamed_video_path,
+            caption="",
             title="",
         )
 
@@ -7190,6 +7194,34 @@ class MainWindow(QMainWindow):
             return base_text.strip()
         combined = f"{base_text.strip()}\n\n{tag_text}" if base_text.strip() else tag_text
         return combined.strip()
+
+    def _stage_tiktok_browser_video(self, source_video_path: str, description_text: str) -> str:
+        source_path = Path(str(source_video_path)).expanduser()
+        if not source_path.exists() or not source_path.is_file():
+            raise ValueError("TikTok upload video path is invalid.")
+
+        safe_stem = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(description_text or "")).strip()
+        safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" .")
+        if not safe_stem:
+            safe_stem = source_path.stem
+        safe_stem = safe_stem[:80].strip() or source_path.stem
+
+        extension = source_path.suffix or ".mp4"
+        staged_path = source_path.with_name(f"{safe_stem}{extension}")
+        if staged_path == source_path:
+            self._append_log(f"TikTok: using existing filename for browser upload: {source_path.name}")
+            return str(source_path)
+
+        counter = 1
+        while staged_path.exists():
+            staged_path = source_path.with_name(f"{safe_stem}-{counter}{extension}")
+            counter += 1
+
+        shutil.copy2(source_path, staged_path)
+        self._append_log(
+            f"TikTok: staged renamed upload file '{staged_path.name}' from description text before browser upload."
+        )
+        return str(staged_path)
 
     def _show_upload_dialog(self, platform_name: str, title_enabled: bool = True) -> tuple[str, str, list[str], str, bool]:
         dialog = QDialog(self)
