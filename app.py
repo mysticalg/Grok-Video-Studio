@@ -72,7 +72,7 @@ OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com"
 OPENAI_CODEX_CLIENT_ID = os.getenv("OPENAI_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 OPENAI_OAUTH_SCOPE = os.getenv(
     "OPENAI_OAUTH_SCOPE",
-    "openid profile email offline_access api.read api.write api.videos.write",
+    "openid profile email offline_access api.videos.write",
 )
 OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455"))
 OPENAI_TOKEN_PATHS = ("/token", "/oauth/token")
