@@ -115,6 +115,7 @@ For OpenAI prompt generation, the app supports either an API key or an OAuth acc
 In **Model/API Settings**, set Prompt Source to **OpenAI API**, then provide an API key or run Browser Authorization (or paste an access token).
 Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex-style) in your system browser. On success, the app auto-fills **OpenAI Access Token**.
 When both are set, the app prefers **OpenAI API Key** over **OpenAI Access Token**.
+If a model is responses-only (for example some newer OpenAI models), the app automatically retries on `/v1/responses` when `/v1/chat/completions` returns that compatibility error.
 The token exchange now tries both `https://auth.openai.com/token` and `https://auth.openai.com/oauth/token` so either issuer route works.
 When available in OAuth token claims, requests also include `OpenAI-Organization` and `OpenAI-Project` headers (in addition to `Authorization` and `Content-Type`).
 With ChatGPT/Codex OAuth login, the app prefers the ChatGPT Codex backend so usage follows subscription-authenticated behavior rather than API-key-only billing paths.

@@ -276,42 +276,69 @@ def _extract_text_from_responses_sse(raw_text: str) -> str:
 
     return "".join(text_chunks).strip()
 
+def _openai_chat_payload(model: str, system: str, user: str, temperature: float) -> dict[str, object]:
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": temperature,
+    }
+
+
+def _openai_responses_payload(model: str, system: str, user: str) -> dict[str, object]:
+    return {
+        "model": model,
+        "instructions": system,
+        "input": [
+            {"role": "user", "content": user},
+        ],
+        "store": False,
+        "stream": True,
+    }
+
+
+def _openai_error_prefers_responses(response: requests.Response) -> bool:
+    if response.status_code not in {400, 404, 422}:
+        return False
+    text = (response.text or "").lower()
+    return "only supported in v1/responses" in text or "not in v1/chat/completions" in text
+
+
 def _call_openai_chat_api(credential: str, model: str, system: str, user: str, temperature: float) -> str:
     endpoint, headers, is_responses_api = _openai_chat_target(credential)
 
-    payload: dict[str, object]
-    if is_responses_api:
-        payload = {
-            "model": model,
-            "instructions": system,
-            "input": [
-                {"role": "user", "content": user},
-            ],
-            "store": False,
-            "stream": True,
-        }
-    else:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-        }
+    payload = (
+        _openai_responses_payload(model, system, user)
+        if is_responses_api
+        else _openai_chat_payload(model, system, user, temperature)
+    )
 
     response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+
+    if not response.ok and not is_responses_api and _openai_error_prefers_responses(response):
+        responses_endpoint = f"{OPENAI_API_BASE}/responses"
+        retry_payload = _openai_responses_payload(model, system, user)
+        retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=90)
+        if not retry_response.ok:
+            raise RuntimeError(
+                f"OpenAI request failed: {retry_response.status_code} {retry_response.text[:500]}"
+            )
+        response = retry_response
+        is_responses_api = True
+
     if not response.ok:
         raise RuntimeError(f"OpenAI request failed: {response.status_code} {response.text[:500]}")
 
     if is_responses_api:
-        content_type = response.headers.get("Content-Type", "")
-        #if "text/event-stream" in content_type:
         streamed_text = _extract_text_from_responses_sse(response.text)
-            
-        #if streamed_text: (it is)
-        return streamed_text
-    
+        if streamed_text:
+            return streamed_text
+        body = response.json() if response.content else {}
+        text_from_body = _extract_text_from_responses_body(body)
+        if text_from_body:
+            return text_from_body
         raise RuntimeError("OpenAI response did not include text output.")
 
     body = response.json()
