@@ -148,11 +148,13 @@ def _parse_json_object_from_text(raw: str) -> dict:
 
 
 def _sanitize_upload_filename(text: str, fallback: str = "tiktok-upload") -> str:
-    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    raw_text = str(text or "")
+    normalized = raw_text.translate(str.maketrans({"\n": " ", "\r": " ", "\t": " ", "\f": " ", "\v": " "}))
     cleaned = re.sub(r"[^A-Za-z0-9._ -]", "", normalized).strip(" ._-")
     if not cleaned:
         return fallback
     return cleaned[:80]
+
 
 
 def _prepare_tiktok_upload_video_path(video_path: str, description: str) -> tuple[str, Path | None]:
