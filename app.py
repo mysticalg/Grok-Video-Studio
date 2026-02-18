@@ -1236,14 +1236,23 @@ class MainWindow(QMainWindow):
         actions_group = QGroupBox("🚀 Actions")
         actions_layout = QGridLayout(actions_group)
 
-        self.generate_btn = QPushButton("🎬 API Generate Video")
-        self.generate_btn.setToolTip("Generate videos using the selected API source (Grok Imagine API or OpenAI/Sora API mode).")
+        self.generate_btn = QPushButton("📝 Manual Generate Video")
+        self.generate_btn.setToolTip("Generate a video in the embedded browser using the Manual Prompt.")
         self.generate_btn.setStyleSheet(
             "background-color: #2e7d32; color: white; font-weight: 700;"
             "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
         )
-        self.generate_btn.clicked.connect(self.start_generation)
+        self.generate_btn.clicked.connect(self.start_manual_generation)
         actions_layout.addWidget(self.generate_btn, 0, 0)
+
+        self.api_generate_btn = QPushButton("🎬 API Generate Video")
+        self.api_generate_btn.setToolTip("Generate videos using the selected API source (Grok Imagine API or OpenAI/Sora API mode).")
+        self.api_generate_btn.setStyleSheet(
+            "background-color: #1565c0; color: white; font-weight: 700;"
+            "border: 1px solid #0d47a1; border-radius: 6px; padding: 8px;"
+        )
+        self.api_generate_btn.clicked.connect(self.start_api_generation)
+        actions_layout.addWidget(self.api_generate_btn, 0, 1)
 
         self.generate_image_btn = QPushButton("🖼️ Populate Image Prompt in Browser")
         self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
@@ -1252,7 +1261,7 @@ class MainWindow(QMainWindow):
             "border: 1px solid #2e7d32; border-radius: 6px; padding: 8px;"
         )
         self.generate_image_btn.clicked.connect(self.start_image_generation)
-        actions_layout.addWidget(self.generate_image_btn, 0, 1)
+        actions_layout.addWidget(self.generate_image_btn, 0, 2)
 
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
@@ -2671,10 +2680,29 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after)
 
     def start_generation(self) -> None:
+        source = self.prompt_source.currentData()
+        if source == "manual":
+            self.start_manual_generation()
+            return
+        self.start_api_generation()
+
+    def start_manual_generation(self) -> None:
+        self.stop_all_requested = False
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            return
+        self._start_manual_browser_generation(manual_prompt, self.count.value())
+
+    def start_api_generation(self) -> None:
         self.stop_all_requested = False
         concept = self.concept.toPlainText().strip()
         source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
+
+        if source == "manual":
+            QMessageBox.warning(self, "API Source Required", "Set Prompt Source to Grok API or OpenAI API.")
+            return
 
         if source == "grok":
             api_key = self.api_key.text().strip()
@@ -2684,11 +2712,8 @@ class MainWindow(QMainWindow):
         else:
             api_key = self.api_key.text().strip()
 
-        if source != "manual" and not concept:
+        if not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
-            return
-        if source == "manual" and not manual_prompt:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
         if source == "openai" and not self.openai_access_token.text().strip():
             QMessageBox.warning(
@@ -2696,10 +2721,6 @@ class MainWindow(QMainWindow):
                 "Missing OpenAI Credentials",
                 "Please authorize OpenAI in browser (or paste an OpenAI access token).",
             )
-            return
-
-        if source == "manual":
-            self._start_manual_browser_generation(manual_prompt, self.count.value())
             return
 
         config = GrokConfig(
@@ -5303,7 +5324,9 @@ class MainWindow(QMainWindow):
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
-        self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "🎬 API Generate Video")
+        self.generate_btn.setText("📝 Manual Generate Video")
+        self.api_generate_btn.setText("🎬 API Generate Video")
+        self.api_generate_btn.setVisible(not is_manual)
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
         self.generate_image_btn.setEnabled(True)
 
