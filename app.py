@@ -1305,6 +1305,9 @@ class MainWindow(QMainWindow):
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
         browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
+        if developer_extras_attr is not None:
+            browser_settings.setAttribute(developer_extras_attr, True)
 
         self.browser.setUrl(QUrl("https://grok.com/imagine"))
         self.browser.loadFinished.connect(self._on_browser_load_finished)
@@ -1501,6 +1504,9 @@ class MainWindow(QMainWindow):
         )
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+        developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
+        if developer_extras_attr is not None:
+            browser.settings().setAttribute(developer_extras_attr, True)
         browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
         layout.addWidget(browser, 1)
@@ -6904,7 +6910,13 @@ class MainWindow(QMainWindow):
                     }
 
                     let tiktokPostEnabled = false;
+                    const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
                     if (platform === "tiktok") {
+                        const nowMs = Date.now();
+                        const minTikTokActionGapMs = 900;
+                        const actionSpacingElapsed = !tiktokState.lastActionAtMs
+                            || (nowMs - Number(tiktokState.lastActionAtMs)) >= minTikTokActionGapMs;
+
                         if (captionText) {
                             const draftEditorContainer = bySelectors(['div.DraftEditor-editorContainer']);
                             const draftSpan = draftEditorContainer
@@ -6916,18 +6928,104 @@ class MainWindow(QMainWindow):
                                     ? draftEditorContainer.querySelector('[contenteditable="true"]')
                                     : null);
 
-                            if (draftSpan) {
+                            const setTikTokCaption = (editableNode, spanNode, value) => {
+                                if (!editableNode) return false;
+                                const nextText = String(value || "");
+
+                                const readCurrentText = () => {
+                                    try {
+                                        if (editableNode.isContentEditable || editableNode.getAttribute("contenteditable") === "true") {
+                                            return normalizedNodeText(editableNode);
+                                        }
+                                        if ("value" in editableNode) {
+                                            return norm(editableNode.value);
+                                        }
+                                    } catch (_) {}
+                                    return "";
+                                };
+
+                                const replaceEditorTextWithoutExec = (textValue) => {
+                                    try {
+                                        editableNode.focus();
+                                    } catch (_) {}
+
+                                    try {
+                                        if (editableNode.isContentEditable || editableNode.getAttribute("contenteditable") === "true") {
+                                            const selection = window.getSelection();
+                                            if (selection && typeof selection.removeAllRanges === "function") {
+                                                const range = document.createRange();
+                                                range.selectNodeContents(editableNode);
+                                                selection.removeAllRanges();
+                                                selection.addRange(range);
+                                                range.deleteContents();
+
+                                                if (textValue) {
+                                                    const textNode = document.createTextNode(textValue);
+                                                    range.insertNode(textNode);
+                                                    range.setStartAfter(textNode);
+                                                    range.collapse(true);
+                                                    selection.removeAllRanges();
+                                                    selection.addRange(range);
+                                                }
+                                                return true;
+                                            }
+                                        }
+                                    } catch (_) {}
+
+                                    try {
+                                        if ("value" in editableNode) {
+                                            editableNode.value = textValue;
+                                            return true;
+                                        }
+                                    } catch (_) {}
+                                    return false;
+                                };
+
+                                const eventOptions = { bubbles: true, composed: true };
                                 try {
-                                    draftSpan.textContent = captionText;
-                                    draftSpan.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: captionText, inputType: "insertText" }));
-                                    draftSpan.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                    textFilled = true;
+                                    editableNode.dispatchEvent(new InputEvent("beforeinput", { ...eventOptions, data: "", inputType: "deleteByCut" }));
+                                } catch (_) {}
+
+                                replaceEditorTextWithoutExec(nextText);
+
+                                if (spanNode) {
+                                    try { spanNode.textContent = nextText; } catch (_) {}
+                                }
+
+                                try {
+                                    editableNode.dispatchEvent(new InputEvent("input", { ...eventOptions, data: nextText, inputType: "insertReplacementText" }));
+                                } catch (_) {
+                                    try { editableNode.dispatchEvent(new Event("input", eventOptions)); } catch (_) {}
+                                }
+                                try { editableNode.dispatchEvent(new Event("change", eventOptions)); } catch (_) {}
+                                try { editableNode.dispatchEvent(new Event("blur", eventOptions)); } catch (_) {}
+
+                                const current = readCurrentText();
+                                return current === norm(nextText);
+                            };
+
+                            const captionAlreadyPresent = draftEditable
+                                ? normalizedNodeText(draftEditable) === norm(captionText)
+                                : false;
+                            if (captionAlreadyPresent) {
+                                textFilled = true;
+                            } else if (actionSpacingElapsed && (draftEditable || draftSpan)) {
+                                try {
+                                    textFilled = setTikTokCaption(draftEditable, draftSpan, captionText) || textFilled;
+                                    if (textFilled) {
+                                        tiktokState.captionSetAtMs = Date.now();
+                                        tiktokState.lastActionAtMs = tiktokState.captionSetAtMs;
+                                    }
                                 } catch (_) {}
                             }
 
                         }
 
                         captionReady = !captionText || textFilled;
+                        const tiktokSubmitDelayElapsed = !captionText
+                            || Boolean(tiktokState.captionSetAtMs && (Date.now() - Number(tiktokState.captionSetAtMs)) >= 1200);
+                        const tiktokSubmitSpacingElapsed = !tiktokState.lastSubmitAttemptAtMs
+                            || (Date.now() - Number(tiktokState.lastSubmitAttemptAtMs)) >= 1500;
 
                         const tiktokPostButton = bySelectors([
                             'button[data-e2e="save_draft_button"]',
@@ -6938,8 +7036,13 @@ class MainWindow(QMainWindow):
                             const dataDisabled = String(tiktokPostButton.getAttribute("data-disabled") || "").toLowerCase();
                             const nativeDisabled = Boolean(tiktokPostButton.disabled);
                             tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
-                            if (captionReady && tiktokPostEnabled) {
+                            if (captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed) {
                                 submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
+                                if (submitClicked) {
+                                    const clickedAtMs = Date.now();
+                                    tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
+                                    tiktokState.lastActionAtMs = clickedAtMs;
+                                }
                             }
                         }
                     }
