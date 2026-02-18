@@ -3706,7 +3706,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.pending_manual_download_type = "video"
-                    self._trigger_browser_video_download(current_variant)
+                    self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                     return
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
@@ -3759,7 +3759,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_video_submit_sent = True
                 self.manual_image_submit_retry_count = 0
                 self.pending_manual_download_type = "video"
-                self._trigger_browser_video_download(current_variant)
+                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                 return
 
             self._append_log(
@@ -4521,6 +4521,9 @@ class MainWindow(QMainWindow):
                     return {{ status: "progress", progressText: (percentNode.textContent || "").trim() }};
                 }}
 
+                const cancelVideoButton = [...document.querySelectorAll("button")]
+                    .find((btn) => isVisible(btn) && !btn.disabled && /cancel\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+
                 const redoButton = [...document.querySelectorAll("button")]
                     .find((btn) => isVisible(btn) && !btn.disabled && /redo/i.test((btn.textContent || "").trim()));
 
@@ -4547,13 +4550,17 @@ class MainWindow(QMainWindow):
                 }}
                 if (!downloadButton) downloadButton = downloadCandidates[0] || null;
 
-                if (downloadButton && (redoButton || !makeVideoButton)) {{
+                if (downloadButton && !cancelVideoButton) {{
                     return {{
                         status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
                     }};
                 }}
 
-                if (makeVideoButton && !redoButton) {{
+                if (cancelVideoButton) {{
+                    return {{ status: "rendering-cancel-visible" }};
+                }}
+
+                if (makeVideoButton) {{
                     const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
                     if (!allowMakeVideoClick) {{
                         return {{ status: "make-video-awaiting-progress", buttonLabel }};
@@ -4565,7 +4572,7 @@ class MainWindow(QMainWindow):
                 }}
 
                 if (!redoButton) {{
-                    return {{ status: "waiting-for-redo" }};
+                    return {{ status: "waiting-for-download" }};
                 }}
 
                 const video = document.querySelector("video");
@@ -4617,7 +4624,8 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_timer.start(2000)
                 return
 
-            if status == "waiting-for-redo":
+            if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
+                self.manual_video_start_click_sent = True
                 self.manual_download_poll_timer.start(3000)
                 return
 
