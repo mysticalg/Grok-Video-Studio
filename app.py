@@ -528,6 +528,42 @@ class GenerateWorker(QThread):
         response.raise_for_status()
         return response.json().get("id")
 
+    def _resolution_label_for_value(self, resolution: str) -> str:
+        mapping = {
+            "854x480": "480p",
+            "1280x720": "720p",
+        }
+        return mapping.get(str(resolution), str(resolution))
+
+    def _start_video_job_with_resolution_fallback(self, prompt: str, duration_seconds: int) -> tuple[str, str, str]:
+        requested_resolution = str(self.prompt_config.video_resolution)
+        requested_label = str(self.prompt_config.video_resolution_label)
+
+        try:
+            job_id = self.start_video_job(prompt, requested_resolution, duration_seconds)
+            return job_id, requested_resolution, requested_label
+        except requests.HTTPError as exc:
+            fallback_resolution = "854x480"
+            should_try_fallback = requested_resolution == "1280x720" and fallback_resolution != requested_resolution
+            if not should_try_fallback:
+                raise RuntimeError(
+                    "Could not start a video generation job with the selected resolution "
+                    f"({requested_label})."
+                ) from exc
+
+            fallback_label = self._resolution_label_for_value(fallback_resolution)
+            self.status.emit(
+                f"Requested resolution {requested_label} is unavailable for this prompt/model; retrying with {fallback_label}."
+            )
+            try:
+                job_id = self.start_video_job(prompt, fallback_resolution, duration_seconds)
+                return job_id, fallback_resolution, fallback_label
+            except requests.HTTPError as fallback_exc:
+                raise RuntimeError(
+                    "Could not start a video generation job with the selected resolution "
+                    f"({requested_label}) or fallback ({fallback_label})."
+                ) from fallback_exc
+
     def poll_video_job(self, job_id: str, timeout_s: int = 420) -> dict:
         start = time.time()
         while time.time() - start < timeout_s:
@@ -563,17 +599,11 @@ class GenerateWorker(QThread):
     def generate_one_video(self, variant: int) -> dict:
         prompt = self.build_prompt(variant)
 
-        try:
-            video_job_id = self.start_video_job(
-                prompt,
-                self.prompt_config.video_resolution,
-                int(self.prompt_config.video_duration_seconds),
-            )
-        except requests.HTTPError as exc:
-            raise RuntimeError(
-                "Could not start a video generation job with the selected resolution "
-                f"({self.prompt_config.video_resolution_label})."
-            ) from exc
+        selected_duration = int(self.prompt_config.video_duration_seconds)
+        video_job_id, effective_resolution, effective_resolution_label = self._start_video_job_with_resolution_fallback(
+            prompt,
+            selected_duration,
+        )
 
         result = self.poll_video_job(video_job_id)
         video_url = result.get("output", {}).get("video_url") or result.get("video_url")
@@ -584,9 +614,11 @@ class GenerateWorker(QThread):
         return {
             "title": f"Generated Video {variant}",
             "prompt": prompt,
-            "resolution": f"{self.prompt_config.video_resolution_label} ({self.prompt_config.video_aspect_ratio})",
+            "resolution": f"{effective_resolution_label} ({self.prompt_config.video_aspect_ratio})",
             "video_file_path": str(file_path),
             "source_url": video_url,
+            "requested_resolution": self.prompt_config.video_resolution,
+            "effective_resolution": effective_resolution,
         }
 
 class StitchWorker(QThread):
