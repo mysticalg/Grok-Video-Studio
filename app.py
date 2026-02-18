@@ -526,7 +526,10 @@ class GenerateWorker(QThread):
             timeout=60,
         )
         response.raise_for_status()
-        return response.json().get("id")
+        job_id = response.json().get("id")
+        if not job_id:
+            raise RuntimeError("Grok Imagine API did not return a video job id.")
+        return str(job_id)
 
     def _resolution_label_for_value(self, resolution: str) -> str:
         mapping = {
@@ -583,11 +586,127 @@ class GenerateWorker(QThread):
             time.sleep(5)
         raise TimeoutError("Timed out waiting for video generation")
 
-    def download_video(self, video_url: str, suffix: str) -> Path:
+    def _openai_video_model(self) -> str:
+        configured = os.getenv("OPENAI_VIDEO_MODEL", "").strip()
+        if configured:
+            return configured
+        return "sora-2"
+
+    def _extract_openai_video_url(self, payload: dict) -> str:
+        if not isinstance(payload, dict):
+            return ""
+
+        direct = str(payload.get("video_url", "") or "").strip()
+        if direct:
+            return direct
+
+        output = payload.get("output")
+        if isinstance(output, dict):
+            nested = str(output.get("video_url", "") or output.get("url", "") or "").strip()
+            if nested:
+                return nested
+        elif isinstance(output, list):
+            for item in output:
+                if isinstance(item, dict):
+                    nested = str(item.get("video_url", "") or item.get("url", "") or "").strip()
+                    if nested:
+                        return nested
+                    for content in item.get("content", []) if isinstance(item.get("content"), list) else []:
+                        if isinstance(content, dict):
+                            maybe = str(content.get("video_url", "") or content.get("url", "") or "").strip()
+                            if maybe:
+                                return maybe
+        return ""
+
+    def start_openai_video_job(self, prompt: str, duration_seconds: int) -> dict:
+        self._ensure_not_stopped()
+        token = self._openai_bearer_token()
+        if not token:
+            raise RuntimeError("OpenAI access token is required for API video generation.")
+
+        headers = _openai_headers_from_oauth_token(token)
+        model = self._openai_video_model()
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "size": self.prompt_config.video_resolution,
+            "duration": duration_seconds,
+        }
+
+        endpoints = [
+            f"{OPENAI_API_BASE}/videos",
+            f"{OPENAI_API_BASE}/video/generations",
+        ]
+
+        last_error = ""
+        for endpoint in endpoints:
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+            if response.status_code in {404, 405}:
+                last_error = f"{response.status_code} {response.text[:300]}"
+                continue
+            if not response.ok:
+                raise RuntimeError(f"OpenAI video request failed: {response.status_code} {response.text[:500]}")
+
+            body = response.json()
+            video_url = self._extract_openai_video_url(body)
+            if video_url:
+                return {"video_url": video_url, "status": "succeeded", "provider": "openai"}
+
+            generation_id = str(body.get("id", "") or body.get("generation_id", "") or "").strip()
+            if not generation_id:
+                raise RuntimeError("OpenAI video API response did not include a downloadable video URL or generation id.")
+
+            return {
+                "provider": "openai",
+                "id": generation_id,
+                "status": str(body.get("status", "queued") or "queued"),
+                "endpoint": endpoint,
+            }
+
+        raise RuntimeError(
+            "OpenAI video API endpoint unavailable for this token/base URL. "
+            f"Tried /videos and /video/generations ({last_error})."
+        )
+
+    def poll_openai_video_job(self, generation: dict, timeout_s: int = 600) -> dict:
+        if generation.get("video_url"):
+            return generation
+
+        token = self._openai_bearer_token()
+        if not token:
+            raise RuntimeError("OpenAI access token is required for polling video generation status.")
+
+        generation_id = str(generation.get("id", "") or "").strip()
+        if not generation_id:
+            raise RuntimeError("OpenAI video generation id is missing.")
+
+        headers = _openai_headers_from_oauth_token(token)
+        status_endpoint = f"{OPENAI_API_BASE}/videos/{generation_id}"
+        start = time.time()
+
+        while time.time() - start < timeout_s:
+            self._ensure_not_stopped()
+            response = requests.get(status_endpoint, headers=headers, timeout=45)
+            if not response.ok:
+                raise RuntimeError(f"OpenAI video status check failed: {response.status_code} {response.text[:500]}")
+
+            payload = response.json()
+            status = str(payload.get("status", "") or "").lower()
+            video_url = self._extract_openai_video_url(payload)
+            if video_url:
+                return {"video_url": video_url, "status": status or "succeeded", "provider": "openai"}
+            if status in {"failed", "cancelled", "canceled", "error"}:
+                raise RuntimeError(str(payload.get("error", "OpenAI video generation failed.")))
+            time.sleep(5)
+
+        raise TimeoutError("Timed out waiting for OpenAI video generation.")
+
+    def download_video(self, video_url: str, suffix: str, headers: dict | None = None) -> Path:
         self._ensure_not_stopped()
         self.download_dir.mkdir(parents=True, exist_ok=True)
         file_path = self.download_dir / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
-        with requests.get(video_url, stream=True, timeout=240) as response:
+        request_headers = headers or {}
+        with requests.get(video_url, stream=True, timeout=240, headers=request_headers) as response:
             response.raise_for_status()
             with open(file_path, "wb") as handle:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -598,8 +717,34 @@ class GenerateWorker(QThread):
 
     def generate_one_video(self, variant: int) -> dict:
         prompt = self.build_prompt(variant)
+        source = self.prompt_config.source
+
+        if source == "openai":
+            self.status.emit(f"Variant {variant}: generating via OpenAI API ({self._openai_video_model()}).")
+            openai_generation = self.start_openai_video_job(prompt, int(self.prompt_config.video_duration_seconds))
+            result = self.poll_openai_video_job(openai_generation)
+            video_url = str(result.get("video_url", "") or "").strip()
+            if not video_url:
+                raise RuntimeError("OpenAI video API did not return a downloadable video URL.")
+            file_path = self.download_video(
+                video_url,
+                f"openai_v{variant}",
+                headers=_openai_headers_from_oauth_token(self._openai_bearer_token()),
+            )
+            return {
+                "title": f"OpenAI API Generated Video {variant}",
+                "prompt": prompt,
+                "resolution": f"{self.prompt_config.video_resolution_label} ({self.prompt_config.video_aspect_ratio})",
+                "video_file_path": str(file_path),
+                "source_url": video_url,
+                "requested_resolution": self.prompt_config.video_resolution,
+                "effective_resolution": self.prompt_config.video_resolution,
+                "provider": "openai",
+                "model": self._openai_video_model(),
+            }
 
         selected_duration = int(self.prompt_config.video_duration_seconds)
+        self.status.emit(f"Variant {variant}: generating via Grok Imagine API ({self.config.image_model}).")
         video_job_id, effective_resolution, effective_resolution_label = self._start_video_job_with_resolution_fallback(
             prompt,
             selected_duration,
@@ -610,15 +755,17 @@ class GenerateWorker(QThread):
         if not video_url:
             raise RuntimeError("No video URL returned")
 
-        file_path = self.download_video(video_url, f"v{variant}")
+        file_path = self.download_video(video_url, f"grok_v{variant}")
         return {
-            "title": f"Generated Video {variant}",
+            "title": f"Grok API Generated Video {variant}",
             "prompt": prompt,
             "resolution": f"{effective_resolution_label} ({self.prompt_config.video_aspect_ratio})",
             "video_file_path": str(file_path),
             "source_url": video_url,
             "requested_resolution": self.prompt_config.video_resolution,
             "effective_resolution": effective_resolution,
+            "provider": "grok",
+            "model": self.config.image_model,
         }
 
 class StitchWorker(QThread):
@@ -1089,8 +1236,8 @@ class MainWindow(QMainWindow):
         actions_group = QGroupBox("🚀 Actions")
         actions_layout = QGridLayout(actions_group)
 
-        self.generate_btn = QPushButton("📝 Populate Video Prompt")
-        self.generate_btn.setToolTip("Populate the video prompt, then generate videos from the selected prompt source.")
+        self.generate_btn = QPushButton("🎬 API Generate Video")
+        self.generate_btn.setToolTip("Generate videos using the selected API source (Grok Imagine API or OpenAI/Sora API mode).")
         self.generate_btn.setStyleSheet(
             "background-color: #2e7d32; color: white; font-weight: 700;"
             "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
@@ -5156,7 +5303,7 @@ class MainWindow(QMainWindow):
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
-        self.generate_btn.setText("📝 Populate Video Prompt")
+        self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "🎬 API Generate Video")
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
         self.generate_image_btn.setEnabled(True)
 
