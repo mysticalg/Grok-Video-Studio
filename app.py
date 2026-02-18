@@ -7140,7 +7140,7 @@ class MainWindow(QMainWindow):
             if isinstance(result, dict) and result.get("error"):
                 self._append_log(f"WARNING: {platform_name} browser script error: {result.get('error')}")
                 status_label.setText("Status: script error encountered; retrying...")
-                timer.start(1700)
+                timer.start(800)
                 return
 
             file_found = bool(isinstance(result, dict) and result.get("fileInputFound"))
@@ -7200,7 +7200,7 @@ class MainWindow(QMainWindow):
             if is_tiktok and tiktok_upload_assumed and not tiktok_upload_complete:
                 status_label.setText("Status: upload queued (assumed); polling TikTok until upload completes...")
 
-            timer.start(1500)
+            timer.start(800)
 
         browser.page().runJavaScript(script, _after)
 
