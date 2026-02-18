@@ -3130,7 +3130,7 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                         return true;
                     };
-                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const hasImageSelectionMarker = () => {
                         const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
                             .filter((el) => isVisible(el));
@@ -3195,7 +3195,7 @@ class MainWindow(QMainWindow):
                     const desiredAspect = "{selected_aspect_ratio}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
-                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const clickableAncestor = (el) => {
                         if (!el) return null;
                         if (typeof el.closest === "function") {
@@ -3547,7 +3547,7 @@ class MainWindow(QMainWindow):
                 }}
 
                 if (phase === "video-mode") {{
-                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const modelTriggerCandidates = [
                         ...document.querySelectorAll("#model-select-trigger"),
                         ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
