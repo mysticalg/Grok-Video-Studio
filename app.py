@@ -4427,12 +4427,20 @@ class MainWindow(QMainWindow):
                         return /make\\s+video/i.test(label);
                     }});
 
-                const downloadCandidates = [...document.querySelectorAll("button[aria-label='Download'][type='button'], button[aria-label='Download']")]
+                const exactDownloadSelector = "button[type='button'][aria-label='Download']";
+                const exactDownloadCandidates = [...document.querySelectorAll(exactDownloadSelector)]
                     .filter((btn) => isVisible(btn) && !btn.disabled);
+                const fallbackDownloadCandidates = [...document.querySelectorAll("button[aria-label='Download']")]
+                    .filter((btn) => isVisible(btn) && !btn.disabled);
+                const downloadCandidates = [...exactDownloadCandidates, ...fallbackDownloadCandidates]
+                    .filter((btn, index, arr) => arr.indexOf(btn) === index);
                 const makeVideoContainer = makeVideoButton
                     ? (makeVideoButton.closest("form") || makeVideoButton.closest("section") || makeVideoButton.closest("main") || makeVideoButton.parentElement)
                     : null;
-                let downloadButton = downloadCandidates.find((btn) => makeVideoContainer && makeVideoContainer.contains(btn) && btn !== makeVideoButton);
+                let downloadButton = exactDownloadCandidates[0] || null;
+                if (!downloadButton) {{
+                    downloadButton = downloadCandidates.find((btn) => makeVideoContainer && makeVideoContainer.contains(btn) && btn !== makeVideoButton);
+                }}
                 if (!downloadButton) downloadButton = downloadCandidates[0] || null;
 
                 if (downloadButton && (redoButton || !makeVideoButton)) {{
