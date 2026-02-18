@@ -6463,7 +6463,7 @@ class MainWindow(QMainWindow):
         if platform_name == "Instagram":
             max_attempts = 6
         elif platform_name == "TikTok":
-            max_attempts = 12
+            max_attempts = 18
         else:
             max_attempts = 2
         if attempts > max_attempts:
@@ -6612,6 +6612,7 @@ class MainWindow(QMainWindow):
                     const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
+                    const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
                     if (platform === "instagram") {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
@@ -6735,6 +6736,11 @@ class MainWindow(QMainWindow):
 
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
+                        if (platform === "tiktok") {
+                            return bySelectors([
+                                'input[type="file"][accept*="video" i]',
+                            ]);
+                        }
                         if (platform === "instagram") {
                             const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                             if (!instagramDialog) return null;
@@ -6795,7 +6801,9 @@ class MainWindow(QMainWindow):
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
-                        if (!alreadyHasFile && videoBase64) {
+                        const canAttemptTikTokFileSet = platform !== "tiktok"
+                            || Number(tiktokState.fileSetAttempts || 0) < 2;
+                        if (!alreadyHasFile && videoBase64 && canAttemptTikTokFileSet) {
                             try {
                                 const binary = atob(videoBase64);
                                 const bytes = new Uint8Array(binary.length);
@@ -6807,6 +6815,9 @@ class MainWindow(QMainWindow):
                                     fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
                                     fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
                                     fileDialogTriggered = true;
+                                    if (platform === "tiktok") {
+                                        tiktokState.fileSetAttempts = Number(tiktokState.fileSetAttempts || 0) + 1;
+                                    }
                                 }
                             } catch (_) {}
                         }
@@ -6910,7 +6921,7 @@ class MainWindow(QMainWindow):
                     }
 
                     let tiktokPostEnabled = false;
-                    const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
+                    let tiktokUploadComplete = false;
                     if (platform === "tiktok") {
                         const nowMs = Date.now();
                         const minTikTokActionGapMs = 900;
@@ -7044,6 +7055,7 @@ class MainWindow(QMainWindow):
                                     tiktokState.lastActionAtMs = clickedAtMs;
                                 }
                             }
+                            tiktokUploadComplete = tiktokPostEnabled;
                         }
                     }
 
@@ -7058,6 +7070,7 @@ class MainWindow(QMainWindow):
                         nextClicked,
                         submitClicked,
                         tiktokPostEnabled,
+                        tiktokUploadComplete,
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
@@ -7086,6 +7099,7 @@ class MainWindow(QMainWindow):
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostEnabled"))
+            tiktok_upload_complete = bool(isinstance(result, dict) and result.get("tiktokUploadComplete"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -7097,30 +7111,41 @@ class MainWindow(QMainWindow):
             )
             current_url = browser.url().toString().strip()
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} tiktok_upload_complete={tiktok_upload_complete} submit_clicked={submit_clicked}"
             )
             pending["allow_file_dialog"] = False
 
             is_tiktok = platform_name == "TikTok"
-            tiktok_upload_assumed = is_tiktok and attempts >= 3
+            tiktok_upload_assumed = is_tiktok and attempts >= 2
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists) or tiktok_upload_assumed
             is_facebook = platform_name == "Facebook"
             is_instagram = platform_name == "Instagram"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if (is_facebook or is_instagram or is_tiktok) else True
-            completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok) else (attempts >= 2)
+            submit_ok = submit_clicked if (is_facebook or is_instagram) else True
+            completion_attempt_ready = (
+                tiktok_upload_complete
+                if is_tiktok
+                else (submit_ok if (is_facebook or is_instagram) else (attempts >= 2))
+            )
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
                 status_label.setText(
                     "Status: post submitted."
                     if (is_facebook or is_instagram)
-                    else "Status: staged. Confirm/finalize post in this tab if needed."
+                    else (
+                        "Status: upload complete. Continue in TikTok tab for final publish."
+                        if is_tiktok
+                        else "Status: staged. Confirm/finalize post in this tab if needed."
+                    )
                 )
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram) else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram) else ('reached upload-complete state' if is_tiktok else 'staged successfully')} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
+
+            if is_tiktok and tiktok_upload_assumed and not tiktok_upload_complete:
+                status_label.setText("Status: upload queued (assumed); polling TikTok until upload completes...")
 
             timer.start(1500)
 
