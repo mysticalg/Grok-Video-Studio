@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 
 import requests
 from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -528,6 +528,42 @@ class GenerateWorker(QThread):
         response.raise_for_status()
         return response.json().get("id")
 
+    def _resolution_label_for_value(self, resolution: str) -> str:
+        mapping = {
+            "854x480": "480p",
+            "1280x720": "720p",
+        }
+        return mapping.get(str(resolution), str(resolution))
+
+    def _start_video_job_with_resolution_fallback(self, prompt: str, duration_seconds: int) -> tuple[str, str, str]:
+        requested_resolution = str(self.prompt_config.video_resolution)
+        requested_label = str(self.prompt_config.video_resolution_label)
+
+        try:
+            job_id = self.start_video_job(prompt, requested_resolution, duration_seconds)
+            return job_id, requested_resolution, requested_label
+        except requests.HTTPError as exc:
+            fallback_resolution = "854x480"
+            should_try_fallback = requested_resolution == "1280x720" and fallback_resolution != requested_resolution
+            if not should_try_fallback:
+                raise RuntimeError(
+                    "Could not start a video generation job with the selected resolution "
+                    f"({requested_label})."
+                ) from exc
+
+            fallback_label = self._resolution_label_for_value(fallback_resolution)
+            self.status.emit(
+                f"Requested resolution {requested_label} is unavailable for this prompt/model; retrying with {fallback_label}."
+            )
+            try:
+                job_id = self.start_video_job(prompt, fallback_resolution, duration_seconds)
+                return job_id, fallback_resolution, fallback_label
+            except requests.HTTPError as fallback_exc:
+                raise RuntimeError(
+                    "Could not start a video generation job with the selected resolution "
+                    f"({requested_label}) or fallback ({fallback_label})."
+                ) from fallback_exc
+
     def poll_video_job(self, job_id: str, timeout_s: int = 420) -> dict:
         start = time.time()
         while time.time() - start < timeout_s:
@@ -563,17 +599,11 @@ class GenerateWorker(QThread):
     def generate_one_video(self, variant: int) -> dict:
         prompt = self.build_prompt(variant)
 
-        try:
-            video_job_id = self.start_video_job(
-                prompt,
-                self.prompt_config.video_resolution,
-                int(self.prompt_config.video_duration_seconds),
-            )
-        except requests.HTTPError as exc:
-            raise RuntimeError(
-                "Could not start a video generation job with the selected resolution "
-                f"({self.prompt_config.video_resolution_label})."
-            ) from exc
+        selected_duration = int(self.prompt_config.video_duration_seconds)
+        video_job_id, effective_resolution, effective_resolution_label = self._start_video_job_with_resolution_fallback(
+            prompt,
+            selected_duration,
+        )
 
         result = self.poll_video_job(video_job_id)
         video_url = result.get("output", {}).get("video_url") or result.get("video_url")
@@ -584,9 +614,11 @@ class GenerateWorker(QThread):
         return {
             "title": f"Generated Video {variant}",
             "prompt": prompt,
-            "resolution": f"{self.prompt_config.video_resolution_label} ({self.prompt_config.video_aspect_ratio})",
+            "resolution": f"{effective_resolution_label} ({self.prompt_config.video_aspect_ratio})",
             "video_file_path": str(file_path),
             "source_url": video_url,
+            "requested_resolution": self.prompt_config.video_resolution,
+            "effective_resolution": effective_resolution,
         }
 
 class StitchWorker(QThread):
@@ -3958,53 +3990,42 @@ class MainWindow(QMainWindow):
                         return true;
                     };
 
-                    const hasVisibleOptionsPanel = () => {
-                        const popupSelectors = [
-                            "[role='dialog']",
-                            "[role='menu']",
-                            "[role='listbox']",
-                            "[data-state='open']",
-                            "[data-expanded='true']",
-                            "[aria-modal='true']"
-                        ];
-                        return popupSelectors.some((selector) => [...document.querySelectorAll(selector)]
-                            .some((el) => isVisible(el) && /(video|720|10\s*s|16\s*:\s*9)/i.test((el.textContent || "").trim())));
+                    const isOptionsMenu = (el) => {
+                        if (!el || !isVisible(el)) return false;
+                        const txt = (el.textContent || "").trim();
+                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
                     };
 
-                    const triggerCandidates = [
-                        "#model-select-trigger",
-                        "button[aria-haspopup='dialog']",
-                        "button[aria-haspopup='menu']",
-                        "button[aria-expanded='false']",
-                        "button[aria-expanded='true']",
-                        "[role='button'][aria-haspopup='dialog']",
-                        "[role='button'][aria-haspopup='menu']",
-                        "button"
-                    ];
+                    const findOpenMenu = () => {
+                        const candidates = [
+                            ...document.querySelectorAll("[role='menu'][data-state='open']"),
+                            ...document.querySelectorAll("[data-radix-menu-content][data-state='open']"),
+                            ...document.querySelectorAll("[role='menu'], [data-radix-menu-content]")
+                        ];
+                        return candidates.find((el) => isOptionsMenu(el)) || null;
+                    };
 
-                    const byText = (el) => /(^|\s)(model|options?|settings?)($|\s)/i.test((el.textContent || "").trim());
-                    let trigger = null;
-                    for (const selector of triggerCandidates) {
-                        const matches = [...document.querySelectorAll(selector)]
-                            .filter((el) => isVisible(el) && !el.disabled)
-                            .filter((el) => selector !== "button" || byText(el));
-                        if (matches.length) {
-                            trigger = matches[0];
-                            break;
-                        }
+                    const settingsCandidates = [
+                        ...document.querySelectorAll("button[aria-label='Settings']"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu'][aria-label='Settings']"),
+                        ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings']")
+                    ].filter((el, index, arr) => arr.indexOf(el) === index);
+                    const settingsButton = settingsCandidates.find((el) => isVisible(el) && !el.disabled) || null;
+
+                    if (!settingsButton) {
+                        return { ok: false, error: "Settings button not found", panelVisible: !!findOpenMenu() };
                     }
 
-                    if (!trigger) {
-                        return { ok: false, error: "Model/options trigger not found", panelVisible: hasVisibleOptionsPanel() };
-                    }
-
-                    const opened = emulateClick(trigger);
+                    const wasExpanded = settingsButton.getAttribute("aria-expanded") === "true";
+                    const opened = wasExpanded || emulateClick(settingsButton);
+                    const menu = findOpenMenu();
                     return {
-                        ok: opened || hasVisibleOptionsPanel(),
+                        ok: opened || !!menu,
                         opened,
-                        panelVisible: hasVisibleOptionsPanel(),
-                        triggerText: (trigger.textContent || "").trim(),
-                        triggerId: trigger.id || ""
+                        panelVisible: !!menu,
+                        triggerAriaLabel: settingsButton.getAttribute("aria-label") || "",
+                        triggerId: settingsButton.id || "",
+                        wasExpanded,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -4029,34 +4050,9 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
-                    const clickableAncestor = (el) => {
-                        if (!el) return null;
-                        if (typeof el.closest === 'function') {
-                            const ancestor = el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label");
-                            if (ancestor) return ancestor;
-                        }
-                        return el;
-                    };
-                    const matchesAny = (text, patterns) => patterns.some((pattern) => pattern.test(text));
-                    const visibleTextElements = (root = document) => [...root.querySelectorAll(interactiveSelector)]
-                        .filter((el) => isVisible(el) && (el.textContent || "").trim());
-                    const selectedTextElements = (root = document) => visibleTextElements(root)
-                        .filter((el) => {
-                            const target = clickableAncestor(el);
-                            if (!target) return false;
-                            const ariaPressed = target.getAttribute("aria-pressed") === "true";
-                            const ariaSelected = target.getAttribute("aria-selected") === "true";
-                            const dataState = (target.getAttribute("data-state") || "").toLowerCase() === "checked";
-                            const dataSelected = target.getAttribute("data-selected") === "true";
-                            const classSelected = /\b(active|selected|checked|on)\b/i.test(target.className || "");
-                            const checkedInput = !!target.querySelector("input[type='radio']:checked, input[type='checkbox']:checked");
-                            return ariaPressed || ariaSelected || dataState || dataSelected || checkedInput || classSelected;
-                        });
-
+                    const common = { bubbles: true, cancelable: true, composed: true };
                     const emulateClick = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
-                        const common = { bubbles: true, cancelable: true, composed: true };
                         try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
                         el.dispatchEvent(new MouseEvent("mousedown", common));
                         try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
@@ -4065,120 +4061,127 @@ class MainWindow(QMainWindow):
                         return true;
                     };
 
-                    const clickByText = (patterns, root = document) => {
-                        const candidate = visibleTextElements(root).find((el) => matchesAny((el.textContent || "").trim(), patterns));
-                        const target = clickableAncestor(candidate);
-                        if (!target) return false;
-                        return emulateClick(target);
-                    };
-
-                    const hasSelectedByText = (patterns, root = document) => selectedTextElements(root)
-                        .some((el) => matchesAny((el.textContent || "").trim(), patterns));
-
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
-                    const composer = (promptInput && (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section"))) || document;
-                    const findVisibleButtonByAriaLabel = (ariaLabel, root = document) => {
-                        const candidates = [...root.querySelectorAll(`button[aria-label='${ariaLabel}']`)];
-                        return candidates.find((el) => isVisible(el) && !el.disabled) || null;
-                    };
-                    const isOptionButtonSelected = (button) => {
-                        if (!button) return false;
-                        const ariaPressed = button.getAttribute("aria-pressed") === "true";
-                        const ariaSelected = button.getAttribute("aria-selected") === "true";
-                        const dataSelected = button.getAttribute("data-selected") === "true";
-                        const dataState = (button.getAttribute("data-state") || "").toLowerCase();
-                        if (ariaPressed || ariaSelected || dataSelected || dataState === "checked" || dataState === "active") return true;
-                        if (/\b(active|selected|checked|on|text-fg-primary)\b/i.test(button.className || "")) return true;
-                        const selectedFill = button.querySelector(".bg-primary:not([class*='bg-primary/'])");
-                        return !!selectedFill;
-                    };
-                    const hasSelectedByAriaLabel = (ariaLabel, root = document) => {
-                        const button = findVisibleButtonByAriaLabel(ariaLabel, root);
-                        return isOptionButtonSelected(button);
-                    };
-                    const clickVisibleButtonByAriaLabel = (ariaLabel, root = document) => {
-                        const button = findVisibleButtonByAriaLabel(ariaLabel, root) || findVisibleButtonByAriaLabel(ariaLabel, document);
-                        if (!button) return false;
-                        return emulateClick(button);
-                    };
-
                     const desiredQuality = "{selected_quality_label}";
                     const desiredAspect = "{selected_aspect_ratio}";
                     const desiredDuration = "{selected_duration_label}";
+                    const fallbackQuality = desiredQuality === "720p" ? "480p" : desiredQuality;
+
+                    const isOptionsMenu = (el) => {
+                        if (!el || !isVisible(el)) return false;
+                        const txt = (el.textContent || "").trim();
+                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                    };
+                    const menuCandidates = [
+                        ...document.querySelectorAll("[role='menu'][data-state='open']"),
+                        ...document.querySelectorAll("[data-radix-menu-content][data-state='open']"),
+                        ...document.querySelectorAll("[role='menu'], [data-radix-menu-content]")
+                    ];
+                    const menu = menuCandidates.find((el) => isOptionsMenu(el)) || null;
+                    if (!menu) return { ok: false, error: "Options menu not visible" };
+
+                    const optionNodes = [...menu.querySelectorAll("button, [role='menuitemradio'], [role='radio'], [role='button']")]
+                        .filter((el) => isVisible(el));
+
+                    const nodeText = (el) => (el.getAttribute("aria-label") || el.textContent || "").trim();
+                    const isSelected = (el) => {
+                        if (!el) return false;
+                        const ariaChecked = el.getAttribute("aria-checked") === "true";
+                        const ariaPressed = el.getAttribute("aria-pressed") === "true";
+                        const ariaSelected = el.getAttribute("aria-selected") === "true";
+                        const dataState = (el.getAttribute("data-state") || "").toLowerCase();
+                        const dataSelected = el.getAttribute("data-selected") === "true";
+                        const classSelected = /\b(bg-button-filled|active|selected|checked|font-semibold|text-primary)\b/i.test(el.className || "");
+                        return ariaChecked || ariaPressed || ariaSelected || dataSelected || dataState === "checked" || dataState === "active" || classSelected;
+                    };
+
+                    const byExactName = (name) => optionNodes.find((el) => nodeText(el).toLowerCase() === String(name).toLowerCase()) || null;
+                    const byPattern = (patterns) => optionNodes.find((el) => patterns.some((p) => p.test(nodeText(el)))) || null;
+
                     const qualityPatterns = {
-                        "480p": [/480\s*p/i, /854\s*[x×]\s*480/i],
-                        "720p": [/720\s*p/i, /1280\s*[x×]\s*720/i]
+                        "480p": [/^480p$/i, /480\s*p/i, /854\s*[x×]\s*480/i],
+                        "720p": [/^720p$/i, /720\s*p/i, /1280\s*[x×]\s*720/i],
                     };
                     const durationPatterns = {
-                        "6s": [/^6\s*s(ec(onds?)?)?$/i],
-                        "10s": [/^10\s*s(ec(onds?)?)?$/i]
+                        "6s": [/^6s$/i, /^6\s*s(ec(onds?)?)?$/i],
+                        "10s": [/^10s$/i, /^10\s*s(ec(onds?)?)?$/i],
                     };
                     const aspectPatterns = {
                         "2:3": [/^2\s*:\s*3$/i],
                         "3:2": [/^3\s*:\s*2$/i],
                         "1:1": [/^1\s*:\s*1$/i],
                         "9:16": [/^9\s*:\s*16$/i],
-                        "16:9": [/^16\s*:\s*9$/i]
+                        "16:9": [/^16\s*:\s*9$/i],
                     };
 
-                    const requiredOptions = ["video", desiredQuality, desiredDuration, desiredAspect];
                     const optionsRequested = [];
                     const optionsApplied = [];
+                    let effectiveQuality = desiredQuality;
 
-                    const applyOption = (name, patterns, ariaLabel) => {
-                        const isAlreadySelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
-                            || hasSelectedByText(patterns, composer)
-                            || hasSelectedByText(patterns);
-                        if (isAlreadySelected) {
+                    const chooseOption = (name, patterns) => {
+                        const direct = byExactName(name);
+                        const candidate = direct || byPattern(patterns);
+                        if (!candidate) return false;
+                        if (isSelected(candidate)) {
                             optionsApplied.push(`${name}(already-selected)`);
-                            return;
+                            return true;
                         }
-                        const clicked = (ariaLabel && (clickVisibleButtonByAriaLabel(ariaLabel, composer) || clickVisibleButtonByAriaLabel(ariaLabel)))
-                            || clickByText(patterns, composer)
-                            || clickByText(patterns);
-                        if (clicked) {
-                            optionsRequested.push(name);
+                        const clicked = emulateClick(candidate);
+                        if (clicked) optionsRequested.push(name);
+                        if (clicked && !isSelected(candidate)) emulateClick(candidate);
+                        if (isSelected(candidate)) {
+                            optionsApplied.push(name);
+                            return true;
                         }
-                        const isNowSelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
-                            || hasSelectedByText(patterns, composer)
-                            || hasSelectedByText(patterns);
-                        if (clicked && !isNowSelected) {
-                            if (ariaLabel) {
-                                clickVisibleButtonByAriaLabel(ariaLabel, composer) || clickVisibleButtonByAriaLabel(ariaLabel);
-                            } else {
-                                clickByText(patterns, composer) || clickByText(patterns);
-                            }
-                        }
-                        const selected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
-                            || hasSelectedByText(patterns, composer)
-                            || hasSelectedByText(patterns);
-                        if (selected) optionsApplied.push(name);
+                        return false;
                     };
 
-                    applyOption("video", [/^video$/i], null);
-                    applyOption(desiredQuality, qualityPatterns[desiredQuality] || qualityPatterns["720p"], desiredQuality);
-                    applyOption(desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"], desiredDuration);
-                    applyOption(desiredAspect, aspectPatterns[desiredAspect] || aspectPatterns["16:9"], desiredAspect);
+                    chooseOption("Video", [/^video$/i, /video\s*mode/i]);
 
-                    const missingOptions = requiredOptions.filter((option) => {
-                        const patterns = option === "video"
-                            ? [/^video$/i]
-                            : option === desiredQuality
-                                ? (qualityPatterns[desiredQuality] || qualityPatterns["720p"])
-                                : option === desiredDuration
-                                    ? (durationPatterns[desiredDuration] || durationPatterns["10s"])
-                                    : (aspectPatterns[desiredAspect] || aspectPatterns["16:9"]);
-                        const ariaLabel = option === "video" ? null : option;
-                        const selectedByAria = ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel));
-                        return !(selectedByAria || hasSelectedByText(patterns, composer) || hasSelectedByText(patterns));
-                    });
+                    const desiredQualityApplied = chooseOption(desiredQuality, qualityPatterns[desiredQuality] || qualityPatterns["720p"]);
+                    if (!desiredQualityApplied && fallbackQuality !== desiredQuality) {
+                        const fallbackApplied = chooseOption(fallbackQuality, qualityPatterns[fallbackQuality] || qualityPatterns["480p"]);
+                        if (fallbackApplied) effectiveQuality = fallbackQuality;
+                    }
 
+                    chooseOption(desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"]);
+                    chooseOption(desiredAspect, aspectPatterns[desiredAspect] || aspectPatterns["16:9"]);
+
+                    const selectedQualityNode = byExactName(effectiveQuality) || byPattern(qualityPatterns[effectiveQuality] || qualityPatterns["720p"]);
+                    if (!isSelected(selectedQualityNode) && fallbackQuality !== desiredQuality) {
+                        const fallbackNode = byExactName(fallbackQuality) || byPattern(qualityPatterns[fallbackQuality] || qualityPatterns["480p"]);
+                        if (isSelected(fallbackNode)) effectiveQuality = fallbackQuality;
+                    }
+
+                    const requiredOptions = ["video", desiredQuality, desiredDuration, desiredAspect];
+                    const effectiveRequiredOptions = ["video", effectiveQuality, desiredDuration, desiredAspect];
+
+                    const isOptionConfirmed = (name) => {
+                        if (String(name).toLowerCase() === "video") {
+                            const videoNode = byExactName("Video") || byPattern([/^video$/i]);
+                            return isSelected(videoNode);
+                        }
+                        if (name === effectiveQuality || name === desiredQuality) {
+                            const n = byExactName(name) || byPattern(qualityPatterns[name] || qualityPatterns["720p"]);
+                            return isSelected(n);
+                        }
+                        if (name === desiredDuration) {
+                            const n = byExactName(name) || byPattern(durationPatterns[name] || durationPatterns["10s"]);
+                            return isSelected(n);
+                        }
+                        const n = byExactName(name) || byPattern(aspectPatterns[name] || aspectPatterns["16:9"]);
+                        return isSelected(n);
+                    };
+
+                    const missingOptions = effectiveRequiredOptions.filter((name) => !isOptionConfirmed(name));
                     return {
                         ok: true,
                         requiredOptions,
+                        effectiveRequiredOptions,
                         optionsRequested,
                         optionsApplied,
-                        missingOptions
+                        missingOptions,
+                        selectedQuality: effectiveQuality,
+                        fallbackUsed: effectiveQuality !== desiredQuality,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -4204,16 +4207,38 @@ class MainWindow(QMainWindow):
                         return true;
                     };
 
+                    const isOptionsMenu = (el) => {
+                        if (!el || !isVisible(el)) return false;
+                        const txt = (el.textContent || "").trim();
+                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                    };
+                    const hasOpenMenu = () => {
+                        const candidates = [
+                            ...document.querySelectorAll("[role='menu'][data-state='open']"),
+                            ...document.querySelectorAll("[data-radix-menu-content][data-state='open']"),
+                            ...document.querySelectorAll("[role='menu'], [data-radix-menu-content]")
+                        ];
+                        return candidates.some((el) => isOptionsMenu(el));
+                    };
+
                     let closed = false;
-                    const modelTrigger = document.querySelector("#model-select-trigger");
-                    if (modelTrigger) closed = emulateClick(modelTrigger);
-                    if (!closed) {
+                    const settingsButton = [...document.querySelectorAll("button[aria-label='Settings']")]
+                        .find((el) => isVisible(el) && !el.disabled);
+                    if (settingsButton) closed = emulateClick(settingsButton);
+
+                    if (hasOpenMenu()) {
+                        const videoChip = [...document.querySelectorAll("button[aria-label='Video']")]
+                            .find((el) => isVisible(el) && !el.disabled && !el.closest("[role='menu']") && !el.closest("[data-radix-menu-content]"));
+                        if (videoChip) closed = emulateClick(videoChip) || closed;
+                    }
+
+                    if (hasOpenMenu()) {
                         const escEvent = new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true });
                         document.dispatchEvent(escEvent);
                         closed = true;
                     }
 
-                    return { ok: true, closed };
+                    return { ok: true, closed, panelVisible: hasOpenMenu() };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
                 }
@@ -4308,11 +4333,22 @@ class MainWindow(QMainWindow):
 
             options_requested = result.get("optionsRequested") if isinstance(result, dict) else []
             options_applied = result.get("optionsApplied") if isinstance(result, dict) else []
+            selected_quality = result.get("selectedQuality") if isinstance(result, dict) else None
+            fallback_used = bool(result.get("fallbackUsed")) if isinstance(result, dict) else False
             requested_summary = ", ".join(options_requested) if options_requested else "none"
             applied_summary = ", ".join(options_applied) if options_applied else "none detected"
             self._append_log(
                 f"Options staged for variant {variant}; options requested: {requested_summary}; options applied markers: {applied_summary}."
             )
+            if selected_quality:
+                if fallback_used:
+                    self._append_log(
+                        f"Variant {variant}: preferred quality {selected_quality_label} not confirmed in the panel; "
+                        f"falling back to {selected_quality}."
+                    )
+                else:
+                    self._append_log(f"Variant {variant}: confirmed quality selection {selected_quality}.")
+
 
             def _continue_after_options_close(close_result):
                 if not isinstance(close_result, dict) or not close_result.get("ok"):
@@ -4862,6 +4898,27 @@ class MainWindow(QMainWindow):
             self.worker.request_stop()
             self._append_log("Stop requested: API generation worker will stop after the current request completes.")
         self._append_log("Stop all requested: cleared queued manual image/video jobs and halted polling timers.")
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self.stop_all_jobs()
+        workers: list[tuple[str, QThread | None]] = [
+            ("generation", self.worker),
+            ("stitch", self.stitch_worker),
+            ("upload", self.upload_worker),
+            ("browser-training", self.browser_training_worker),
+        ]
+        for worker_name, worker in workers:
+            if worker is None or not worker.isRunning():
+                continue
+            if hasattr(worker, "request_stop"):
+                try:
+                    worker.request_stop()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            worker.requestInterruption()
+            if not worker.wait(5000):
+                self._append_log(f"WARNING: Timed out while waiting for {worker_name} worker thread to stop.")
+        super().closeEvent(event)
 
     def _build_video_label(self, video: dict) -> str:
         title = str(video.get("title") or "Video")
