@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 
 import requests
 from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -4121,9 +4121,11 @@ class MainWindow(QMainWindow):
                         "16:9": [/^16\s*:\s*9$/i]
                     };
 
+                    const fallbackQuality = desiredQuality === "720p" ? "480p" : desiredQuality;
                     const requiredOptions = ["video", desiredQuality, desiredDuration, desiredAspect];
                     const optionsRequested = [];
                     const optionsApplied = [];
+                    let effectiveQuality = desiredQuality;
 
                     const applyOption = (name, patterns, ariaLabel) => {
                         const isAlreadySelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
@@ -4155,16 +4157,34 @@ class MainWindow(QMainWindow):
                         if (selected) optionsApplied.push(name);
                     };
 
-                    applyOption("video", [/^video$/i], null);
-                    applyOption(desiredQuality, qualityPatterns[desiredQuality] || qualityPatterns["720p"], desiredQuality);
+                    applyOption("video", [/^video$/i, /video\s+mode/i], "Video");
+
+                    const desiredQualityPatterns = qualityPatterns[desiredQuality] || qualityPatterns["720p"];
+                    applyOption(desiredQuality, desiredQualityPatterns, desiredQuality);
+                    const desiredQualitySelected = (hasSelectedByAriaLabel(desiredQuality, composer) || hasSelectedByAriaLabel(desiredQuality))
+                        || hasSelectedByText(desiredQualityPatterns, composer)
+                        || hasSelectedByText(desiredQualityPatterns);
+
+                    if (!desiredQualitySelected && fallbackQuality !== desiredQuality) {
+                        const fallbackPatterns = qualityPatterns[fallbackQuality] || qualityPatterns["480p"];
+                        applyOption(fallbackQuality, fallbackPatterns, fallbackQuality);
+                        const fallbackSelected = (hasSelectedByAriaLabel(fallbackQuality, composer) || hasSelectedByAriaLabel(fallbackQuality))
+                            || hasSelectedByText(fallbackPatterns, composer)
+                            || hasSelectedByText(fallbackPatterns);
+                        if (fallbackSelected) {
+                            effectiveQuality = fallbackQuality;
+                        }
+                    }
+
                     applyOption(desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"], desiredDuration);
                     applyOption(desiredAspect, aspectPatterns[desiredAspect] || aspectPatterns["16:9"], desiredAspect);
 
-                    const missingOptions = requiredOptions.filter((option) => {
+                    const effectiveRequiredOptions = ["video", effectiveQuality, desiredDuration, desiredAspect];
+                    const missingOptions = effectiveRequiredOptions.filter((option) => {
                         const patterns = option === "video"
                             ? [/^video$/i]
-                            : option === desiredQuality
-                                ? (qualityPatterns[desiredQuality] || qualityPatterns["720p"])
+                            : option === effectiveQuality
+                                ? (qualityPatterns[effectiveQuality] || qualityPatterns["720p"])
                                 : option === desiredDuration
                                     ? (durationPatterns[desiredDuration] || durationPatterns["10s"])
                                     : (aspectPatterns[desiredAspect] || aspectPatterns["16:9"]);
@@ -4176,9 +4196,12 @@ class MainWindow(QMainWindow):
                     return {
                         ok: true,
                         requiredOptions,
+                        effectiveRequiredOptions,
                         optionsRequested,
                         optionsApplied,
-                        missingOptions
+                        missingOptions,
+                        selectedQuality: effectiveQuality,
+                        fallbackUsed: effectiveQuality !== desiredQuality
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -4308,11 +4331,22 @@ class MainWindow(QMainWindow):
 
             options_requested = result.get("optionsRequested") if isinstance(result, dict) else []
             options_applied = result.get("optionsApplied") if isinstance(result, dict) else []
+            selected_quality = result.get("selectedQuality") if isinstance(result, dict) else None
+            fallback_used = bool(result.get("fallbackUsed")) if isinstance(result, dict) else False
             requested_summary = ", ".join(options_requested) if options_requested else "none"
             applied_summary = ", ".join(options_applied) if options_applied else "none detected"
             self._append_log(
                 f"Options staged for variant {variant}; options requested: {requested_summary}; options applied markers: {applied_summary}."
             )
+            if selected_quality:
+                if fallback_used:
+                    self._append_log(
+                        f"Variant {variant}: preferred quality {selected_quality_label} not confirmed in the panel; "
+                        f"falling back to {selected_quality}."
+                    )
+                else:
+                    self._append_log(f"Variant {variant}: confirmed quality selection {selected_quality}.")
+
 
             def _continue_after_options_close(close_result):
                 if not isinstance(close_result, dict) or not close_result.get("ok"):
@@ -4862,6 +4896,27 @@ class MainWindow(QMainWindow):
             self.worker.request_stop()
             self._append_log("Stop requested: API generation worker will stop after the current request completes.")
         self._append_log("Stop all requested: cleared queued manual image/video jobs and halted polling timers.")
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self.stop_all_jobs()
+        workers: list[tuple[str, QThread | None]] = [
+            ("generation", self.worker),
+            ("stitch", self.stitch_worker),
+            ("upload", self.upload_worker),
+            ("browser-training", self.browser_training_worker),
+        ]
+        for worker_name, worker in workers:
+            if worker is None or not worker.isRunning():
+                continue
+            if hasattr(worker, "request_stop"):
+                try:
+                    worker.request_stop()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            worker.requestInterruption()
+            if not worker.wait(5000):
+                self._append_log(f"WARNING: Timed out while waiting for {worker_name} worker thread to stop.")
+        super().closeEvent(event)
 
     def _build_video_label(self, video: dict) -> str:
         title = str(video.get("title") or "Video")
