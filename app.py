@@ -1235,76 +1235,89 @@ class MainWindow(QMainWindow):
 
         actions_group = QGroupBox("🚀 Actions")
         actions_layout = QGridLayout(actions_group)
+        actions_layout.setHorizontalSpacing(6)
+        actions_layout.setVerticalSpacing(6)
+        actions_layout.setColumnStretch(0, 1)
+        actions_layout.setColumnStretch(1, 1)
+        actions_layout.setColumnStretch(2, 1)
 
         self.generate_btn = QPushButton("📝 Manual Generate Video")
         self.generate_btn.setToolTip("Generate a video in the embedded browser using the Manual Prompt.")
         self.generate_btn.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: 700;"
-            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
+            "background-color: #2e7d32; color: white; font-weight: 700; font-size: 13px;"
+            "border: 1px solid #1b5e20; border-radius: 6px; padding: 5px 8px;"
         )
+        self.generate_btn.setMinimumHeight(32)
         self.generate_btn.clicked.connect(self.start_manual_generation)
         actions_layout.addWidget(self.generate_btn, 0, 0)
 
         self.api_generate_btn = QPushButton("🎬 API Generate Video")
         self.api_generate_btn.setToolTip("Generate videos using the selected API source (Grok Imagine API or OpenAI/Sora API mode).")
         self.api_generate_btn.setStyleSheet(
-            "background-color: #1565c0; color: white; font-weight: 700;"
-            "border: 1px solid #0d47a1; border-radius: 6px; padding: 8px;"
+            "background-color: #1565c0; color: white; font-weight: 700; font-size: 13px;"
+            "border: 1px solid #0d47a1; border-radius: 6px; padding: 5px 8px;"
         )
+        self.api_generate_btn.setMinimumHeight(32)
         self.api_generate_btn.clicked.connect(self.start_api_generation)
         actions_layout.addWidget(self.api_generate_btn, 0, 1)
 
-        self.generate_image_btn = QPushButton("🖼️ Populate Image Prompt in Browser")
+        self.generate_image_btn = QPushButton("🖼️ Populate Image Prompt")
         self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
         self.generate_image_btn.setStyleSheet(
-            "background-color: #43a047; color: white; font-weight: 700;"
-            "border: 1px solid #2e7d32; border-radius: 6px; padding: 8px;"
+            "background-color: #43a047; color: white; font-weight: 700; font-size: 13px;"
+            "border: 1px solid #2e7d32; border-radius: 6px; padding: 5px 8px;"
         )
+        self.generate_image_btn.setMinimumHeight(32)
         self.generate_image_btn.clicked.connect(self.start_image_generation)
         actions_layout.addWidget(self.generate_image_btn, 0, 2)
 
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
         self.stop_all_btn.setStyleSheet(
-            "background-color: #8b0000; color: white; font-weight: 700;"
-            "border: 1px solid #5c0000; border-radius: 6px; padding: 8px;"
+            "background-color: #8b0000; color: white; font-weight: 700; font-size: 13px;"
+            "border: 1px solid #5c0000; border-radius: 6px; padding: 5px 8px;"
         )
+        self.stop_all_btn.setMinimumHeight(32)
         self.stop_all_btn.clicked.connect(self.stop_all_jobs)
         actions_layout.addWidget(self.stop_all_btn, 1, 0)
 
-        self.continue_frame_btn = QPushButton("🟨 Continue from Last Frame (paste + generate)")
+        self.continue_frame_btn = QPushButton("🟨 Continue from Last Frame")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
         self.continue_frame_btn.setStyleSheet(
-            "background-color: #fdd835; color: #222; font-weight: 700;"
-            "border: 1px solid #f9a825; border-radius: 6px; padding: 8px;"
+            "background-color: #fdd835; color: #222; font-weight: 700; font-size: 13px;"
+            "border: 1px solid #f9a825; border-radius: 6px; padding: 5px 8px;"
         )
+        self.continue_frame_btn.setMinimumHeight(32)
         self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
         actions_layout.addWidget(self.continue_frame_btn, 2, 0)
 
-        self.continue_image_btn = QPushButton("🖼️ Continue from Local Image (paste + generate)")
+        self.continue_image_btn = QPushButton("🖼️ Continue from Local Image")
         self.continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
         self.continue_image_btn.setStyleSheet(
-            "background-color: #fff176; color: #222; font-weight: 700;"
-            "border: 1px solid #fbc02d; border-radius: 6px; padding: 8px;"
+            "background-color: #fff176; color: #222; font-weight: 700; font-size: 13px;"
+            "border: 1px solid #fbc02d; border-radius: 6px; padding: 5px 8px;"
         )
+        self.continue_image_btn.setMinimumHeight(32)
         self.continue_image_btn.clicked.connect(self.continue_from_local_image)
         actions_layout.addWidget(self.continue_image_btn, 2, 1)
 
-        self.show_browser_btn = QPushButton("🌐 Show Browser (grok.com/imagine)")
+        self.show_browser_btn = QPushButton("🌐 Show Browser")
         self.show_browser_btn.setToolTip("Bring the embedded Grok browser to the front.")
         self.show_browser_btn.setStyleSheet(
-            "background-color: #ffffff; color: #222; font-weight: 700;"
-            "border: 1px solid #cfcfcf; border-radius: 6px; padding: 8px;"
+            "background-color: #ffffff; color: #222; font-weight: 700; font-size: 13px;"
+            "border: 1px solid #cfcfcf; border-radius: 6px; padding: 5px 8px;"
         )
+        self.show_browser_btn.setMinimumHeight(32)
         self.show_browser_btn.clicked.connect(self.show_browser_page)
         actions_layout.addWidget(self.show_browser_btn, 3, 0)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
         self.stitch_btn.setStyleSheet(
-            "background-color: #81d4fa; color: #0d47a1; font-weight: 700;"
-            "border: 1px solid #4fc3f7; border-radius: 6px; padding: 8px;"
+            "background-color: #81d4fa; color: #0d47a1; font-weight: 700; font-size: 13px;"
+            "border: 1px solid #4fc3f7; border-radius: 6px; padding: 5px 8px;"
         )
+        self.stitch_btn.setMinimumHeight(32)
         self.stitch_btn.clicked.connect(self.stitch_all_videos)
         actions_layout.addWidget(self.stitch_btn, 3, 1)
 
@@ -1423,15 +1436,6 @@ class MainWindow(QMainWindow):
 
         actions_layout.addWidget(upload_group, 13, 0, 1, 2)
 
-        self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
-        self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
-        self.buy_coffee_btn.setStyleSheet(
-            "font-size: 15px; font-weight: 700; padding: 10px;"
-            "background-color: #ffdd00; color: #222; border-radius: 8px;"
-        )
-        self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
-        actions_layout.addWidget(self.buy_coffee_btn, 14, 0, 1, 2)
-
         left_layout.addWidget(actions_group)
 
         left_layout.addWidget(QLabel("Generated Videos"))
@@ -1533,6 +1537,18 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setValue(0)
         self.upload_progress_bar.setVisible(False)
         log_layout.addWidget(self.upload_progress_bar)
+
+        self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
+        self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
+        self.buy_coffee_btn.setStyleSheet(
+            "font-size: 12px; font-weight: 700; padding: 4px 8px;"
+            "background-color: #ffdd00; color: #222; border-radius: 6px;"
+            "max-width: 180px;"
+        )
+        self.buy_coffee_btn.setMaximumWidth(180)
+        self.buy_coffee_btn.setMinimumHeight(28)
+        self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
+        log_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignLeft)
 
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
