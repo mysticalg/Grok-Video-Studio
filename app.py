@@ -6984,10 +6984,57 @@ class MainWindow(QMainWindow):
                                     return pasteDispatched;
                                 };
 
-                                try {
-                                    editableNode.focus();
-                                } catch (_) {}
+                                const sleepMs = (ms) => {
+                                    const waitFor = Number(ms || 0);
+                                    if (!(waitFor > 0)) return;
+                                    const start = (typeof performance !== "undefined" && performance.now)
+                                        ? performance.now()
+                                        : Date.now();
+                                    while (true) {
+                                        const now = (typeof performance !== "undefined" && performance.now)
+                                            ? performance.now()
+                                            : Date.now();
+                                        if ((now - start) >= waitFor) break;
+                                    }
+                                };
 
+                                const selectAllAndDelete = () => {
+                                    try {
+                                        editableNode.focus();
+                                    } catch (_) {}
+                                    try {
+                                        const selection = window.getSelection();
+                                        if (selection && typeof selection.removeAllRanges === "function") {
+                                            const range = document.createRange();
+                                            range.selectNodeContents(editableNode);
+                                            selection.removeAllRanges();
+                                            selection.addRange(range);
+                                        }
+                                    } catch (_) {}
+                                    sleepMs(120);
+                                    try {
+                                        const selection = window.getSelection();
+                                        if (selection && selection.rangeCount > 0) {
+                                            const range = selection.getRangeAt(0);
+                                            range.deleteContents();
+                                        } else {
+                                            editableNode.textContent = "";
+                                        }
+                                    } catch (_) {
+                                        try { editableNode.textContent = ""; } catch (_) {}
+                                    }
+                                    try {
+                                        editableNode.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
+                                    } catch (_) {}
+                                    try {
+                                        editableNode.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
+                                    } catch (_) {
+                                        try { editableNode.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
+                                    }
+                                    sleepMs(120);
+                                };
+
+                                selectAllAndDelete();
                                 const pasteAttempted = dispatchPasteLikeWindows(decodedCaption);
                                 const pastedTextMatches = normalizedNodeText(editableNode) === norm(decodedCaption);
 
