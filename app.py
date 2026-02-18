@@ -1089,8 +1089,8 @@ class MainWindow(QMainWindow):
         actions_group = QGroupBox("🚀 Actions")
         actions_layout = QGridLayout(actions_group)
 
-        self.generate_btn = QPushButton("🎬 Generate Video")
-        self.generate_btn.setToolTip("Generate videos from the selected prompt source.")
+        self.generate_btn = QPushButton("📝 Populate Video Prompt")
+        self.generate_btn.setToolTip("Populate the video prompt, then generate videos from the selected prompt source.")
         self.generate_btn.setStyleSheet(
             "background-color: #2e7d32; color: white; font-weight: 700;"
             "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
@@ -5156,7 +5156,7 @@ class MainWindow(QMainWindow):
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
-        self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "🎬 Generate Video")
+        self.generate_btn.setText("📝 Populate Video Prompt")
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
         self.generate_image_btn.setEnabled(True)
 
