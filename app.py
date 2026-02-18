@@ -2411,13 +2411,15 @@ class MainWindow(QMainWindow):
                     let playing = 0;
                     for (const video of videos) {
                         try {
-                            video.muted = false;
-                            video.defaultMuted = false;
-                            video.volume = 1;
+                            // Chromium/WebEngine autoplay policies are stricter for unmuted media.
+                            // Start muted so playback can begin reliably, then attempt an unmute.
+                            video.muted = true;
+                            video.defaultMuted = true;
+                            video.volume = Math.max(video.volume || 0, 0.01);
                             video.autoplay = true;
                             video.playsInline = true;
                             video.loop = false;
-                            video.removeAttribute("muted");
+                            video.setAttribute("muted", "");
                             video.setAttribute("autoplay", "");
                             video.setAttribute("playsinline", "");
                             video.setAttribute("webkit-playsinline", "");
@@ -2440,15 +2442,19 @@ class MainWindow(QMainWindow):
                                         const p2 = video.play();
                                         if (p2 && typeof p2.catch === "function") p2.catch(() => {});
                                     });
+                                    p.then(() => {
+                                        // Best-effort unmute; if policy rejects it we keep muted playback.
+                                        try {
+                                            video.muted = false;
+                                            video.defaultMuted = false;
+                                            video.removeAttribute("muted");
+                                            video.volume = Math.max(video.volume || 0, 0.2);
+                                        } catch (_) {}
+                                    });
                                 }
 
                                 if (video.muted) {
-                                    try {
-                                        video.muted = false;
-                                        video.defaultMuted = false;
-                                        video.volume = 1;
-                                        video.removeAttribute("muted");
-                                    } catch (_) {}
+                                    // Keep muted for autoplay reliability.
                                 }
 
                                 if (video.readyState < 2) {
