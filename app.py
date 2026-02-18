@@ -194,12 +194,13 @@ def _extract_openai_org_project_ids(access_token: str) -> tuple[str, str]:
     return org_id, project_id
 
 
-def _openai_headers_from_oauth_token(access_token: str) -> dict[str, str]:
+def _openai_headers_from_credential(credential: str) -> dict[str, str]:
     headers = {
-        "Authorization": f"Bearer {access_token}",
+        "Authorization": f"Bearer {credential}",
         "Content-Type": "application/json",
     }
-    org_id, project_id = _extract_openai_org_project_ids(access_token)
+    # OAuth tokens may contain organization/project hints in claims. API keys do not.
+    org_id, project_id = _extract_openai_org_project_ids(credential)
     if org_id:
         headers["OpenAI-Organization"] = org_id
     if project_id:
@@ -207,12 +208,12 @@ def _openai_headers_from_oauth_token(access_token: str) -> dict[str, str]:
     return headers
 
 
-def _openai_chat_target(access_token: str) -> tuple[str, dict[str, str], bool]:
-    claims = _decode_openai_access_token(access_token)
+def _openai_chat_target(credential: str) -> tuple[str, dict[str, str], bool]:
+    claims = _decode_openai_access_token(credential)
     issuer = str(claims.get("iss", "")).strip()
     auth_claim = claims.get("https://api.openai.com/auth")
 
-    headers = _openai_headers_from_oauth_token(access_token)
+    headers = _openai_headers_from_credential(credential)
 
     use_chatgpt_backend = (
         OPENAI_USE_CHATGPT_BACKEND
@@ -275,8 +276,8 @@ def _extract_text_from_responses_sse(raw_text: str) -> str:
 
     return "".join(text_chunks).strip()
 
-def _call_openai_chat_api(access_token: str, model: str, system: str, user: str, temperature: float) -> str:
-    endpoint, headers, is_responses_api = _openai_chat_target(access_token)
+def _call_openai_chat_api(credential: str, model: str, system: str, user: str, temperature: float) -> str:
+    endpoint, headers, is_responses_api = _openai_chat_target(credential)
 
     payload: dict[str, object]
     if is_responses_api:
@@ -404,6 +405,7 @@ class PromptConfig:
     source: str
     concept: str
     manual_prompt: str
+    openai_api_key: str
     openai_access_token: str
     openai_chat_model: str
     video_resolution: str
@@ -461,14 +463,14 @@ class GenerateWorker(QThread):
         except Exception:
             return response.text[:500] or response.reason
 
-    def _openai_bearer_token(self) -> str:
-        return self.prompt_config.openai_access_token
+    def _openai_credential(self) -> str:
+        return self.prompt_config.openai_api_key or self.prompt_config.openai_access_token
 
     def _openai_video_headers(self) -> dict[str, str]:
-        token = self._openai_bearer_token()
-        if not token:
-            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
-        return _openai_headers_from_oauth_token(token)
+        credential = self._openai_credential()
+        if not credential:
+            raise RuntimeError("OpenAI API key or access token is required.")
+        return _openai_headers_from_credential(credential)
 
     def call_grok_chat(self, system: str, user: str) -> str:
         headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
@@ -490,11 +492,11 @@ class GenerateWorker(QThread):
         return response.json()["choices"][0]["message"]["content"].strip()
 
     def call_openai_chat(self, system: str, user: str) -> str:
-        openai_token = self._openai_bearer_token()
-        if not openai_token:
-            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+        openai_credential = self._openai_credential()
+        if not openai_credential:
+            raise RuntimeError("OpenAI API key or access token is required.")
         return _call_openai_chat_api(
-            access_token=openai_token,
+            credential=openai_credential,
             model=self.prompt_config.openai_chat_model,
             system=system,
             user=user,
@@ -1881,6 +1883,12 @@ class MainWindow(QMainWindow):
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
         ai_layout.addRow("Prompt Source", self.prompt_source)
 
+        self.openai_api_key = QLineEdit()
+        self.openai_api_key.setEchoMode(QLineEdit.Password)
+        self.openai_api_key.setPlaceholderText("Optional OpenAI API key (preferred when available)")
+        self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
+        ai_layout.addRow("OpenAI API Key", self.openai_api_key)
+
         self.openai_access_token = QLineEdit()
         self.openai_access_token.setEchoMode(QLineEdit.Password)
         self.openai_access_token.setPlaceholderText("Optional bearer token from OAuth/browser sign-in flow")
@@ -2194,6 +2202,7 @@ class MainWindow(QMainWindow):
             "chat_model": self.chat_model.text(),
             "image_model": self.image_model.text(),
             "prompt_source": self.prompt_source.currentData(),
+            "openai_api_key": self.openai_api_key.text(),
             "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
@@ -2261,6 +2270,8 @@ class MainWindow(QMainWindow):
             source_index = self.prompt_source.findData(str(preferences["prompt_source"]))
             if source_index >= 0:
                 self.prompt_source.setCurrentIndex(source_index)
+        if "openai_api_key" in preferences:
+            self.openai_api_key.setText(str(preferences["openai_api_key"]))
         if "openai_access_token" in preferences:
             self.openai_access_token.setText(str(preferences["openai_access_token"]))
         if "openai_chat_model" in preferences:
@@ -2668,11 +2679,11 @@ class MainWindow(QMainWindow):
         if source == "manual" and not manual_prompt:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
-        if source == "openai" and not self.openai_access_token.text().strip():
+        if source == "openai" and not (self.openai_api_key.text().strip() or self.openai_access_token.text().strip()):
             QMessageBox.warning(
                 self,
                 "Missing OpenAI Credentials",
-                "Please authorize OpenAI in browser (or paste an OpenAI access token).",
+                "Please provide an OpenAI API key or authorize OpenAI in browser (or paste an access token).",
             )
             return
 
@@ -2699,6 +2710,7 @@ class MainWindow(QMainWindow):
             source=source,
             concept=concept,
             manual_prompt=manual_prompt,
+            openai_api_key=self.openai_api_key.text().strip(),
             openai_access_token=self.openai_access_token.text().strip(),
             openai_chat_model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
             video_resolution=selected_resolution,
@@ -3099,11 +3111,11 @@ class MainWindow(QMainWindow):
         }
 
         if source == "openai":
-            openai_token = self.openai_access_token.text().strip()
-            if not openai_token:
-                raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+            openai_credential = self.openai_api_key.text().strip() or self.openai_access_token.text().strip()
+            if not openai_credential:
+                raise RuntimeError("OpenAI API key or access token is required.")
             return _call_openai_chat_api(
-                access_token=openai_token,
+                credential=openai_credential,
                 model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
                 system=system,
                 user=user,
@@ -5290,6 +5302,7 @@ class MainWindow(QMainWindow):
         is_manual = source == "manual"
         is_openai = source == "openai"
         self.manual_prompt.setEnabled(True)
+        self.openai_api_key.setEnabled(is_openai)
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
@@ -5836,9 +5849,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Trace", "Select or generate a training trace before building a process.")
             return
 
-        access_token = self.openai_access_token.text().strip()
-        if not access_token:
-            QMessageBox.warning(self, "Missing OpenAI Access Token", "Sign in with Browser Authorization or paste an access token in Settings.")
+        credential = self.openai_api_key.text().strip() or self.openai_access_token.text().strip()
+        if not credential:
+            QMessageBox.warning(self, "Missing OpenAI Credentials", "Enter an OpenAI API key or sign in with Browser Authorization in Settings.")
             return
 
         trace_path = Path(trace_path_text)
@@ -5851,7 +5864,7 @@ class MainWindow(QMainWindow):
             "build",
             {
                 "trace_path": trace_path,
-                "access_token": access_token,
+                "access_token": credential,
                 "model": model,
             },
         )
