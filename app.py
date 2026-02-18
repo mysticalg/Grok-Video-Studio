@@ -6427,10 +6427,22 @@ class MainWindow(QMainWindow):
         raw_caption = str(caption or "").strip()
         upload_filename = video_file.name or "upload.mp4"
         if platform_name == "TikTok" and raw_caption:
-            safe_stem = re.sub(r'[\\/:*?"<>|]+', "", raw_caption)
+            hashtag_tokens = []
+            for token in re.findall(r"#\S+", raw_caption):
+                cleaned_tag = re.sub(r'[\\/:*?"<>|]+', "", token)
+                cleaned_tag = re.sub(r"[_]+", "", cleaned_tag)
+                cleaned_tag = re.sub(r"\s+", " ", cleaned_tag).strip(" .")
+                if cleaned_tag and cleaned_tag not in hashtag_tokens:
+                    hashtag_tokens.append(cleaned_tag)
+
+            caption_without_hashtags = re.sub(r"#\S+", "", raw_caption)
+            safe_stem = re.sub(r'[\\/:*?"<>|]+', "", caption_without_hashtags)
             safe_stem = re.sub(r"[_]+", "", safe_stem)
             safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" .")
-            safe_stem = safe_stem.title()[:80]
+            safe_stem = safe_stem.title()
+            if hashtag_tokens:
+                safe_stem = f"{safe_stem} {' '.join(hashtag_tokens)}".strip()
+            safe_stem = safe_stem[:80]
             suffix = video_file.suffix if video_file.suffix else ".mp4"
             upload_filename = f"{safe_stem or 'upload'}{suffix}"
 
