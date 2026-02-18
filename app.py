@@ -6310,7 +6310,6 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
-        combined_caption = self._compose_social_text(caption, hashtags)
         upload_video_path = source_video_path
         temp_upload_dir: Path | None = None
         try:
@@ -6369,7 +6368,7 @@ class MainWindow(QMainWindow):
             payload = {
                 "source_info": source_info,
                 "post_info": {
-                    "title": combined_caption,
+                    "title": "",
                     "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
                     "disable_comment": False,
                     "disable_duet": False,
