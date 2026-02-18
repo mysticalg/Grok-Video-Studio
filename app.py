@@ -7202,10 +7202,11 @@ class MainWindow(QMainWindow):
 
         safe_stem = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(description_text or "")).strip()
         safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" .")
+        if safe_stem:
+            safe_stem = safe_stem.title()
         if not safe_stem:
-            safe_stem = source_path.stem
-        safe_stem = safe_stem[:80].strip() or source_path.stem
-
+            safe_stem = source_path.stem.title()
+        safe_stem = safe_stem[:80].strip() or source_path.stem.title()
         extension = source_path.suffix or ".mp4"
         staged_path = source_path.with_name(f"{safe_stem}{extension}")
         if staged_path == source_path:
