@@ -147,32 +147,20 @@ def _parse_json_object_from_text(raw: str) -> dict:
     raise json.JSONDecodeError("AI response did not contain a JSON object", text, 0)
 
 
-def _sanitize_upload_filename(text: str, fallback: str = "tiktok-upload") -> str:
-    raw_text = str(text or "")
-    normalized = raw_text.translate(str.maketrans({"\n": " ", "\r": " ", "\t": " ", "\f": " ", "\v": " "}))
-    cleaned = re.sub(r"[^A-Za-z0-9._ -]", "", normalized).strip(" ._-")
-    if not cleaned:
-        return fallback
-    return cleaned[:80]
-
-
-
 def _prepare_tiktok_upload_video_path(video_path: str, description: str) -> tuple[str, Path | None]:
     source_path = Path(video_path)
     if not source_path.exists() or not source_path.is_file():
         raise ValueError("TikTok upload video path is invalid.")
 
-    sanitized_name = _sanitize_upload_filename(description)
-    if not sanitized_name:
+    filename_from_description = str(description or "")
+    if not filename_from_description:
         return str(source_path), None
 
-    extension = source_path.suffix or ".mp4"
-    target_name = f"{sanitized_name}{extension}"
-    if source_path.name == target_name:
+    if source_path.name == filename_from_description:
         return str(source_path), None
 
     temp_dir = Path(tempfile.mkdtemp(prefix="tiktok-upload-"))
-    renamed_path = temp_dir / target_name
+    renamed_path = temp_dir / filename_from_description
     shutil.copy2(source_path, renamed_path)
     return str(renamed_path), temp_dir
 
