@@ -902,8 +902,10 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type: str | None = None
         self.pending_manual_image_prompt: str | None = None
         self.manual_image_pick_clicked = False
+        self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
+        self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token = 0
         self.manual_download_deadline: float | None = None
@@ -3056,8 +3058,10 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = "image"
         self.pending_manual_image_prompt = prompt
         self.manual_image_pick_clicked = False
+        self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
+        self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
         self.manual_download_click_sent = False
@@ -3504,7 +3508,12 @@ class MainWindow(QMainWindow):
             return
 
         prompt = self.pending_manual_image_prompt or ""
-        phase = "pick" if not self.manual_image_pick_clicked else "submit"
+        if not self.manual_image_pick_clicked:
+            phase = "pick"
+        elif not self.manual_image_video_mode_selected:
+            phase = "video-mode"
+        else:
+            phase = "submit"
         script = f"""
             (async () => {{
                 const prompt = {prompt!r};
@@ -3535,6 +3544,58 @@ class MainWindow(QMainWindow):
                     if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
                     await sleep(ACTION_DELAY_MS);
                     return {{ ok: true, status: "generated-image-clicked" }};
+                }}
+
+                if (phase === "video-mode") {{
+                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const modelTriggerCandidates = [
+                        ...document.querySelectorAll("#model-select-trigger"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
+                        ...document.querySelectorAll("button, [role='button']"),
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+
+                    const modelTrigger = modelTriggerCandidates.find((el) => {{
+                        const txt = textOf(el);
+                        return /model|video|image|options|settings/i.test(txt) || (el.id || "") === "model-select-trigger";
+                    }}) || null;
+
+                    let optionsOpened = false;
+                    if (modelTrigger) {{
+                        optionsOpened = emulateClick(modelTrigger);
+                    }}
+                    await sleep(ACTION_DELAY_MS);
+
+                    const menuItems = [
+                        ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+
+                    const videoItem = menuItems.find((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el))) || null;
+                    const videoClicked = videoItem ? emulateClick(videoItem) : false;
+                    await sleep(ACTION_DELAY_MS);
+
+                    const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
+                        .filter((el) => isVisible(el));
+                    const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
+                    const selectedViaTrigger = !!(modelTrigger && /(^|\\s)video(\\s|$)/i.test(textOf(modelTrigger)));
+                    const videoSelected = videoClicked || selectedViaMarker || selectedViaTrigger;
+
+                    if (!videoSelected) {{
+                        return {{
+                            ok: false,
+                            status: "waiting-for-video-mode",
+                            optionsOpened,
+                            videoItemFound: !!videoItem,
+                            videoClicked,
+                        }};
+                    }}
+
+                    return {{
+                        ok: true,
+                        status: "video-mode-selected",
+                        optionsOpened,
+                        videoItemFound: !!videoItem,
+                        videoClicked,
+                    }};
                 }}
 
                 if (window.__grokManualImageSubmitToken === submitToken) {{
@@ -3608,8 +3669,24 @@ class MainWindow(QMainWindow):
                         )
                     self.manual_image_pick_clicked = True
                     self.manual_image_pick_retry_count = 0
+                    self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     QTimer.singleShot(1000, self._poll_for_manual_image)
+                    return
+
+                if status == "video-mode-selected":
+                    opened = result.get("optionsOpened")
+                    item_found = result.get("videoItemFound")
+                    clicked = result.get("videoClicked")
+                    if not self.manual_image_video_mode_selected:
+                        self._append_log(
+                            f"Variant {current_variant}: switched prompt mode to video "
+                            f"(opened={opened}, itemFound={item_found}, itemClicked={clicked}); refilling prompt."
+                        )
+                    self.manual_image_video_mode_selected = True
+                    self.manual_image_video_mode_retry_count = 0
+                    self.manual_image_submit_retry_count = 0
+                    QTimer.singleShot(700, self._poll_for_manual_image)
                     return
 
                 if status in ("video-submit-clicked", "video-submit-already-clicked"):
@@ -3626,6 +3703,7 @@ class MainWindow(QMainWindow):
                     if not self.manual_image_video_submit_sent:
                         self._append_log(f"Variant {current_variant}: {message}.")
                     self.manual_image_video_submit_sent = True
+                    self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.pending_manual_download_type = "video"
                     self._trigger_browser_video_download(current_variant)
@@ -3649,6 +3727,26 @@ class MainWindow(QMainWindow):
                     f"Variant {current_variant}: generated image not ready for pick+submit yet ({status}); retrying..."
                 )
                 QTimer.singleShot(3000, self._poll_for_manual_image)
+                return
+
+            if not self.manual_image_video_mode_selected:
+                self.manual_image_video_mode_retry_count += 1
+                if self.manual_image_video_mode_retry_count >= self.MANUAL_IMAGE_SUBMIT_RETRY_LIMIT:
+                    self._append_log(
+                        "WARNING: Variant "
+                        f"{current_variant}: video-mode validation stayed in '{status}' for "
+                        f"{self.manual_image_video_mode_retry_count} checks; forcing prompt submit stage."
+                    )
+                    self.manual_image_video_mode_selected = True
+                    self.manual_image_video_mode_retry_count = 0
+                    self.manual_image_submit_retry_count = 0
+                    QTimer.singleShot(800, self._poll_for_manual_image)
+                    return
+
+                self._append_log(
+                    f"Variant {current_variant}: waiting for video mode selection ({status}); retrying..."
+                )
+                QTimer.singleShot(2500, self._poll_for_manual_image)
                 return
 
             self.manual_image_submit_retry_count += 1
@@ -4592,8 +4690,10 @@ class MainWindow(QMainWindow):
                     self.pending_manual_download_type = None
                     self.pending_manual_image_prompt = None
                     self.manual_image_pick_clicked = False
+                    self.manual_image_video_mode_selected = False
                     self.manual_image_video_submit_sent = False
                     self.manual_image_pick_retry_count = 0
+                    self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
                     self.manual_video_start_click_sent = False
@@ -4626,8 +4726,10 @@ class MainWindow(QMainWindow):
                     self.pending_manual_download_type = None
                     self.pending_manual_image_prompt = None
                     self.manual_image_pick_clicked = False
+                    self.manual_image_video_mode_selected = False
                     self.manual_image_video_submit_sent = False
                     self.manual_image_pick_retry_count = 0
+                    self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
                     self.manual_video_start_click_sent = False
@@ -4661,8 +4763,10 @@ class MainWindow(QMainWindow):
                 self.pending_manual_download_type = None
                 self.pending_manual_image_prompt = None
                 self.manual_image_pick_clicked = False
+                self.manual_image_video_mode_selected = False
                 self.manual_image_video_submit_sent = False
                 self.manual_image_pick_retry_count = 0
+                self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
                 self.manual_download_click_sent = False
                 self.manual_video_start_click_sent = False
@@ -4691,8 +4795,10 @@ class MainWindow(QMainWindow):
                 self.pending_manual_download_type = None
                 self.pending_manual_image_prompt = None
                 self.manual_image_pick_clicked = False
+                self.manual_image_video_mode_selected = False
                 self.manual_image_video_submit_sent = False
                 self.manual_image_pick_retry_count = 0
+                self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
                 self.manual_download_click_sent = False
                 self.manual_video_start_click_sent = False
@@ -4720,8 +4826,10 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = None
         self.pending_manual_image_prompt = None
         self.manual_image_pick_clicked = False
+        self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
+        self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
         self.manual_download_click_sent = False
