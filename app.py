@@ -464,6 +464,12 @@ class GenerateWorker(QThread):
     def _openai_bearer_token(self) -> str:
         return self.prompt_config.openai_access_token
 
+    def _openai_video_headers(self) -> dict[str, str]:
+        token = self._openai_bearer_token()
+        if not token:
+            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+        return _openai_headers_from_oauth_token(token)
+
     def call_grok_chat(self, system: str, user: str) -> str:
         headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
         response = requests.post(
@@ -527,6 +533,94 @@ class GenerateWorker(QThread):
         )
         response.raise_for_status()
         return response.json().get("id")
+
+    def _start_openai_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> tuple[str | None, str | None]:
+        self._ensure_not_stopped()
+        headers = self._openai_video_headers()
+        payload = {
+            "model": "sora-2",
+            "prompt": prompt,
+            "size": resolution,
+            "duration": duration_seconds,
+        }
+
+        endpoints = [
+            f"{OPENAI_API_BASE}/videos/generations",
+            f"{OPENAI_API_BASE}/videos",
+        ]
+
+        last_error = ""
+        for endpoint in endpoints:
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+            if response.ok:
+                data = response.json() if response.content else {}
+                job_id = data.get("id") or data.get("job_id")
+                if not job_id and isinstance(data.get("data"), list) and data["data"]:
+                    job_id = data["data"][0].get("id")
+                direct_url = (
+                    data.get("video_url")
+                    or data.get("url")
+                    or (data.get("output") or {}).get("video_url")
+                )
+                return job_id, direct_url
+
+            status = response.status_code
+            if status in {404, 405, 501}:
+                last_error = response.text[:400]
+                continue
+            raise RuntimeError(f"OpenAI Sora request failed: {status} {response.text[:500]}")
+
+        raise RuntimeError(
+            "OpenAI Sora API endpoint not available for this account/base URL. "
+            f"Last error: {last_error or 'none'}"
+        )
+
+    def _poll_openai_video_job(self, job_id: str, timeout_s: int = 900) -> dict:
+        self._ensure_not_stopped()
+        headers = self._openai_video_headers()
+        endpoints = [
+            f"{OPENAI_API_BASE}/videos/generations/{job_id}",
+            f"{OPENAI_API_BASE}/videos/{job_id}",
+        ]
+
+        start = time.time()
+        while time.time() - start < timeout_s:
+            self._ensure_not_stopped()
+            for endpoint in endpoints:
+                response = requests.get(endpoint, headers=headers, timeout=60)
+                if response.status_code in {404, 405, 501}:
+                    continue
+                if not response.ok:
+                    raise RuntimeError(f"OpenAI Sora poll failed: {response.status_code} {response.text[:500]}")
+
+                payload = response.json() if response.content else {}
+                status = str(payload.get("status") or payload.get("state") or "").lower()
+                if status in {"succeeded", "completed", "ready"}:
+                    return payload
+                if status in {"failed", "error", "cancelled", "canceled"}:
+                    error_msg = payload.get("error") or payload.get("last_error") or "Video generation failed"
+                    raise RuntimeError(f"OpenAI Sora generation failed: {error_msg}")
+            time.sleep(5)
+
+        raise TimeoutError("Timed out waiting for OpenAI Sora video generation")
+
+    def _extract_video_url_from_payload(self, payload: dict) -> str:
+        candidates = [
+            payload.get("video_url"),
+            payload.get("url"),
+            (payload.get("output") or {}).get("video_url") if isinstance(payload.get("output"), dict) else None,
+        ]
+        if isinstance(payload.get("data"), list):
+            for item in payload.get("data"):
+                if isinstance(item, dict):
+                    candidates.extend([item.get("video_url"), item.get("url")])
+                    if isinstance(item.get("output"), dict):
+                        candidates.append(item["output"].get("video_url"))
+
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return ""
 
     def _resolution_label_for_value(self, resolution: str) -> str:
         mapping = {
@@ -600,15 +694,37 @@ class GenerateWorker(QThread):
         prompt = self.build_prompt(variant)
 
         selected_duration = int(self.prompt_config.video_duration_seconds)
-        video_job_id, effective_resolution, effective_resolution_label = self._start_video_job_with_resolution_fallback(
-            prompt,
-            selected_duration,
-        )
 
-        result = self.poll_video_job(video_job_id)
-        video_url = result.get("output", {}).get("video_url") or result.get("video_url")
-        if not video_url:
-            raise RuntimeError("No video URL returned")
+        if self.prompt_config.source == "openai":
+            self.status.emit("Starting OpenAI Sora video generation job...")
+            openai_job_id, direct_video_url = self._start_openai_video_job(
+                prompt,
+                self.prompt_config.video_resolution,
+                selected_duration,
+            )
+            if direct_video_url:
+                video_url = direct_video_url
+            elif openai_job_id:
+                result = self._poll_openai_video_job(openai_job_id)
+                video_url = self._extract_video_url_from_payload(result)
+            else:
+                raise RuntimeError("OpenAI Sora did not return a job id or downloadable video URL.")
+
+            if not video_url:
+                raise RuntimeError("OpenAI Sora completed but no downloadable video URL was returned.")
+
+            effective_resolution = self.prompt_config.video_resolution
+            effective_resolution_label = self.prompt_config.video_resolution_label
+        else:
+            video_job_id, effective_resolution, effective_resolution_label = self._start_video_job_with_resolution_fallback(
+                prompt,
+                selected_duration,
+            )
+
+            result = self.poll_video_job(video_job_id)
+            video_url = result.get("output", {}).get("video_url") or result.get("video_url")
+            if not video_url:
+                raise RuntimeError("No video URL returned")
 
         file_path = self.download_video(video_url, f"v{variant}")
         return {
@@ -1089,16 +1205,16 @@ class MainWindow(QMainWindow):
         actions_group = QGroupBox("🚀 Actions")
         actions_layout = QGridLayout(actions_group)
 
-        self.generate_btn = QPushButton("🎬 Generate Video")
-        self.generate_btn.setToolTip("Generate videos from the selected prompt source.")
-        self.generate_btn.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: 700;"
-            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
+        self.populate_video_btn = QPushButton("📝 Populate Video Prompt")
+        self.populate_video_btn.setToolTip("Populate the browser prompt box and generate manually in the current Grok tab.")
+        self.populate_video_btn.setStyleSheet(
+            "background-color: #1e88e5; color: white; font-weight: 700;"
+            "border: 1px solid #1565c0; border-radius: 6px; padding: 8px;"
         )
-        self.generate_btn.clicked.connect(self.start_generation)
-        actions_layout.addWidget(self.generate_btn, 0, 0)
+        self.populate_video_btn.clicked.connect(self.populate_video_prompt)
+        actions_layout.addWidget(self.populate_video_btn, 0, 0)
 
-        self.generate_image_btn = QPushButton("🖼️ Populate Image Prompt in Browser")
+        self.generate_image_btn = QPushButton("🖼️ Populate Image Prompt")
         self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
         self.generate_image_btn.setStyleSheet(
             "background-color: #43a047; color: white; font-weight: 700;"
@@ -1107,6 +1223,15 @@ class MainWindow(QMainWindow):
         self.generate_image_btn.clicked.connect(self.start_image_generation)
         actions_layout.addWidget(self.generate_image_btn, 0, 1)
 
+        self.generate_btn = QPushButton("🎬 API Generate Video")
+        self.generate_btn.setToolTip("Generate and download video via the selected API provider.")
+        self.generate_btn.setStyleSheet(
+            "background-color: #2e7d32; color: white; font-weight: 700;"
+            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
+        )
+        self.generate_btn.clicked.connect(self.start_generation)
+        actions_layout.addWidget(self.generate_btn, 1, 0)
+
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
         self.stop_all_btn.setStyleSheet(
@@ -1114,7 +1239,7 @@ class MainWindow(QMainWindow):
             "border: 1px solid #5c0000; border-radius: 6px; padding: 8px;"
         )
         self.stop_all_btn.clicked.connect(self.stop_all_jobs)
-        actions_layout.addWidget(self.stop_all_btn, 1, 0)
+        actions_layout.addWidget(self.stop_all_btn, 1, 1)
 
         self.continue_frame_btn = QPushButton("🟨 Continue from Last Frame (paste + generate)")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
@@ -2552,7 +2677,11 @@ class MainWindow(QMainWindow):
             return
 
         if source == "manual":
-            self._start_manual_browser_generation(manual_prompt, self.count.value())
+            QMessageBox.information(
+                self,
+                "API Mode Required",
+                "Select Grok API or OpenAI API in Prompt Source, then click API Generate Video."
+            )
             return
 
         config = GrokConfig(
@@ -3038,6 +3167,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "AI Response Error", "AI response was not valid JSON. Please retry.")
         except Exception as exc:
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
+
+    def populate_video_prompt(self) -> None:
+        self.stop_all_requested = False
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            return
+        self._start_manual_browser_generation(manual_prompt, self.count.value())
 
     def start_image_generation(self) -> None:
         self.stop_all_requested = False
@@ -5156,9 +5293,10 @@ class MainWindow(QMainWindow):
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
-        self.generate_btn.setText("📝 Populate Video Prompt" if is_manual else "🎬 Generate Video")
+        self.generate_btn.setText("🎬 API Generate Video")
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
         self.generate_image_btn.setEnabled(True)
+        self.populate_video_btn.setEnabled(True)
 
     def _resolve_download_extension(self, download, download_type: str) -> str:
         suggested = ""
