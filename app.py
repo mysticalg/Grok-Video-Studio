@@ -2497,11 +2497,13 @@ class MainWindow(QMainWindow):
         source = self.prompt_source.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
 
-        if source != "manual":
+        if source == "grok":
             api_key = self.api_key.text().strip()
             if not api_key:
                 QMessageBox.warning(self, "Missing API Key", "Please enter a Grok API key.")
                 return
+        else:
+            api_key = self.api_key.text().strip()
 
         if source != "manual" and not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
