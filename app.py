@@ -1269,7 +1269,6 @@ class MainWindow(QMainWindow):
         actions_layout.setVerticalSpacing(6)
         actions_layout.setColumnStretch(0, 1)
         actions_layout.setColumnStretch(1, 1)
-        actions_layout.setColumnStretch(2, 1)
 
         self.generate_btn = QPushButton("📝 Manual Generate Video")
         self.generate_btn.setToolTip("Generate a video in the embedded browser using the Manual Prompt.")
@@ -1299,7 +1298,7 @@ class MainWindow(QMainWindow):
         )
         self.generate_image_btn.setMinimumHeight(32)
         self.generate_image_btn.clicked.connect(self.start_image_generation)
-        actions_layout.addWidget(self.generate_image_btn, 0, 2)
+        actions_layout.addWidget(self.generate_image_btn, 1, 1)
 
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
