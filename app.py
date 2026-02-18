@@ -6440,8 +6440,11 @@ class MainWindow(QMainWindow):
             safe_stem = re.sub(r"[_]+", "", safe_stem)
             safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" .")
             safe_stem = safe_stem.title()
-            if hashtag_tokens:
-                safe_stem = f"{safe_stem} {' '.join(hashtag_tokens)}".strip()
+            hashtags_suffix = re.sub(r"\s+", " ", " ".join(hashtag_tokens)).strip()
+            if hashtags_suffix:
+                max_base_len = max(0, 80 - len(hashtags_suffix) - 1)
+                safe_stem = safe_stem[:max_base_len].strip()
+                safe_stem = f"{safe_stem} {hashtags_suffix}".strip()
             safe_stem = safe_stem[:80]
             suffix = video_file.suffix if video_file.suffix else ".mp4"
             upload_filename = f"{safe_stem or 'upload'}{suffix}"
