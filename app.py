@@ -6424,15 +6424,22 @@ class MainWindow(QMainWindow):
             except Exception:
                 encoded_video = ""
 
+        raw_caption = str(caption or "").strip()
+        upload_filename = video_file.name or "upload.mp4"
+        if platform_name == "TikTok" and raw_caption:
+            safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_caption).strip("._-")[:80]
+            suffix = video_file.suffix if video_file.suffix else ".mp4"
+            upload_filename = f"{safe_stem or 'upload'}{suffix}"
+
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
             "video_path": str(video_path),
-            "caption": str(caption or ""),
+            "caption": raw_caption,
             "title": str(title or ""),
             "attempts": 0,
             "allow_file_dialog": True,
             "video_base64": encoded_video,
-            "video_name": video_file.name or "upload.mp4",
+            "video_name": upload_filename,
             "video_mime": "video/mp4",
         }
         self._append_log(
@@ -6608,7 +6615,7 @@ class MainWindow(QMainWindow):
                     const videoName = String(payload.video_name || "upload.mp4");
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
-                    const captionText = String(payload.caption || "").trim();
+                    const captionText = platform === "tiktok" ? "" : String(payload.caption || "").trim();
                     const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
@@ -7076,6 +7083,15 @@ class MainWindow(QMainWindow):
                             tiktokState.uploadReadyAtMs
                             && (Date.now() - Number(tiktokState.uploadReadyAtMs)) >= 1200
                         );
+
+                        if (tiktokUploadComplete && tiktokPostEnabled && actionSpacingElapsed && !tiktokState.postClickAttempted) {
+                            const clicked = clickNodeOrAncestor(tiktokPostButton);
+                            if (clicked) {
+                                submitClicked = true;
+                                tiktokState.postClickAttempted = true;
+                                tiktokState.lastActionAtMs = Date.now();
+                            }
+                        }
                     }
 
                     return {
@@ -7140,9 +7156,9 @@ class MainWindow(QMainWindow):
             is_facebook = platform_name == "Facebook"
             is_instagram = platform_name == "Instagram"
             caption_ok = (text_filled or not caption_queued) if not is_tiktok else True
-            submit_ok = submit_clicked if (is_facebook or is_instagram) else True
+            submit_ok = submit_clicked if (is_facebook or is_instagram or is_tiktok) else True
             completion_attempt_ready = (
-                tiktok_upload_complete
+                (tiktok_upload_complete and submit_ok)
                 if is_tiktok
                 else (submit_ok if (is_facebook or is_instagram) else (attempts >= 2))
             )
@@ -7151,14 +7167,14 @@ class MainWindow(QMainWindow):
                     "Status: post submitted."
                     if (is_facebook or is_instagram)
                     else (
-                        "Status: upload complete. Continue in TikTok tab for final publish."
+                        "Status: post submitted."
                         if is_tiktok
                         else "Status: staged. Confirm/finalize post in this tab if needed."
                     )
                 )
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram) else ('reached upload-complete state' if is_tiktok else 'staged successfully')} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram or is_tiktok) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
