@@ -383,6 +383,9 @@ def _configure_qtwebengine_runtime() -> None:
         "--disable-renderer-backgrounding",
         "--autoplay-policy=no-user-gesture-required",
         "--disable-webrtc",
+        "--disable-logging",
+        "--log-level=3",
+        "--v=0",
         f"--media-cache-size={_env_int('GROK_BROWSER_MEDIA_CACHE_BYTES', 268435456)}",
         f"--disk-cache-size={_env_int('GROK_BROWSER_DISK_CACHE_BYTES', 536870912)}",
     ]
@@ -999,6 +1002,13 @@ class FilteredWebEnginePage(QWebEnginePage):
         "Failed to fetch panel tt_web_creation_text_font",
         "TypeError: Failed to fetch",
         "[DEPRECATED] Default export is deprecated. Instead use `import { create } from 'zustand'`.",
+        "ErrorUtils caught an error:",
+        "Subsequent non-fatal errors won't be logged; see https://fburl.com/debugjs.",
+        "Required template parameter is an empty string: bucket_id",
+        "MEDIA_ERR_SRC_NOT_SUPPORTED/URL_RESPONSE_HTTP_200",
+        "Please wait a few minutes before you try again.",
+        "[i18n] missing key en WebApp_Login",
+        "Uncaught (in promise) NotSupportedError: Failed to load because no supported source was found.",
         "[Statsig] A networking error occurred during POST request",
         "featureassets.org/v1/initialize",
         "auth-cdn.oaistatic.com/assets/statsig",
@@ -1504,10 +1514,13 @@ class MainWindow(QMainWindow):
         self.browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.browser))
         browser_profile = self.browser_profile
         if QTWEBENGINE_USE_DISK_CACHE:
-            (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
-            (CACHE_DIR / "cache").mkdir(parents=True, exist_ok=True)
-            browser_profile.setPersistentStoragePath(str(CACHE_DIR / "profile"))
-            browser_profile.setCachePath(str(CACHE_DIR / "cache"))
+            runtime_suffix = f"runtime_{os.getpid()}"
+            profile_dir = CACHE_DIR / "profile" / runtime_suffix
+            cache_dir = CACHE_DIR / "cache" / runtime_suffix
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            browser_profile.setPersistentStoragePath(str(profile_dir))
+            browser_profile.setCachePath(str(cache_dir))
             browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
             browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
