@@ -70,7 +70,10 @@ API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
 OPENAI_CODEX_CLIENT_ID = os.getenv("OPENAI_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
-OPENAI_OAUTH_SCOPE = "openid profile email offline_access"
+OPENAI_OAUTH_SCOPE = os.getenv(
+    "OPENAI_OAUTH_SCOPE",
+    "openid profile email offline_access api.read api.write api.videos.write",
+)
 OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455"))
 OPENAI_TOKEN_PATHS = ("/token", "/oauth/token")
 OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.com/backend-api/codex")

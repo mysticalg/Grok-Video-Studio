@@ -82,6 +82,7 @@ python app.py
 - `OPENAI_OAUTH_ISSUER` (default: `https://auth.openai.com`)
 - `OPENAI_CODEX_CLIENT_ID` (default: `app_EMoamEEZ73f0CkXaXp7hrann`)
 - `OPENAI_OAUTH_CALLBACK_PORT` (default: `1455`)
+- `OPENAI_OAUTH_SCOPE` (default: `openid profile email offline_access api.read api.write api.videos.write`)
 - `OPENAI_CHATGPT_API_BASE` (default: `https://chatgpt.com/backend-api/codex`)
 - `OPENAI_USE_CHATGPT_BACKEND` (default: `1`; routes `auth.openai.com` OAuth tokens to ChatGPT Codex backend)
 - `TIKTOK_ACCESS_TOKEN` (optional; can also be set in-app)
@@ -112,6 +113,7 @@ For OpenAI prompt generation, the app now uses OAuth access tokens.
 
 In **Model/API Settings**, set Prompt Source to **OpenAI API**, then run Browser Authorization (or paste an access token).
 Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex-style) in your system browser. On success, the app auto-fills **OpenAI Access Token**.
+If you see `Missing scopes: api.videos.write` while generating video, re-authorize so the token includes video scopes (or override `OPENAI_OAUTH_SCOPE` with the required scopes before authorization).
 The token exchange now tries both `https://auth.openai.com/token` and `https://auth.openai.com/oauth/token` so either issuer route works.
 When available in OAuth token claims, requests also include `OpenAI-Organization` and `OpenAI-Project` headers (in addition to `Authorization` and `Content-Type`).
 With ChatGPT/Codex OAuth login, the app prefers the ChatGPT Codex backend so usage follows subscription-authenticated behavior rather than API-key-only billing paths.
