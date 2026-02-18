@@ -6931,54 +6931,94 @@ class MainWindow(QMainWindow):
                             const setTikTokCaption = (editableNode, spanNode, value) => {
                                 if (!editableNode) return false;
                                 const nextText = String(value || "");
-                                try {
-                                    editableNode.focus();
-                                } catch (_) {}
+                                const encodedCaption = btoa(unescape(encodeURIComponent(nextText)));
+                                const decodedCaption = (() => {
+                                    try {
+                                        return decodeURIComponent(escape(atob(encodedCaption)));
+                                    } catch (_) {
+                                        return nextText;
+                                    }
+                                })();
 
-                                try {
-                                    const selection = window.getSelection();
-                                    if (selection && typeof selection.removeAllRanges === "function") {
-                                        const range = document.createRange();
-                                        range.selectNodeContents(editableNode);
-                                        selection.removeAllRanges();
-                                        selection.addRange(range);
-
-                                        try {
+                                const replaceEditableSelection = (textValue) => {
+                                    try {
+                                        const selection = window.getSelection();
+                                        if (selection && typeof selection.removeAllRanges === "function") {
+                                            const range = document.createRange();
+                                            range.selectNodeContents(editableNode);
+                                            selection.removeAllRanges();
+                                            selection.addRange(range);
                                             range.deleteContents();
-                                            const textNode = document.createTextNode(nextText);
+                                            const textNode = document.createTextNode(textValue);
                                             range.insertNode(textNode);
                                             range.setStartAfter(textNode);
                                             range.collapse(true);
                                             selection.removeAllRanges();
                                             selection.addRange(range);
-                                        } catch (_) {}
+                                            return true;
+                                        }
+                                    } catch (_) {}
+                                    return false;
+                                };
+
+                                const dispatchPasteLikeWindows = (textValue) => {
+                                    const eventOptions = { bubbles: true, composed: true, cancelable: true };
+                                    let pasteDispatched = false;
+                                    try {
+                                        const clipboardData = new DataTransfer();
+                                        clipboardData.setData("text/plain", textValue);
+                                        clipboardData.setData("text/html", textValue.replace(/\n/g, "<br>"));
+                                        const pasteEvent = new ClipboardEvent("paste", { ...eventOptions, clipboardData });
+                                        pasteDispatched = editableNode.dispatchEvent(pasteEvent) || pasteDispatched;
+                                    } catch (_) {}
+                                    try {
+                                        editableNode.dispatchEvent(new InputEvent("beforeinput", { ...eventOptions, data: textValue, inputType: "insertFromPaste" }));
+                                        pasteDispatched = true;
+                                    } catch (_) {}
+                                    try {
+                                        editableNode.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: textValue, inputType: "insertFromPaste" }));
+                                        pasteDispatched = true;
+                                    } catch (_) {
+                                        try { editableNode.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
                                     }
+                                    return pasteDispatched;
+                                };
+
+                                try {
+                                    editableNode.focus();
                                 } catch (_) {}
+
+                                const pasteAttempted = dispatchPasteLikeWindows(decodedCaption);
+                                const pastedTextMatches = normalizedNodeText(editableNode) === norm(decodedCaption);
+
+                                if (!pastedTextMatches || !pasteAttempted) {
+                                    replaceEditableSelection(decodedCaption);
+                                }
 
                                 let wroteText = false;
                                 try {
-                                    editableNode.textContent = nextText;
-                                    wroteText = normalizedNodeText(editableNode) === norm(nextText);
+                                    editableNode.textContent = decodedCaption;
+                                    wroteText = normalizedNodeText(editableNode) === norm(decodedCaption);
                                 } catch (_) {}
 
                                 if (spanNode) {
-                                    try { spanNode.textContent = nextText; } catch (_) {}
+                                    try { spanNode.textContent = decodedCaption; } catch (_) {}
                                 }
 
                                 const eventOptions = { bubbles: true, composed: true };
                                 try {
-                                    editableNode.dispatchEvent(new InputEvent("beforeinput", { ...eventOptions, data: nextText, inputType: "insertText" }));
+                                    editableNode.dispatchEvent(new InputEvent("beforeinput", { ...eventOptions, data: decodedCaption, inputType: "insertFromPaste" }));
                                 } catch (_) {}
                                 try {
-                                    editableNode.dispatchEvent(new InputEvent("input", { ...eventOptions, data: nextText, inputType: "insertText" }));
+                                    editableNode.dispatchEvent(new InputEvent("input", { ...eventOptions, data: decodedCaption, inputType: "insertFromPaste" }));
                                 } catch (_) {
                                     try { editableNode.dispatchEvent(new Event("input", eventOptions)); } catch (_) {}
                                 }
-                                try { editableNode.dispatchEvent(new KeyboardEvent("keyup", { key: " ", bubbles: true })); } catch (_) {}
+                                try { editableNode.dispatchEvent(new KeyboardEvent("keyup", { key: "v", ctrlKey: true, bubbles: true })); } catch (_) {}
                                 try { editableNode.dispatchEvent(new Event("change", eventOptions)); } catch (_) {}
                                 try { editableNode.dispatchEvent(new Event("blur", eventOptions)); } catch (_) {}
 
-                                return wroteText || normalizedNodeText(editableNode) === norm(nextText);
+                                return wroteText || normalizedNodeText(editableNode) === norm(decodedCaption);
                             };
 
                             const captionAlreadyPresent = draftEditable
