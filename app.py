@@ -6967,7 +6967,7 @@ class MainWindow(QMainWindow):
                                     try {
                                         const clipboardData = new DataTransfer();
                                         clipboardData.setData("text/plain", textValue);
-                                        clipboardData.setData("text/html", textValue.replace(/\n/g, "<br>"));
+                                        clipboardData.setData("text/html", textValue.replace(/\\n/g, "<br>"));
                                         const pasteEvent = new ClipboardEvent("paste", { ...eventOptions, clipboardData });
                                         pasteDispatched = editableNode.dispatchEvent(pasteEvent) || pasteDispatched;
                                     } catch (_) {}
