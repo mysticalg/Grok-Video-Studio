@@ -7033,10 +7033,6 @@ class MainWindow(QMainWindow):
                         }
 
                         captionReady = !captionText || textFilled;
-                        const tiktokSubmitDelayElapsed = !captionText
-                            || Boolean(tiktokState.captionSetAtMs && (Date.now() - Number(tiktokState.captionSetAtMs)) >= 1200);
-                        const tiktokSubmitSpacingElapsed = !tiktokState.lastSubmitAttemptAtMs
-                            || (Date.now() - Number(tiktokState.lastSubmitAttemptAtMs)) >= 1500;
 
                         const tiktokPostButton = bySelectors([
                             'button[data-e2e="save_draft_button"]',
@@ -7047,16 +7043,39 @@ class MainWindow(QMainWindow):
                             const dataDisabled = String(tiktokPostButton.getAttribute("data-disabled") || "").toLowerCase();
                             const nativeDisabled = Boolean(tiktokPostButton.disabled);
                             tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
-                            if (captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed) {
-                                submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
-                                if (submitClicked) {
-                                    const clickedAtMs = Date.now();
-                                    tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
-                                    tiktokState.lastActionAtMs = clickedAtMs;
-                                }
-                            }
-                            tiktokUploadComplete = tiktokPostEnabled;
                         }
+
+                        const tiktokCaptionEditorReady = Boolean(
+                            bySelectors([
+                                'div.DraftEditor-editorContainer [contenteditable="true"]',
+                                'div[role="textbox"][contenteditable="true"]',
+                                'textarea[maxlength="4000"]',
+                            ])
+                        );
+                        const tiktokUploadedLabel = Boolean(
+                            findClickableByHints(["uploaded", "upload complete"], { contexts: [document], excludeHints: ["uploading"] })
+                        );
+                        const tiktokProgressVisible = Boolean(
+                            bySelectors([
+                                '[aria-label*="uploading" i]',
+                                '[class*="progress" i]',
+                                'progress',
+                            ])
+                        );
+                        const tiktokUploadReadyAtMs = tiktokState.uploadReadyAtMs
+                            ? Number(tiktokState.uploadReadyAtMs)
+                            : 0;
+                        if (fileReadySignal && (tiktokPostEnabled || tiktokCaptionEditorReady || tiktokUploadedLabel) && !tiktokProgressVisible) {
+                            if (!tiktokUploadReadyAtMs) {
+                                tiktokState.uploadReadyAtMs = Date.now();
+                            }
+                        } else {
+                            tiktokState.uploadReadyAtMs = 0;
+                        }
+                        tiktokUploadComplete = Boolean(
+                            tiktokState.uploadReadyAtMs
+                            && (Date.now() - Number(tiktokState.uploadReadyAtMs)) >= 1200
+                        );
                     }
 
                     return {
@@ -7120,7 +7139,7 @@ class MainWindow(QMainWindow):
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists) or tiktok_upload_assumed
             is_facebook = platform_name == "Facebook"
             is_instagram = platform_name == "Instagram"
-            caption_ok = text_filled or not caption_queued
+            caption_ok = (text_filled or not caption_queued) if not is_tiktok else True
             submit_ok = submit_clicked if (is_facebook or is_instagram) else True
             completion_attempt_ready = (
                 tiktok_upload_complete
