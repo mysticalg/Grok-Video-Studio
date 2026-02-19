@@ -4891,6 +4891,19 @@ class MainWindow(QMainWindow):
                 def _queue_pick_retry(current_status: str) -> None:
                     self.manual_image_pick_retry_count += 1
                     if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
+                        if current_status == "callback-empty":
+                            self._append_log(
+                                "WARNING: Variant "
+                                f"{current_variant}: image pick stayed callback-empty for "
+                                f"{self.manual_image_pick_retry_count} checks; assuming pick stage already completed and advancing."
+                            )
+                            self.manual_image_pick_clicked = True
+                            self.manual_image_video_mode_selected = True
+                            self.manual_image_pick_retry_count = 0
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            return
                         self._append_log(
                             "WARNING: Variant "
                             f"{current_variant}: image pick validation stayed in '{current_status}' for "
