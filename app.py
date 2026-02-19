@@ -448,6 +448,8 @@ class PromptConfig:
 @dataclass
 class AISocialMetadata:
     title: str
+    medium_title: str
+    tiktok_subheading: str
     description: str
     hashtags: list[str]
     category: str
@@ -1516,6 +1518,8 @@ class MainWindow(QMainWindow):
         self.custom_music_file: Path | None = None
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
+            medium_title="AI Generated Video Clip",
+            tiktok_subheading="Swipe for more AI visuals.",
             description="",
             hashtags=["grok", "ai", "generated-video"],
             category="22",
@@ -2977,6 +2981,8 @@ class MainWindow(QMainWindow):
             "training_process_path": self.training_process_path.text(),
             "ai_social_metadata": {
                 "title": self.ai_social_metadata.title,
+                "medium_title": self.ai_social_metadata.medium_title,
+                "tiktok_subheading": self.ai_social_metadata.tiktok_subheading,
                 "description": self.ai_social_metadata.description,
                 "hashtags": self.ai_social_metadata.hashtags,
                 "category": self.ai_social_metadata.category,
@@ -3059,6 +3065,8 @@ class MainWindow(QMainWindow):
             hashtags = metadata.get("hashtags", self.ai_social_metadata.hashtags)
             self.ai_social_metadata = AISocialMetadata(
                 title=str(metadata.get("title", self.ai_social_metadata.title)),
+                medium_title=str(metadata.get("medium_title", self.ai_social_metadata.medium_title)),
+                tiktok_subheading=str(metadata.get("tiktok_subheading", self.ai_social_metadata.tiktok_subheading)),
                 description=str(metadata.get("description", self.ai_social_metadata.description)),
                 hashtags=[str(tag).strip().lstrip("#") for tag in hashtags if str(tag).strip()],
                 category=str(metadata.get("category", self.ai_social_metadata.category)),
@@ -4078,9 +4086,11 @@ class MainWindow(QMainWindow):
             instruction = concept + " please turn this into a detailed 10 second prompt for grok imagine"
             system = "You are an expert prompt and social metadata generator for short-form AI videos. Return strict JSON only."
             user = (
-                "Generate JSON with keys: manual_prompt, title, description, hashtags, category. "
+                "Generate JSON with keys: manual_prompt, title, medium_title, tiktok_subheading, description, hashtags, category. "
                 "manual_prompt should be detailed and cinematic for a 10-second Grok Imagine clip. "
                 "title should be short and catchy. description should be 1-3 sentences. "
+                "medium_title should be a medium-length title fit for social display. "
+                "tiktok_subheading should be a slogan/subheading near 120 characters (roughly 100-140). "
                 "hashtags should be an array of 5-12 hashtag strings without # prefixes. "
                 "category should be the best YouTube category id as a string (default 22 if unsure). "
                 f"Concept instruction: {instruction}"
@@ -4095,6 +4105,8 @@ class MainWindow(QMainWindow):
             cleaned_hashtags = [str(tag).strip().lstrip("#") for tag in hashtags if str(tag).strip()]
             self.ai_social_metadata = AISocialMetadata(
                 title=str(parsed.get("title", "AI Generated Video")).strip() or "AI Generated Video",
+                medium_title=str(parsed.get("medium_title", parsed.get("title", "AI Generated Video Clip"))).strip() or "AI Generated Video Clip",
+                tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")).strip() or "Swipe for more AI visuals.",
                 description=str(parsed.get("description", "")).strip(),
                 hashtags=cleaned_hashtags or ["grok", "ai", "generated-video"],
                 category=str(parsed.get("category", "22")).strip() or "22",
@@ -7483,8 +7495,9 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
-        filename_title = title.strip() or caption.strip()
-        renamed_video_path = self._stage_tiktok_browser_video(video_path, filename_title)
+        filename_title = title.strip() or self.ai_social_metadata.medium_title.strip() or caption.strip()
+        filename_slogan = self.ai_social_metadata.tiktok_subheading.strip()
+        renamed_video_path = self._stage_tiktok_browser_video(video_path, filename_title, filename_slogan, hashtags)
 
         self._start_social_browser_upload(
             platform_name="TikTok",
@@ -8518,21 +8531,40 @@ class MainWindow(QMainWindow):
         combined = f"{base_text.strip()}\n\n{tag_text}" if base_text.strip() else tag_text
         return combined.strip()
 
-    def _stage_tiktok_browser_video(self, source_video_path: str, title_text: str) -> str:
+    def _build_tiktok_filename_stem(self, title_text: str, slogan_text: str, hashtags: list[str], max_length: int) -> str:
+        safe_title = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(title_text or "")).strip()
+        safe_slogan = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(slogan_text or "")).strip()
+        safe_title = re.sub(r"\s+", " ", safe_title).strip(" .")
+        safe_slogan = re.sub(r"\s+", " ", safe_slogan).strip(" .")
+        normalized_tags = [f"#{str(tag).strip().lstrip('#')}" for tag in hashtags if str(tag).strip()]
+
+        parts = [part for part in [safe_title, safe_slogan] if part]
+        base = " - ".join(parts).strip()
+        if not base:
+            base = "Tiktok Upload"
+
+        candidate_tags = normalized_tags.copy()
+        if candidate_tags:
+            stem = f"{base} {' '.join(candidate_tags)}".strip()
+        else:
+            stem = base
+
+        while len(stem) > max_length and candidate_tags:
+            candidate_tags.pop()
+            stem = f"{base} {' '.join(candidate_tags)}".strip()
+
+        if len(stem) > max_length:
+            stem = stem[:max_length].rstrip(" .")
+        return stem or "Tiktok Upload"
+
+    def _stage_tiktok_browser_video(self, source_video_path: str, title_text: str, slogan_text: str, hashtags: list[str]) -> str:
         source_path = Path(str(source_video_path)).expanduser()
         if not source_path.exists() or not source_path.is_file():
             raise ValueError("TikTok upload video path is invalid.")
 
-        safe_stem = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(title_text or "")).strip()
-        safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" .")
-        if safe_stem:
-            safe_stem = safe_stem.title()
-        if not safe_stem:
-            safe_stem = source_path.stem.title()
-        # TikTok browser upload filename should be concise and filesystem-safe.
-        max_stem_length = 255
-        safe_stem = safe_stem[:max_stem_length].strip() or source_path.stem.title()
         extension = source_path.suffix or ".mp4"
+        max_stem_length = max(1, 255 - len(extension))
+        safe_stem = self._build_tiktok_filename_stem(title_text, slogan_text, hashtags, max_stem_length)
         staged_path = source_path.with_name(f"{safe_stem}{extension}")
         if staged_path == source_path:
             self._append_log(f"TikTok: using existing filename for browser upload: {source_path.name}")
