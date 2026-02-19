@@ -7910,10 +7910,26 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     if (platform === "instagram") {
+                        const pathHint = norm(String(window.location && window.location.pathname || ""));
+                        const onReelCreatePage = pathHint.includes("/reels/create") || pathHint.includes("/create/reel");
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
                             instagramState.dialogSeen = true;
                             instagramState.postClicked = true;
+                            instagramState.createClicked = true;
+                        } else if (onReelCreatePage) {
+                            instagramState.createClicked = true;
+                            const reelStartButton = findClickableByHints([
+                                "select from computer",
+                                "choose files",
+                                "choose file",
+                                "add video",
+                                "upload",
+                            ]);
+                            if (reelStartButton) {
+                                const clicked = clickNodeOrAncestor(reelStartButton);
+                                openUploadClicked = clicked || openUploadClicked;
+                            }
                         } else {
                             const dispatchHover = (node) => {
                                 if (!node) return;
@@ -7946,7 +7962,11 @@ class MainWindow(QMainWindow):
                                     ...collectDeep('div[role="menu"]'),
                                     ...collectDeep('div[role="dialog"]:not([aria-label*="create new post" i])'),
                                 ];
+                                const preferVideoFlow = videoMime.includes("video") || requestedVideoPath.endsWith(".mp4") || requestedVideoPath.endsWith(".mov");
                                 const postButton =
+                                    (preferVideoFlow
+                                        ? findClickableByHints(["reel"], { contexts: menuContexts, excludeHints: ["story", "live"] })
+                                        : null) ||
                                     findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel", "story", "live"] }) ||
                                     pick(menuContexts.flatMap((ctx) => {
                                         try {
@@ -8053,6 +8073,11 @@ class MainWindow(QMainWindow):
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
                         if (platform === "instagram") {
+                            const byInstagramVideoAccept = fileInputs.find((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*") || accept.includes("video");
+                            });
+                            if (byInstagramVideoAccept) return byInstagramVideoAccept;
                             const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                             if (instagramDialog) {
                                 const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data" i][method="post" i][role="presentation"] input[type="file"], input[type="file"]'));
