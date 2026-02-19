@@ -7739,7 +7739,7 @@ class MainWindow(QMainWindow):
         attempts = int(pending["attempts"])
 
         if platform_name == "Instagram":
-            max_attempts = 6
+            max_attempts = 10
         elif platform_name == "TikTok":
             max_attempts = 12
         elif platform_name == "Facebook":
@@ -7766,6 +7766,7 @@ class MainWindow(QMainWindow):
                 "video_name": str(pending.get("video_name") or "upload.mp4"),
                 "video_mime": str(pending.get("video_mime") or "video/mp4"),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
+                "attempt": attempts,
             },
             ensure_ascii=True,
         )
@@ -7776,6 +7777,8 @@ class MainWindow(QMainWindow):
                     const payload = JSON.parse(atob("__PAYLOAD_B64__"));
                     const norm = (s) => String(s || "").toLowerCase();
                     const platform = norm(payload.platform);
+                    const attemptNo = Number(payload.attempt || 1);
+                    const pageReady = document.readyState === "interactive" || document.readyState === "complete";
                     const pick = (arr) => arr.find(Boolean) || null;
                     const collectDeep = (selector) => {
                         const results = [];
@@ -7910,6 +7913,26 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     if (platform === "instagram") {
+                        if (!pageReady && attemptNo <= 3) {
+                            return {
+                                fileInputFound: false,
+                                fileDialogTriggered: false,
+                                openUploadClicked: false,
+                                fileReadySignal: false,
+                                textFilled: false,
+                                captionReady: false,
+                                facebookSubmitDelayElapsed: true,
+                                nextClicked: false,
+                                submitClicked: false,
+                                tiktokPostEnabled: false,
+                                tiktokSubmitClickedEver: false,
+                                videoPathQueued: Boolean(requestedVideoPath),
+                                requestedVideoPath,
+                                allowFileDialog,
+                                waitingForLoad: true,
+                                pageReady,
+                            };
+                        }
                         const pathHint = norm(String(window.location && window.location.pathname || ""));
                         const onReelCreatePage = pathHint.includes("/reels/create") || pathHint.includes("/create/reel");
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
@@ -8420,6 +8443,8 @@ class MainWindow(QMainWindow):
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
+                        waitingForLoad: false,
+                        pageReady,
                     };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
@@ -8446,6 +8471,8 @@ class MainWindow(QMainWindow):
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostEnabled"))
             tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
+            waiting_for_load = bool(isinstance(result, dict) and result.get("waitingForLoad"))
+            page_ready = bool(isinstance(result, dict) and result.get("pageReady"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -8462,9 +8489,13 @@ class MainWindow(QMainWindow):
                 and "tab=draft" in current_url.lower()
             )
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} page_ready={page_ready} waiting_for_load={waiting_for_load} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
             pending["allow_file_dialog"] = False
+            if waiting_for_load:
+                status_label.setText(f"Status: attempt {attempts} waiting for page to finish loading...")
+                timer.start(1700)
+                return
 
             is_tiktok = platform_name == "TikTok"
             tiktok_upload_assumed = is_tiktok and attempts >= 3
