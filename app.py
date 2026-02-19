@@ -7779,6 +7779,8 @@ class MainWindow(QMainWindow):
                     const platform = norm(payload.platform);
                     const attemptNo = Number(payload.attempt || 1);
                     const pageReady = document.readyState === "interactive" || document.readyState === "complete";
+                    const hostHint = norm(String(window.location && window.location.hostname || ""));
+                    const pathHintRaw = norm(String(window.location && window.location.pathname || ""));
                     const pick = (arr) => arr.find(Boolean) || null;
                     const collectDeep = (selector) => {
                         const results = [];
@@ -7913,7 +7915,28 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     if (platform === "instagram") {
-                        const pathHint = norm(String(window.location && window.location.pathname || ""));
+                        const pathHint = pathHintRaw;
+                        if (!hostHint.includes("instagram.com") || pathHint.includes("/accounts/login")) {
+                            return {
+                                fileInputFound: false,
+                                fileDialogTriggered: false,
+                                openUploadClicked: false,
+                                fileReadySignal: false,
+                                textFilled: false,
+                                captionReady: false,
+                                facebookSubmitDelayElapsed: true,
+                                nextClicked: false,
+                                submitClicked: false,
+                                tiktokPostEnabled: false,
+                                tiktokSubmitClickedEver: false,
+                                videoPathQueued: Boolean(requestedVideoPath),
+                                requestedVideoPath,
+                                allowFileDialog,
+                                waitingForLoad: true,
+                                pageReady,
+                            };
+                        }
+
                         const onReelCreatePage = pathHint.includes("/reels/create") || pathHint.includes("/create/reel");
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
@@ -7938,57 +7961,56 @@ class MainWindow(QMainWindow):
                                 }
                             }
                             if (!clickedReelEntry) {
-                            const dispatchHover = (node) => {
-                                if (!node) return;
-                                const events = ["pointerenter", "mouseenter", "mouseover", "pointerover"];
-                                for (const eventName of events) {
-                                    try {
-                                        node.dispatchEvent(new MouseEvent(eventName, { bubbles: true, cancelable: true, composed: true }));
-                                    } catch (_) {}
-                                }
-                            };
-                            if (!instagramState.createClicked) {
-                                const createButton =
-                                    findClickableByHints(["create"]) ||
-                                    pick(collectDeep('a[href="#"][role="link"], div[role="button"], button').filter((node) => {
+                                const dispatchHover = (node) => {
+                                    if (!node) return;
+                                    const events = ["pointerenter", "mouseenter", "mouseover", "pointerover"];
+                                    for (const eventName of events) {
+                                        try {
+                                            node.dispatchEvent(new MouseEvent(eventName, { bubbles: true, cancelable: true, composed: true }));
+                                        } catch (_) {}
+                                    }
+                                };
+                                if (!instagramState.createClicked) {
+                                    const navRoot = bySelectors(['nav[role="navigation"]']) || document;
+                                    const createButton = pick(Array.from(navRoot.querySelectorAll('a[role="link"], div[role="button"], button')).filter((node) => {
                                         const text = normalizedNodeText(node);
                                         const aria = norm(node.getAttribute("aria-label"));
-                                        return text.includes("create") || aria.includes("new post") || aria.includes("create");
-                                    })) ||
-                                    pick(collectDeep('svg[aria-label="New post" i], svg[aria-label*="new post" i]'));
-                                if (createButton) {
-                                    dispatchHover(createButton);
-                                    const clicked = clickNodeOrAncestor(createButton);
-                                    openUploadClicked = clicked || openUploadClicked;
-                                    if (clicked) instagramState.createClicked = true;
-                                }
-                            }
-
-                            if (instagramState.createClicked && !instagramState.postClicked) {
-                                const menuContexts = [
-                                    ...collectDeep('div[role="menu"]'),
-                                    ...collectDeep('div[role="dialog"]:not([aria-label*="create new post" i])'),
-                                ];
-                                const preferVideoFlow = videoMime.includes("video") || requestedVideoPath.endsWith(".mp4") || requestedVideoPath.endsWith(".mov");
-                                const postButton =
-                                    (preferVideoFlow
-                                        ? findClickableByHints(["reel"], { contexts: menuContexts, excludeHints: ["story", "live"] })
-                                        : null) ||
-                                    findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel", "story", "live"] }) ||
-                                    pick(menuContexts.flatMap((ctx) => {
-                                        try {
-                                            return Array.from(ctx.querySelectorAll('a[role="link"], div[role="button"], button, span, div'));
-                                        } catch (_) {
-                                            return [];
-                                        }
-                                    }).filter((node) => {
-                                        const text = normalizedNodeText(node);
-                                        return text.includes("post") && !text.includes("reel") && !text.includes("story") && !text.includes("live");
+                                        return text.includes("create") || aria.includes("new post") || aria === "create";
                                     }));
-                                if (postButton) {
-                                    const clicked = clickNodeOrAncestor(postButton);
-                                    openUploadClicked = clicked || openUploadClicked;
-                                    if (clicked) instagramState.postClicked = true;
+                                    if (createButton) {
+                                        dispatchHover(createButton);
+                                        const clicked = clickNodeOrAncestor(createButton);
+                                        openUploadClicked = clicked || openUploadClicked;
+                                        if (clicked) instagramState.createClicked = true;
+                                    }
+                                }
+
+                                if (instagramState.createClicked && !instagramState.postClicked) {
+                                    const menuContexts = [
+                                        ...collectDeep('div[role="menu"]'),
+                                        ...collectDeep('div[role="dialog"]:not([aria-label*="create new post" i])'),
+                                    ];
+                                    const preferVideoFlow = videoMime.includes("video") || requestedVideoPath.endsWith(".mp4") || requestedVideoPath.endsWith(".mov");
+                                    const postButton =
+                                        (preferVideoFlow
+                                            ? findClickableByHints(["reel"], { contexts: menuContexts, excludeHints: ["story", "live"] })
+                                            : null) ||
+                                        findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel", "story", "live"] }) ||
+                                        pick(menuContexts.flatMap((ctx) => {
+                                            try {
+                                                return Array.from(ctx.querySelectorAll('a[role="link"], div[role="button"], button, span, div'));
+                                            } catch (_) {
+                                                return [];
+                                            }
+                                        }).filter((node) => {
+                                            const text = normalizedNodeText(node);
+                                            return text.includes("post") && !text.includes("reel") && !text.includes("story") && !text.includes("live");
+                                        }));
+                                    if (postButton) {
+                                        const clicked = clickNodeOrAncestor(postButton);
+                                        openUploadClicked = clicked || openUploadClicked;
+                                        if (clicked) instagramState.postClicked = true;
+                                    }
                                 }
                             }
                         }
