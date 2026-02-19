@@ -8405,6 +8405,24 @@ class MainWindow(QMainWindow):
                         const audience = String(youtubeOptions.audience || "not_kids").toLowerCase();
                         const nowMs = Date.now();
                         const actionSpacingElapsed = !youtubeState.lastActionAtMs || (nowMs - Number(youtubeState.lastActionAtMs)) >= 700;
+                        const findYouTubeTextboxByLabel = (labelHint) => {
+                            const hint = norm(labelHint);
+                            const containers = collectDeep('ytcp-form-input-container, ytcp-mention-input, ytcp-social-suggestion-input');
+                            for (const container of containers) {
+                                let labelNode = null;
+                                try {
+                                    labelNode = container.querySelector('#label, [id="label"], label, .label, [aria-label]');
+                                } catch (_) {}
+                                const labelText = normalizedNodeText(labelNode || container);
+                                if (!labelText.includes(hint)) continue;
+                                let target = null;
+                                try {
+                                    target = container.querySelector('div#textbox[contenteditable="true"], textarea#textbox, #textbox[contenteditable="true"]');
+                                } catch (_) {}
+                                if (target) return target;
+                            }
+                            return null;
+                        };
 
                         if (!fileInput && actionSpacingElapsed) {
                             const createButton = bySelectors([
@@ -8437,22 +8455,29 @@ class MainWindow(QMainWindow):
                             }
                         }
 
+                        let youtubeTitleFilled = !titleText;
                         if (titleText) {
-                            const titleTarget = bySelectors([
+                            const titleTarget = findYouTubeTextboxByLabel("title") || bySelectors([
                                 'textarea#textbox[aria-label*="title" i]',
                                 'div#textbox[aria-label*="title" i][contenteditable="true"]',
+                                'ytcp-mention-input[label*="Title" i] #textbox[contenteditable="true"]',
                                 'ytcp-social-suggestion-input input#textbox',
                             ]);
-                            textFilled = setTextValue(titleTarget, titleText) || textFilled;
+                            youtubeTitleFilled = setTextValue(titleTarget, titleText) || youtubeTitleFilled;
                         }
 
+                        let youtubeDescriptionFilled = !captionText;
                         if (captionText) {
-                            const descTarget = bySelectors([
-                                'textarea#textbox[aria-label*="description" i]',
+                            const descTarget = findYouTubeTextboxByLabel("description") || bySelectors([
+                                'ytcp-mention-input[label*="Description" i] #textbox[contenteditable="true"]',
+                                'ytcp-social-suggestion-input #textbox[contenteditable="true"]',
                                 'div#textbox[aria-label*="description" i][contenteditable="true"]',
+                                'textarea#textbox[aria-label*="description" i]',
                             ]);
-                            textFilled = setTextValue(descTarget, captionText) || textFilled;
+                            youtubeDescriptionFilled = setTextValue(descTarget, captionText) || youtubeDescriptionFilled;
                         }
+
+                        textFilled = youtubeDescriptionFilled;
 
                         const madeForKidsLabel = findClickableByHints(["yes, it’s made for kids", "yes, it's made for kids"]);
                         const notKidsLabel = findClickableByHints(["no, it’s not made for kids", "no, it's not made for kids"]);
@@ -8463,7 +8488,7 @@ class MainWindow(QMainWindow):
                         }
 
                         const nextButton = findClickableByHints(["next"]);
-                        if (nextButton && Number(youtubeState.nextClicks || 0) < 3 && actionSpacingElapsed) {
+                        if (nextButton && Number(youtubeState.nextClicks || 0) < 3 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
                             const clicked = clickNodeOrAncestor(nextButton);
                             if (clicked) {
                                 youtubeState.nextClicks = Number(youtubeState.nextClicks || 0) + 1;
