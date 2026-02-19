@@ -4659,13 +4659,27 @@ class MainWindow(QMainWindow):
                 }};
 
                 if (phase === "pick") {{
-                    const generatedImages = [...document.querySelectorAll("img[alt='Generated image']")]
-                        .filter((img) => isVisible(img));
+                    const generatedImages = [...document.querySelectorAll("img")]
+                        .filter((img) => {{
+                            if (!isVisible(img)) return false;
+                            const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
+                            const title = (img.getAttribute("title") || "").trim().toLowerCase();
+                            const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
+                            const descriptor = (alt + " " + title + " " + aria).trim();
+                            const isEditControlImage = /\\bedit\\s+image\\b/i.test(descriptor);
+                            if (isEditControlImage) return false;
+
+                            const hintedGenerated = /generated\\s+image|created\\s+image|image\\s+result/i.test(descriptor);
+                            const width = img.naturalWidth || img.width || img.clientWidth || 0;
+                            const height = img.naturalHeight || img.height || img.clientHeight || 0;
+                            const largeEnough = width >= 220 && height >= 220;
+                            return hintedGenerated || largeEnough;
+                        }});
                     if (!generatedImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
 
                     const firstImage = generatedImages[0];
-                    const listItem = firstImage.closest("[role='listitem']");
-                    const clickedImage = emulateClick(firstImage) || emulateClick(listItem) || emulateClick(firstImage.parentElement);
+                    const listItem = firstImage.closest("button, [role='button'], [role='listitem'], li, article, figure");
+                    const clickedImage = emulateClick(listItem) || emulateClick(firstImage) || emulateClick(firstImage.parentElement);
                     if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
                     await sleep(ACTION_DELAY_MS);
                     return {{ ok: true, status: "generated-image-clicked" }};
