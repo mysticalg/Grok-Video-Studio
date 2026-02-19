@@ -2000,10 +2000,6 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("Facebook", self._facebook_upload_home_url()),
             "Facebook Upload",
         )
-        self.social_upload_tab_indices["Instagram"] = self.browser_tabs.addTab(
-            self._build_social_upload_tab("Instagram", self._instagram_reels_create_url()),
-            "Instagram Upload",
-        )
         self.social_upload_tab_indices["TikTok"] = self.browser_tabs.addTab(
             self._build_social_upload_tab("TikTok", "https://www.tiktok.com/upload"),
             "TikTok Upload",
