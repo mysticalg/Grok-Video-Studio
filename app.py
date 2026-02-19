@@ -613,6 +613,29 @@ class GenerateWorker(QThread):
         collect(payload)
         return candidates[0] if candidates else ""
 
+    def _openai_input_reference_payload_variants(self, payload: dict[str, object]) -> list[dict[str, object]]:
+        reference_value = payload.get("input_reference")
+        if not isinstance(reference_value, str) or not reference_value.strip():
+            return [payload]
+
+        reference_id = reference_value.strip()
+        variants: list[dict[str, object]] = [payload]
+
+        as_file_id = dict(payload)
+        as_file_id["input_reference"] = {"file_id": reference_id}
+        variants.append(as_file_id)
+
+        as_id_object = dict(payload)
+        as_id_object["input_reference"] = {"id": reference_id}
+        variants.append(as_id_object)
+
+        as_image_id = dict(payload)
+        as_image_id.pop("input_reference", None)
+        as_image_id["image_id"] = reference_id
+        variants.append(as_image_id)
+
+        return variants
+
     def _resolve_latest_video_for_sora_continuation(self) -> Path | None:
         video_extensions = {".mp4", ".mov", ".m4v", ".webm"}
         if self._openai_last_generated_video_path and self._openai_last_generated_video_path.exists():
@@ -742,42 +765,53 @@ class GenerateWorker(QThread):
         last_error = ""
         for endpoint in endpoints:
             for idx, payload in enumerate(payload_variants):
-                response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
-                if response.ok:
-                    data = response.json() if response.content else {}
-                    job_id = data.get("id") or data.get("job_id")
-                    if not job_id and isinstance(data.get("data"), list) and data["data"]:
-                        job_id = data["data"][0].get("id")
-                    direct_url = (
-                        data.get("video_url")
-                        or data.get("url")
-                        or (data.get("output") or {}).get("video_url")
+                request_payload_variants = self._openai_input_reference_payload_variants(payload)
+                for payload_variant_idx, request_payload in enumerate(request_payload_variants):
+                    response = requests.post(endpoint, headers=headers, json=request_payload, timeout=90)
+                    if response.ok:
+                        data = response.json() if response.content else {}
+                        job_id = data.get("id") or data.get("job_id")
+                        if not job_id and isinstance(data.get("data"), list) and data["data"]:
+                            job_id = data["data"][0].get("id")
+                        direct_url = (
+                            data.get("video_url")
+                            or data.get("url")
+                            or (data.get("output") or {}).get("video_url")
+                        )
+                        reference_id = self._extract_openai_input_reference_id(data)
+                        return job_id, direct_url, reference_id
+
+                    status = response.status_code
+                    body_text = response.text[:500]
+                    body_lower = body_text.lower()
+                    if status in {404, 405, 501}:
+                        last_error = body_text[:400]
+                        break
+
+                    input_reference_type_error = (
+                        status in {400, 422}
+                        and "input_reference" in body_lower
+                        and "invalid type" in body_lower
                     )
-                    reference_id = self._extract_openai_input_reference_id(data)
-                    return job_id, direct_url, reference_id
+                    if input_reference_type_error and payload_variant_idx < len(request_payload_variants) - 1:
+                        last_error = body_text[:400]
+                        continue
 
-                status = response.status_code
-                body_text = response.text[:500]
-                body_lower = body_text.lower()
-                if status in {404, 405, 501}:
-                    last_error = body_text[:400]
-                    break
-
-                seconds_error = (
-                    status in {400, 422}
-                    and "seconds" in body_lower
-                    and (
-                        "unknown parameter" in body_lower
-                        or "invalid type" in body_lower
-                        or "invalid value" in body_lower
-                        or "expected one of" in body_lower
+                    seconds_error = (
+                        status in {400, 422}
+                        and "seconds" in body_lower
+                        and (
+                            "unknown parameter" in body_lower
+                            or "invalid type" in body_lower
+                            or "invalid value" in body_lower
+                            or "expected one of" in body_lower
+                        )
                     )
-                )
-                if seconds_error and idx < len(payload_variants) - 1:
-                    last_error = body_text[:400]
-                    continue
+                    if seconds_error and idx < len(payload_variants) - 1 and payload_variant_idx == len(request_payload_variants) - 1:
+                        last_error = body_text[:400]
+                        break
 
-                raise RuntimeError(f"OpenAI Sora request failed: {status} {body_text}")
+                    raise RuntimeError(f"OpenAI Sora request failed: {status} {body_text}")
 
         raise RuntimeError(
             "OpenAI Sora API endpoint not available for this account/base URL. "
