@@ -1703,7 +1703,6 @@ class MainWindow(QMainWindow):
             "border: 1px solid #4fc3f7; border-radius: 6px; padding: 8px;"
         )
         self.stitch_btn.clicked.connect(self.stitch_all_videos)
-        actions_layout.addWidget(self.stitch_btn, 1, 1)
 
         self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
@@ -1802,6 +1801,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(actions_group)
 
         left_layout.addWidget(QLabel("Generated Videos"))
+        left_layout.addWidget(self.stitch_btn)
         self.video_picker = QComboBox()
         self.video_picker.setIconSize(QPixmap(180, 102).size())
         self.video_picker.setMinimumHeight(82)
