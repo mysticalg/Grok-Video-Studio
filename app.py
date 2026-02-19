@@ -7722,24 +7722,7 @@ class MainWindow(QMainWindow):
         video_size = os.path.getsize(video_path)  # MUST be exact bytes!
         MIN_CHUNK = 5 * 1024 * 1024     # 5242880
         MAX_CHUNK = 64 * 1024 * 1024    # 67108864
-        
-        if video_size <= MAX_CHUNK:
-            # Single chunk is simplest/safest for ≤64 MB
-            chunk_size = video_size
-            total_chunk_count = 1
-        else:
-            # TikTok inbox init appears to validate total_chunk_count as the number
-            # of *full* chunks for large uploads, with a possible final remainder chunk.
-            chunk_size = MAX_CHUNK
-            total_chunk_count = max(1, video_size // chunk_size)
 
-        # Optional: if video_size < MIN_CHUNK, force single chunk
-        if video_size < MIN_CHUNK:
-            chunk_size = video_size
-            total_chunk_count = 1
-
-        upload_chunk_count = max(1, math.ceil(video_size / chunk_size))
-        
         raw_token = self.tiktok_access_token.text().strip()
         if isinstance(raw_token, tuple) or isinstance(raw_token, list):
             access_token = raw_token[0] if raw_token else ""
@@ -7751,9 +7734,6 @@ class MainWindow(QMainWindow):
             return
 
         print(f"DEBUG: video_size={video_size} bytes (~{video_size / (1024*1024):.2f} MB)")
-        print(f"DEBUG: chunk_size={chunk_size} bytes")
-        print(f"DEBUG: total_chunk_count={total_chunk_count}")
-        print(f"DEBUG: upload_chunk_count={upload_chunk_count}")
         print(f"DEBUG: access token={access_token}")
         headers = {
         "Authorization": f"Bearer {access_token}",
@@ -7764,86 +7744,106 @@ class MainWindow(QMainWindow):
         # Start with inbox — safer for testing
         init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 
-        source_info = {
-            "source": "FILE_UPLOAD",
-            "video_size": video_size,
-            "chunk_size": chunk_size,
-            "total_chunk_count": total_chunk_count
-        }
-
-        payload = {
-            "source_info": source_info,
-            "post_info": {
-                "title": self._compose_social_text(caption, hashtags), # or separate title if you have one
-                "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
-                "disable_comment": False,       # adjust as needed
-                "disable_duet": False,
-                "disable_stitch": False,
-                # add video_cover_timestamp_ms, etc. if desired
-            }
-        }
-
-
-        resp = requests.post(init_url, headers=headers, json=payload)
-        #resp.raise_for_status()
-
-        data = resp.json()
-        if resp.status_code == 200:
-            print("Status response:", data)
-            # Look for data['data']['status'] — possible values:
-            # "PROCESSING_UPLOAD", "UPLOAD_SUCCESS", "POSTED", "FAILED", etc.
-            
+        # TikTok metadata validation can vary. Try a few valid chunking strategies
+        # and use the first one that both initializes and uploads successfully.
+        if video_size < MIN_CHUNK or video_size <= MAX_CHUNK:
+            strategy_candidates = [(video_size, 1, "single_chunk")]
         else:
-            print("Status check failed:", data)
-            return
-        print(f"DEBUG: access token={data}")
-        upload_url = data['data']['upload_url']  # or check exact key in response
-        publish_id = data['data'].get('publish_id')  # save for status check later
+            ceil_count = max(1, math.ceil(video_size / MAX_CHUNK))
+            floor_count = max(1, video_size // MAX_CHUNK)
+            strategy_candidates = [
+                (MAX_CHUNK, ceil_count, "fixed_64mb_ceil_count"),
+                (math.ceil(video_size / ceil_count), ceil_count, "even_ceil_count"),
+                (MAX_CHUNK, floor_count, "fixed_64mb_floor_count"),
+            ]
 
-        # Upload in one or more chunks using Content-Range.
-        # Large files fail with 413 if sent in one request.
-        upload_resp = None
-        bytes_uploaded = 0
+        last_error = None
+        for chunk_size, total_chunk_count, strategy_name in strategy_candidates:
+            upload_chunk_count = max(1, math.ceil(video_size / chunk_size))
+            print(f"DEBUG: strategy={strategy_name} chunk_size={chunk_size} total_chunk_count={total_chunk_count} upload_chunk_count={upload_chunk_count}")
 
-        with open(video_path, "rb") as f:
-            chunk_index = 0
-            while bytes_uploaded < video_size:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
+            source_info = {
+                "source": "FILE_UPLOAD",
+                "video_size": video_size,
+                "chunk_size": chunk_size,
+                "total_chunk_count": total_chunk_count
+            }
 
-                start_byte = bytes_uploaded
-                end_byte = start_byte + len(chunk) - 1
-                chunk_index += 1
-
-                upload_headers = {
-                    "Content-Type": "video/mp4",
-                    "Content-Length": str(len(chunk)),
-                    "Content-Range": f"bytes {start_byte}-{end_byte}/{video_size}",
+            payload = {
+                "source_info": source_info,
+                "post_info": {
+                    "title": self._compose_social_text(caption, hashtags), # or separate title if you have one
+                    "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
+                    "disable_comment": False,
+                    "disable_duet": False,
+                    "disable_stitch": False,
                 }
+            }
 
-                print(
-                    f"DEBUG: Uploading chunk {chunk_index}/{upload_chunk_count} "
-                    f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
-                )
-                upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
-                print(f"DEBUG: Chunk upload status code: {upload_resp.status_code}")
+            resp = requests.post(init_url, headers=headers, json=payload)
+            data = resp.json()
+            if resp.status_code != 200:
+                print("Status check failed:", data)
+                last_error = RuntimeError(f"TikTok init failed ({strategy_name}): {resp.status_code} - {data}")
+                continue
 
-                if upload_resp.status_code not in (200, 201, 202, 204, 206):
-                    raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
+            print("Status response:", data)
+            upload_url = data['data']['upload_url']
+            publish_id = data['data'].get('publish_id')
 
-                if upload_resp.text.strip():
-                    try:
-                        print("DEBUG: Chunk upload response:", upload_resp.json())
-                    except ValueError:
-                        print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
+            upload_resp = None
+            bytes_uploaded = 0
+            try:
+                with open(video_path, "rb") as f:
+                    chunk_index = 0
+                    while bytes_uploaded < video_size:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
 
-                bytes_uploaded += len(chunk)
+                        start_byte = bytes_uploaded
+                        end_byte = start_byte + len(chunk) - 1
+                        chunk_index += 1
 
-        if upload_resp is None or bytes_uploaded != video_size:
-            raise RuntimeError(
-                f"Upload failed: sent {bytes_uploaded} bytes, expected {video_size} bytes."
-            )
+                        upload_headers = {
+                            "Content-Type": "video/mp4",
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range": f"bytes {start_byte}-{end_byte}/{video_size}",
+                        }
+
+                        print(
+                            f"DEBUG: Uploading chunk {chunk_index}/{upload_chunk_count} "
+                            f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
+                        )
+                        upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
+                        print(f"DEBUG: Chunk upload status code: {upload_resp.status_code}")
+
+                        if upload_resp.text.strip():
+                            try:
+                                print("DEBUG: Chunk upload response:", upload_resp.json())
+                            except ValueError:
+                                print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
+
+                        if upload_resp.status_code not in (200, 201, 202, 204, 206):
+                            raise RuntimeError(f"Upload failed ({strategy_name}): {upload_resp.status_code} - {upload_resp.text}")
+
+                        bytes_uploaded += len(chunk)
+
+                if upload_resp is None or bytes_uploaded != video_size:
+                    raise RuntimeError(
+                        f"Upload failed ({strategy_name}): sent {bytes_uploaded} bytes, expected {video_size} bytes."
+                    )
+
+                # Successful upload for this strategy.
+                break
+            except RuntimeError as upload_error:
+                last_error = upload_error
+                print(f"DEBUG: strategy {strategy_name} failed, retrying with next strategy. error={upload_error}")
+                continue
+        else:
+            if last_error:
+                raise last_error
+            raise RuntimeError("TikTok upload failed: no chunking strategy succeeded.")
 
         self.check_tiktok_status(access_token, publish_id)
         self._append_log(f"TikTok Upload complete")
