@@ -8254,6 +8254,15 @@ class MainWindow(QMainWindow):
                         }
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
+                        if (platform === "tiktok" && alreadyHasFile) {
+                            try {
+                                const postInjectClicked = fileInput.getAttribute("data-codex-postinject-clicked") === "1";
+                                if (!postInjectClicked) {
+                                    fileInput.click();
+                                    fileInput.setAttribute("data-codex-postinject-clicked", "1");
+                                }
+                            } catch (_) {}
+                        }
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
                         if (!alreadyHasFile && !alreadyStaged && allowFileDialog) {
                             fileDialogTriggered = clickNodeSingle(fileInput) || fileDialogTriggered;
