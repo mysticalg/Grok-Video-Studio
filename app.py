@@ -7728,9 +7728,10 @@ class MainWindow(QMainWindow):
             chunk_size = video_size
             total_chunk_count = 1
         else:
-            # For >64 MB, split into multiple chunks (TikTok max chunk is 64 MB)
-            chunk_size = MAX_CHUNK
-            total_chunk_count = max(1, math.ceil(video_size / chunk_size))
+            # TikTok validates chunk metadata strictly. Compute chunk count first,
+            # then derive a chunk size that matches that count.
+            total_chunk_count = max(1, math.ceil(video_size / MAX_CHUNK))
+            chunk_size = math.ceil(video_size / total_chunk_count)
         
         # Optional: if video_size < MIN_CHUNK, force single chunk
         if video_size < MIN_CHUNK:
