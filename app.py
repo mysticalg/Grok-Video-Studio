@@ -7769,7 +7769,7 @@ class MainWindow(QMainWindow):
         attempts = int(pending["attempts"])
 
         if platform_name == "Instagram":
-            max_attempts = 6
+            max_attempts = 10
         elif platform_name == "TikTok":
             max_attempts = 12
         elif platform_name == "Facebook":
@@ -7900,6 +7900,32 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                         return false;
                     };
+                    const hoverNodeOrAncestor = (node) => {
+                        if (!node) return false;
+                        const candidates = [
+                            node,
+                            node.closest && node.closest('button, [role="button"], a, [role="link"], div[tabindex], div'),
+                            node.parentElement,
+                        ].filter(Boolean);
+                        const events = [
+                            ["pointerenter", PointerEvent],
+                            ["mouseenter", MouseEvent],
+                            ["pointerover", PointerEvent],
+                            ["mouseover", MouseEvent],
+                        ];
+                        let hovered = false;
+                        for (const candidate of candidates) {
+                            try { candidate.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                            for (const [eventName, EventCtor] of events) {
+                                try {
+                                    const ev = new EventCtor(eventName, { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 });
+                                    candidate.dispatchEvent(ev);
+                                    hovered = true;
+                                } catch (_) {}
+                            }
+                        }
+                        return hovered;
+                    };
                     const findClickableByHints = (hints, options = {}) => {
                         const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
                         const excludeHints = (options.excludeHints || []).map((hint) => norm(hint)).filter(Boolean);
@@ -7950,9 +7976,19 @@ class MainWindow(QMainWindow):
                             instagramState.dialogSeen = true;
                             instagramState.postClicked = true;
                         } else {
+                            const createLauncher = bySelectors([
+                                'svg[aria-label*="new post" i]',
+                                'svg[aria-label*="create" i]',
+                                'a[role="link"][href="#"][tabindex="0"]',
+                            ]) || findClickableByHints(["new post", "create"]);
+                            if (createLauncher) {
+                                const hovered = hoverNodeOrAncestor(createLauncher);
+                                instagramState.createHovered = hovered || instagramState.createHovered;
+                            }
                             if (!instagramState.createClicked) {
                                 const createSpanButton = pick(collectDeep('span.html-span[aria-describedby="_r_m_"], span[aria-describedby="_r_m_"], span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
                                 const createButton = createSpanButton
+                                    || findClickableByHints(["create"], { excludeHints: ["creation", "creator"] })
                                     || bySelectors([
                                         'div[role="button"][tabindex="0"]',
                                         'button',
