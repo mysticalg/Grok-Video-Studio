@@ -8455,8 +8455,8 @@ class MainWindow(QMainWindow):
                             }
                         }
 
-                        let youtubeTitleFilled = !titleText;
-                        if (titleText) {
+                        let youtubeTitleFilled = Boolean(youtubeState.titleFilled) || !titleText;
+                        if (!youtubeTitleFilled && titleText) {
                             const titleTarget = findYouTubeTextboxByLabel("title") || bySelectors([
                                 'textarea#textbox[aria-label*="title" i]',
                                 'div#textbox[aria-label*="title" i][contenteditable="true"]',
@@ -8465,9 +8465,10 @@ class MainWindow(QMainWindow):
                             ]);
                             youtubeTitleFilled = setTextValue(titleTarget, titleText) || youtubeTitleFilled;
                         }
+                        youtubeState.titleFilled = youtubeTitleFilled;
 
-                        let youtubeDescriptionFilled = !captionText;
-                        if (captionText) {
+                        let youtubeDescriptionFilled = Boolean(youtubeState.descriptionFilled) || !captionText;
+                        if (!youtubeDescriptionFilled && captionText) {
                             const descTarget = findYouTubeTextboxByLabel("description") || bySelectors([
                                 'ytcp-mention-input[label*="Description" i] #textbox[contenteditable="true"]',
                                 'ytcp-social-suggestion-input #textbox[contenteditable="true"]',
@@ -8476,6 +8477,7 @@ class MainWindow(QMainWindow):
                             ]);
                             youtubeDescriptionFilled = setTextValue(descTarget, captionText) || youtubeDescriptionFilled;
                         }
+                        youtubeState.descriptionFilled = youtubeDescriptionFilled;
 
                         textFilled = youtubeDescriptionFilled;
 
@@ -8501,7 +8503,7 @@ class MainWindow(QMainWindow):
                                 || String(nextButton.getAttribute('disabled') || '').toLowerCase() === 'true'
                             )
                         );
-                        if (nextButton && !nextDisabled && Number(youtubeState.nextClicks || 0) < 3 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
+                        if (nextButton && !nextDisabled && Number(youtubeState.nextClicks || 0) < 4 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
                             const clicked = clickNodeOrAncestor(nextButton);
                             if (clicked) {
                                 youtubeState.nextClicks = Number(youtubeState.nextClicks || 0) + 1;
@@ -8510,7 +8512,7 @@ class MainWindow(QMainWindow):
                             }
                         }
 
-                        if (Number(youtubeState.nextClicks || 0) >= 3) {
+                        if (Number(youtubeState.nextClicks || 0) >= 4) {
                             const visibilityButton = visibility === "private"
                                 ? findClickableByHints(["private"])
                                 : (visibility === "unlisted" ? findClickableByHints(["unlisted"]) : findClickableByHints(["public"]));
