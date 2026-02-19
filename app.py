@@ -735,12 +735,27 @@ class GenerateWorker(QThread):
 
         local_path = Path(input_reference)
         if local_path.exists() and local_path.is_file():
-            self.status.emit(f"Sora continuity: uploading input reference file {local_path.name}...")
-            file_id = self._upload_openai_input_reference_file(local_path)
-            self.status.emit(f"Sora continuity: uploaded input reference as {file_id}.")
-            return file_id
+            self.status.emit(f"Sora continuity: using local input reference file {local_path.name}.")
+            return str(local_path)
 
         return input_reference
+
+    def _post_openai_sora_generation_request(self, endpoint: str, headers: dict[str, str], payload: dict[str, object]) -> requests.Response:
+        input_reference_value = payload.get("input_reference")
+        if isinstance(input_reference_value, str):
+            candidate_path = Path(input_reference_value)
+            if candidate_path.exists() and candidate_path.is_file():
+                request_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+                data = {k: str(v) for k, v in payload.items() if k != "input_reference"}
+                with candidate_path.open("rb") as handle:
+                    return requests.post(
+                        endpoint,
+                        headers=request_headers,
+                        data=data,
+                        files={"input_reference": (candidate_path.name, handle, "application/octet-stream")},
+                        timeout=90,
+                    )
+        return requests.post(endpoint, headers=headers, json=payload, timeout=90)
 
     def _start_openai_video_job(self, prompt: str) -> tuple[str | None, str | None, str]:
         self._ensure_not_stopped()
@@ -757,7 +772,7 @@ class GenerateWorker(QThread):
             for idx, payload in enumerate(payload_variants):
                 request_payload_variants = self._openai_input_reference_payload_variants(payload)
                 for payload_variant_idx, request_payload in enumerate(request_payload_variants):
-                    response = requests.post(endpoint, headers=headers, json=request_payload, timeout=90)
+                    response = self._post_openai_sora_generation_request(endpoint, headers, request_payload)
                     if response.ok:
                         data = response.json() if response.content else {}
                         job_id = data.get("id") or data.get("job_id")
