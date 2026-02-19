@@ -4906,13 +4906,24 @@ class MainWindow(QMainWindow):
                     pick_ready_probe_script = """
                         (() => {
                             try {
-                                const ready = !!document.querySelector(
+                                const customizePromptVisible = !!document.querySelector(
                                     "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], " +
                                     "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                                 );
                                 const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i]")]
                                     .find((btn) => !!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)));
-                                return { ready: ready || makeVideoButtonVisible };
+                                const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
+                                    .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
+                                const path = String((window.location && window.location.pathname) || "").toLowerCase();
+                                const onPostView = path.includes("/imagine/post/");
+                                const ready = customizePromptVisible || (onPostView && (editImageVisible || makeVideoButtonVisible));
+                                return {
+                                    ready,
+                                    customizePromptVisible,
+                                    makeVideoButtonVisible,
+                                    editImageVisible,
+                                    onPostView,
+                                };
                             } catch (_) {
                                 return { ready: false };
                             }
@@ -4921,10 +4932,17 @@ class MainWindow(QMainWindow):
 
                     def _after_pick_ready_probe(probe_result):
                         if isinstance(probe_result, dict) and probe_result.get("ready"):
+                            ready_flags = (
+                                f"customizePrompt={bool(probe_result.get('customizePromptVisible'))}, "
+                                f"makeVideoBtn={bool(probe_result.get('makeVideoButtonVisible'))}, "
+                                f"editImage={bool(probe_result.get('editImageVisible'))}, "
+                                f"postView={bool(probe_result.get('onPostView'))}"
+                            )
                             self._append_log(
-                                f"Variant {current_variant}: detected customize/make-video UI after empty callback; treating image pick as complete."
+                                f"Variant {current_variant}: detected post/customize UI after empty callback ({ready_flags}); treating image pick as complete."
                             )
                             self.manual_image_pick_clicked = True
+                            self.manual_image_video_mode_selected = True
                             self.manual_image_pick_retry_count = 0
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
