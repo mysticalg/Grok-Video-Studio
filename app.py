@@ -66,6 +66,7 @@ THUMBNAILS_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
+BROWSER_INLINE_STAGE_MAX_BYTES = int(os.getenv("BROWSER_INLINE_STAGE_MAX_BYTES", str(32 * 1024 * 1024)))
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
@@ -7860,7 +7861,13 @@ class MainWindow(QMainWindow):
         encoded_video = ""
         if video_file.exists() and video_file.is_file():
             try:
-                encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+                file_size = video_file.stat().st_size
+                if file_size <= BROWSER_INLINE_STAGE_MAX_BYTES:
+                    encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+                else:
+                    self._append_log(
+                        f"{platform_name}: skipping in-page base64 staging for large file ({file_size} bytes); using browser file picker auto-selection instead."
+                    )
             except Exception:
                 encoded_video = ""
 
@@ -8958,9 +8965,16 @@ class MainWindow(QMainWindow):
             staged_path = source_path.with_name(f"{safe_stem}-{counter}{extension}")
             counter += 1
 
-        shutil.copy2(source_path, staged_path)
+        staged_via_hardlink = False
+        try:
+            os.link(source_path, staged_path)
+            staged_via_hardlink = True
+        except Exception:
+            shutil.copy2(source_path, staged_path)
+
         self._append_log(
-            f"TikTok: staged renamed upload file '{staged_path.name}' from description text before browser upload."
+            f"TikTok: staged renamed upload file '{staged_path.name}' from description text before browser upload"
+            f" ({'hardlink' if staged_via_hardlink else 'copied'})."
         )
         return str(staged_path)
 
