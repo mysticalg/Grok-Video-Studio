@@ -18,6 +18,7 @@ A desktop-first Python/PySide6 app for generating Grok videos, iterating quickly
 - Keep a generated-video list in-session.
 - Preview generated or local videos inside the app.
 - Continue from the latest frame or a local seed image.
+- In Sora 2 settings, optionally auto-continue each OpenAI API generation from the last generated video frame (auto-extract + upload as `input_reference`).
 - Stitch all listed videos into one final output:
   - Hard-cut or crossfade transitions
   - Optional frame interpolation (48/60 fps)

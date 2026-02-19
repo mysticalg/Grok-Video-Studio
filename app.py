@@ -462,6 +462,8 @@ class GenerateWorker(QThread):
         self.count = count
         self.download_dir = download_dir
         self.stop_requested = False
+        self._openai_uploaded_reference_cache: dict[str, str] = {}
+        self._openai_last_generated_video_path: Path | None = None
 
     def request_stop(self) -> None:
         self.stop_requested = True
@@ -569,7 +571,7 @@ class GenerateWorker(QThread):
         model = str(settings.get("model") or "sora-2")
         size = str(settings.get("size") or self.prompt_config.video_resolution or "1280x720")
         seconds = str(settings.get("seconds") or str(self.prompt_config.video_duration_seconds or 8))
-        input_reference = str(settings.get("input_reference") or "").strip()
+        input_reference = self._resolve_openai_input_reference(settings)
         extra_body = settings.get("extra_body") if isinstance(settings.get("extra_body"), dict) else {}
 
         base: dict[str, object] = {
@@ -585,6 +587,107 @@ class GenerateWorker(QThread):
         with_seconds = dict(base)
         with_seconds["seconds"] = seconds
         return [with_seconds, base]
+
+    def _openai_setting_enabled(self, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _resolve_latest_video_for_sora_continuation(self) -> Path | None:
+        video_extensions = {".mp4", ".mov", ".m4v", ".webm"}
+        if self._openai_last_generated_video_path and self._openai_last_generated_video_path.exists():
+            return self._openai_last_generated_video_path
+
+        files = [
+            path
+            for path in self.download_dir.glob("*")
+            if path.is_file() and path.suffix.lower() in video_extensions
+        ]
+        if not files:
+            return None
+        return max(files, key=lambda path: path.stat().st_mtime)
+
+    def _extract_last_frame_for_sora(self, video_path: Path) -> Path:
+        self._ensure_not_stopped()
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        frame_path = self.download_dir / f"sora_last_frame_{int(time.time() * 1000)}.png"
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-sseof",
+            "-0.05",
+            "-i",
+            str(video_path),
+            "-update",
+            "1",
+            "-frames:v",
+            "1",
+            str(frame_path),
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except FileNotFoundError as exc:
+            raise RuntimeError("ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH.") from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"Failed to extract last frame for Sora continuity: {exc.stderr[-500:] or 'ffmpeg failed'}") from exc
+
+        if not frame_path.exists() or frame_path.stat().st_size <= 0:
+            raise RuntimeError("Sora continuity frame extraction produced an empty image.")
+        return frame_path
+
+    def _upload_openai_input_reference_file(self, file_path: Path) -> str:
+        self._ensure_not_stopped()
+        cache_key = str(file_path.resolve())
+        if cache_key in self._openai_uploaded_reference_cache:
+            return self._openai_uploaded_reference_cache[cache_key]
+
+        headers = self._openai_video_headers()
+        upload_headers = {key: value for key, value in headers.items() if key.lower() != "content-type"}
+
+        with file_path.open("rb") as handle:
+            response = requests.post(
+                f"{OPENAI_API_BASE}/files",
+                headers=upload_headers,
+                data={"purpose": "vision"},
+                files={"file": (file_path.name, handle, "application/octet-stream")},
+                timeout=120,
+            )
+
+        if not response.ok:
+            raise RuntimeError(f"OpenAI file upload failed for input_reference: {response.status_code} {response.text[:500]}")
+
+        payload = response.json() if response.content else {}
+        file_id = str(payload.get("id") or "").strip()
+        if not file_id:
+            raise RuntimeError("OpenAI file upload succeeded but did not return a file id.")
+
+        self._openai_uploaded_reference_cache[cache_key] = file_id
+        return file_id
+
+    def _resolve_openai_input_reference(self, settings: dict[str, object]) -> str:
+        input_reference = str(settings.get("input_reference") or "").strip()
+
+        if self._openai_setting_enabled(settings.get("continue_from_last_frame")):
+            latest_video = self._resolve_latest_video_for_sora_continuation()
+            if latest_video is None:
+                raise RuntimeError(
+                    "Sora continuity is enabled, but no generated videos were found in the downloads folder to extract from."
+                )
+            self.status.emit(f"Sora continuity: extracting last frame from {latest_video.name}...")
+            frame_path = self._extract_last_frame_for_sora(latest_video)
+            input_reference = str(frame_path)
+
+        if not input_reference:
+            return ""
+
+        local_path = Path(input_reference)
+        if local_path.exists() and local_path.is_file():
+            self.status.emit(f"Sora continuity: uploading input reference file {local_path.name}...")
+            file_id = self._upload_openai_input_reference_file(local_path)
+            self.status.emit(f"Sora continuity: uploaded input reference as {file_id}.")
+            return file_id
+
+        return input_reference
 
     def _start_openai_video_job(self, prompt: str) -> tuple[str | None, str | None]:
         self._ensure_not_stopped()
@@ -830,6 +933,9 @@ class GenerateWorker(QThread):
         else:
             file_path = self.download_video(video_url, f"v{variant}")
             resolved_video_url = video_url
+
+        if self.prompt_config.source == "openai":
+            self._openai_last_generated_video_path = file_path
 
         return {
             "title": f"Generated Video {variant}",
@@ -1919,6 +2025,13 @@ class MainWindow(QMainWindow):
         input_ref_wrap.setLayout(input_ref_row)
         form.addRow("input_reference (optional)", input_ref_wrap)
 
+        self.sora2_continue_from_last_frame = QCheckBox("Auto-continue from the last generated video frame")
+        self.sora2_continue_from_last_frame.setToolTip(
+            "When enabled, the app extracts the final frame from the latest generated video, uploads it to OpenAI Files, and sends that file id as input_reference."
+        )
+        self.sora2_continue_from_last_frame.setChecked(False)
+        form.addRow("continuity", self.sora2_continue_from_last_frame)
+
         self.sora2_extra_body = QPlainTextEdit()
         self.sora2_extra_body.setPlaceholderText('{"any_additional_openai_video_fields": "value"}')
         self.sora2_extra_body.setMaximumHeight(110)
@@ -1927,7 +2040,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(form)
 
         hint = QLabel(
-            "Known create parameters from current OpenAI SDK docs: prompt, model, seconds, size, input_reference. "
+            "Known create parameters from current OpenAI SDK docs: prompt, model, seconds, size, input_reference. Continuity mode can automatically use the last generated video frame. "
             "The prompt is generated by the app; fields above control the request payload."
         )
         hint.setWordWrap(True)
@@ -1952,6 +2065,7 @@ class MainWindow(QMainWindow):
             "seconds": str(self.sora2_seconds.currentData() or "8"),
             "size": str(self.sora2_size.currentData() or "1280x720"),
             "input_reference": self.sora2_input_reference.text().strip(),
+            "continue_from_last_frame": self.sora2_continue_from_last_frame.isChecked(),
             "extra_body": {},
         }
 
@@ -2438,6 +2552,7 @@ class MainWindow(QMainWindow):
             "sora2_seconds": str(self.sora2_seconds.currentData()),
             "sora2_size": str(self.sora2_size.currentData()),
             "sora2_input_reference": self.sora2_input_reference.text(),
+            "sora2_continue_from_last_frame": self.sora2_continue_from_last_frame.isChecked(),
             "sora2_extra_body": self.sora2_extra_body.toPlainText(),
             "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
@@ -2580,6 +2695,8 @@ class MainWindow(QMainWindow):
                 self.sora2_size.setCurrentIndex(size_index)
         if "sora2_input_reference" in preferences:
             self.sora2_input_reference.setText(str(preferences["sora2_input_reference"]))
+        if "sora2_continue_from_last_frame" in preferences:
+            self.sora2_continue_from_last_frame.setChecked(bool(preferences["sora2_continue_from_last_frame"]))
         if "sora2_extra_body" in preferences:
             self.sora2_extra_body.setPlainText(str(preferences["sora2_extra_body"]))
         if "stitch_crossfade_enabled" in preferences:
@@ -2906,6 +3023,7 @@ class MainWindow(QMainWindow):
         size = str(sora_settings.get("size") or "1280x720")
         seconds = str(sora_settings.get("seconds") or "8")
         input_reference = str(sora_settings.get("input_reference") or "").strip()
+        continue_from_last_frame = str(sora_settings.get("continue_from_last_frame") or "").strip().lower() in {"1", "true", "yes", "on"}
         extra_body = sora_settings.get("extra_body") if isinstance(sora_settings.get("extra_body"), dict) else {}
         aspect_ratio = self._aspect_ratio_from_video_size(size)
         message = (
@@ -2916,6 +3034,7 @@ class MainWindow(QMainWindow):
             f"• seconds: {seconds}\n"
             f"• aspect ratio target: {aspect_ratio}\n"
             f"• input_reference: {input_reference or '(none)'}\n"
+            f"• continue_from_last_frame: {'yes' if continue_from_last_frame else 'no'}\n"
             f"• extra_body fields: {len(extra_body)}\n\n"
             "Allowed values (from current OpenAI SDK docs):\n"
             "• seconds: 4, 8, 12\n"
