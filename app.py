@@ -1610,37 +1610,9 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
 
-        row = QHBoxLayout()
-
         self.count = QSpinBox()
         self.count.setRange(1, 10)
         self.count.setValue(1)
-
-        row.addWidget(QLabel("Resolution"))
-        self.video_resolution = QComboBox()
-        self.video_resolution.addItem("480p (854x480)", "854x480")
-        self.video_resolution.addItem("720p (1280x720)", "1280x720")
-        self.video_resolution.setCurrentIndex(1)
-        row.addWidget(self.video_resolution)
-
-        row.addWidget(QLabel("Duration"))
-        self.video_duration = QComboBox()
-        self.video_duration.addItem("6s", 6)
-        self.video_duration.addItem("10s", 10)
-        self.video_duration.setCurrentIndex(1)
-        row.addWidget(self.video_duration)
-
-        row.addWidget(QLabel("Aspect"))
-        self.video_aspect_ratio = QComboBox()
-        self.video_aspect_ratio.addItem("2:3", "2:3")
-        self.video_aspect_ratio.addItem("3:2", "3:2")
-        self.video_aspect_ratio.addItem("1:1", "1:1")
-        self.video_aspect_ratio.addItem("9:16", "9:16")
-        self.video_aspect_ratio.addItem("16:9", "16:9")
-        self.video_aspect_ratio.setCurrentIndex(4)
-        row.addWidget(self.video_aspect_ratio)
-        prompt_group_layout.addLayout(row)
-        prompt_group_layout.addStretch(0)
 
         left_layout.addWidget(prompt_group)
 
@@ -1875,7 +1847,7 @@ class MainWindow(QMainWindow):
         log_layout = QVBoxLayout(log_group)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(260)
+        self.log.setMinimumHeight(120)
         log_layout.addWidget(self.log)
 
         self.stitch_progress_label = QLabel("Stitch progress: idle")
@@ -1966,7 +1938,35 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.continue_frame_btn, 1, 0)
         grok_browser_controls.addWidget(self.continue_image_btn, 1, 1)
         grok_browser_controls.addWidget(self.browser_home_btn, 2, 0, 1, 2)
+
+        grok_video_options = QHBoxLayout()
+        grok_video_options.addWidget(QLabel("Resolution"))
+        self.video_resolution = QComboBox()
+        self.video_resolution.addItem("480p (854x480)", "854x480")
+        self.video_resolution.addItem("720p (1280x720)", "1280x720")
+        self.video_resolution.setCurrentIndex(1)
+        grok_video_options.addWidget(self.video_resolution)
+
+        grok_video_options.addWidget(QLabel("Duration"))
+        self.video_duration = QComboBox()
+        self.video_duration.addItem("6s", 6)
+        self.video_duration.addItem("10s", 10)
+        self.video_duration.setCurrentIndex(1)
+        grok_video_options.addWidget(self.video_duration)
+
+        grok_video_options.addWidget(QLabel("Aspect"))
+        self.video_aspect_ratio = QComboBox()
+        self.video_aspect_ratio.addItem("2:3", "2:3")
+        self.video_aspect_ratio.addItem("3:2", "3:2")
+        self.video_aspect_ratio.addItem("1:1", "1:1")
+        self.video_aspect_ratio.addItem("9:16", "9:16")
+        self.video_aspect_ratio.addItem("16:9", "16:9")
+        self.video_aspect_ratio.setCurrentIndex(4)
+        grok_video_options.addWidget(self.video_aspect_ratio)
+        grok_video_options.addStretch(1)
+
         grok_browser_layout.addLayout(grok_browser_controls)
+        grok_browser_layout.addLayout(grok_video_options)
         grok_browser_layout.addWidget(self.browser)
 
         self.browser_tabs = QTabWidget()
@@ -1992,6 +1992,8 @@ class MainWindow(QMainWindow):
         right_splitter.setChildrenCollapsible(False)
         right_splitter.addWidget(self.browser_tabs)
         right_splitter.addWidget(bottom_splitter)
+        right_splitter.setStretchFactor(0, 3)
+        right_splitter.setStretchFactor(1, 2)
         right_splitter.setSizes([620, 280])
 
         left_scroll = QScrollArea()
