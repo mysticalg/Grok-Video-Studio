@@ -7728,11 +7728,9 @@ class MainWindow(QMainWindow):
             chunk_size = video_size
             total_chunk_count = 1
         else:
-            # For >64 MB: pick a safe chunk size (e.g. 20-64 MB)
-            chunk_size = MAX_CHUNK  # or e.g. 20*1024*1024 for smaller chunks
-            total_chunk_count = math.floor(video_size / chunk_size)
-            if total_chunk_count < 1:
-                total_chunk_count = 1
+            # For >64 MB: use 64 MB chunks and round up.
+            chunk_size = MAX_CHUNK
+            total_chunk_count = math.ceil(video_size / chunk_size)
         
         # Optional: if video_size < MIN_CHUNK, force single chunk
         if video_size < MIN_CHUNK:
@@ -7794,34 +7792,42 @@ class MainWindow(QMainWindow):
         else:
             print("Status check failed:", data)
             return
-        print(f"DEBUG: access token={data}")
+        print(f"DEBUG: init response={data}")
         upload_url = data['data']['upload_url']  # or check exact key in response
         publish_id = data['data'].get('publish_id')  # save for status check later
 
-        # ── SINGLE-CHUNK UPLOAD (your case) ───────────────────────────────────
-        video_size = os.path.getsize(video_path)
-        last_byte = video_size - 1
-
-        upload_headers = {
-            "Content-Type": "video/mp4",  # change if MOV/WebM/etc.
-            "Content-Length": str(video_size),
-            "Content-Range": f"bytes 0-{last_byte}/{video_size}"
-        }
-
+        # ── CHUNKED UPLOAD ─────────────────────────────────────────────────────
         with open(video_path, "rb") as f:
-            video_bytes = f.read()  # safe since small file
+            for chunk_index in range(total_chunk_count):
+                chunk_start = chunk_index * chunk_size
+                chunk_end = min(chunk_start + chunk_size, video_size) - 1
+                bytes_to_read = chunk_end - chunk_start + 1
+                video_bytes = f.read(bytes_to_read)
 
-        print(f"DEBUG: Uploading {video_size} bytes with range: bytes 0-{last_byte}/{video_size}")
+                upload_headers = {
+                    "Content-Type": "video/mp4",  # change if MOV/WebM/etc.
+                    "Content-Length": str(len(video_bytes)),
+                    "Content-Range": f"bytes {chunk_start}-{chunk_end}/{video_size}",
+                }
 
-        upload_resp = requests.put(upload_url, headers=upload_headers, data=video_bytes)
-        data = upload_resp.json()
-        print("Status response:", data)
-        print(f"DEBUG: Upload status code: {upload_resp.status_code}")
-        print(f"DEBUG: Upload response: {upload_resp}")
+                print(
+                    f"DEBUG: Uploading chunk {chunk_index + 1}/{total_chunk_count} "
+                    f"({len(video_bytes)} bytes) with range: bytes {chunk_start}-{chunk_end}/{video_size}"
+                )
+                upload_resp = requests.put(upload_url, headers=upload_headers, data=video_bytes)
+
+                print(f"DEBUG: Upload status code: {upload_resp.status_code}")
+                if upload_resp.text.strip():
+                    try:
+                        print("DEBUG: Upload response json:", upload_resp.json())
+                    except requests.exceptions.JSONDecodeError:
+                        print("DEBUG: Upload response text:", upload_resp.text)
+
+                if upload_resp.status_code not in (200, 201, 206):
+                    raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
+
         self.check_tiktok_status(access_token, publish_id)
-        
-        if upload_resp.status_code != 201:
-            raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
+
         self._append_log(f"TikTok Upload complete")
         # Success! Video is in user's TikTok inbox/drafts.
         # Optionally: poll status with publish_id
