@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import math
+import unicodedata
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -8917,30 +8918,33 @@ class MainWindow(QMainWindow):
         return combined.strip()
 
     def _build_tiktok_filename_stem(self, title_text: str, slogan_text: str, hashtags: list[str], max_length: int) -> str:
+        # TikTok's web uploader can time out while processing very long/non-ASCII names.
+        # Keep staged filenames short, ASCII-only, and punctuation-light for reliability.
         safe_title = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(title_text or "")).strip()
         safe_slogan = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(slogan_text or "")).strip()
         safe_title = re.sub(r"\s+", " ", safe_title).strip(" .")
         safe_slogan = re.sub(r"\s+", " ", safe_slogan).strip(" .")
-        normalized_tags = [f"#{str(tag).strip().lstrip('#')}" for tag in hashtags if str(tag).strip()]
 
         parts = [part for part in [safe_title, safe_slogan] if part]
-        base = " - ".join(parts).strip()
-        if not base:
-            base = "Tiktok Upload"
+        base = " - ".join(parts).strip() or "TikTok Upload"
 
-        candidate_tags = normalized_tags.copy()
-        if candidate_tags:
-            stem = f"{base} {' '.join(candidate_tags)}".strip()
-        else:
-            stem = base
+        ascii_base = unicodedata.normalize("NFKD", base).encode("ascii", "ignore").decode("ascii")
+        ascii_base = re.sub(r"[^A-Za-z0-9._ -]+", " ", ascii_base)
+        ascii_base = re.sub(r"\s+", " ", ascii_base).strip(" .-_")
 
-        while len(stem) > max_length and candidate_tags:
-            candidate_tags.pop()
-            stem = f"{base} {' '.join(candidate_tags)}".strip()
+        if not ascii_base:
+            ascii_base = "TikTok Upload"
 
-        if len(stem) > max_length:
-            stem = stem[:max_length].rstrip(" .")
-        return stem or "Tiktok Upload"
+        # Reserve room for a short deterministic suffix and keep overall stem compact.
+        compact_limit = max(16, min(max_length, 80))
+        short_base_limit = max(8, compact_limit - 12)
+        short_base = ascii_base[:short_base_limit].rstrip(" .-_") or "TikTokUpload"
+        suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stem = f"{short_base}_{suffix}"
+
+        if len(stem) > compact_limit:
+            stem = stem[:compact_limit].rstrip(" .-_")
+        return stem or "TikTokUpload"
 
     def _stage_tiktok_browser_video(self, source_video_path: str, title_text: str, slogan_text: str, hashtags: list[str]) -> str:
         source_path = Path(str(source_video_path)).expanduser()
