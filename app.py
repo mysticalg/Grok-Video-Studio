@@ -1370,7 +1370,7 @@ class BrowserTrainingWorker(QThread):
 
 
 class FilteredWebEnginePage(QWebEnginePage):
-    """Suppress noisy third-party console warnings from grok.com in the embedded browser."""
+    """Suppress noisy third-party console warnings in the embedded browser."""
 
     _IGNORED_CONSOLE_PATTERNS = (
         "cdn-cgi/speculation",
@@ -1382,6 +1382,8 @@ class FilteredWebEnginePage(QWebEnginePage):
         "featureassets.org/v1/initialize",
         "auth-cdn.oaistatic.com/assets/statsig",
         "upgrade-insecure-requests' is ignored when delivered in a report-only policy",
+        "[performance] an error occurred when calling measure(selectVideoFiles",
+        "iterable.length has been deprecated, use iterable.size or iterable.count()",
     )
 
     def __init__(
