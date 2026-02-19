@@ -4659,26 +4659,36 @@ class MainWindow(QMainWindow):
                 }};
 
                 if (phase === "pick") {{
-                    const generatedImages = [...document.querySelectorAll("img")]
+                    const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
                         .filter((img) => {{
                             if (!isVisible(img)) return false;
                             const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
                             const title = (img.getAttribute("title") || "").trim().toLowerCase();
                             const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
                             const descriptor = (alt + " " + title + " " + aria).trim();
-                            const isEditControlImage = /\\bedit\\s+image\\b/i.test(descriptor);
-                            if (isEditControlImage) return false;
-
-                            const hintedGenerated = /generated\\s+image|created\\s+image|image\\s+result/i.test(descriptor);
+                            if (/\\bedit\\s+image\\b/i.test(descriptor)) return false;
                             const width = img.naturalWidth || img.width || img.clientWidth || 0;
                             const height = img.naturalHeight || img.height || img.clientHeight || 0;
-                            const largeEnough = width >= 220 && height >= 220;
-                            return hintedGenerated || largeEnough;
+                            return width >= 220 && height >= 220;
                         }});
+
+                    const generatedImages = listItemImages.length
+                        ? listItemImages
+                        : [...document.querySelectorAll("img[alt='Generated image'], img[alt*='generated' i], img[aria-label*='generated' i]")]
+                            .filter((img) => isVisible(img));
+
                     if (!generatedImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
 
+                    generatedImages.sort((a, b) => {{
+                        const ar = a.getBoundingClientRect();
+                        const br = b.getBoundingClientRect();
+                        const rowDelta = Math.abs(ar.top - br.top);
+                        if (rowDelta > 20) return ar.top - br.top;
+                        return ar.left - br.left;
+                    }});
+
                     const firstImage = generatedImages[0];
-                    const listItem = firstImage.closest("button, [role='button'], [role='listitem'], li, article, figure");
+                    const listItem = firstImage.closest("[role='listitem'], button, [role='button'], li, article, figure");
                     const clickedImage = emulateClick(listItem) || emulateClick(firstImage) || emulateClick(firstImage.parentElement);
                     if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
                     await sleep(ACTION_DELAY_MS);
