@@ -7937,6 +7937,7 @@ class MainWindow(QMainWindow):
                     const videoName = String(payload.video_name || "upload.mp4");
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
+                    const titleText = String(payload.title || "").trim();
                     const captionText = String(payload.caption || "").trim();
                     const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
@@ -8402,6 +8403,39 @@ class MainWindow(QMainWindow):
                         const youtubeOptions = (payload.youtube_options && typeof payload.youtube_options === "object") ? payload.youtube_options : {};
                         const visibility = String(youtubeOptions.visibility || "public").toLowerCase();
                         const audience = String(youtubeOptions.audience || "not_kids").toLowerCase();
+                        const nowMs = Date.now();
+                        const actionSpacingElapsed = !youtubeState.lastActionAtMs || (nowMs - Number(youtubeState.lastActionAtMs)) >= 700;
+
+                        if (!fileInput && actionSpacingElapsed) {
+                            const createButton = bySelectors([
+                                'button[aria-label*="create" i]',
+                                'ytcp-button#create-icon button',
+                                'ytcp-button[id="create-icon"] button',
+                                'ytcp-button#create-icon',
+                            ]) || findClickableByHints(["create"]);
+                            if (createButton) {
+                                const clickedCreate = clickNodeOrAncestor(createButton);
+                                openUploadClicked = clickedCreate || openUploadClicked;
+                                if (clickedCreate) {
+                                    youtubeState.lastActionAtMs = nowMs;
+                                }
+                            }
+
+                            const uploadItem = bySelectors([
+                                'tp-yt-paper-item[test-id="upload"]',
+                                'tp-yt-paper-item#text-item-0',
+                                'tp-yt-paper-item[aria-label*="upload" i]',
+                                'ytd-menu-service-item-renderer tp-yt-paper-item[role="menuitem"]',
+                            ]) || findClickableByHints(["upload videos", "upload video", "upload"]);
+                            if (uploadItem) {
+                                const clickedUpload = clickNodeOrAncestor(uploadItem);
+                                openUploadClicked = clickedUpload || openUploadClicked;
+                                if (clickedUpload) {
+                                    youtubeState.uploadMenuClicked = true;
+                                    youtubeState.lastActionAtMs = nowMs;
+                                }
+                            }
+                        }
 
                         if (titleText) {
                             const titleTarget = bySelectors([
@@ -8429,10 +8463,11 @@ class MainWindow(QMainWindow):
                         }
 
                         const nextButton = findClickableByHints(["next"]);
-                        if (nextButton && Number(youtubeState.nextClicks || 0) < 3) {
+                        if (nextButton && Number(youtubeState.nextClicks || 0) < 3 && actionSpacingElapsed) {
                             const clicked = clickNodeOrAncestor(nextButton);
                             if (clicked) {
                                 youtubeState.nextClicks = Number(youtubeState.nextClicks || 0) + 1;
+                                youtubeState.lastActionAtMs = nowMs;
                             }
                         }
 
@@ -8455,9 +8490,12 @@ class MainWindow(QMainWindow):
                             }
 
                             const doneButton = findClickableByHints(["publish", "done", "save"]);
-                            if (doneButton && !youtubeState.submitted) {
+                            if (doneButton && !youtubeState.submitted && actionSpacingElapsed) {
                                 submitClicked = clickNodeOrAncestor(doneButton) || submitClicked;
-                                if (submitClicked) youtubeState.submitted = true;
+                                if (submitClicked) {
+                                    youtubeState.submitted = true;
+                                    youtubeState.lastActionAtMs = nowMs;
+                                }
                             }
                         }
                     }
