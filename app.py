@@ -1488,6 +1488,7 @@ class MainWindow(QMainWindow):
         self.manual_image_submit_token = 0
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
+        self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_video_allow_make_click = True
@@ -4187,6 +4188,7 @@ class MainWindow(QMainWindow):
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
         self.manual_download_click_sent = False
+        self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
 
         populate_script = rf"""
@@ -5105,6 +5107,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download = variant
         self.pending_manual_download_type = "video"
         self.manual_download_click_sent = False
+        self.manual_download_request_pending = False
         action_delay_ms = 1000
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_label = f"{int(self.video_duration.currentData() or 10)}s"
@@ -5696,6 +5699,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
         self.manual_download_click_sent = False
+        self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_video_allow_make_click = allow_make_video_click
@@ -5716,6 +5720,7 @@ class MainWindow(QMainWindow):
         if time.time() > deadline:
             self.pending_manual_variant_for_download = None
             self.manual_download_click_sent = False
+            self.manual_download_request_pending = False
             self.manual_video_start_click_sent = False
             self.manual_video_make_click_fallback_used = False
             self.manual_video_allow_make_click = True
@@ -5913,6 +5918,10 @@ class MainWindow(QMainWindow):
         variant = self.pending_manual_variant_for_download
         if variant is None:
             return
+        if self.manual_download_request_pending:
+            self._append_log("Ignoring duplicate browser download request for current manual variant.")
+            download.cancel()
+            return
         if self.manual_download_in_progress:
             self.manual_download_in_progress = False
         elif self.manual_download_click_sent:
@@ -5925,6 +5934,8 @@ class MainWindow(QMainWindow):
         filename = f"{download_type}_{int(time.time() * 1000)}_manual_v{variant}.{extension}"
         download.setDownloadDirectory(str(self.download_dir))
         download.setDownloadFileName(filename)
+        self.manual_download_click_sent = True
+        self.manual_download_request_pending = True
         download.accept()
         self._append_log(f"Downloading manual {download_type} variant {variant} to {self.download_dir / filename}")
 
@@ -5944,6 +5955,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
+                    self.manual_download_request_pending = False
                     self.manual_video_start_click_sent = False
                     self.manual_video_make_click_fallback_used = False
                     self.manual_video_allow_make_click = True
@@ -5961,6 +5973,7 @@ class MainWindow(QMainWindow):
                     if video_path.exists():
                         video_path.unlink(missing_ok=True)
                     self.manual_download_click_sent = False
+                    self.manual_download_request_pending = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = time.time()
                     self.manual_download_poll_timer.start(1200)
@@ -5980,6 +5993,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
+                    self.manual_download_request_pending = False
                     self.manual_video_start_click_sent = False
                     self.manual_video_make_click_fallback_used = False
                     self.manual_video_allow_make_click = True
@@ -6017,6 +6031,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
                 self.manual_download_click_sent = False
+                self.manual_download_request_pending = False
                 self.manual_video_start_click_sent = False
                 self.manual_video_make_click_fallback_used = False
                 self.manual_video_allow_make_click = True
@@ -6049,6 +6064,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
                 self.manual_download_click_sent = False
+                self.manual_download_request_pending = False
                 self.manual_video_start_click_sent = False
                 self.manual_video_make_click_fallback_used = False
                 self.manual_video_allow_make_click = True
@@ -6081,6 +6097,7 @@ class MainWindow(QMainWindow):
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
         self.manual_download_click_sent = False
+        self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_video_allow_make_click = True
