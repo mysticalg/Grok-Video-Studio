@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTabWidget,
     QToolButton,
+    QStatusBar,
     QScrollArea,
     QTextBrowser,
     QVBoxLayout,
@@ -1932,18 +1933,6 @@ class MainWindow(QMainWindow):
         self.stitch_progress_bar.setVisible(False)
         log_layout.addWidget(self.stitch_progress_bar)
 
-        self.upload_progress_label = QLabel("Upload progress: idle")
-        self.upload_progress_label.setStyleSheet("color: #9fb3c8;")
-        self.upload_progress_label.setWordWrap(True)
-        self.upload_progress_label.setMaximumWidth(560)
-        self.upload_progress_label.setToolTip("Upload progress details")
-        log_layout.addWidget(self.upload_progress_label)
-
-        self.upload_progress_bar = QProgressBar()
-        self.upload_progress_bar.setRange(0, 100)
-        self.upload_progress_bar.setValue(0)
-        self.upload_progress_bar.setVisible(False)
-        log_layout.addWidget(self.upload_progress_bar)
         log_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignLeft)
 
         if QTWEBENGINE_USE_DISK_CACHE:
@@ -2062,6 +2051,21 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(container)
         layout.addWidget(splitter)
         self.setCentralWidget(container)
+
+        status_bar = QStatusBar(self)
+        status_bar.setSizeGripEnabled(False)
+        self.setStatusBar(status_bar)
+
+        self.upload_progress_label = QLabel("Upload progress: idle")
+        self.upload_progress_label.setToolTip("Upload progress details")
+        status_bar.addWidget(self.upload_progress_label, 1)
+
+        self.upload_progress_bar = QProgressBar()
+        self.upload_progress_bar.setRange(0, 100)
+        self.upload_progress_bar.setValue(0)
+        self.upload_progress_bar.setVisible(False)
+        self.upload_progress_bar.setFixedWidth(260)
+        status_bar.addPermanentWidget(self.upload_progress_bar)
 
         self._build_menu_bar()
         self._toggle_prompt_source_fields()
