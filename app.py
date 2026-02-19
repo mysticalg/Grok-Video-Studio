@@ -8513,17 +8513,24 @@ class MainWindow(QMainWindow):
                         }
 
                         if (Number(youtubeState.nextClicks || 0) >= 4) {
+                            const visibilityGroup = bySelectors([
+                                'tp-yt-paper-radio-group#privacy-radios',
+                                'ytcp-video-visibility-select tp-yt-paper-radio-group',
+                            ]);
                             const visibilityRadio = visibility === "private"
                                 ? bySelectors([
+                                    'tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button#private-radio-button',
                                     'tp-yt-paper-radio-button#private-radio-button',
                                     'tp-yt-paper-radio-button[name="PRIVATE"]',
                                 ])
                                 : (visibility === "unlisted"
                                     ? bySelectors([
+                                        'tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button#unlisted-radio-button',
                                         'tp-yt-paper-radio-button#unlisted-radio-button',
                                         'tp-yt-paper-radio-button[name="UNLISTED"]',
                                     ])
                                     : bySelectors([
+                                        'tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button#public-radio-button',
                                         'tp-yt-paper-radio-button#public-radio-button',
                                         'tp-yt-paper-radio-button[name="PUBLIC"]',
                                     ]));
@@ -8532,11 +8539,20 @@ class MainWindow(QMainWindow):
                                 && String(visibilityRadio.getAttribute('aria-checked') || '').toLowerCase() === 'true'
                             );
                             if (visibilityRadio && !visibilitySelected && actionSpacingElapsed) {
-                                const clickedVisibility = clickNodeOrAncestor(visibilityRadio);
+                                const innerRadioTarget = pick([
+                                    visibilityRadio.querySelector && visibilityRadio.querySelector('div#radioContainer, div[role="radio"], #radioLabel, .onRadio'),
+                                    visibilityRadio,
+                                ]);
+                                const clickedVisibility = clickNodeSingle(innerRadioTarget) || clickNodeOrAncestor(visibilityRadio);
                                 if (clickedVisibility) {
                                     youtubeState.lastActionAtMs = nowMs;
                                 }
                             }
+
+                            const visibilityReady = Boolean(
+                                visibilityRadio
+                                && String(visibilityRadio.getAttribute('aria-checked') || '').toLowerCase() === 'true'
+                            );
 
                             const scheduleText = String(youtubeOptions.schedule || "").trim();
                             if (scheduleText) {
@@ -8548,12 +8564,13 @@ class MainWindow(QMainWindow):
                                 }
                             }
 
+                            const finalActionHints = visibility === "public" ? ["publish"] : ["save", "done"];
                             const doneButton = bySelectors([
                                 'ytcp-button#done-button button',
                                 'ytcp-button[id="done-button"] button',
-                                'button[aria-label*="save" i]',
-                                'button[aria-label*="publish" i]',
-                            ]) || findClickableByHints(["publish", "done", "save"]);
+                                visibility === "public" ? 'button[aria-label*="publish" i]' : 'button[aria-label*="save" i]',
+                                'button[aria-label*="done" i]',
+                            ]) || findClickableByHints(finalActionHints);
                             const doneDisabled = Boolean(
                                 doneButton
                                 && (
@@ -8562,7 +8579,7 @@ class MainWindow(QMainWindow):
                                     || String(doneButton.getAttribute('disabled') || '').toLowerCase() === 'true'
                                 )
                             );
-                            if (doneButton && !doneDisabled && !youtubeState.submitted && actionSpacingElapsed) {
+                            if (doneButton && !doneDisabled && !youtubeState.submitted && visibilityReady && actionSpacingElapsed) {
                                 submitClicked = clickNodeOrAncestor(doneButton) || submitClicked;
                                 if (submitClicked) {
                                     youtubeState.submitted = true;
