@@ -47,10 +47,13 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QTabWidget,
+    QToolButton,
     QScrollArea,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
+    QMenu,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -1673,6 +1676,31 @@ class MainWindow(QMainWindow):
         self.stop_all_btn.clicked.connect(self.stop_all_jobs)
         actions_layout.addWidget(self.stop_all_btn, 1, 1)
 
+        self.video_settings_btn = QToolButton()
+        self.video_settings_btn.setText("🎞️ Video")
+        self.video_settings_btn.setPopupMode(QToolButton.InstantPopup)
+        self.video_settings_btn.setToolTip("Video settings menu.")
+
+        video_menu = QMenu(self.video_settings_btn)
+        self.video_settings_menu = video_menu.addMenu("Settings")
+        self.video_settings_btn.setMenu(video_menu)
+        actions_layout.addWidget(self.video_settings_btn, 2, 0)
+
+        self.audio_settings_btn = QToolButton()
+        self.audio_settings_btn.setText("🎵 Audio")
+        self.audio_settings_btn.setPopupMode(QToolButton.InstantPopup)
+        self.audio_settings_btn.setToolTip("Audio settings menu.")
+
+        audio_menu = QMenu(self.audio_settings_btn)
+        self.audio_settings_menu = audio_menu.addMenu("Settings")
+        self.audio_settings_btn.setMenu(audio_menu)
+        actions_layout.addWidget(self.audio_settings_btn, 2, 1)
+
+        def add_menu_widget(menu: QMenu, widget: QWidget) -> None:
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(widget)
+            menu.addAction(action)
+
         self.continue_frame_btn = QPushButton("🟨 Continue from Last Frame (paste + generate)")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
         self.continue_frame_btn.setStyleSheet(
@@ -1708,26 +1736,26 @@ class MainWindow(QMainWindow):
 
         self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
-        actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 1)
+        add_menu_widget(self.video_settings_menu, self.stitch_crossfade_checkbox)
 
         self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation")
         self.stitch_interpolation_checkbox.setToolTip(
             "After stitching, use ffmpeg minterpolate to smooth motion by generating in-between frames."
         )
-        actions_layout.addWidget(self.stitch_interpolation_checkbox, 5, 0, 1, 1)
+        add_menu_widget(self.video_settings_menu, self.stitch_interpolation_checkbox)
 
         self.stitch_interpolation_fps = QComboBox()
         self.stitch_interpolation_fps.addItem("48 fps", 48)
         self.stitch_interpolation_fps.addItem("60 fps", 60)
         self.stitch_interpolation_fps.setCurrentIndex(0)
         self.stitch_interpolation_fps.setToolTip("Target frame rate used when frame interpolation is enabled.")
-        actions_layout.addWidget(self.stitch_interpolation_fps, 5, 1, 1, 1)
+        add_menu_widget(self.video_settings_menu, self.stitch_interpolation_fps)
 
         self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling")
         self.stitch_upscale_checkbox.setToolTip(
             "After stitching, upscale output to a selected target resolution using high-quality Lanczos scaling."
         )
-        actions_layout.addWidget(self.stitch_upscale_checkbox, 6, 0, 1, 1)
+        add_menu_widget(self.video_settings_menu, self.stitch_upscale_checkbox)
 
         self.stitch_upscale_target = QComboBox()
         self.stitch_upscale_target.addItem("2x (max 4K)", "2x")
@@ -1736,13 +1764,13 @@ class MainWindow(QMainWindow):
         self.stitch_upscale_target.addItem("4K (3840x2160)", "4k")
         self.stitch_upscale_target.setCurrentIndex(0)
         self.stitch_upscale_target.setToolTip("Choose output upscale target resolution.")
-        actions_layout.addWidget(self.stitch_upscale_target, 6, 1, 1, 1)
+        add_menu_widget(self.video_settings_menu, self.stitch_upscale_target)
 
         self.stitch_gpu_checkbox = QCheckBox("Use GPU encoding for stitching (NVENC)")
         self.stitch_gpu_checkbox.setToolTip("Use NVIDIA NVENC encoder when available to reduce CPU load.")
         self.stitch_gpu_checkbox.setChecked(True)
         self.stitch_gpu_checkbox.toggled.connect(lambda _: self._sync_video_options_label())
-        actions_layout.addWidget(self.stitch_gpu_checkbox, 7, 0, 1, 2)
+        add_menu_widget(self.video_settings_menu, self.stitch_gpu_checkbox)
 
         self.video_options_dropdown = QComboBox()
         self.video_options_dropdown.addItem("0.2s", 0.2)
@@ -1755,7 +1783,7 @@ class MainWindow(QMainWindow):
         self.video_options_dropdown.setMaximumWidth(140)
         self.video_options_dropdown.setToolTip("Crossfade duration for stitching.")
         self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
-        actions_layout.addWidget(self.video_options_dropdown, 4, 1, 1, 1, alignment=Qt.AlignRight)
+        add_menu_widget(self.video_settings_menu, self.video_options_dropdown)
 
         self.music_file_label = QLabel("Music: none selected")
         self.music_file_label.setStyleSheet("color: #9fb3c8;")
@@ -1776,7 +1804,7 @@ class MainWindow(QMainWindow):
 
         self.stitch_mute_original_checkbox = QCheckBox("Mute original video audio when music is used")
         self.stitch_mute_original_checkbox.setToolTip("If enabled, only the selected music is audible in the stitched output.")
-        actions_layout.addWidget(self.stitch_mute_original_checkbox, 10, 0, 1, 2)
+        add_menu_widget(self.audio_settings_menu, self.stitch_mute_original_checkbox)
 
         self.stitch_original_audio_volume = QSpinBox()
         self.stitch_original_audio_volume.setRange(0, 200)
@@ -1784,7 +1812,7 @@ class MainWindow(QMainWindow):
         self.stitch_original_audio_volume.setPrefix("Original audio: ")
         self.stitch_original_audio_volume.setSuffix("%")
         self.stitch_original_audio_volume.setToolTip("Original video audio level used during custom music mixing.")
-        actions_layout.addWidget(self.stitch_original_audio_volume, 11, 0)
+        add_menu_widget(self.audio_settings_menu, self.stitch_original_audio_volume)
 
         self.stitch_music_volume = QSpinBox()
         self.stitch_music_volume.setRange(0, 200)
@@ -1792,7 +1820,7 @@ class MainWindow(QMainWindow):
         self.stitch_music_volume.setPrefix("Music audio: ")
         self.stitch_music_volume.setSuffix("%")
         self.stitch_music_volume.setToolTip("Custom music level used during stitched output mixing.")
-        actions_layout.addWidget(self.stitch_music_volume, 11, 1)
+        add_menu_widget(self.audio_settings_menu, self.stitch_music_volume)
 
         self.stitch_audio_fade_duration = QDoubleSpinBox()
         self.stitch_audio_fade_duration.setRange(0.0, 10.0)
@@ -1801,11 +1829,11 @@ class MainWindow(QMainWindow):
         self.stitch_audio_fade_duration.setValue(0.5)
         self.stitch_audio_fade_duration.setSuffix(" s")
         self.stitch_audio_fade_duration.setToolTip("Fade-in and fade-out duration applied to stitched output audio mix.")
-        actions_layout.addWidget(self.stitch_audio_fade_duration, 12, 0)
+        add_menu_widget(self.audio_settings_menu, self.stitch_audio_fade_duration)
 
         self.stitch_audio_fade_label = QLabel("Audio fade in/out")
         self.stitch_audio_fade_label.setStyleSheet("color: #9fb3c8;")
-        actions_layout.addWidget(self.stitch_audio_fade_label, 12, 1)
+        add_menu_widget(self.audio_settings_menu, self.stitch_audio_fade_label)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
