@@ -66,6 +66,7 @@ THUMBNAILS_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
+MAX_BROWSER_INLINE_VIDEO_BYTES = 64 * 1024 * 1024
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
@@ -7858,11 +7859,28 @@ class MainWindow(QMainWindow):
 
         video_file = Path(str(video_path))
         encoded_video = ""
+        encoded_video_chunks: list[str] = []
+        inline_staging_enabled = False
+        video_size_bytes = 0
         if video_file.exists() and video_file.is_file():
             try:
-                encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+                video_size_bytes = video_file.stat().st_size
+                if 0 < video_size_bytes <= MAX_BROWSER_INLINE_VIDEO_BYTES:
+                    encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+                    chunk_chars = 4 * 1024 * 1024
+                    encoded_video_chunks = [
+                        encoded_video[idx : idx + chunk_chars]
+                        for idx in range(0, len(encoded_video), chunk_chars)
+                    ]
+                    inline_staging_enabled = True
+                else:
+                    self._append_log(
+                        f"{platform_name}: video is {video_size_bytes / (1024 * 1024):.1f} MB; skipping inline browser staging and using native file picker automation instead."
+                    )
             except Exception:
                 encoded_video = ""
+                encoded_video_chunks = []
+                inline_staging_enabled = False
 
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
@@ -7872,8 +7890,11 @@ class MainWindow(QMainWindow):
             "attempts": 0,
             "allow_file_dialog": True,
             "video_base64": encoded_video,
+            "video_base64_chunks": encoded_video_chunks,
             "video_name": video_file.name or "upload.mp4",
             "video_mime": "video/mp4",
+            "inline_staging_enabled": inline_staging_enabled,
+            "video_size_bytes": video_size_bytes,
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
         self._append_log(
@@ -7928,8 +7949,10 @@ class MainWindow(QMainWindow):
                 "platform": platform_name.lower(),
                 "video_path": str(pending.get("video_path") or ""),
                 "video_base64": str(pending.get("video_base64") or ""),
+                "video_base64_chunks": list(pending.get("video_base64_chunks") or []),
                 "video_name": str(pending.get("video_name") or "upload.mp4"),
                 "video_mime": str(pending.get("video_mime") or "video/mp4"),
+                "inline_staging_enabled": bool(pending.get("inline_staging_enabled", False)),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
                 "youtube_options": pending.get("youtube_options") or {},
             },
@@ -8067,6 +8090,9 @@ class MainWindow(QMainWindow):
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
                     const videoBase64 = String(payload.video_base64 || "");
+                    const videoBase64Chunks = Array.isArray(payload.video_base64_chunks) ? payload.video_base64_chunks : [];
+                    const hasVideoChunks = videoBase64Chunks.length > 0;
+                    const inlineStagingEnabled = Boolean(payload.inline_staging_enabled);
                     const videoName = String(payload.video_name || "upload.mp4");
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
@@ -8269,12 +8295,17 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        if (!alreadyHasFile && !alreadyStaged && videoBase64) {
+                        if (!alreadyHasFile && !alreadyStaged && inlineStagingEnabled && (videoBase64 || hasVideoChunks)) {
                             try {
-                                const binary = atob(videoBase64);
-                                const bytes = new Uint8Array(binary.length);
-                                for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-                                const file = new File([bytes], videoName, { type: videoMime });
+                                const chunkList = hasVideoChunks ? videoBase64Chunks : [videoBase64];
+                                const byteChunks = [];
+                                for (const b64Chunk of chunkList) {
+                                    const binary = atob(String(b64Chunk || ""));
+                                    const bytes = new Uint8Array(binary.length);
+                                    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                                    byteChunks.push(bytes);
+                                }
+                                const file = new File(byteChunks, videoName, { type: videoMime });
                                 const dt = new DataTransfer();
                                 dt.items.add(file);
                                 if (setInputFiles(fileInput, dt.files)) {
