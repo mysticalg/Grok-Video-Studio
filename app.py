@@ -7739,7 +7739,7 @@ class MainWindow(QMainWindow):
         attempts = int(pending["attempts"])
 
         if platform_name == "Instagram":
-            max_attempts = 10
+            max_attempts = 14
         elif platform_name == "TikTok":
             max_attempts = 12
         elif platform_name == "Facebook":
@@ -7913,26 +7913,6 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     if (platform === "instagram") {
-                        if (!pageReady && attemptNo <= 3) {
-                            return {
-                                fileInputFound: false,
-                                fileDialogTriggered: false,
-                                openUploadClicked: false,
-                                fileReadySignal: false,
-                                textFilled: false,
-                                captionReady: false,
-                                facebookSubmitDelayElapsed: true,
-                                nextClicked: false,
-                                submitClicked: false,
-                                tiktokPostEnabled: false,
-                                tiktokSubmitClickedEver: false,
-                                videoPathQueued: Boolean(requestedVideoPath),
-                                requestedVideoPath,
-                                allowFileDialog,
-                                waitingForLoad: true,
-                                pageReady,
-                            };
-                        }
                         const pathHint = norm(String(window.location && window.location.pathname || ""));
                         const onReelCreatePage = pathHint.includes("/reels/create") || pathHint.includes("/create/reel");
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
@@ -7940,20 +7920,24 @@ class MainWindow(QMainWindow):
                             instagramState.dialogSeen = true;
                             instagramState.postClicked = true;
                             instagramState.createClicked = true;
-                        } else if (onReelCreatePage) {
-                            instagramState.createClicked = true;
-                            const reelStartButton = findClickableByHints([
-                                "select from computer",
-                                "choose files",
-                                "choose file",
-                                "add video",
-                                "upload",
-                            ]);
-                            if (reelStartButton) {
-                                const clicked = clickNodeOrAncestor(reelStartButton);
-                                openUploadClicked = clicked || openUploadClicked;
-                            }
                         } else {
+                            let clickedReelEntry = false;
+                            if (onReelCreatePage) {
+                                instagramState.createClicked = true;
+                                const reelStartButton = findClickableByHints([
+                                    "select from computer",
+                                    "choose files",
+                                    "choose file",
+                                    "add video",
+                                    "upload",
+                                ]);
+                                if (reelStartButton) {
+                                    const clicked = clickNodeOrAncestor(reelStartButton);
+                                    openUploadClicked = clicked || openUploadClicked;
+                                    clickedReelEntry = clickedReelEntry || clicked;
+                                }
+                            }
+                            if (!clickedReelEntry) {
                             const dispatchHover = (node) => {
                                 if (!node) return;
                                 const events = ["pointerenter", "mouseenter", "mouseover", "pointerover"];
@@ -8443,7 +8427,7 @@ class MainWindow(QMainWindow):
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
-                        waitingForLoad: false,
+                        waitingForLoad: !pageReady,
                         pageReady,
                     };
                 } catch (err) {
@@ -8492,7 +8476,7 @@ class MainWindow(QMainWindow):
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} page_ready={page_ready} waiting_for_load={waiting_for_load} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
             pending["allow_file_dialog"] = False
-            if waiting_for_load:
+            if waiting_for_load and not (file_found or open_upload_clicked or file_dialog_triggered or file_ready_signal):
                 status_label.setText(f"Status: attempt {attempts} waiting for page to finish loading...")
                 timer.start(1700)
                 return
