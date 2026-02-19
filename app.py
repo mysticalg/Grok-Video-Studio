@@ -8269,7 +8269,20 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        if (!alreadyHasFile && !alreadyStaged && videoBase64) {
+                        const shouldUsePathDialog = Boolean(
+                            requestedVideoPath
+                            && allowFileDialog
+                            && (platform === "tiktok" || platform === "youtube")
+                        );
+
+                        if (!alreadyHasFile && !alreadyStaged && shouldUsePathDialog) {
+                            try {
+                                const clicked = clickNodeOrAncestor(fileInput) || clickNodeSingle(fileInput);
+                                fileDialogTriggered = clicked || fileDialogTriggered;
+                            } catch (_) {}
+                        }
+
+                        if (!alreadyHasFile && !alreadyStaged && !shouldUsePathDialog && videoBase64) {
                             try {
                                 const binary = atob(videoBase64);
                                 const bytes = new Uint8Array(binary.length);
