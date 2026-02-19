@@ -1547,13 +1547,8 @@ class MainWindow(QMainWindow):
         self.setStyleSheet("")
 
     def _instagram_reels_create_url(self) -> str:
-        username = ""
-        if hasattr(self, "instagram_username") and self.instagram_username is not None:
-            username = self.instagram_username.text().strip()
-        if not username:
-            username = os.getenv("INSTAGRAM_USERNAME", "").strip()
-        if username:
-            return f"https://www.instagram.com/{username}/reels/create"
+        # Instagram's actual web composer path is global, not profile-scoped.
+        # Using /<username>/reels/create lands on profile reels and has no upload form.
         return "https://www.instagram.com/create/reel/"
 
     def _refresh_instagram_upload_tab_url(self) -> None:
@@ -2663,9 +2658,9 @@ class MainWindow(QMainWindow):
 
         self.instagram_username = QLineEdit(os.getenv("INSTAGRAM_USERNAME", ""))
         self.instagram_username.setPlaceholderText("e.g. funkymonk66")
-        self.instagram_username.setToolTip("Used for the Instagram web upload tab URL: https://www.instagram.com/<username>/reels/create")
+        self.instagram_username.setToolTip("Optional account hint only. Web upload tab always opens https://www.instagram.com/create/reel/")
         self.instagram_username.editingFinished.connect(self._refresh_instagram_upload_tab_url)
-        instagram_layout.addRow("Instagram Username (web upload URL)", self.instagram_username)
+        instagram_layout.addRow("Instagram Username (optional)", self.instagram_username)
 
         tiktok_group = QGroupBox("TikTok")
         tiktok_layout = QFormLayout(tiktok_group)
