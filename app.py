@@ -464,6 +464,7 @@ class GenerateWorker(QThread):
         self.stop_requested = False
         self._openai_uploaded_reference_cache: dict[str, str] = {}
         self._openai_last_generated_video_path: Path | None = None
+        self._openai_last_generated_reference_id: str = ""
 
     def request_stop(self) -> None:
         self.stop_requested = True
@@ -593,6 +594,34 @@ class GenerateWorker(QThread):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+    def _looks_like_openai_file_id(self, value: str) -> bool:
+        normalized = str(value).strip()
+        return normalized.startswith("file-") and len(normalized) > len("file-")
+
+    def _extract_openai_input_reference_id(self, payload: object) -> str:
+        candidates: list[str] = []
+
+        def collect(value: object) -> None:
+            if isinstance(value, dict):
+                for key in ("image_id", "input_reference", "input_image_id", "reference_image_id", "file_id"):
+                    candidate = value.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        candidates.append(candidate.strip())
+                output = value.get("output")
+                if isinstance(output, dict):
+                    collect(output)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+
+        collect(payload)
+        return candidates[0] if candidates else ""
+
+    def _openai_input_reference_payload_variants(self, payload: dict[str, object]) -> list[dict[str, object]]:
+        # OpenAI Sora expects `input_reference` as a file value (string file id in this integration).
+        # Object forms such as {"file_id": ...} or {"id": ...} trigger invalid_type errors.
+        return [payload]
+
     def _resolve_latest_video_for_sora_continuation(self) -> Path | None:
         video_extensions = {".mp4", ".mov", ".m4v", ".webm"}
         if self._openai_last_generated_video_path and self._openai_last_generated_video_path.exists():
@@ -610,30 +639,44 @@ class GenerateWorker(QThread):
     def _extract_last_frame_for_sora(self, video_path: Path) -> Path:
         self._ensure_not_stopped()
         self.download_dir.mkdir(parents=True, exist_ok=True)
-        frame_path = self.download_dir / f"sora_last_frame_{int(time.time() * 1000)}.png"
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-sseof",
-            "-0.05",
-            "-i",
-            str(video_path),
-            "-update",
-            "1",
-            "-frames:v",
-            "1",
-            str(frame_path),
+        extraction_attempts = [
+            ["-sseof", "-0.05"],
+            ["-sseof", "-0.5"],
+            ["-sseof", "-1.0"],
         ]
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-        except FileNotFoundError as exc:
-            raise RuntimeError("ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH.") from exc
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"Failed to extract last frame for Sora continuity: {exc.stderr[-500:] or 'ffmpeg failed'}") from exc
+        failure_messages: list[str] = []
 
-        if not frame_path.exists() or frame_path.stat().st_size <= 0:
-            raise RuntimeError("Sora continuity frame extraction produced an empty image.")
-        return frame_path
+        for attempt_index, seek_args in enumerate(extraction_attempts):
+            frame_path = self.download_dir / f"sora_last_frame_{int(time.time() * 1000)}_{attempt_index}.png"
+            cmd = [
+                "ffmpeg",
+                "-y",
+                *seek_args,
+                "-i",
+                str(video_path),
+                "-frames:v",
+                "1",
+                str(frame_path),
+            ]
+            try:
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH."
+                ) from exc
+            except subprocess.CalledProcessError as exc:
+                failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
+                continue
+
+            if frame_path.exists() and frame_path.stat().st_size > 0:
+                return frame_path
+
+            failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
+
+        raise RuntimeError(
+            "Sora continuity frame extraction produced an empty image. "
+            f"Attempts failed with: {' | '.join(msg.strip() for msg in failure_messages if msg.strip())[:1200]}"
+        )
 
     def _upload_openai_input_reference_file(self, file_path: Path) -> str:
         self._ensure_not_stopped()
@@ -668,28 +711,53 @@ class GenerateWorker(QThread):
         input_reference = str(settings.get("input_reference") or "").strip()
 
         if self._openai_setting_enabled(settings.get("continue_from_last_frame")):
-            latest_video = self._resolve_latest_video_for_sora_continuation()
-            if latest_video is None:
-                raise RuntimeError(
-                    "Sora continuity is enabled, but no generated videos were found in the downloads folder to extract from."
+            if self._openai_last_generated_reference_id and self._looks_like_openai_file_id(self._openai_last_generated_reference_id):
+                self.status.emit(
+                    f"Sora continuity: reusing previous OpenAI file reference id {self._openai_last_generated_reference_id}."
                 )
-            self.status.emit(f"Sora continuity: extracting last frame from {latest_video.name}...")
-            frame_path = self._extract_last_frame_for_sora(latest_video)
-            input_reference = str(frame_path)
+                input_reference = self._openai_last_generated_reference_id
+            else:
+                if self._openai_last_generated_reference_id:
+                    self.status.emit(
+                        "Sora continuity: previous OpenAI reference id is not a file id; extracting and uploading a frame instead."
+                    )
+                latest_video = self._resolve_latest_video_for_sora_continuation()
+                if latest_video is None:
+                    raise RuntimeError(
+                        "Sora continuity is enabled, but no generated videos were found in the downloads folder to extract from."
+                    )
+                self.status.emit(f"Sora continuity: extracting last frame from {latest_video.name}...")
+                frame_path = self._extract_last_frame_for_sora(latest_video)
+                input_reference = str(frame_path)
 
         if not input_reference:
             return ""
 
         local_path = Path(input_reference)
         if local_path.exists() and local_path.is_file():
-            self.status.emit(f"Sora continuity: uploading input reference file {local_path.name}...")
-            file_id = self._upload_openai_input_reference_file(local_path)
-            self.status.emit(f"Sora continuity: uploaded input reference as {file_id}.")
-            return file_id
+            self.status.emit(f"Sora continuity: using local input reference file {local_path.name}.")
+            return str(local_path)
 
         return input_reference
 
-    def _start_openai_video_job(self, prompt: str) -> tuple[str | None, str | None]:
+    def _post_openai_sora_generation_request(self, endpoint: str, headers: dict[str, str], payload: dict[str, object]) -> requests.Response:
+        input_reference_value = payload.get("input_reference")
+        if isinstance(input_reference_value, str):
+            candidate_path = Path(input_reference_value)
+            if candidate_path.exists() and candidate_path.is_file():
+                request_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+                data = {k: str(v) for k, v in payload.items() if k != "input_reference"}
+                with candidate_path.open("rb") as handle:
+                    return requests.post(
+                        endpoint,
+                        headers=request_headers,
+                        data=data,
+                        files={"input_reference": (candidate_path.name, handle, "application/octet-stream")},
+                        timeout=90,
+                    )
+        return requests.post(endpoint, headers=headers, json=payload, timeout=90)
+
+    def _start_openai_video_job(self, prompt: str) -> tuple[str | None, str | None, str]:
         self._ensure_not_stopped()
         headers = self._openai_video_headers()
 
@@ -702,41 +770,56 @@ class GenerateWorker(QThread):
         last_error = ""
         for endpoint in endpoints:
             for idx, payload in enumerate(payload_variants):
-                response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
-                if response.ok:
-                    data = response.json() if response.content else {}
-                    job_id = data.get("id") or data.get("job_id")
-                    if not job_id and isinstance(data.get("data"), list) and data["data"]:
-                        job_id = data["data"][0].get("id")
-                    direct_url = (
-                        data.get("video_url")
-                        or data.get("url")
-                        or (data.get("output") or {}).get("video_url")
+                request_payload_variants = self._openai_input_reference_payload_variants(payload)
+                for payload_variant_idx, request_payload in enumerate(request_payload_variants):
+                    response = self._post_openai_sora_generation_request(endpoint, headers, request_payload)
+                    if response.ok:
+                        data = response.json() if response.content else {}
+                        job_id = data.get("id") or data.get("job_id")
+                        if not job_id and isinstance(data.get("data"), list) and data["data"]:
+                            job_id = data["data"][0].get("id")
+                        direct_url = (
+                            data.get("video_url")
+                            or data.get("url")
+                            or (data.get("output") or {}).get("video_url")
+                        )
+                        reference_id = self._extract_openai_input_reference_id(data)
+                        return job_id, direct_url, reference_id
+
+                    status = response.status_code
+                    body_text = response.text[:500]
+                    body_lower = body_text.lower()
+                    if status in {404, 405, 501}:
+                        last_error = body_text[:400]
+                        break
+
+                    input_reference_type_error = (
+                        status in {400, 422}
+                        and "input_reference" in body_lower
+                        and (
+                            "invalid type" in body_lower
+                            or "unknown parameter" in body_lower
+                            or "expected" in body_lower
+                        )
                     )
-                    return job_id, direct_url
+                    if input_reference_type_error:
+                        last_error = body_text[:400]
 
-                status = response.status_code
-                body_text = response.text[:500]
-                body_lower = body_text.lower()
-                if status in {404, 405, 501}:
-                    last_error = body_text[:400]
-                    break
-
-                seconds_error = (
-                    status in {400, 422}
-                    and "seconds" in body_lower
-                    and (
-                        "unknown parameter" in body_lower
-                        or "invalid type" in body_lower
-                        or "invalid value" in body_lower
-                        or "expected one of" in body_lower
+                    seconds_error = (
+                        status in {400, 422}
+                        and "seconds" in body_lower
+                        and (
+                            "unknown parameter" in body_lower
+                            or "invalid type" in body_lower
+                            or "invalid value" in body_lower
+                            or "expected one of" in body_lower
+                        )
                     )
-                )
-                if seconds_error and idx < len(payload_variants) - 1:
-                    last_error = body_text[:400]
-                    continue
+                    if seconds_error and idx < len(payload_variants) - 1 and payload_variant_idx == len(request_payload_variants) - 1:
+                        last_error = body_text[:400]
+                        break
 
-                raise RuntimeError(f"OpenAI Sora request failed: {status} {body_text}")
+                    raise RuntimeError(f"OpenAI Sora request failed: {status} {body_text}")
 
         raise RuntimeError(
             "OpenAI Sora API endpoint not available for this account/base URL. "
@@ -897,12 +980,16 @@ class GenerateWorker(QThread):
 
         if self.prompt_config.source == "openai":
             self.status.emit("Starting OpenAI Sora video generation job...")
-            openai_job_id, direct_video_url = self._start_openai_video_job(prompt)
+            openai_job_id, direct_video_url, initial_reference_id = self._start_openai_video_job(prompt)
+            self._openai_last_generated_reference_id = initial_reference_id
             if direct_video_url:
                 video_url = direct_video_url
             elif openai_job_id:
                 result = self._poll_openai_video_job(openai_job_id)
                 video_url = self._extract_video_url_from_payload(result)
+                polled_reference_id = self._extract_openai_input_reference_id(result)
+                if polled_reference_id:
+                    self._openai_last_generated_reference_id = polled_reference_id
             else:
                 raise RuntimeError("OpenAI Sora did not return a job id or downloadable video URL.")
 
