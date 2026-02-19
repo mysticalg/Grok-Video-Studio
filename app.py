@@ -8246,6 +8246,12 @@ class MainWindow(QMainWindow):
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
+                        if (platform === "tiktok") {
+                            try {
+                                fileInput.click();
+                                fileDialogTriggered = true;
+                            } catch (_) {}
+                        }
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
