@@ -76,6 +76,7 @@ python app.py
 - `GROK_CHAT_MODEL` (default: `grok-3-mini`)
 - `GROK_VIDEO_MODEL` (default: `grok-video-latest`)
 - `XAI_API_BASE` (default: `https://api.x.ai/v1`)
+- `OPENAI_API_KEY` (optional; preferred when available)
 - `OPENAI_ACCESS_TOKEN` (optional bearer token from browser/OAuth-style sign-in)
 - `OPENAI_CHAT_MODEL` (default: `gpt-5.1-codex`)
 - `OPENAI_API_BASE` (default: `https://api.openai.com/v1`)
@@ -106,12 +107,18 @@ python app.py
 
 ## OpenAI auth options
 
-For OpenAI prompt generation, the app now uses OAuth access tokens.
+For OpenAI prompt generation, the app supports either an API key or an OAuth access token.
 
+- `OPENAI_API_KEY` (optional; preferred when available).
 - `OPENAI_ACCESS_TOKEN` (optional pre-seeded bearer token; normally auto-filled by browser authorization).
 
-In **Model/API Settings**, set Prompt Source to **OpenAI API**, then run Browser Authorization (or paste an access token).
+In **Model/API Settings**, set Prompt Source to **OpenAI API**, then provide an API key or run Browser Authorization (or paste an access token).
 Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex-style) in your system browser. On success, the app auto-fills **OpenAI Access Token**.
+When both are set, the app prefers **OpenAI API Key** over **OpenAI Access Token**.
+If a model is responses-only (for example some newer OpenAI models), the app automatically retries on `/v1/responses` when `/v1/chat/completions` returns that compatibility error.
+For Sora video generation, use the **Sora 2 Video Settings** tab to configure API parameters used by the OpenAI `/videos` create call.
+Supported fields in the UI follow current OpenAI SDK docs: `model`, `seconds` (`4`, `8`, `12`), `size` (`720x1280`, `1280x720`, `1024x1792`, `1792x1024`), optional `input_reference`, plus optional `extra_body` JSON passthrough.
+If the job completes without a `video_url`, the app now falls back to downloading binary content from `/videos/{id}/content`.
 The token exchange now tries both `https://auth.openai.com/token` and `https://auth.openai.com/oauth/token` so either issuer route works.
 When available in OAuth token claims, requests also include `OpenAI-Organization` and `OpenAI-Project` headers (in addition to `Authorization` and `Content-Type`).
 With ChatGPT/Codex OAuth login, the app prefers the ChatGPT Codex backend so usage follows subscription-authenticated behavior rather than API-key-only billing paths.

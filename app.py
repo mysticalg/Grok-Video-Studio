@@ -194,12 +194,13 @@ def _extract_openai_org_project_ids(access_token: str) -> tuple[str, str]:
     return org_id, project_id
 
 
-def _openai_headers_from_oauth_token(access_token: str) -> dict[str, str]:
+def _openai_headers_from_credential(credential: str) -> dict[str, str]:
     headers = {
-        "Authorization": f"Bearer {access_token}",
+        "Authorization": f"Bearer {credential}",
         "Content-Type": "application/json",
     }
-    org_id, project_id = _extract_openai_org_project_ids(access_token)
+    # OAuth tokens may contain organization/project hints in claims. API keys do not.
+    org_id, project_id = _extract_openai_org_project_ids(credential)
     if org_id:
         headers["OpenAI-Organization"] = org_id
     if project_id:
@@ -207,12 +208,12 @@ def _openai_headers_from_oauth_token(access_token: str) -> dict[str, str]:
     return headers
 
 
-def _openai_chat_target(access_token: str) -> tuple[str, dict[str, str], bool]:
-    claims = _decode_openai_access_token(access_token)
+def _openai_chat_target(credential: str) -> tuple[str, dict[str, str], bool]:
+    claims = _decode_openai_access_token(credential)
     issuer = str(claims.get("iss", "")).strip()
     auth_claim = claims.get("https://api.openai.com/auth")
 
-    headers = _openai_headers_from_oauth_token(access_token)
+    headers = _openai_headers_from_credential(credential)
 
     use_chatgpt_backend = (
         OPENAI_USE_CHATGPT_BACKEND
@@ -275,42 +276,69 @@ def _extract_text_from_responses_sse(raw_text: str) -> str:
 
     return "".join(text_chunks).strip()
 
-def _call_openai_chat_api(access_token: str, model: str, system: str, user: str, temperature: float) -> str:
-    endpoint, headers, is_responses_api = _openai_chat_target(access_token)
+def _openai_chat_payload(model: str, system: str, user: str, temperature: float) -> dict[str, object]:
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": temperature,
+    }
 
-    payload: dict[str, object]
-    if is_responses_api:
-        payload = {
-            "model": model,
-            "instructions": system,
-            "input": [
-                {"role": "user", "content": user},
-            ],
-            "store": False,
-            "stream": True,
-        }
-    else:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-        }
+
+def _openai_responses_payload(model: str, system: str, user: str) -> dict[str, object]:
+    return {
+        "model": model,
+        "instructions": system,
+        "input": [
+            {"role": "user", "content": user},
+        ],
+        "store": False,
+        "stream": True,
+    }
+
+
+def _openai_error_prefers_responses(response: requests.Response) -> bool:
+    if response.status_code not in {400, 404, 422}:
+        return False
+    text = (response.text or "").lower()
+    return "only supported in v1/responses" in text or "not in v1/chat/completions" in text
+
+
+def _call_openai_chat_api(credential: str, model: str, system: str, user: str, temperature: float) -> str:
+    endpoint, headers, is_responses_api = _openai_chat_target(credential)
+
+    payload = (
+        _openai_responses_payload(model, system, user)
+        if is_responses_api
+        else _openai_chat_payload(model, system, user, temperature)
+    )
 
     response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+
+    if not response.ok and not is_responses_api and _openai_error_prefers_responses(response):
+        responses_endpoint = f"{OPENAI_API_BASE}/responses"
+        retry_payload = _openai_responses_payload(model, system, user)
+        retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=90)
+        if not retry_response.ok:
+            raise RuntimeError(
+                f"OpenAI request failed: {retry_response.status_code} {retry_response.text[:500]}"
+            )
+        response = retry_response
+        is_responses_api = True
+
     if not response.ok:
         raise RuntimeError(f"OpenAI request failed: {response.status_code} {response.text[:500]}")
 
     if is_responses_api:
-        content_type = response.headers.get("Content-Type", "")
-        #if "text/event-stream" in content_type:
         streamed_text = _extract_text_from_responses_sse(response.text)
-            
-        #if streamed_text: (it is)
-        return streamed_text
-    
+        if streamed_text:
+            return streamed_text
+        body = response.json() if response.content else {}
+        text_from_body = _extract_text_from_responses_body(body)
+        if text_from_body:
+            return text_from_body
         raise RuntimeError("OpenAI response did not include text output.")
 
     body = response.json()
@@ -404,12 +432,14 @@ class PromptConfig:
     source: str
     concept: str
     manual_prompt: str
+    openai_api_key: str
     openai_access_token: str
     openai_chat_model: str
     video_resolution: str
     video_resolution_label: str
     video_aspect_ratio: str
     video_duration_seconds: int
+    openai_sora_settings: dict[str, object]
 
 
 @dataclass
@@ -461,14 +491,14 @@ class GenerateWorker(QThread):
         except Exception:
             return response.text[:500] or response.reason
 
-    def _openai_bearer_token(self) -> str:
-        return self.prompt_config.openai_access_token
+    def _openai_credential(self) -> str:
+        return self.prompt_config.openai_api_key or self.prompt_config.openai_access_token
 
     def _openai_video_headers(self) -> dict[str, str]:
-        token = self._openai_bearer_token()
-        if not token:
-            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
-        return _openai_headers_from_oauth_token(token)
+        credential = self._openai_credential()
+        if not credential:
+            raise RuntimeError("OpenAI API key or access token is required.")
+        return _openai_headers_from_credential(credential)
 
     def call_grok_chat(self, system: str, user: str) -> str:
         headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
@@ -490,11 +520,11 @@ class GenerateWorker(QThread):
         return response.json()["choices"][0]["message"]["content"].strip()
 
     def call_openai_chat(self, system: str, user: str) -> str:
-        openai_token = self._openai_bearer_token()
-        if not openai_token:
-            raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+        openai_credential = self._openai_credential()
+        if not openai_credential:
+            raise RuntimeError("OpenAI API key or access token is required.")
         return _call_openai_chat_api(
-            access_token=openai_token,
+            credential=openai_credential,
             model=self.prompt_config.openai_chat_model,
             system=system,
             user=user,
@@ -534,41 +564,76 @@ class GenerateWorker(QThread):
         response.raise_for_status()
         return response.json().get("id")
 
-    def _start_openai_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> tuple[str | None, str | None]:
+    def _openai_sora_payload_variants(self, prompt: str) -> list[dict[str, object]]:
+        settings = self.prompt_config.openai_sora_settings if isinstance(self.prompt_config.openai_sora_settings, dict) else {}
+        model = str(settings.get("model") or "sora-2")
+        size = str(settings.get("size") or self.prompt_config.video_resolution or "1280x720")
+        seconds = str(settings.get("seconds") or str(self.prompt_config.video_duration_seconds or 8))
+        input_reference = str(settings.get("input_reference") or "").strip()
+        extra_body = settings.get("extra_body") if isinstance(settings.get("extra_body"), dict) else {}
+
+        base: dict[str, object] = {
+            "model": model,
+            "prompt": prompt,
+            "size": size,
+        }
+        if input_reference:
+            base["input_reference"] = input_reference
+        if extra_body:
+            base.update(extra_body)
+
+        with_seconds = dict(base)
+        with_seconds["seconds"] = seconds
+        return [with_seconds, base]
+
+    def _start_openai_video_job(self, prompt: str) -> tuple[str | None, str | None]:
         self._ensure_not_stopped()
         headers = self._openai_video_headers()
-        payload = {
-            "model": "sora-2",
-            "prompt": prompt,
-            "size": resolution,
-            "duration": duration_seconds,
-        }
 
         endpoints = [
             f"{OPENAI_API_BASE}/videos/generations",
             f"{OPENAI_API_BASE}/videos",
         ]
 
+        payload_variants = self._openai_sora_payload_variants(prompt)
         last_error = ""
         for endpoint in endpoints:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
-            if response.ok:
-                data = response.json() if response.content else {}
-                job_id = data.get("id") or data.get("job_id")
-                if not job_id and isinstance(data.get("data"), list) and data["data"]:
-                    job_id = data["data"][0].get("id")
-                direct_url = (
-                    data.get("video_url")
-                    or data.get("url")
-                    or (data.get("output") or {}).get("video_url")
-                )
-                return job_id, direct_url
+            for idx, payload in enumerate(payload_variants):
+                response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+                if response.ok:
+                    data = response.json() if response.content else {}
+                    job_id = data.get("id") or data.get("job_id")
+                    if not job_id and isinstance(data.get("data"), list) and data["data"]:
+                        job_id = data["data"][0].get("id")
+                    direct_url = (
+                        data.get("video_url")
+                        or data.get("url")
+                        or (data.get("output") or {}).get("video_url")
+                    )
+                    return job_id, direct_url
 
-            status = response.status_code
-            if status in {404, 405, 501}:
-                last_error = response.text[:400]
-                continue
-            raise RuntimeError(f"OpenAI Sora request failed: {status} {response.text[:500]}")
+                status = response.status_code
+                body_text = response.text[:500]
+                body_lower = body_text.lower()
+                if status in {404, 405, 501}:
+                    last_error = body_text[:400]
+                    break
+
+                seconds_error = (
+                    status in {400, 422}
+                    and "seconds" in body_lower
+                    and (
+                        "unknown parameter" in body_lower
+                        or "invalid type" in body_lower
+                        or "invalid value" in body_lower
+                        or "expected one of" in body_lower
+                    )
+                )
+                if seconds_error and idx < len(payload_variants) - 1:
+                    last_error = body_text[:400]
+                    continue
+
+                raise RuntimeError(f"OpenAI Sora request failed: {status} {body_text}")
 
         raise RuntimeError(
             "OpenAI Sora API endpoint not available for this account/base URL. "
@@ -621,6 +686,38 @@ class GenerateWorker(QThread):
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()
         return ""
+
+    def _download_openai_video_content(self, job_id: str, suffix: str) -> Path:
+        self._ensure_not_stopped()
+        headers = self._openai_video_headers()
+        headers["Accept"] = "application/binary"
+        endpoints = [
+            f"{OPENAI_API_BASE}/videos/{job_id}/content",
+            f"{OPENAI_API_BASE}/videos/generations/{job_id}/content",
+        ]
+
+        last_error = ""
+        for endpoint in endpoints:
+            response = requests.get(endpoint, headers=headers, timeout=240)
+            if response.status_code in {404, 405, 501}:
+                last_error = response.text[:400]
+                continue
+            if not response.ok:
+                raise RuntimeError(
+                    f"OpenAI Sora content download failed: {response.status_code} {response.text[:500]}"
+                )
+
+            self.download_dir.mkdir(parents=True, exist_ok=True)
+            file_path = self.download_dir / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
+            file_path.write_bytes(response.content)
+            if file_path.stat().st_size <= 0:
+                raise RuntimeError("OpenAI Sora content endpoint returned an empty file.")
+            return file_path
+
+        raise RuntimeError(
+            "OpenAI Sora completed but no direct URL or downloadable content endpoint was available. "
+            f"Last error: {last_error or 'none'}"
+        )
 
     def _resolution_label_for_value(self, resolution: str) -> str:
         mapping = {
@@ -697,11 +794,7 @@ class GenerateWorker(QThread):
 
         if self.prompt_config.source == "openai":
             self.status.emit("Starting OpenAI Sora video generation job...")
-            openai_job_id, direct_video_url = self._start_openai_video_job(
-                prompt,
-                self.prompt_config.video_resolution,
-                selected_duration,
-            )
+            openai_job_id, direct_video_url = self._start_openai_video_job(prompt)
             if direct_video_url:
                 video_url = direct_video_url
             elif openai_job_id:
@@ -710,8 +803,14 @@ class GenerateWorker(QThread):
             else:
                 raise RuntimeError("OpenAI Sora did not return a job id or downloadable video URL.")
 
-            if not video_url:
-                raise RuntimeError("OpenAI Sora completed but no downloadable video URL was returned.")
+            downloaded_from_content_endpoint = False
+            if not video_url and openai_job_id:
+                self.status.emit("OpenAI Sora returned no direct URL; downloading from content endpoint...")
+                file_path = self._download_openai_video_content(openai_job_id, f"v{variant}")
+                downloaded_from_content_endpoint = True
+
+            if not video_url and not openai_job_id:
+                raise RuntimeError("OpenAI Sora completed but no downloadable video URL or job id was returned.")
 
             effective_resolution = self.prompt_config.video_resolution
             effective_resolution_label = self.prompt_config.video_resolution_label
@@ -726,13 +825,18 @@ class GenerateWorker(QThread):
             if not video_url:
                 raise RuntimeError("No video URL returned")
 
-        file_path = self.download_video(video_url, f"v{variant}")
+        if self.prompt_config.source == "openai" and 'downloaded_from_content_endpoint' in locals() and downloaded_from_content_endpoint:
+            resolved_video_url = f"{OPENAI_API_BASE}/videos/{openai_job_id}/content"
+        else:
+            file_path = self.download_video(video_url, f"v{variant}")
+            resolved_video_url = video_url
+
         return {
             "title": f"Generated Video {variant}",
             "prompt": prompt,
             "resolution": f"{effective_resolution_label} ({self.prompt_config.video_aspect_ratio})",
             "video_file_path": str(file_path),
-            "source_url": video_url,
+            "source_url": resolved_video_url,
             "requested_resolution": self.prompt_config.video_resolution,
             "effective_resolution": effective_resolution,
         }
@@ -1084,6 +1188,7 @@ class MainWindow(QMainWindow):
         self.last_extracted_frame_path: Path | None = None
         self.preview_muted = False
         self.preview_volume = 100
+        self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
@@ -1583,6 +1688,7 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("TikTok", "https://www.tiktok.com/upload"),
             "TikTok Upload",
         )
+        self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
         self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
 
         right_splitter = QSplitter(Qt.Vertical)
@@ -1754,6 +1860,110 @@ class MainWindow(QMainWindow):
             return ""
         return str(self.videos[index].get("video_file_path") or "").strip()
 
+    def _build_sora2_settings_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        description = QLabel(
+            "Configure official Sora 2 create-video parameters used by OpenAI API generation. "
+            "These settings are applied when Prompt Source is OpenAI API and you click API Generate Video."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet("color: #9fb3c8;")
+        layout.addWidget(description)
+
+        form = QFormLayout()
+
+        self.sora2_model = QComboBox()
+        self.sora2_model.setEditable(True)
+        for model_name in [
+            "sora-2",
+            "sora-2-pro",
+            "sora-2-2025-10-06",
+            "sora-2-pro-2025-10-06",
+            "sora-2-2025-12-08",
+        ]:
+            self.sora2_model.addItem(model_name, model_name)
+        model_env = os.getenv("OPENAI_SORA_MODEL", "sora-2").strip() or "sora-2"
+        model_index = self.sora2_model.findData(model_env)
+        if model_index >= 0:
+            self.sora2_model.setCurrentIndex(model_index)
+        else:
+            self.sora2_model.setCurrentText(model_env)
+        form.addRow("model", self.sora2_model)
+
+        self.sora2_seconds = QComboBox()
+        for seconds in ["4", "8", "12"]:
+            self.sora2_seconds.addItem(f"{seconds}s", seconds)
+        seconds_env = os.getenv("OPENAI_SORA_SECONDS", "8").strip() or "8"
+        seconds_index = self.sora2_seconds.findData(seconds_env)
+        self.sora2_seconds.setCurrentIndex(seconds_index if seconds_index >= 0 else 1)
+        form.addRow("seconds", self.sora2_seconds)
+
+        self.sora2_size = QComboBox()
+        for size in ["720x1280", "1280x720", "1024x1792", "1792x1024"]:
+            self.sora2_size.addItem(size, size)
+        size_env = os.getenv("OPENAI_SORA_SIZE", "1280x720").strip() or "1280x720"
+        size_index = self.sora2_size.findData(size_env)
+        self.sora2_size.setCurrentIndex(size_index if size_index >= 0 else 1)
+        form.addRow("size", self.sora2_size)
+
+        input_ref_row = QHBoxLayout()
+        self.sora2_input_reference = QLineEdit(os.getenv("OPENAI_SORA_INPUT_REFERENCE", ""))
+        self.sora2_input_reference.setPlaceholderText("Optional file id/reference image for video continuation")
+        input_ref_row.addWidget(self.sora2_input_reference)
+        pick_input_ref = QPushButton("Browse…")
+        pick_input_ref.clicked.connect(self._choose_sora2_input_reference)
+        input_ref_row.addWidget(pick_input_ref)
+        input_ref_wrap = QWidget()
+        input_ref_wrap.setLayout(input_ref_row)
+        form.addRow("input_reference (optional)", input_ref_wrap)
+
+        self.sora2_extra_body = QPlainTextEdit()
+        self.sora2_extra_body.setPlaceholderText('{"any_additional_openai_video_fields": "value"}')
+        self.sora2_extra_body.setMaximumHeight(110)
+        form.addRow("extra_body JSON (optional)", self.sora2_extra_body)
+
+        layout.addLayout(form)
+
+        hint = QLabel(
+            "Known create parameters from current OpenAI SDK docs: prompt, model, seconds, size, input_reference. "
+            "The prompt is generated by the app; fields above control the request payload."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #9fb3c8;")
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return tab
+
+    def _choose_sora2_input_reference(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Input Reference Media",
+            str(self.download_dir),
+            "Media Files (*.png *.jpg *.jpeg *.webp *.mp4 *.mov *.m4v);;All Files (*)",
+        )
+        if file_path:
+            self.sora2_input_reference.setText(file_path)
+
+    def _collect_sora2_settings(self) -> dict[str, object]:
+        settings: dict[str, object] = {
+            "model": self.sora2_model.currentData() or self.sora2_model.currentText().strip() or "sora-2",
+            "seconds": str(self.sora2_seconds.currentData() or "8"),
+            "size": str(self.sora2_size.currentData() or "1280x720"),
+            "input_reference": self.sora2_input_reference.text().strip(),
+            "extra_body": {},
+        }
+
+        raw_extra = self.sora2_extra_body.toPlainText().strip()
+        if raw_extra:
+            parsed = json.loads(raw_extra)
+            if not isinstance(parsed, dict):
+                raise ValueError("Sora 2 extra_body JSON must be an object.")
+            settings["extra_body"] = parsed
+
+        return settings
+
     def _build_browser_training_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -1880,6 +2090,12 @@ class MainWindow(QMainWindow):
         self.prompt_source.addItem("OpenAI API", "openai")
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
         ai_layout.addRow("Prompt Source", self.prompt_source)
+
+        self.openai_api_key = QLineEdit()
+        self.openai_api_key.setEchoMode(QLineEdit.Password)
+        self.openai_api_key.setPlaceholderText("Optional OpenAI API key (preferred when available)")
+        self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
+        ai_layout.addRow("OpenAI API Key", self.openai_api_key)
 
         self.openai_access_token = QLineEdit()
         self.openai_access_token.setEchoMode(QLineEdit.Password)
@@ -2194,6 +2410,7 @@ class MainWindow(QMainWindow):
             "chat_model": self.chat_model.text(),
             "image_model": self.image_model.text(),
             "prompt_source": self.prompt_source.currentData(),
+            "openai_api_key": self.openai_api_key.text(),
             "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
@@ -2217,6 +2434,11 @@ class MainWindow(QMainWindow):
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
+            "sora2_model": self.sora2_model.currentData() or self.sora2_model.currentText(),
+            "sora2_seconds": str(self.sora2_seconds.currentData()),
+            "sora2_size": str(self.sora2_size.currentData()),
+            "sora2_input_reference": self.sora2_input_reference.text(),
+            "sora2_extra_body": self.sora2_extra_body.toPlainText(),
             "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
             "stitch_interpolation_fps": int(self.stitch_interpolation_fps.currentData()),
@@ -2261,6 +2483,8 @@ class MainWindow(QMainWindow):
             source_index = self.prompt_source.findData(str(preferences["prompt_source"]))
             if source_index >= 0:
                 self.prompt_source.setCurrentIndex(source_index)
+        if "openai_api_key" in preferences:
+            self.openai_api_key.setText(str(preferences["openai_api_key"]))
         if "openai_access_token" in preferences:
             self.openai_access_token.setText(str(preferences["openai_access_token"]))
         if "openai_chat_model" in preferences:
@@ -2338,6 +2562,26 @@ class MainWindow(QMainWindow):
             aspect_index = self.video_aspect_ratio.findData(str(preferences["video_aspect_ratio"]))
             if aspect_index >= 0:
                 self.video_aspect_ratio.setCurrentIndex(aspect_index)
+
+        if "sora2_model" in preferences:
+            sora_model = str(preferences["sora2_model"])
+            model_index = self.sora2_model.findData(sora_model)
+            if model_index >= 0:
+                self.sora2_model.setCurrentIndex(model_index)
+            else:
+                self.sora2_model.setCurrentText(sora_model)
+        if "sora2_seconds" in preferences:
+            seconds_index = self.sora2_seconds.findData(str(preferences["sora2_seconds"]))
+            if seconds_index >= 0:
+                self.sora2_seconds.setCurrentIndex(seconds_index)
+        if "sora2_size" in preferences:
+            size_index = self.sora2_size.findData(str(preferences["sora2_size"]))
+            if size_index >= 0:
+                self.sora2_size.setCurrentIndex(size_index)
+        if "sora2_input_reference" in preferences:
+            self.sora2_input_reference.setText(str(preferences["sora2_input_reference"]))
+        if "sora2_extra_body" in preferences:
+            self.sora2_extra_body.setPlainText(str(preferences["sora2_extra_body"]))
         if "stitch_crossfade_enabled" in preferences:
             self.stitch_crossfade_checkbox.setChecked(bool(preferences["stitch_crossfade_enabled"]))
         if "stitch_interpolation_enabled" in preferences:
@@ -2648,6 +2892,45 @@ class MainWindow(QMainWindow):
 
         self.browser.page().runJavaScript(script, after)
 
+    def _aspect_ratio_from_video_size(self, size: str) -> str:
+        mapping = {
+            "720x1280": "9:16",
+            "1280x720": "16:9",
+            "1024x1792": "4:7",
+            "1792x1024": "7:4",
+        }
+        return mapping.get(size, str(self.video_aspect_ratio.currentData() or "16:9"))
+
+    def _confirm_openai_sora_settings(self, sora_settings: dict[str, object]) -> bool:
+        model = str(sora_settings.get("model") or "sora-2")
+        size = str(sora_settings.get("size") or "1280x720")
+        seconds = str(sora_settings.get("seconds") or "8")
+        input_reference = str(sora_settings.get("input_reference") or "").strip()
+        extra_body = sora_settings.get("extra_body") if isinstance(sora_settings.get("extra_body"), dict) else {}
+        aspect_ratio = self._aspect_ratio_from_video_size(size)
+        message = (
+            "OpenAI Sora request will be sent with:\n\n"
+            f"• model: {model}\n"
+            "• prompt: <generated prompt>\n"
+            f"• size: {size}\n"
+            f"• seconds: {seconds}\n"
+            f"• aspect ratio target: {aspect_ratio}\n"
+            f"• input_reference: {input_reference or '(none)'}\n"
+            f"• extra_body fields: {len(extra_body)}\n\n"
+            "Allowed values (from current OpenAI SDK docs):\n"
+            "• seconds: 4, 8, 12\n"
+            "• size: 720x1280, 1280x720, 1024x1792, 1792x1024\n\n"
+            "Continue with generation?"
+        )
+        answer = QMessageBox.question(
+            self,
+            "OpenAI Sora Parameters",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def start_generation(self) -> None:
         self.stop_all_requested = False
         concept = self.concept.toPlainText().strip()
@@ -2668,11 +2951,11 @@ class MainWindow(QMainWindow):
         if source == "manual" and not manual_prompt:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
-        if source == "openai" and not self.openai_access_token.text().strip():
+        if source == "openai" and not (self.openai_api_key.text().strip() or self.openai_access_token.text().strip()):
             QMessageBox.warning(
                 self,
                 "Missing OpenAI Credentials",
-                "Please authorize OpenAI in browser (or paste an OpenAI access token).",
+                "Please provide an OpenAI API key or authorize OpenAI in browser (or paste an access token).",
             )
             return
 
@@ -2694,17 +2977,42 @@ class MainWindow(QMainWindow):
         selected_resolution_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+        openai_sora_settings: dict[str, object] = {}
+
+        if source == "openai":
+            try:
+                openai_sora_settings = self._collect_sora2_settings()
+            except Exception as exc:
+                QMessageBox.warning(self, "Invalid Sora 2 Settings", str(exc))
+                return
+
+            selected_resolution = str(openai_sora_settings.get("size") or selected_resolution)
+            selected_resolution_label = selected_resolution
+            selected_aspect_ratio = self._aspect_ratio_from_video_size(selected_resolution)
+            seconds_value = str(openai_sora_settings.get("seconds") or "8")
+            try:
+                selected_duration_seconds = int(seconds_value)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Sora 2 Settings", "seconds must be one of 4, 8, or 12.")
+                return
+
+        if source == "openai" and self._openai_sora_help_always_show:
+            if not self._confirm_openai_sora_settings(openai_sora_settings):
+                self._append_log("OpenAI generation canceled from Sora parameters confirmation dialog.")
+                return
 
         prompt_config = PromptConfig(
             source=source,
             concept=concept,
             manual_prompt=manual_prompt,
+            openai_api_key=self.openai_api_key.text().strip(),
             openai_access_token=self.openai_access_token.text().strip(),
             openai_chat_model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
             video_resolution=selected_resolution,
             video_resolution_label=selected_resolution_label,
             video_aspect_ratio=selected_aspect_ratio,
             video_duration_seconds=selected_duration_seconds,
+            openai_sora_settings=openai_sora_settings,
         )
 
         self.worker = GenerateWorker(config, prompt_config, self.count.value(), self.download_dir)
@@ -3099,11 +3407,11 @@ class MainWindow(QMainWindow):
         }
 
         if source == "openai":
-            openai_token = self.openai_access_token.text().strip()
-            if not openai_token:
-                raise RuntimeError("OpenAI access token is required. Use Browser Authorization to sign in.")
+            openai_credential = self.openai_api_key.text().strip() or self.openai_access_token.text().strip()
+            if not openai_credential:
+                raise RuntimeError("OpenAI API key or access token is required.")
             return _call_openai_chat_api(
-                access_token=openai_token,
+                credential=openai_credential,
                 model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
                 system=system,
                 user=user,
@@ -5290,6 +5598,7 @@ class MainWindow(QMainWindow):
         is_manual = source == "manual"
         is_openai = source == "openai"
         self.manual_prompt.setEnabled(True)
+        self.openai_api_key.setEnabled(is_openai)
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
         self.chat_model.setEnabled(source == "grok")
@@ -5836,9 +6145,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Trace", "Select or generate a training trace before building a process.")
             return
 
-        access_token = self.openai_access_token.text().strip()
-        if not access_token:
-            QMessageBox.warning(self, "Missing OpenAI Access Token", "Sign in with Browser Authorization or paste an access token in Settings.")
+        credential = self.openai_api_key.text().strip() or self.openai_access_token.text().strip()
+        if not credential:
+            QMessageBox.warning(self, "Missing OpenAI Credentials", "Enter an OpenAI API key or sign in with Browser Authorization in Settings.")
             return
 
         trace_path = Path(trace_path_text)
@@ -5851,7 +6160,7 @@ class MainWindow(QMainWindow):
             "build",
             {
                 "trace_path": trace_path,
-                "access_token": access_token,
+                "access_token": credential,
                 "model": model,
             },
         )
