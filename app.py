@@ -7749,110 +7749,24 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Auth Error", "No valid TikTok access token found.")
             return
 
-        print(f"DEBUG: video_size={video_size} bytes (~{video_size / (1024*1024):.2f} MB)")
-        print(f"DEBUG: chunk_size={chunk_size} bytes")
-        print(f"DEBUG: total_chunk_count={total_chunk_count}")
-        print(f"DEBUG: access token={access_token}")
-        headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json; charset=UTF-8"
-        }
-
-        # Use /inbox/ for draft (user approves) or /video/ for direct post
-        # Start with inbox — safer for testing
-        init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
-
-        source_info = {
-            "source": "FILE_UPLOAD",
-            "video_size": video_size,
-            "chunk_size": chunk_size,
-            "total_chunk_count": total_chunk_count
-        }
-
-        payload = {
-            "source_info": source_info,
-            "post_info": {
-                "title": self._compose_social_text(caption, hashtags), # or separate title if you have one
+        self._append_log(
+            "TikTok upload requested via API: "
+            f"video_size={video_size} chunk_size={chunk_size} total_chunks={total_chunk_count}"
+        )
+        self._start_upload(
+            platform_name="TikTok",
+            upload_fn=upload_video_to_tiktok,
+            upload_kwargs={
+                "access_token": access_token,
+                "video_path": video_path,
+                "caption": self._compose_social_text(caption, hashtags),
                 "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
-                "disable_comment": False,       # adjust as needed
-                "disable_duet": False,
-                "disable_stitch": False,
-                # add video_cover_timestamp_ms, etc. if desired
-            }
-        }
-
-
-        resp = requests.post(init_url, headers=headers, json=payload)
-        #resp.raise_for_status()
-
-        data = resp.json()
-        if resp.status_code == 200:
-            print("Status response:", data)
-            # Look for data['data']['status'] — possible values:
-            # "PROCESSING_UPLOAD", "UPLOAD_SUCCESS", "POSTED", "FAILED", etc.
-            
-        else:
-            print("Status check failed:", data)
-            return
-        print(f"DEBUG: access token={data}")
-        upload_url = data['data']['upload_url']  # or check exact key in response
-        publish_id = data['data'].get('publish_id')  # save for status check later
-
-        # ── SINGLE-CHUNK UPLOAD (your case) ───────────────────────────────────
-        video_size = os.path.getsize(video_path)
-        last_byte = video_size - 1
-
-        upload_headers = {
-            "Content-Type": "video/mp4",  # change if MOV/WebM/etc.
-            "Content-Length": str(video_size),
-            "Content-Range": f"bytes 0-{last_byte}/{video_size}"
-        }
-
-        with open(video_path, "rb") as f:
-            video_bytes = f.read()  # safe since small file
-
-        print(f"DEBUG: Uploading {video_size} bytes with range: bytes 0-{last_byte}/{video_size}")
-
-        upload_resp = requests.put(upload_url, headers=upload_headers, data=video_bytes)
-        print(f"DEBUG: Upload status code: {upload_resp.status_code}")
-
-        upload_data = None
-        if upload_resp.text.strip():
-            try:
-                upload_data = upload_resp.json()
-                print("Status response:", upload_data)
-            except ValueError:
-                print("DEBUG: Upload response is not JSON:", upload_resp.text[:500])
-        else:
-            print("DEBUG: Upload response body is empty.")
-
-        if upload_resp.status_code not in (200, 201, 204):
-            raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
-
-        self.check_tiktok_status(access_token, publish_id)
-        self._append_log(f"TikTok Upload complete")
-        # Success! Video is in user's TikTok inbox/drafts.
-        # Optionally: poll status with publish_id
+            },
+            success_dialog_title="TikTok Upload Complete",
+            success_prefix="TikTok publish completed. ID:",
+        )
         return
 
-    def check_tiktok_status(self, access_token, publish_id):
-        url = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
-        payload = {"publish_id": publish_id}
-        
-        resp = requests.post(url, headers=headers, json=payload)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            print("Status response:", data)
-            # Look for data['data']['status'] — possible values:
-            # "PROCESSING_UPLOAD", "UPLOAD_SUCCESS", "POSTED", "FAILED", etc.
-            return data
-        else:
-            print("Status check failed:", resp.text)
 
     def _start_social_browser_upload(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         browser = self.social_upload_browsers.get(platform_name)
