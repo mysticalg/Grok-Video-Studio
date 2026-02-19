@@ -8084,6 +8084,7 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     const youtubeState = uploadState.youtube = uploadState.youtube || {};
+                    const pickerState = uploadState.filePicker = uploadState.filePicker || {};
                     if (platform === "instagram") {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
@@ -8242,6 +8243,11 @@ class MainWindow(QMainWindow):
                             return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*");
                         });
                         if (byExactInstagramAccept) return byExactInstagramAccept;
+                        const byExactVideoWildcard = fileInputs.find((node) => {
+                            const accept = norm(node.getAttribute("accept"));
+                            return accept === "video/*";
+                        });
+                        if (byExactVideoWildcard) return byExactVideoWildcard;
                         const byAcceptVideo = fileInputs.find((node) => norm(node.getAttribute("accept")).includes("video"));
                         if (byAcceptVideo) return byAcceptVideo;
                         const byClassVideo = fileInputs.find((node) => norm(node.className).includes("video") || norm(node.className).includes("x1s85apg"));
@@ -8293,6 +8299,22 @@ class MainWindow(QMainWindow):
                                     }
                                 }
                             } catch (_) {}
+                        }
+
+                        if (!alreadyHasFile && !alreadyStaged && !videoBase64 && allowFileDialog) {
+                            const dialogKey = `${platform}:${requestedVideoPath || 'no-path'}`;
+                            const lastDialogAttemptMs = Number(pickerState[dialogKey] || 0);
+                            const nowMs = Date.now();
+                            const retryDelayMs = 1200;
+                            if (!lastDialogAttemptMs || (nowMs - lastDialogAttemptMs) >= retryDelayMs) {
+                                try {
+                                    fileInput.click();
+                                    fileDialogTriggered = true;
+                                } catch (_) {
+                                    fileDialogTriggered = clickNodeOrAncestor(fileInput) || fileDialogTriggered;
+                                }
+                                pickerState[dialogKey] = nowMs;
+                            }
                         }
                     }
 
@@ -8825,7 +8847,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
-            pending["allow_file_dialog"] = False
+            pending["allow_file_dialog"] = not file_ready_signal
 
             is_tiktok = platform_name == "TikTok"
             is_youtube = platform_name == "YouTube"
