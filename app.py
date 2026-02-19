@@ -1811,35 +1811,20 @@ class MainWindow(QMainWindow):
         self.stitch_audio_fade_label.setStyleSheet("color: #9fb3c8;")
         actions_layout.addWidget(self.stitch_audio_fade_label, 12, 1)
 
-        upload_group = QGroupBox("Upload")
-        upload_layout = QHBoxLayout(upload_group)
-
-        self.upload_youtube_btn = QPushButton("YouTube")
-        self.upload_youtube_btn.setToolTip("Upload the currently selected local video to your YouTube channel.")
-        self.upload_youtube_btn.setStyleSheet(
-            "background-color: #cc0000; color: white; font-weight: 700;"
-            "border: 1px solid #990000; border-radius: 6px; padding: 5px 10px;"
-        )
-        self.upload_youtube_btn.clicked.connect(self.upload_selected_to_youtube)
-        upload_layout.addWidget(self.upload_youtube_btn)
-
-        actions_layout.addWidget(upload_group, 13, 0, 1, 2)
-
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
         self.buy_coffee_btn.setStyleSheet(
-            "font-size: 15px; font-weight: 700; padding: 10px;"
-            "background-color: #ffdd00; color: #222; border-radius: 8px;"
+            "font-size: 12px; font-weight: 700; padding: 4px 8px;"
+            "background-color: #ffdd00; color: #222; border-radius: 6px;"
         )
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
-        actions_layout.addWidget(self.buy_coffee_btn, 14, 0, 1, 2)
 
         left_layout.addWidget(actions_group)
 
         left_layout.addWidget(QLabel("Generated Videos"))
         self.video_picker = QComboBox()
-        self.video_picker.setIconSize(QPixmap(144, 82).size())
-        self.video_picker.setMinimumHeight(42)
+        self.video_picker.setIconSize(QPixmap(180, 102).size())
+        self.video_picker.setMinimumHeight(82)
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
         left_layout.addWidget(self.video_picker)
 
@@ -1935,6 +1920,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setValue(0)
         self.upload_progress_bar.setVisible(False)
         log_layout.addWidget(self.upload_progress_bar)
+        log_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignLeft)
 
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
@@ -2016,6 +2002,10 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("TikTok", "https://www.tiktok.com/upload"),
             "TikTok Upload",
         )
+        self.social_upload_tab_indices["YouTube"] = self.browser_tabs.addTab(
+            self._build_social_upload_tab("YouTube", "https://studio.youtube.com"),
+            "YouTube Upload",
+        )
         self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
         self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
         self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
@@ -2068,9 +2058,13 @@ class MainWindow(QMainWindow):
         elif platform_name == "Instagram":
             api_btn.clicked.connect(self.upload_selected_to_instagram)
             browser_btn.clicked.connect(self.start_instagram_browser_upload)
-        else:
+        elif platform_name == "TikTok":
             api_btn.clicked.connect(self.upload_selected_to_tiktok)
             browser_btn.clicked.connect(self.start_tiktok_browser_upload)
+        else:
+            api_btn.clicked.connect(self.upload_selected_to_youtube)
+            browser_btn.clicked.connect(self.start_youtube_browser_upload)
+            self.upload_youtube_btn = api_btn
 
         open_btn.clicked.connect(lambda _=False, p=platform_name, u=upload_url: self._open_social_upload_page(p, self._social_upload_url_for_platform(p, u)))
         controls.addWidget(api_btn)
@@ -2155,6 +2149,7 @@ class MainWindow(QMainWindow):
             ("Facebook", ("facebook.com",)),
             ("Instagram", ("instagram.com",)),
             ("TikTok", ("tiktok.com",)),
+            ("YouTube", ("youtube.com", "studio.youtube.com")),
         ]
 
         matched_platform: str | None = None
@@ -7506,6 +7501,27 @@ class MainWindow(QMainWindow):
             title="",
         )
 
+
+    def start_youtube_browser_upload(self) -> None:
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
+            QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
+            return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
+
+        title, description, hashtags, _, accepted = self._show_upload_dialog("YouTube")
+        if not accepted:
+            return
+
+        self._start_social_browser_upload(
+            platform_name="YouTube",
+            video_path=video_path,
+            caption=self._compose_social_text(description, hashtags),
+            title=title,
+        )
+
     def upload_selected_to_facebook(self) -> None:
         index = self.video_picker.currentIndex()
         if index < 0 or index >= len(self.videos):
@@ -7725,6 +7741,7 @@ class MainWindow(QMainWindow):
             "video_base64": encoded_video,
             "video_name": video_file.name or "upload.mp4",
             "video_mime": "video/mp4",
+            "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
         self._append_log(
             f"{platform_name}: queued browser upload video path={video_path} (exists={Path(str(video_path)).exists()})"
@@ -7757,6 +7774,8 @@ class MainWindow(QMainWindow):
             max_attempts = 12
         elif platform_name == "Facebook":
             max_attempts = 8
+        elif platform_name == "YouTube":
+            max_attempts = 14
         else:
             max_attempts = 2
         if attempts > max_attempts:
@@ -7779,6 +7798,7 @@ class MainWindow(QMainWindow):
                 "video_name": str(pending.get("video_name") or "upload.mp4"),
                 "video_mime": str(pending.get("video_mime") or "video/mp4"),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
+                "youtube_options": pending.get("youtube_options") or {},
             },
             ensure_ascii=True,
         )
@@ -7922,6 +7942,7 @@ class MainWindow(QMainWindow):
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
+                    const youtubeState = uploadState.youtube = uploadState.youtube || {};
                     if (platform === "instagram") {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
@@ -8377,6 +8398,70 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    if (platform === "youtube") {
+                        const youtubeOptions = (payload.youtube_options && typeof payload.youtube_options === "object") ? payload.youtube_options : {};
+                        const visibility = String(youtubeOptions.visibility || "public").toLowerCase();
+                        const audience = String(youtubeOptions.audience || "not_kids").toLowerCase();
+
+                        if (titleText) {
+                            const titleTarget = bySelectors([
+                                'textarea#textbox[aria-label*="title" i]',
+                                'div#textbox[aria-label*="title" i][contenteditable="true"]',
+                                'ytcp-social-suggestion-input input#textbox',
+                            ]);
+                            textFilled = setTextValue(titleTarget, titleText) || textFilled;
+                        }
+
+                        if (captionText) {
+                            const descTarget = bySelectors([
+                                'textarea#textbox[aria-label*="description" i]',
+                                'div#textbox[aria-label*="description" i][contenteditable="true"]',
+                            ]);
+                            textFilled = setTextValue(descTarget, captionText) || textFilled;
+                        }
+
+                        const madeForKidsLabel = findClickableByHints(["yes, it’s made for kids", "yes, it's made for kids"]);
+                        const notKidsLabel = findClickableByHints(["no, it’s not made for kids", "no, it's not made for kids"]);
+                        if (audience === "kids" && madeForKidsLabel) {
+                            clickNodeOrAncestor(madeForKidsLabel);
+                        } else if (audience !== "kids" && notKidsLabel) {
+                            clickNodeOrAncestor(notKidsLabel);
+                        }
+
+                        const nextButton = findClickableByHints(["next"]);
+                        if (nextButton && Number(youtubeState.nextClicks || 0) < 3) {
+                            const clicked = clickNodeOrAncestor(nextButton);
+                            if (clicked) {
+                                youtubeState.nextClicks = Number(youtubeState.nextClicks || 0) + 1;
+                            }
+                        }
+
+                        if (Number(youtubeState.nextClicks || 0) >= 3) {
+                            const visibilityButton = visibility === "private"
+                                ? findClickableByHints(["private"])
+                                : (visibility === "unlisted" ? findClickableByHints(["unlisted"]) : findClickableByHints(["public"]));
+                            if (visibilityButton) {
+                                clickNodeOrAncestor(visibilityButton);
+                            }
+
+                            const scheduleText = String(youtubeOptions.schedule || "").trim();
+                            if (scheduleText) {
+                                const scheduleToggle = findClickableByHints(["schedule"]);
+                                if (scheduleToggle) clickNodeOrAncestor(scheduleToggle);
+                                const scheduleInput = bySelectors(['input[aria-label*="date" i]', 'input[placeholder*="date" i]']);
+                                if (scheduleInput) {
+                                    setTextValue(scheduleInput, scheduleText);
+                                }
+                            }
+
+                            const doneButton = findClickableByHints(["publish", "done", "save"]);
+                            if (doneButton && !youtubeState.submitted) {
+                                submitClicked = clickNodeOrAncestor(doneButton) || submitClicked;
+                                if (submitClicked) youtubeState.submitted = true;
+                            }
+                        }
+                    }
+
                     return {
                         fileInputFound: Boolean(fileInput),
                         fileDialogTriggered,
@@ -8439,6 +8524,7 @@ class MainWindow(QMainWindow):
             pending["allow_file_dialog"] = False
 
             is_tiktok = platform_name == "TikTok"
+            is_youtube = platform_name == "YouTube"
             tiktok_upload_assumed = is_tiktok and attempts >= 3
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists) or tiktok_upload_assumed
             is_facebook = platform_name == "Facebook"
@@ -8447,17 +8533,17 @@ class MainWindow(QMainWindow):
             submit_ok = (
                 submit_clicked
                 or (is_tiktok and (tiktok_submit_clicked_ever or tiktok_draft_landed))
-            ) if (is_facebook or is_instagram or is_tiktok) else True
-            completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok) else (attempts >= 2)
+            ) if (is_facebook or is_instagram or is_tiktok or is_youtube) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok or is_youtube) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
                 status_label.setText(
                     "Status: post submitted."
-                    if (is_facebook or is_instagram)
+                    if (is_facebook or is_instagram or is_youtube)
                     else "Status: staged. Confirm/finalize post in this tab if needed."
                 )
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram) else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram or is_youtube) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
@@ -8607,6 +8693,24 @@ class MainWindow(QMainWindow):
             dialog_layout.addWidget(QLabel("YouTube Category ID"))
             dialog_layout.addWidget(category_input)
 
+            visibility_input = QComboBox()
+            visibility_input.addItem("Public", "public")
+            visibility_input.addItem("Unlisted", "unlisted")
+            visibility_input.addItem("Private", "private")
+            dialog_layout.addWidget(QLabel("Visibility"))
+            dialog_layout.addWidget(visibility_input)
+
+            schedule_input = QLineEdit()
+            schedule_input.setPlaceholderText("Optional schedule datetime (YYYY-MM-DD HH:MM)")
+            dialog_layout.addWidget(QLabel("Schedule publish time"))
+            dialog_layout.addWidget(schedule_input)
+
+            audience_input = QComboBox()
+            audience_input.addItem("Not made for kids", "not_kids")
+            audience_input.addItem("Made for kids", "kids")
+            dialog_layout.addWidget(QLabel("Audience"))
+            dialog_layout.addWidget(audience_input)
+
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
@@ -8615,6 +8719,13 @@ class MainWindow(QMainWindow):
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         hashtags = [tag.strip().lstrip("#") for tag in hashtags_input.text().split(",") if tag.strip()]
         category_value = category_input.text().strip() if platform_name == "YouTube" else self.ai_social_metadata.category
+        if platform_name == "YouTube":
+            self.youtube_browser_upload_options = {
+                "visibility": str(visibility_input.currentData() or "public"),
+                "schedule": schedule_input.text().strip(),
+                "audience": str(audience_input.currentData() or "not_kids"),
+                "category": category_value,
+            }
         return title_input.text().strip(), description_input.toPlainText().strip(), hashtags, category_value, accepted
 
 

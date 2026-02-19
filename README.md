@@ -1,241 +1,130 @@
-# Grok Video Studio (Windows/macOS desktop + Android companion) — **Beta**
+# Grok Video Studio
 
-**Version:** `1.0.0`
+Desktop PySide6 app for generating AI videos, managing clips, previewing/stitching outputs, and publishing to social platforms with API + browser automation workflows.
 
-A desktop-first Python/PySide6 app for generating Grok videos, iterating quickly in-browser, stitching clips, and uploading finished results to social platforms.
+## Features
 
-<img width="1500" height="900" alt="image" src="https://github.com/user-attachments/assets/aa6aec78-f12b-443d-b75e-0558591f3db9" />
+- **Video generation**
+  - Manual prompt workflow in embedded `grok.com/imagine` browser
+  - Prompt generation via **xAI Grok API** or **OpenAI API**
+  - Video providers: **Grok Imagine API**, **OpenAI Sora 2 API**, **Seedance 2.0 API**
+  - Batch/variant queue execution
+  - Continue-from-last-frame and continue-from-local-image tools
+- **Media pipeline**
+  - Generated Videos picker with thumbnail previews
+  - In-app video playback controls (seek/volume/mute/fullscreen)
+  - Stitch clips with optional crossfade, interpolation (48/60fps), upscale (2x/1080p/1440p/4K), GPU encode, and music mixing
+- **Social publishing**
+  - Dedicated upload tabs: **Facebook**, **Instagram**, **TikTok**, **YouTube**
+  - Per-platform API upload actions
+  - Browser automation uploader for each platform
+  - New YouTube upload tab includes browser automation to load Studio, upload file, set title/description, pick audience/visibility, optional scheduling, and publish
+- **Automation**
+  - AI Flow Trainer tab to record/build/replay browser workflows
+- **UX updates**
+  - Buy Me a Coffee button moved under Activity Log and made smaller
+  - Generated Videos area is taller for easier selection
 
+## Supported models
 
-## What it does
+- **Grok chat/prompt models** (configurable), default: `grok-3-mini`
+- **Grok video model** (configurable), default: `grok-video-latest`
+- **OpenAI chat model** (configurable), default: `gpt-5.1-codex`
+- **OpenAI Sora models** (Sora 2 tab examples include `sora-2`, `sora-2-pro`, dated variants)
+- **Seedance model settings** via Seedance tab
 
-- Generate videos from:
-  - Manual prompts (embedded browser workflow)
-  - Grok API prompt generation
-  - OpenAI API prompt generation
-- Queue multiple variants in one run.
-- Choose video resolution (480p/720p), duration (6s/10s), and aspect ratio (2:3, 3:2, 1:1, 9:16, 16:9) before generating prompts/jobs; these are also applied when setting Grok Imagine options in Populate Video/Image flows.
-- Keep a generated-video list in-session.
-- Preview generated or local videos inside the app.
-- Continue from the latest frame or a local seed image.
-- In Sora 2 settings, optionally auto-continue each OpenAI API generation from the last generated video frame (auto-extract + upload as `input_reference`).
-- Stitch all listed videos into one final output:
-  - Hard-cut or crossfade transitions
-  - Optional frame interpolation (48/60 fps)
-  - Optional 2x upscaling (capped at 4K)
-  - Optional custom WAV/MP3 music mix with per-track volume and fade controls
-- See stitch progress with elapsed/ETA and active setting summary.
-- Configure app behavior from settings dialogs (Model/API settings, video options, default manual prompt, custom download folder).
-- Upload the selected local video to:
-  - YouTube
-  - Facebook Page
-  - Instagram Reels (requires a publicly reachable video URL)
-  - TikTok (via TikTok Content Posting API)
+## Install
 
-## Download Windows binary (recommended)
+### 1) Prerequisites
 
-If you just want to run the app on Windows, download the prebuilt zip here:
+- Python 3.11+
+- `ffmpeg` in PATH (required for stitch/interpolate/upscale/audio mix)
 
-- **Releases:** https://github.com/mysticalg/Grok-video-to-youtube-api/releases
-- **Latest CI builds (all workflow runs):** https://github.com/mysticalg/Grok-video-to-youtube-api/actions
+### 2) Create env + install deps
 
-Look for:
-- `GrokVideoDesktopStudio-windows-x64.zip`
-- `GrokVideoDesktopStudio-macos-universal2.zip`
-- `GrokVideoDesktopStudio-android-play-aab`
-
-
-## Platform support
-
-- **Windows desktop app:** packaged with PyInstaller.
-- **macOS desktop app:** packaged with PyInstaller (`.app` zipped artifact).
-- **Android companion app:** native WebView wrapper that opens `https://grok.com/imagine`, built as a signed **AAB** for Google Play upload.
-
-## Quick start
+macOS/Linux:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python app.py
 ```
 
-On Windows PowerShell:
+Windows PowerShell:
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+### 3) Run
+
+```bash
 python app.py
 ```
 
-## Environment variables
+## Configure credentials
 
-### Generation
+In **Model/API Settings** tab configure what you need:
 
 - `GROK_API_KEY`
-- `GROK_CHAT_MODEL` (default: `grok-3-mini`)
-- `GROK_VIDEO_MODEL` (default: `grok-video-latest`)
-- `XAI_API_BASE` (default: `https://api.x.ai/v1`)
-- `OPENAI_API_KEY` (optional; preferred when available)
-- `OPENAI_ACCESS_TOKEN` (optional bearer token from browser/OAuth-style sign-in)
-- `OPENAI_CHAT_MODEL` (default: `gpt-5.1-codex`)
-- `OPENAI_API_BASE` (default: `https://api.openai.com/v1`)
-- `OPENAI_OAUTH_ISSUER` (default: `https://auth.openai.com`)
-- `OPENAI_CODEX_CLIENT_ID` (default: `app_EMoamEEZ73f0CkXaXp7hrann`)
-- `OPENAI_OAUTH_CALLBACK_PORT` (default: `1455`)
-- `OPENAI_CHATGPT_API_BASE` (default: `https://chatgpt.com/backend-api/codex`)
-- `OPENAI_USE_CHATGPT_BACKEND` (default: `1`; routes `auth.openai.com` OAuth tokens to ChatGPT Codex backend)
-- `TIKTOK_ACCESS_TOKEN` (optional; can also be set in-app)
-- `TIKTOK_CLIENT_KEY` (optional; used by in-app TikTok OAuth helper)
-- `TIKTOK_CLIENT_SECRET` (optional; used by in-app TikTok OAuth helper)
-- `TIKTOK_OAUTH_CALLBACK_PORT` (default: `1457`)
-- `TIKTOK_OAUTH_SCOPE` (default: `user.info.basic,video.upload,video.publish`)
-- `TIKTOK_PKCE_CHALLENGE_ENCODING` (default: `hex`; set to `base64url` to use RFC-style S256 challenge encoding)
-- `TIKTOK_PRIVACY_LEVEL` (optional default: `PUBLIC_TO_EVERYONE`; options also include `MUTUAL_FOLLOW_FRIENDS`, `SELF_ONLY`)
-- `FACEBOOK_APP_ID` (optional; used by in-app Facebook OAuth helper)
-- `FACEBOOK_APP_SECRET` (optional; used by in-app Facebook OAuth helper)
-- `FACEBOOK_OAUTH_CALLBACK_PORT` (default: `1456`)
-- `FACEBOOK_OAUTH_SCOPE` (default: `pages_show_list,pages_manage_posts,pages_manage_videos,pages_read_engagement`)
+- `OPENAI_API_KEY` and/or `OPENAI_ACCESS_TOKEN`
+- `SEEDANCE_API_KEY` (or OAuth token)
+- Upload credentials (YouTube/Facebook/Instagram/TikTok)
 
-### Embedded browser/runtime
+You can set env vars first, or enter directly in the UI.
 
-- `GROK_PLAYWRIGHT_BROWSER` (default: `chromium`; options: `chromium`, `firefox`, `webkit`)
-- `GROK_BROWSER_CACHE_DIR` (optional custom QtWebEngine cache directory)
-- `GROK_BROWSER_DISK_CACHE_BYTES` (default: `536870912`, 512 MB)
-- `GROK_BROWSER_MEDIA_CACHE_BYTES` (default: `268435456`, 256 MB)
-- `QTWEBENGINE_CHROMIUM_FLAGS` (optional additional Chromium flags)
+## Interface guide
 
-## OpenAI auth options
+### Left panel
 
-For OpenAI prompt generation, the app supports either an API key or an OAuth access token.
+1. Enter concept/prompt settings.
+2. Choose prompt source and video provider.
+3. Run generate actions.
+4. Manage clips in **Generated Videos** list.
+5. Use stitch/export tools.
 
-- `OPENAI_API_KEY` (optional; preferred when available).
-- `OPENAI_ACCESS_TOKEN` (optional pre-seeded bearer token; normally auto-filled by browser authorization).
+### Right panel tabs
 
-In **Model/API Settings**, set Prompt Source to **OpenAI API**, then provide an API key or run Browser Authorization (or paste an access token).
-Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex-style) in your system browser. On success, the app auto-fills **OpenAI Access Token**.
-When both are set, the app prefers **OpenAI API Key** over **OpenAI Access Token**.
-If a model is responses-only (for example some newer OpenAI models), the app automatically retries on `/v1/responses` when `/v1/chat/completions` returns that compatibility error.
-For Sora video generation, use the **Sora 2 Video Settings** tab to configure API parameters used by the OpenAI `/videos` create call.
-Supported fields in the UI follow current OpenAI SDK docs: `model`, `seconds` (`4`, `8`, `12`), `size` (`720x1280`, `1280x720`, `1024x1792`, `1792x1024`), optional `input_reference`, plus optional `extra_body` JSON passthrough.
-If the job completes without a `video_url`, the app now falls back to downloading binary content from `/videos/{id}/content`.
-The token exchange now tries both `https://auth.openai.com/token` and `https://auth.openai.com/oauth/token` so either issuer route works.
-When available in OAuth token claims, requests also include `OpenAI-Organization` and `OpenAI-Project` headers (in addition to `Authorization` and `Content-Type`).
-With ChatGPT/Codex OAuth login, the app prefers the ChatGPT Codex backend so usage follows subscription-authenticated behavior rather than API-key-only billing paths.
-With ChatGPT/Codex OAuth login, responses requests explicitly set `store: false` and `stream: true` to satisfy backend requirements.
+- **Browser**: embedded Grok imagine flow
+- **Facebook Upload / Instagram Upload / TikTok Upload / YouTube Upload**:
+  - `Upload via API`
+  - `Automate in Browser`
+  - `Open Upload Page`
+- **Sora 2 Video Settings**: OpenAI video params
+- **Seedance 2.0 Video Settings**: Seedance params
+- **AI Flow Trainer**: train/build/run automation
 
-## Browser performance tuning (embedded Chromium)
+### YouTube browser automation workflow
 
-If in-app playback feels choppy, the app enables a persistent disk cache and Chromium GPU/media flags by default.
+1. Select a generated/local video.
+2. Open **YouTube Upload** tab.
+3. Click **Automate YouTube in Browser**.
+4. Fill dialog values:
+   - title
+   - description + hashtags
+   - category
+   - visibility (public/unlisted/private)
+   - audience
+   - optional schedule datetime
+5. App opens/uses YouTube Studio tab, uploads file, fills metadata, steps through Studio flow, and publishes.
 
-Example:
+> Note: YouTube UI can change. If selectors drift, automation may require manual final confirmation in-tab.
 
-```bash
-export GROK_BROWSER_DISK_CACHE_BYTES=1073741824
-export GROK_BROWSER_MEDIA_CACHE_BYTES=536870912
-export QTWEBENGINE_CHROMIUM_FLAGS="--max-gum-fps=30"
-python app.py
-```
+## Upload notes
 
-## Upload requirements
-
-- **YouTube:** uses OAuth. You can upload with an existing `youtube_token.json`; `client_secret.json` is only needed for first-time OAuth sign-in/token renewal when no valid token is available.
-- **Facebook:** uploads use Graph API. You can either paste Page ID + Page Access Token manually, or use the in-app Facebook OAuth helper to authorize and auto-populate these fields.
-- **Instagram Reels:** requires Meta Graph API credentials and a publicly accessible HTTP(S) video URL.
-- **TikTok:** requires a TikTok OAuth access token with Content Posting API permissions (`video.upload` and `video.publish`). You can paste the token manually or use the in-app TikTok OAuth helper with your `client_key` + `client_secret` to authorize the current user and auto-populate the access token. Optional privacy level can be configured in settings.
-
-### TikTok: how to get a token to paste manually
-
-1. In TikTok for Developers, open your app and confirm your redirect URI exactly matches what you will use (for local testing this app defaults to `http://localhost:1457/auth/callback`).
-2. Generate a PKCE verifier/challenge + state (required by TikTok), then build/open the authorize URL:
-
-```bash
-python -c "import hashlib,secrets,string,urllib.parse;alphabet=string.ascii_letters+string.digits;v=''.join(secrets.choice(alphabet) for _ in range(64));c=hashlib.sha256(v.encode()).hexdigest();s=secrets.token_hex(16);r='http://localhost:1457/auth/callback';p={'client_key':'YOUR_CLIENT_KEY','response_type':'code','scope':'user.info.basic,video.upload,video.publish','redirect_uri':r,'state':s,'code_challenge':c,'code_challenge_method':'S256'};print('VERIFIER=',v);print('STATE=',s);print('URL=', 'https://www.tiktok.com/v2/auth/authorize/?'+urllib.parse.urlencode(p))"
-```
-
-> Note: TikTok PKCE challenge generation defaults to **hex-encoded SHA-256** in this app. If needed, set `TIKTOK_PKCE_CHALLENGE_ENCODING=base64url` to use RFC-style S256 output.
-
-3. Open the printed `URL`, approve access, and verify `state` matches your printed `STATE`.
-4. After redirect, copy the `code` from `?code=...&state=...`.
-5. Exchange the code for an access token (use the same verifier):
-
-```bash
-curl -X POST https://open.tiktokapis.com/v2/oauth/token/ \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "client_key=YOUR_CLIENT_KEY" \
-  -d "client_secret=YOUR_CLIENT_SECRET" \
-  -d "code=AUTH_CODE_FROM_CALLBACK" \
-  -d "grant_type=authorization_code" \
-  -d "redirect_uri=http://localhost:1457/auth/callback" \
-  -d "code_verifier=VERIFIER_FROM_STEP_2"
-```
-
-6. Copy `access_token` from the JSON response and paste it into **Model/API Settings → TikTok Access Token**.
-
-> Note: In sandbox mode, only test users/scopes approved for your app can authorize successfully.
-
-## Training + replay automation (experimental)
-
-With OpenAI OAuth/authenticated access configured, you can now prototype a training-driven browser workflow in `grok_web_automation.py`:
-
-- `train_browser_flow(...)`: opens a visible browser, records click/fill/press events, captures screenshots, and saves `raw_training_trace.json`.
-- `build_trained_process(...)`: sends the captured trace to OpenAI Responses API and writes a deterministic process JSON (for example `run-training.process.json`).
-- `run_trained_process(...)`: replays the trained selectors/actions, captures per-step screenshots, and writes `run_report.json`.
-
-This is intended for supervised setup flows where you manually demonstrate the path once, then replay/refine it automatically.
-
-You can now run this workflow directly in the desktop app under the **AI Flow Trainer** tab (right panel). Training can capture directly from the integrated in-app browser, and includes **Start Training** / **Stop Training** controls before **Build Process** → **Run Process**.
-
-## Notes
-
-- Manual prompt mode runs against the embedded `grok.com/imagine` browser session (no xAI API generation call).
-- Downloaded videos are saved under `downloads/` unless you choose a custom folder in settings.
-- Last-frame extraction, stitching, interpolation, upscaling, and custom audio mixing require `ffmpeg` in `PATH`.
+- **YouTube API upload** uses `youtube_token.json` (or `client_secret.json` for OAuth bootstrap).
+- **Facebook/Instagram/TikTok** include both API and browser automation paths.
+- TikTok/Facebook OAuth helper flows are available in settings.
 
 ## Legal
 
 - [Terms of Service](TERMS_OF_SERVICE.md)
 - [Privacy Policy](PRIVACY_POLICY.md)
 
-## Support this project ☕
+## Support
 
-If this saves you hours, grab me a ☕.
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=000000)](https://buymeacoffee.com/dhooksterm)
-
-Also supported via:
-
+- Buy Me a Coffee: https://buymeacoffee.com/dhooksterm
 - PayPal: https://www.paypal.com/paypalme/dhookster
-- Crypto (SOL): `6HiqW3jeF3ymxjK5Fcm6dHi46gDuFmeCeSNdW99CfJjp`
-
-## Build distributables on GitHub
-
-This repository now includes:
-
-- `.github/workflows/windows-build-release.yml` (Windows desktop zip)
-- `.github/workflows/macos-build-release.yml` (macOS desktop app zip)
-- `.github/workflows/android-build-release.yml` (Android signed `.aab` for Play Store upload)
-
-Behavior:
-
-- On push to `main`, workflows build platform artifacts and upload them to Actions artifacts.
-- On tags that start with `v` (for example `v1.0.1`), workflows also attach the artifacts to a GitHub Release.
-
-### Android Play Store signing secrets
-
-Set these repository secrets for the Android workflow:
-
-- `ANDROID_SIGNING_KEY_BASE64` (base64-encoded upload keystore file)
-- `ANDROID_KEYSTORE_PASSWORD`
-- `ANDROID_KEY_ALIAS`
-- `ANDROID_KEY_PASSWORD`
-
-Once set, the workflow outputs a signed `app-release.aab` that can be uploaded directly to Google Play Console.
-
-To create and push a release tag:
-
-```bash
-git tag v1.0.1
-git push origin v1.0.1
-```
+- SOL: `6HiqW3jeF3ymxjK5Fcm6dHi46gDuFmeCeSNdW99CfJjp`
