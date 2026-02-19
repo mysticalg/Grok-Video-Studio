@@ -7047,12 +7047,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        _, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=False)
+        title, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=True)
         if not accepted:
             return
 
-        description_for_filename = self._compose_social_text(caption, hashtags)
-        renamed_video_path = self._stage_tiktok_browser_video(video_path, description_for_filename)
+        filename_title = title.strip() or caption.strip()
+        renamed_video_path = self._stage_tiktok_browser_video(video_path, filename_title)
 
         self._start_social_browser_upload(
             platform_name="TikTok",
@@ -8037,20 +8037,19 @@ class MainWindow(QMainWindow):
         combined = f"{base_text.strip()}\n\n{tag_text}" if base_text.strip() else tag_text
         return combined.strip()
 
-    def _stage_tiktok_browser_video(self, source_video_path: str, description_text: str) -> str:
+    def _stage_tiktok_browser_video(self, source_video_path: str, title_text: str) -> str:
         source_path = Path(str(source_video_path)).expanduser()
         if not source_path.exists() or not source_path.is_file():
             raise ValueError("TikTok upload video path is invalid.")
 
-        safe_stem = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(description_text or "")).strip()
+        safe_stem = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(title_text or "")).strip()
         safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" .")
         if safe_stem:
             safe_stem = safe_stem.title()
         if not safe_stem:
             safe_stem = source_path.stem.title()
-        # Keep as much of the description text as possible so TikTok can infer
-        # a complete filename-based caption in browser uploads.
-        max_stem_length = 4000
+        # TikTok browser upload filename should be concise and filesystem-safe.
+        max_stem_length = 255
         safe_stem = safe_stem[:max_stem_length].strip() or source_path.stem.title()
         extension = source_path.suffix or ".mp4"
         staged_path = source_path.with_name(f"{safe_stem}{extension}")
