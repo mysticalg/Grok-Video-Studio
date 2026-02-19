@@ -4688,7 +4688,7 @@ class MainWindow(QMainWindow):
                 if (phase === "video-mode") {{
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
-                    const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(`${textOf(el)} ${ariaOf(el)}`);
+                    const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(`${{textOf(el)}} ${{ariaOf(el)}}`);
                     const modelTriggerCandidates = [
                         ...document.querySelectorAll("#model-select-trigger"),
                         ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
