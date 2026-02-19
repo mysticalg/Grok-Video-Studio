@@ -4793,66 +4793,80 @@ class MainWindow(QMainWindow):
                 const promptInput = inputCandidates.find((el) => isVisible(el));
                 if (!promptInput) return {{ ok: false, status: "image-clicked-waiting-prompt-input" }};
 
+                const PROMPT_ACTION_DELAY_MS = 1000;
                 promptInput.focus();
-                await sleep(ACTION_DELAY_MS);
+                await sleep(PROMPT_ACTION_DELAY_MS);
 
                 if (promptInput.isContentEditable) {{
                     const paragraph = document.createElement("p");
                     paragraph.textContent = prompt;
                     promptInput.replaceChildren(paragraph);
+                    promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                    await sleep(PROMPT_ACTION_DELAY_MS);
+                    promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
                 }} else {{
                     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(promptInput), "value")?.set;
                     if (setter) setter.call(promptInput, prompt);
                     else promptInput.value = prompt;
+                    promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                    await sleep(PROMPT_ACTION_DELAY_MS);
+                    promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
                 }}
-                await sleep(ACTION_DELAY_MS);
-
-                try {{
-                    promptInput.dispatchEvent(new InputEvent("beforeinput", {{
-                        bubbles: true,
-                        cancelable: true,
-                        composed: true,
-                        inputType: "insertText",
-                        data: prompt.slice(-1),
-                    }}));
-                }} catch (_) {{}}
-                await sleep(ACTION_DELAY_MS);
-
-                promptInput.dispatchEvent(new Event("input", {{ bubbles: true, composed: true }}));
-                await sleep(ACTION_DELAY_MS);
-
-                try {{
-                    promptInput.dispatchEvent(new KeyboardEvent("keyup", {{
-                        key: " ",
-                        code: "Space",
-                        bubbles: true,
-                        cancelable: true,
-                        composed: true,
-                    }}));
-                }} catch (_) {{}}
-                await sleep(ACTION_DELAY_MS);
-
-                promptInput.dispatchEvent(new Event("change", {{ bubbles: true, composed: true }}));
-                await sleep(ACTION_DELAY_MS);
-
-                promptInput.dispatchEvent(new Event("blur", {{ bubbles: true, composed: true }}));
-                await sleep(ACTION_DELAY_MS);
+                await sleep(PROMPT_ACTION_DELAY_MS);
 
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
-                if (!submitButton) return {{ ok: false, status: "prompt-filled-waiting-submit" }};
+                const submitSelectors = [
+                    "button[type='submit'][aria-label='Submit']",
+                    "button[aria-label='Submit'][type='submit']",
+                    "button[type='submit']",
+                    "button[aria-label*='submit' i]",
+                    "[role='button'][aria-label*='submit' i]"
+                ];
+                const submitCandidates = [];
+                const collect = (root) => {{
+                    if (!root || typeof root.querySelectorAll !== "function") return;
+                    submitSelectors.forEach((selector) => {{
+                        const matches = root.querySelectorAll(selector);
+                        for (let i = 0; i < matches.length; i += 1) submitCandidates.push(matches[i]);
+                    }});
+                }};
+                const composerRoot = (promptInput && typeof promptInput.closest === "function")
+                    ? (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section") || promptInput.parentElement)
+                    : null;
+                collect(composerRoot);
+                collect(document);
 
-                await sleep(ACTION_DELAY_MS);
-                const submitted = emulateClick(submitButton);
+                const submitButton = [...new Set(submitCandidates)].find((el) => isVisible(el));
+                const form = (submitButton && submitButton.form)
+                    || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
+                    || (composerRoot && typeof composerRoot.closest === "function" ? composerRoot.closest("form") : null)
+                    || document.querySelector("form");
+
+                if (submitButton && submitButton.disabled) return {{ ok: false, waiting: true, status: "submit-disabled" }};
+
+                await sleep(PROMPT_ACTION_DELAY_MS);
+                const clicked = submitButton ? emulateClick(submitButton) : false;
+
+                let formSubmitted = false;
+                if (form) {{
+                    const ev = new Event("submit", {{ bubbles: true, cancelable: true }});
+                    form.dispatchEvent(ev);
+                    formSubmitted = true;
+                }}
+
+                if (!submitButton && !form) return {{ ok: false, status: "prompt-filled-waiting-submit" }};
+
+                const submitted = clicked || formSubmitted;
                 if (submitted) window.__grokManualImageSubmitToken = submitToken;
                 return {{
                     ok: submitted,
+                    waiting: !submitted,
                     status: submitted ? "video-submit-clicked" : "submit-click-failed",
-                    buttonLabel: (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim(),
+                    buttonLabel: submitButton ? ((submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim()) : "",
                     filledLength: typedValue.length,
+                    formSubmitted,
                 }};
             }})()
         """
