@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -10,6 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+DEFAULT_UPLOAD_CHUNK_SIZE = int(os.getenv("YOUTUBE_UPLOAD_CHUNK_SIZE", str(8 * 1024 * 1024)))
 
 
 def upload_video_to_youtube(
@@ -55,7 +57,7 @@ def upload_video_to_youtube(
             },
             "status": {"privacyStatus": "private"},
         },
-        media_body=MediaFileUpload(video_path, chunksize=-1, resumable=True),
+        media_body=MediaFileUpload(video_path, chunksize=DEFAULT_UPLOAD_CHUNK_SIZE, resumable=True),
     )
 
     response = None

@@ -10,6 +10,59 @@ GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
 TIKTOK_API_BASE = "https://open.tiktokapis.com/v2"
 
 
+class ProgressFileWrapper:
+    """Wrap a binary file object and emit progress updates while reading."""
+
+    def __init__(
+        self,
+        wrapped,
+        total_bytes: int,
+        progress_callback: Callable[[int, str], None] | None,
+        *,
+        progress_prefix: str,
+        start_pct: int,
+        end_pct: int,
+        read_chunk_size: int = 1024 * 1024,
+    ):
+        self._wrapped = wrapped
+        self._total_bytes = max(0, int(total_bytes))
+        self._progress_callback = progress_callback
+        self._progress_prefix = progress_prefix
+        self._start_pct = max(0, min(100, int(start_pct)))
+        self._end_pct = max(self._start_pct, min(100, int(end_pct)))
+        self._read_chunk_size = max(64 * 1024, int(read_chunk_size))
+        self._bytes_read = 0
+        self._last_emit_pct = -1
+
+    def _emit(self) -> None:
+        if self._progress_callback is None:
+            return
+        if self._total_bytes <= 0:
+            pct = self._start_pct
+        else:
+            ratio = max(0.0, min(1.0, self._bytes_read / self._total_bytes))
+            pct = self._start_pct + int((self._end_pct - self._start_pct) * ratio)
+        bounded_pct = max(self._start_pct, min(self._end_pct, pct))
+        if bounded_pct == self._last_emit_pct:
+            return
+        self._last_emit_pct = bounded_pct
+        self._progress_callback(bounded_pct, f"{self._progress_prefix} {bounded_pct}%")
+
+    def read(self, size: int = -1):
+        # Some HTTP clients pass size=-1, which can read the entire file in one call.
+        # Cap read size so large uploads continue emitting progress updates.
+        requested_size = self._read_chunk_size if size is None or size < 0 else min(size, self._read_chunk_size)
+        chunk = self._wrapped.read(requested_size)
+        if not chunk:
+            return chunk
+        self._bytes_read += len(chunk)
+        self._emit()
+        return chunk
+
+    def __getattr__(self, item):
+        return getattr(self._wrapped, item)
+
+
 def upload_video_to_facebook_page(
     page_id: str,
     access_token: str,
@@ -24,34 +77,19 @@ def upload_video_to_facebook_page(
         raise ValueError("Facebook access token is required.")
 
     video_file_size = Path(video_path).stat().st_size
-    bytes_read = 0
-
-    def _read_with_progress(file_obj, size: int = -1):
-        nonlocal bytes_read
-        chunk = file_obj.read(size)
-        if not chunk:
-            return chunk
-        bytes_read += len(chunk)
-        if video_file_size > 0 and progress_callback is not None:
-            progress_pct = int((bytes_read / video_file_size) * 100)
-            bounded_pct = max(0, min(99, progress_pct))
-            progress_callback(bounded_pct, f"Uploading to Facebook... {bounded_pct}%")
-        return chunk
 
     if progress_callback is not None:
         progress_callback(2, "Preparing Facebook upload...")
 
     with Path(video_path).open("rb") as raw_video_file:
-        class _ProgressFile:
-            def __init__(self, wrapped):
-                self._wrapped = wrapped
-
-            def read(self, size: int = -1):
-                return _read_with_progress(self._wrapped, size)
-
-            def __getattr__(self, item):
-                return getattr(self._wrapped, item)
-
+        progress_stream = ProgressFileWrapper(
+            raw_video_file,
+            video_file_size,
+            progress_callback,
+            progress_prefix="Uploading to Facebook...",
+            start_pct=2,
+            end_pct=99,
+        )
         response = requests.post(
             f"{GRAPH_API_BASE}/{page_id}/videos",
             data={
@@ -60,8 +98,8 @@ def upload_video_to_facebook_page(
                 "description": description,
                 "published": "false",
             },
-            files={"source": (Path(video_path).name, _ProgressFile(raw_video_file), "video/mp4")},
-            timeout=600,
+            files={"source": (Path(video_path).name, progress_stream, "video/mp4")},
+            timeout=(30, 3600),
         )
 
     if not response.ok:
@@ -217,11 +255,19 @@ def upload_video_to_tiktok(
         progress_callback(30, "Uploading video bytes to TikTok...")
 
     with video_file.open("rb") as video_handle:
+        progress_stream = ProgressFileWrapper(
+            video_handle,
+            file_size,
+            progress_callback,
+            progress_prefix="Uploading video bytes to TikTok...",
+            start_pct=30,
+            end_pct=64,
+        )
         upload_resp = requests.put(
             upload_url,
-            data=video_handle,
+            data=progress_stream,
             headers={"Content-Type": "video/mp4", "Content-Length": str(file_size)},
-            timeout=600,
+            timeout=(30, 3600),
         )
 
     if not upload_resp.ok:
