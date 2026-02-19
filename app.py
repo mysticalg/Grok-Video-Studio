@@ -91,6 +91,7 @@ TIKTOK_OAUTH_SCOPE = os.getenv("TIKTOK_OAUTH_SCOPE", "user.info.basic,video.uplo
 TIKTOK_PKCE_CHALLENGE_ENCODING = os.getenv("TIKTOK_PKCE_CHALLENGE_ENCODING", "hex").strip().lower()
 if TIKTOK_PKCE_CHALLENGE_ENCODING not in {"hex", "base64url"}:
     TIKTOK_PKCE_CHALLENGE_ENCODING = "hex"
+SOCIAL_UPLOAD_INLINE_VIDEO_MAX_BYTES = 32 * 1024 * 1024
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
@@ -7858,9 +7859,17 @@ class MainWindow(QMainWindow):
 
         video_file = Path(str(video_path))
         encoded_video = ""
+        used_inline_video_payload = False
         if video_file.exists() and video_file.is_file():
             try:
-                encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+                video_size = video_file.stat().st_size
+                if video_size <= SOCIAL_UPLOAD_INLINE_VIDEO_MAX_BYTES:
+                    encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+                    used_inline_video_payload = True
+                else:
+                    self._append_log(
+                        f"{platform_name}: skipping inline base64 staging for large file ({video_size} bytes); using upload dialog auto-selection instead."
+                    )
             except Exception:
                 encoded_video = ""
 
@@ -7872,6 +7881,7 @@ class MainWindow(QMainWindow):
             "attempts": 0,
             "allow_file_dialog": True,
             "video_base64": encoded_video,
+            "video_base64_included": used_inline_video_payload,
             "video_name": video_file.name or "upload.mp4",
             "video_mime": "video/mp4",
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
