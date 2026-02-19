@@ -4661,7 +4661,15 @@ class MainWindow(QMainWindow):
                 if (phase === "pick") {{
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
 
-                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i]")]
+                    const customizePromptReady = !!document.querySelector(
+                        "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
+                        + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
+                    );
+                    if (customizePromptReady) {{
+                        return {{ ok: true, status: "generated-image-clicked" }};
+                    }}
+
+                    const makeVideoButtons = [...document.querySelectorAll("[role='listitem'] button[aria-label*='make video' i]")]
                         .filter((btn) => isVisible(btn) && !btn.disabled);
 
                     if (makeVideoButtons.length) {{
@@ -4885,13 +4893,9 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: image pick validation stayed in '{status}' for "
-                        f"{self.manual_image_pick_retry_count} checks; forcing prompt submit stage."
+                        f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
                     )
-                    self.manual_image_pick_clicked = True
                     self.manual_image_pick_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(1000, self._poll_for_manual_image)
-                    return
                 self._append_log(
                     f"Variant {current_variant}: generated image not ready for pick+submit yet ({status}); retrying..."
                 )
@@ -4904,13 +4908,9 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: video-mode validation stayed in '{status}' for "
-                        f"{self.manual_image_video_mode_retry_count} checks; forcing prompt submit stage."
+                        f"{self.manual_image_video_mode_retry_count} checks; continuing to wait for video-mode state."
                     )
-                    self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(800, self._poll_for_manual_image)
-                    return
 
                 self._append_log(
                     f"Variant {current_variant}: waiting for video mode selection ({status}); retrying..."
