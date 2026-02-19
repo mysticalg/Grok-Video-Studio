@@ -8231,6 +8231,14 @@ class MainWindow(QMainWindow):
                             const byFacebookClass = fileInputs.find((node) => norm(node.className).includes("x1s85apg"));
                             if (byFacebookClass) return byFacebookClass;
                         }
+                        if (platform === "tiktok") {
+                            const byTikTokExactInput = fileInputs.find((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                const hasMultiple = node.hasAttribute("multiple");
+                                return accept === "video/*" && hasMultiple;
+                            });
+                            if (byTikTokExactInput) return byTikTokExactInput;
+                        }
                         const byExactInstagramAccept = fileInputs.find((node) => {
                             const accept = norm(node.getAttribute("accept"));
                             return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*");
@@ -8265,8 +8273,20 @@ class MainWindow(QMainWindow):
                         }
                         fileInput.style.display = "block";
                         fileInput.style.visibility = "visible";
+                        fileInput.style.opacity = "1";
+                        fileInput.style.pointerEvents = "auto";
                         fileInput.removeAttribute("hidden");
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
+                        try {
+                            const existingStyle = String(fileInput.getAttribute("style") || "");
+                            const injectedStyle = [
+                                "display: block !important",
+                                "visibility: visible !important",
+                                "opacity: 1 !important",
+                                "pointer-events: auto !important",
+                            ].join("; ");
+                            fileInput.setAttribute("style", existingStyle ? `${existingStyle}; ${injectedStyle}` : injectedStyle);
+                        } catch (_) {}
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
