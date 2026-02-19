@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QLayout,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -44,10 +45,10 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QSlider,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
-    QToolButton,
     QStatusBar,
     QScrollArea,
     QTextBrowser,
@@ -1582,9 +1583,12 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
 
         self._build_model_api_settings_dialog()
+        self._build_menu_bar()
 
         prompt_group = QGroupBox("✨ Prompt Inputs")
+        prompt_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         prompt_group_layout = QVBoxLayout(prompt_group)
+        prompt_group_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         prompt_group_layout.addWidget(QLabel("Concept"))
         self.concept = QPlainTextEdit()
@@ -1607,11 +1611,10 @@ class MainWindow(QMainWindow):
         prompt_group_layout.addWidget(self.generate_prompt_btn)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("Count"))
+
         self.count = QSpinBox()
         self.count.setRange(1, 10)
         self.count.setValue(1)
-        row.addWidget(self.count)
 
         row.addWidget(QLabel("Resolution"))
         self.video_resolution = QComboBox()
@@ -1637,6 +1640,7 @@ class MainWindow(QMainWindow):
         self.video_aspect_ratio.setCurrentIndex(4)
         row.addWidget(self.video_aspect_ratio)
         prompt_group_layout.addLayout(row)
+        prompt_group_layout.addStretch(0)
 
         left_layout.addWidget(prompt_group)
 
@@ -1659,15 +1663,6 @@ class MainWindow(QMainWindow):
         )
         self.generate_image_btn.clicked.connect(self.start_image_generation)
 
-        self.generate_btn = QPushButton("🎬 API Generate Video")
-        self.generate_btn.setToolTip("Generate and download video via the selected API provider.")
-        self.generate_btn.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: 700;"
-            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
-        )
-        self.generate_btn.clicked.connect(self.start_generation)
-        actions_layout.addWidget(self.generate_btn, 1, 0)
-
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
         self.stop_all_btn.setStyleSheet(
@@ -1675,32 +1670,7 @@ class MainWindow(QMainWindow):
             "border: 1px solid #5c0000; border-radius: 6px; padding: 8px;"
         )
         self.stop_all_btn.clicked.connect(self.stop_all_jobs)
-        actions_layout.addWidget(self.stop_all_btn, 1, 1)
-
-        self.video_settings_btn = QToolButton()
-        self.video_settings_btn.setText("🎞️ Video")
-        self.video_settings_btn.setPopupMode(QToolButton.InstantPopup)
-        self.video_settings_btn.setToolTip("Video settings menu.")
-
-        video_menu = QMenu(self.video_settings_btn)
-        self.video_settings_menu = video_menu.addMenu("Settings")
-        self.video_settings_btn.setMenu(video_menu)
-        actions_layout.addWidget(self.video_settings_btn, 2, 0)
-
-        self.audio_settings_btn = QToolButton()
-        self.audio_settings_btn.setText("🎵 Audio")
-        self.audio_settings_btn.setPopupMode(QToolButton.InstantPopup)
-        self.audio_settings_btn.setToolTip("Audio settings menu.")
-
-        audio_menu = QMenu(self.audio_settings_btn)
-        self.audio_settings_menu = audio_menu.addMenu("Settings")
-        self.audio_settings_btn.setMenu(audio_menu)
-        actions_layout.addWidget(self.audio_settings_btn, 2, 1)
-
-        def add_menu_widget(menu: QMenu, widget: QWidget) -> None:
-            action = QWidgetAction(menu)
-            action.setDefaultWidget(widget)
-            menu.addAction(action)
+        actions_layout.addWidget(self.stop_all_btn, 1, 0)
 
         self.continue_frame_btn = QPushButton("🟨 Continue from Last Frame (paste + generate)")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
@@ -1733,30 +1703,26 @@ class MainWindow(QMainWindow):
             "border: 1px solid #4fc3f7; border-radius: 6px; padding: 8px;"
         )
         self.stitch_btn.clicked.connect(self.stitch_all_videos)
-        actions_layout.addWidget(self.stitch_btn, 3, 1)
+        actions_layout.addWidget(self.stitch_btn, 1, 1)
 
         self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
-        add_menu_widget(self.video_settings_menu, self.stitch_crossfade_checkbox)
 
         self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation")
         self.stitch_interpolation_checkbox.setToolTip(
             "After stitching, use ffmpeg minterpolate to smooth motion by generating in-between frames."
         )
-        add_menu_widget(self.video_settings_menu, self.stitch_interpolation_checkbox)
 
         self.stitch_interpolation_fps = QComboBox()
         self.stitch_interpolation_fps.addItem("48 fps", 48)
         self.stitch_interpolation_fps.addItem("60 fps", 60)
         self.stitch_interpolation_fps.setCurrentIndex(0)
         self.stitch_interpolation_fps.setToolTip("Target frame rate used when frame interpolation is enabled.")
-        add_menu_widget(self.video_settings_menu, self.stitch_interpolation_fps)
 
         self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling")
         self.stitch_upscale_checkbox.setToolTip(
             "After stitching, upscale output to a selected target resolution using high-quality Lanczos scaling."
         )
-        add_menu_widget(self.video_settings_menu, self.stitch_upscale_checkbox)
 
         self.stitch_upscale_target = QComboBox()
         self.stitch_upscale_target.addItem("2x (max 4K)", "2x")
@@ -1765,13 +1731,11 @@ class MainWindow(QMainWindow):
         self.stitch_upscale_target.addItem("4K (3840x2160)", "4k")
         self.stitch_upscale_target.setCurrentIndex(0)
         self.stitch_upscale_target.setToolTip("Choose output upscale target resolution.")
-        add_menu_widget(self.video_settings_menu, self.stitch_upscale_target)
 
         self.stitch_gpu_checkbox = QCheckBox("Use GPU encoding for stitching (NVENC)")
         self.stitch_gpu_checkbox.setToolTip("Use NVIDIA NVENC encoder when available to reduce CPU load.")
         self.stitch_gpu_checkbox.setChecked(True)
         self.stitch_gpu_checkbox.toggled.connect(lambda _: self._sync_video_options_label())
-        add_menu_widget(self.video_settings_menu, self.stitch_gpu_checkbox)
 
         self.video_options_dropdown = QComboBox()
         self.video_options_dropdown.addItem("0.2s", 0.2)
@@ -1784,7 +1748,6 @@ class MainWindow(QMainWindow):
         self.video_options_dropdown.setMaximumWidth(140)
         self.video_options_dropdown.setToolTip("Crossfade duration for stitching.")
         self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
-        add_menu_widget(self.video_settings_menu, self.video_options_dropdown)
 
         self.music_file_label = QLabel("Music: none selected")
         self.music_file_label.setStyleSheet("color: #9fb3c8;")
@@ -1805,7 +1768,6 @@ class MainWindow(QMainWindow):
 
         self.stitch_mute_original_checkbox = QCheckBox("Mute original video audio when music is used")
         self.stitch_mute_original_checkbox.setToolTip("If enabled, only the selected music is audible in the stitched output.")
-        add_menu_widget(self.audio_settings_menu, self.stitch_mute_original_checkbox)
 
         self.stitch_original_audio_volume = QSpinBox()
         self.stitch_original_audio_volume.setRange(0, 200)
@@ -1813,7 +1775,6 @@ class MainWindow(QMainWindow):
         self.stitch_original_audio_volume.setPrefix("Original audio: ")
         self.stitch_original_audio_volume.setSuffix("%")
         self.stitch_original_audio_volume.setToolTip("Original video audio level used during custom music mixing.")
-        add_menu_widget(self.audio_settings_menu, self.stitch_original_audio_volume)
 
         self.stitch_music_volume = QSpinBox()
         self.stitch_music_volume.setRange(0, 200)
@@ -1821,7 +1782,6 @@ class MainWindow(QMainWindow):
         self.stitch_music_volume.setPrefix("Music audio: ")
         self.stitch_music_volume.setSuffix("%")
         self.stitch_music_volume.setToolTip("Custom music level used during stitched output mixing.")
-        add_menu_widget(self.audio_settings_menu, self.stitch_music_volume)
 
         self.stitch_audio_fade_duration = QDoubleSpinBox()
         self.stitch_audio_fade_duration.setRange(0.0, 10.0)
@@ -1830,18 +1790,13 @@ class MainWindow(QMainWindow):
         self.stitch_audio_fade_duration.setValue(0.5)
         self.stitch_audio_fade_duration.setSuffix(" s")
         self.stitch_audio_fade_duration.setToolTip("Fade-in and fade-out duration applied to stitched output audio mix.")
-        add_menu_widget(self.audio_settings_menu, self.stitch_audio_fade_duration)
 
         self.stitch_audio_fade_label = QLabel("Audio fade in/out")
         self.stitch_audio_fade_label.setStyleSheet("color: #9fb3c8;")
-        add_menu_widget(self.audio_settings_menu, self.stitch_audio_fade_label)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
-        self.buy_coffee_btn.setStyleSheet(
-            "font-size: 12px; font-weight: 700; padding: 4px 8px;"
-            "background-color: #ffdd00; color: #222; border-radius: 6px;"
-        )
+        self.buy_coffee_btn.setStyleSheet("font-size: 12px; font-weight: 700; padding: 4px 8px;")
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
         left_layout.addWidget(actions_group)
@@ -1933,7 +1888,7 @@ class MainWindow(QMainWindow):
         self.stitch_progress_bar.setVisible(False)
         log_layout.addWidget(self.stitch_progress_bar)
 
-        log_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignLeft)
+        log_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
 
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
@@ -1997,6 +1952,8 @@ class MainWindow(QMainWindow):
         self.player.durationChanged.connect(self._on_preview_duration_changed)
 
         bottom_splitter = QSplitter()
+        bottom_splitter.setOpaqueResize(True)
+        bottom_splitter.setChildrenCollapsible(False)
         bottom_splitter.addWidget(preview_group)
         bottom_splitter.addWidget(log_group)
         bottom_splitter.setSizes([500, 800])
@@ -2031,6 +1988,8 @@ class MainWindow(QMainWindow):
         self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
 
         right_splitter = QSplitter(Qt.Vertical)
+        right_splitter.setOpaqueResize(True)
+        right_splitter.setChildrenCollapsible(False)
         right_splitter.addWidget(self.browser_tabs)
         right_splitter.addWidget(bottom_splitter)
         right_splitter.setSizes([620, 280])
@@ -2067,7 +2026,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setFixedWidth(260)
         status_bar.addPermanentWidget(self.upload_progress_bar)
 
-        self._build_menu_bar()
+        self._populate_top_settings_menus()
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
 
@@ -2299,6 +2258,16 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #9fb3c8;")
         layout.addWidget(hint)
+
+        self.sora_generate_btn = QPushButton("🎬 API Generate Video")
+        self.sora_generate_btn.setToolTip("Generate and download video via the selected API provider.")
+        self.sora_generate_btn.setStyleSheet(
+            "background-color: #2e7d32; color: white; font-weight: 700;"
+            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
+        )
+        self.sora_generate_btn.clicked.connect(self.start_generation)
+        layout.addWidget(self.sora_generate_btn)
+
         layout.addStretch(1)
         return tab
 
@@ -2446,6 +2415,16 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #9fb3c8;")
         layout.addWidget(hint)
+
+        self.seedance_generate_btn = QPushButton("🎬 API Generate Video")
+        self.seedance_generate_btn.setToolTip("Generate and download video via the selected API provider.")
+        self.seedance_generate_btn.setStyleSheet(
+            "background-color: #2e7d32; color: white; font-weight: 700;"
+            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
+        )
+        self.seedance_generate_btn.clicked.connect(self.start_generation)
+        layout.addWidget(self.seedance_generate_btn)
+
         layout.addStretch(1)
         return tab
 
@@ -2806,6 +2785,14 @@ class MainWindow(QMainWindow):
         open_settings_action.triggered.connect(self.show_model_api_settings)
         settings_menu.addAction(open_settings_action)
 
+        video_menu = menu_bar.addMenu("Video")
+        self.video_settings_menu = video_menu.addMenu("Settings")
+
+        audio_menu = menu_bar.addMenu("Audio")
+        self.audio_settings_menu = audio_menu.addMenu("Settings")
+
+        self.automation_menu = menu_bar.addMenu("Automation")
+
         help_menu = menu_bar.addMenu("Help")
         info_action = QAction("Info", self)
         info_action.triggered.connect(self.show_app_info)
@@ -2822,6 +2809,42 @@ class MainWindow(QMainWindow):
         actions_action = QAction("Build Artifacts", self)
         actions_action.triggered.connect(self.open_github_actions_runs_page)
         help_menu.addAction(actions_action)
+
+    def _add_widget_to_menu(self, menu: QMenu, widget: QWidget) -> None:
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(widget)
+        menu.addAction(action)
+
+    def _populate_top_settings_menus(self) -> None:
+        self.video_settings_menu.clear()
+        self.audio_settings_menu.clear()
+        self.automation_menu.clear()
+
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
+        self._add_widget_to_menu(self.video_settings_menu, self.video_options_dropdown)
+        self.video_settings_menu.addSeparator()
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_interpolation_checkbox)
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_interpolation_fps)
+        self.video_settings_menu.addSeparator()
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_upscale_checkbox)
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_upscale_target)
+        self.video_settings_menu.addSeparator()
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_gpu_checkbox)
+
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_mute_original_checkbox)
+        self.audio_settings_menu.addSeparator()
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_original_audio_volume)
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_music_volume)
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_audio_fade_duration)
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_audio_fade_label)
+
+        automation_widget = QWidget(self)
+        automation_layout = QHBoxLayout(automation_widget)
+        automation_layout.setContentsMargins(8, 4, 8, 4)
+        automation_layout.addWidget(QLabel("Count"))
+        automation_layout.addWidget(self.count)
+        automation_layout.addStretch(1)
+        self._add_widget_to_menu(self.automation_menu, automation_widget)
 
     def show_app_info(self) -> None:
         dialog = QDialog(self)
@@ -6412,7 +6435,8 @@ class MainWindow(QMainWindow):
         self.seedance_api_key.setEnabled(uses_seedance)
         self.seedance_oauth_token.setEnabled(uses_seedance)
         self.chat_model.setEnabled(uses_grok)
-        self.generate_btn.setText("🎬 API Generate Video")
+        self.sora_generate_btn.setText("🎬 API Generate Video")
+        self.seedance_generate_btn.setText("🎬 API Generate Video")
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
         self.generate_image_btn.setEnabled(True)
         self.populate_video_btn.setEnabled(True)
