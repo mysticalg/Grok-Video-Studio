@@ -594,6 +594,10 @@ class GenerateWorker(QThread):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+    def _looks_like_openai_file_id(self, value: str) -> bool:
+        normalized = str(value).strip()
+        return normalized.startswith("file-") and len(normalized) > len("file-")
+
     def _extract_openai_input_reference_id(self, payload: object) -> str:
         candidates: list[str] = []
 
@@ -725,12 +729,16 @@ class GenerateWorker(QThread):
         input_reference = str(settings.get("input_reference") or "").strip()
 
         if self._openai_setting_enabled(settings.get("continue_from_last_frame")):
-            if self._openai_last_generated_reference_id:
+            if self._openai_last_generated_reference_id and self._looks_like_openai_file_id(self._openai_last_generated_reference_id):
                 self.status.emit(
-                    f"Sora continuity: reusing previous OpenAI image reference id {self._openai_last_generated_reference_id}."
+                    f"Sora continuity: reusing previous OpenAI file reference id {self._openai_last_generated_reference_id}."
                 )
                 input_reference = self._openai_last_generated_reference_id
             else:
+                if self._openai_last_generated_reference_id:
+                    self.status.emit(
+                        "Sora continuity: previous OpenAI reference id is not a file id; extracting and uploading a frame instead."
+                    )
                 latest_video = self._resolve_latest_video_for_sora_continuation()
                 if latest_video is None:
                     raise RuntimeError(
