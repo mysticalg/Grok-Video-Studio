@@ -430,7 +430,8 @@ class GrokConfig:
 
 @dataclass
 class PromptConfig:
-    source: str
+    prompt_source: str
+    video_provider: str
     concept: str
     manual_prompt: str
     openai_api_key: str
@@ -538,7 +539,7 @@ class GenerateWorker(QThread):
 
     def build_prompt(self, variant: int) -> str:
         self._ensure_not_stopped()
-        source = self.prompt_config.source
+        source = self.prompt_config.prompt_source
         if source == "manual":
             return self.prompt_config.manual_prompt
 
@@ -552,8 +553,6 @@ class GenerateWorker(QThread):
 
         if source == "openai":
             return self.call_openai_chat(system, user)
-        if source == "seedance":
-            return self.prompt_config.manual_prompt.strip() or self.prompt_config.concept
         return self.call_grok_chat(system, user)
 
     def start_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> str:
@@ -1096,7 +1095,7 @@ class GenerateWorker(QThread):
 
         selected_duration = int(self.prompt_config.video_duration_seconds)
 
-        if self.prompt_config.source == "openai":
+        if self.prompt_config.video_provider == "openai":
             self.status.emit("Starting OpenAI Sora video generation job...")
             openai_job_id, direct_video_url, initial_reference_id = self._start_openai_video_job(prompt)
             self._openai_last_generated_reference_id = initial_reference_id
@@ -1122,7 +1121,7 @@ class GenerateWorker(QThread):
 
             effective_resolution = self.prompt_config.video_resolution
             effective_resolution_label = self.prompt_config.video_resolution_label
-        elif self.prompt_config.source == "seedance":
+        elif self.prompt_config.video_provider == "seedance":
             self.status.emit("Starting Seedance 2.0 video generation job...")
             seedance_job_id, direct_video_url = self._start_seedance_video_job(prompt)
             if direct_video_url:
@@ -1147,13 +1146,13 @@ class GenerateWorker(QThread):
             if not video_url:
                 raise RuntimeError("No video URL returned")
 
-        if self.prompt_config.source == "openai" and 'downloaded_from_content_endpoint' in locals() and downloaded_from_content_endpoint:
+        if self.prompt_config.video_provider == "openai" and 'downloaded_from_content_endpoint' in locals() and downloaded_from_content_endpoint:
             resolved_video_url = f"{OPENAI_API_BASE}/videos/{openai_job_id}/content"
         else:
             file_path = self.download_video(video_url, f"v{variant}")
             resolved_video_url = video_url
 
-        if self.prompt_config.source == "openai":
+        if self.prompt_config.video_provider == "openai":
             self._openai_last_generated_video_path = file_path
 
         return {
@@ -1593,7 +1592,7 @@ class MainWindow(QMainWindow):
 
         self.generate_prompt_btn = QPushButton("✨ Generate Prompt + Social Metadata from Concept")
         self.generate_prompt_btn.setToolTip(
-            "Uses selected AI provider to convert Concept into a 10-second Grok Imagine prompt and social metadata."
+            "Uses Prompt Source (Grok/OpenAI) to convert Concept into a 10-second video prompt and social metadata."
         )
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
@@ -2192,7 +2191,7 @@ class MainWindow(QMainWindow):
 
         description = QLabel(
             "Configure official Sora 2 create-video parameters used by OpenAI API generation. "
-            "These settings are applied when Prompt Source is OpenAI API and you click API Generate Video."
+            "These settings are applied when Video Provider is OpenAI Sora 2 API and you click API Generate Video."
         )
         description.setWordWrap(True)
         description.setStyleSheet("color: #9fb3c8;")
@@ -2304,7 +2303,7 @@ class MainWindow(QMainWindow):
 
         description = QLabel(
             "Configure Seedance 2.0 video generation options. "
-            "These settings are applied when Prompt Source is Seedance 2.0 API and you click API Generate Video."
+            "These settings are applied when Video Provider is Seedance 2.0 API and you click API Generate Video."
         )
         description.setWordWrap(True)
         description.setStyleSheet("color: #9fb3c8;")
@@ -2567,9 +2566,15 @@ class MainWindow(QMainWindow):
         self.prompt_source.addItem("Manual prompt (no API)", "manual")
         self.prompt_source.addItem("Grok API", "grok")
         self.prompt_source.addItem("OpenAI API", "openai")
-        self.prompt_source.addItem("Seedance 2.0 API", "seedance")
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
         ai_layout.addRow("Prompt Source", self.prompt_source)
+
+        self.video_provider = QComboBox()
+        self.video_provider.addItem("Grok Imagine API", "grok")
+        self.video_provider.addItem("OpenAI Sora 2 API", "openai")
+        self.video_provider.addItem("Seedance 2.0 API", "seedance")
+        self.video_provider.currentIndexChanged.connect(self._toggle_prompt_source_fields)
+        ai_layout.addRow("Video Provider", self.video_provider)
 
         self.openai_api_key = QLineEdit()
         self.openai_api_key.setEchoMode(QLineEdit.Password)
@@ -2902,6 +2907,7 @@ class MainWindow(QMainWindow):
             "chat_model": self.chat_model.text(),
             "image_model": self.image_model.text(),
             "prompt_source": self.prompt_source.currentData(),
+            "video_provider": self.video_provider.currentData(),
             "openai_api_key": self.openai_api_key.text(),
             "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
@@ -2991,6 +2997,10 @@ class MainWindow(QMainWindow):
             source_index = self.prompt_source.findData(str(preferences["prompt_source"]))
             if source_index >= 0:
                 self.prompt_source.setCurrentIndex(source_index)
+        if "video_provider" in preferences:
+            provider_index = self.video_provider.findData(str(preferences["video_provider"]))
+            if provider_index >= 0:
+                self.video_provider.setCurrentIndex(provider_index)
         if "openai_api_key" in preferences:
             self.openai_api_key.setText(str(preferences["openai_api_key"]))
         if "openai_access_token" in preferences:
@@ -3528,24 +3538,18 @@ class MainWindow(QMainWindow):
     def start_generation(self) -> None:
         self.stop_all_requested = False
         concept = self.concept.toPlainText().strip()
-        source = self.prompt_source.currentData()
+        prompt_source = self.prompt_source.currentData()
+        video_provider = self.video_provider.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
+        api_key = self.api_key.text().strip()
 
-        if source == "grok":
-            api_key = self.api_key.text().strip()
-            if not api_key:
-                QMessageBox.warning(self, "Missing API Key", "Please enter a Grok API key.")
-                return
-        else:
-            api_key = self.api_key.text().strip()
-
-        if source != "manual" and not concept:
+        if prompt_source != "manual" and not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
             return
-        if source == "manual" and not manual_prompt:
+        if prompt_source == "manual" and not manual_prompt:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
-        if source == "openai" and not (self.openai_api_key.text().strip() or self.openai_access_token.text().strip()):
+        if prompt_source == "openai" and not (self.openai_api_key.text().strip() or self.openai_access_token.text().strip()):
             QMessageBox.warning(
                 self,
                 "Missing OpenAI Credentials",
@@ -3553,19 +3557,23 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if source == "seedance" and not (self.seedance_api_key.text().strip() or self.seedance_oauth_token.text().strip()):
+        if video_provider == "grok" and not api_key:
+            QMessageBox.warning(self, "Missing Grok API Key", "Please enter a Grok API key for Grok Imagine video generation.")
+            return
+
+        if video_provider == "openai" and not (self.openai_api_key.text().strip() or self.openai_access_token.text().strip()):
+            QMessageBox.warning(
+                self,
+                "Missing OpenAI Credentials",
+                "Please provide an OpenAI API key or access token for Sora video generation.",
+            )
+            return
+
+        if video_provider == "seedance" and not (self.seedance_api_key.text().strip() or self.seedance_oauth_token.text().strip()):
             QMessageBox.warning(
                 self,
                 "Missing Seedance Credentials",
                 "Please provide a Seedance API key or OAuth token in Model/API Settings.",
-            )
-            return
-
-        if source == "manual":
-            QMessageBox.information(
-                self,
-                "API Mode Required",
-                "Select Grok API, OpenAI API, or Seedance 2.0 API in Prompt Source, then click API Generate Video."
             )
             return
 
@@ -3582,7 +3590,7 @@ class MainWindow(QMainWindow):
         openai_sora_settings: dict[str, object] = {}
         seedance_settings: dict[str, object] = {}
 
-        if source == "openai":
+        if video_provider == "openai":
             try:
                 openai_sora_settings = self._collect_sora2_settings()
             except Exception as exc:
@@ -3599,12 +3607,12 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Sora 2 Settings", "seconds must be one of 4, 8, or 12.")
                 return
 
-        if source == "openai" and self._openai_sora_help_always_show:
+        if video_provider == "openai" and self._openai_sora_help_always_show:
             if not self._confirm_openai_sora_settings(openai_sora_settings):
                 self._append_log("OpenAI generation canceled from Sora parameters confirmation dialog.")
                 return
 
-        if source == "seedance":
+        if video_provider == "seedance":
             try:
                 seedance_settings = self._collect_seedance_settings()
             except Exception as exc:
@@ -3621,7 +3629,8 @@ class MainWindow(QMainWindow):
                 return
 
         prompt_config = PromptConfig(
-            source=source,
+            prompt_source=prompt_source,
+            video_provider=video_provider,
             concept=concept,
             manual_prompt=manual_prompt,
             openai_api_key=self.openai_api_key.text().strip(),
@@ -4004,14 +4013,15 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "TikTok OAuth Failed", str(exc))
 
     def open_ai_provider_login(self) -> None:
-        source = self.prompt_source.currentData()
-        if source == "openai":
+        prompt_source = self.prompt_source.currentData()
+        video_provider = self.video_provider.currentData()
+        if prompt_source == "openai" or video_provider == "openai":
             try:
                 self._run_openai_oauth_flow()
             except Exception as exc:
                 self._append_log(f"ERROR: OpenAI OAuth flow failed: {exc}")
             return
-        if source == "seedance":
+        if video_provider == "seedance":
             QDesktopServices.openUrl(QUrl("https://seedance.ai/"))
             self._append_log("Opened Seedance in browser. If OAuth is supported on your account, complete sign-in and paste token.")
             return
@@ -6218,17 +6228,18 @@ class MainWindow(QMainWindow):
         self._append_log(f"Preview volume set to {self.preview_volume}%.")
 
     def _toggle_prompt_source_fields(self) -> None:
-        source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
-        is_manual = source == "manual"
-        is_openai = source == "openai"
-        is_seedance = source == "seedance"
+        prompt_source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
+        video_provider = self.video_provider.currentData() if hasattr(self, "video_provider") else "grok"
+        uses_openai = prompt_source == "openai" or video_provider == "openai"
+        uses_seedance = video_provider == "seedance"
+        uses_grok = prompt_source == "grok" or video_provider == "grok"
         self.manual_prompt.setEnabled(True)
-        self.openai_api_key.setEnabled(is_openai)
-        self.openai_access_token.setEnabled(is_openai)
-        self.openai_chat_model.setEnabled(is_openai)
-        self.seedance_api_key.setEnabled(is_seedance)
-        self.seedance_oauth_token.setEnabled(is_seedance)
-        self.chat_model.setEnabled(source == "grok")
+        self.openai_api_key.setEnabled(uses_openai)
+        self.openai_access_token.setEnabled(uses_openai)
+        self.openai_chat_model.setEnabled(prompt_source == "openai")
+        self.seedance_api_key.setEnabled(uses_seedance)
+        self.seedance_oauth_token.setEnabled(uses_seedance)
+        self.chat_model.setEnabled(uses_grok)
         self.generate_btn.setText("🎬 API Generate Video")
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
         self.generate_image_btn.setEnabled(True)
