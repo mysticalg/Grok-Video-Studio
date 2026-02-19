@@ -4767,17 +4767,30 @@ class MainWindow(QMainWindow):
                 }}
 
                 const promptSelectors = [
-                    "textarea[placeholder*='Type to customize video' i]",
-                    "input[placeholder*='Type to customize video' i]",
                     "textarea[placeholder*='Type to imagine' i]",
                     "input[placeholder*='Type to imagine' i]",
+                    "textarea[placeholder*='Type to customize this video' i]",
+                    "input[placeholder*='Type to customize this video' i]",
+                    "textarea[placeholder*='Type to customize video' i]",
+                    "input[placeholder*='Type to customize video' i]",
+                    "textarea[placeholder*='Customize video' i]",
+                    "input[placeholder*='Customize video' i]",
                     "div.tiptap.ProseMirror[contenteditable='true']",
-                    "[contenteditable='true'][aria-label*='Type to customize video' i]",
                     "[contenteditable='true'][aria-label*='Type to imagine' i]",
-                    "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
                     "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                    "[contenteditable='true'][aria-label*='Type to customize this video' i]",
+                    "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
+                    "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                    "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                    "[contenteditable='true'][aria-label*='Make a video' i]",
+                    "[contenteditable='true'][data-placeholder*='Customize video' i]",
                 ];
-                const promptInput = promptSelectors.map((sel) => document.querySelector(sel)).find(Boolean);
+                const inputCandidates = [];
+                promptSelectors.forEach((selector) => {{
+                    const matches = document.querySelectorAll(selector);
+                    for (let i = 0; i < matches.length; i += 1) inputCandidates.push(matches[i]);
+                }});
+                const promptInput = inputCandidates.find((el) => isVisible(el));
                 if (!promptInput) return {{ ok: false, status: "image-clicked-waiting-prompt-input" }};
 
                 promptInput.focus();
