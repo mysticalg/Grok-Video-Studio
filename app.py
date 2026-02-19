@@ -439,6 +439,7 @@ class PromptConfig:
     video_resolution_label: str
     video_aspect_ratio: str
     video_duration_seconds: int
+    openai_sora_settings: dict[str, object]
 
 
 @dataclass
@@ -563,19 +564,29 @@ class GenerateWorker(QThread):
         response.raise_for_status()
         return response.json().get("id")
 
-    def _openai_sora_payload_variants(self, prompt: str, resolution: str, duration_seconds: int) -> list[dict[str, object]]:
-        base = {
-            "model": "sora-2",
-            "prompt": prompt,
-            "size": resolution,
-        }
-        return [
-            {**base, "duration_seconds": duration_seconds},
-            {**base, "seconds": duration_seconds},
-            base,
-        ]
+    def _openai_sora_payload_variants(self, prompt: str) -> list[dict[str, object]]:
+        settings = self.prompt_config.openai_sora_settings if isinstance(self.prompt_config.openai_sora_settings, dict) else {}
+        model = str(settings.get("model") or "sora-2")
+        size = str(settings.get("size") or self.prompt_config.video_resolution or "1280x720")
+        seconds = str(settings.get("seconds") or str(self.prompt_config.video_duration_seconds or 8))
+        input_reference = str(settings.get("input_reference") or "").strip()
+        extra_body = settings.get("extra_body") if isinstance(settings.get("extra_body"), dict) else {}
 
-    def _start_openai_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> tuple[str | None, str | None]:
+        base: dict[str, object] = {
+            "model": model,
+            "prompt": prompt,
+            "size": size,
+        }
+        if input_reference:
+            base["input_reference"] = input_reference
+        if extra_body:
+            base.update(extra_body)
+
+        with_seconds = dict(base)
+        with_seconds["seconds"] = seconds
+        return [with_seconds, base]
+
+    def _start_openai_video_job(self, prompt: str) -> tuple[str | None, str | None]:
         self._ensure_not_stopped()
         headers = self._openai_video_headers()
 
@@ -584,7 +595,7 @@ class GenerateWorker(QThread):
             f"{OPENAI_API_BASE}/videos",
         ]
 
-        payload_variants = self._openai_sora_payload_variants(prompt, resolution, duration_seconds)
+        payload_variants = self._openai_sora_payload_variants(prompt)
         last_error = ""
         for endpoint in endpoints:
             for idx, payload in enumerate(payload_variants):
@@ -608,12 +619,17 @@ class GenerateWorker(QThread):
                     last_error = body_text[:400]
                     break
 
-                duration_error = (
+                seconds_error = (
                     status in {400, 422}
-                    and "unknown parameter" in body_lower
-                    and ("duration" in body_lower or "seconds" in body_lower)
+                    and "seconds" in body_lower
+                    and (
+                        "unknown parameter" in body_lower
+                        or "invalid type" in body_lower
+                        or "invalid value" in body_lower
+                        or "expected one of" in body_lower
+                    )
                 )
-                if duration_error and idx < len(payload_variants) - 1:
+                if seconds_error and idx < len(payload_variants) - 1:
                     last_error = body_text[:400]
                     continue
 
@@ -746,11 +762,7 @@ class GenerateWorker(QThread):
 
         if self.prompt_config.source == "openai":
             self.status.emit("Starting OpenAI Sora video generation job...")
-            openai_job_id, direct_video_url = self._start_openai_video_job(
-                prompt,
-                self.prompt_config.video_resolution,
-                selected_duration,
-            )
+            openai_job_id, direct_video_url = self._start_openai_video_job(prompt)
             if direct_video_url:
                 video_url = direct_video_url
             elif openai_job_id:
@@ -1633,6 +1645,7 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("TikTok", "https://www.tiktok.com/upload"),
             "TikTok Upload",
         )
+        self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
         self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
 
         right_splitter = QSplitter(Qt.Vertical)
@@ -1803,6 +1816,110 @@ class MainWindow(QMainWindow):
         if index < 0 or index >= len(self.videos):
             return ""
         return str(self.videos[index].get("video_file_path") or "").strip()
+
+    def _build_sora2_settings_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        description = QLabel(
+            "Configure official Sora 2 create-video parameters used by OpenAI API generation. "
+            "These settings are applied when Prompt Source is OpenAI API and you click API Generate Video."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet("color: #9fb3c8;")
+        layout.addWidget(description)
+
+        form = QFormLayout()
+
+        self.sora2_model = QComboBox()
+        self.sora2_model.setEditable(True)
+        for model_name in [
+            "sora-2",
+            "sora-2-pro",
+            "sora-2-2025-10-06",
+            "sora-2-pro-2025-10-06",
+            "sora-2-2025-12-08",
+        ]:
+            self.sora2_model.addItem(model_name, model_name)
+        model_env = os.getenv("OPENAI_SORA_MODEL", "sora-2").strip() or "sora-2"
+        model_index = self.sora2_model.findData(model_env)
+        if model_index >= 0:
+            self.sora2_model.setCurrentIndex(model_index)
+        else:
+            self.sora2_model.setCurrentText(model_env)
+        form.addRow("model", self.sora2_model)
+
+        self.sora2_seconds = QComboBox()
+        for seconds in ["4", "8", "12"]:
+            self.sora2_seconds.addItem(f"{seconds}s", seconds)
+        seconds_env = os.getenv("OPENAI_SORA_SECONDS", "8").strip() or "8"
+        seconds_index = self.sora2_seconds.findData(seconds_env)
+        self.sora2_seconds.setCurrentIndex(seconds_index if seconds_index >= 0 else 1)
+        form.addRow("seconds", self.sora2_seconds)
+
+        self.sora2_size = QComboBox()
+        for size in ["720x1280", "1280x720", "1024x1792", "1792x1024"]:
+            self.sora2_size.addItem(size, size)
+        size_env = os.getenv("OPENAI_SORA_SIZE", "1280x720").strip() or "1280x720"
+        size_index = self.sora2_size.findData(size_env)
+        self.sora2_size.setCurrentIndex(size_index if size_index >= 0 else 1)
+        form.addRow("size", self.sora2_size)
+
+        input_ref_row = QHBoxLayout()
+        self.sora2_input_reference = QLineEdit(os.getenv("OPENAI_SORA_INPUT_REFERENCE", ""))
+        self.sora2_input_reference.setPlaceholderText("Optional file id/reference image for video continuation")
+        input_ref_row.addWidget(self.sora2_input_reference)
+        pick_input_ref = QPushButton("Browse…")
+        pick_input_ref.clicked.connect(self._choose_sora2_input_reference)
+        input_ref_row.addWidget(pick_input_ref)
+        input_ref_wrap = QWidget()
+        input_ref_wrap.setLayout(input_ref_row)
+        form.addRow("input_reference (optional)", input_ref_wrap)
+
+        self.sora2_extra_body = QPlainTextEdit()
+        self.sora2_extra_body.setPlaceholderText('{"any_additional_openai_video_fields": "value"}')
+        self.sora2_extra_body.setMaximumHeight(110)
+        form.addRow("extra_body JSON (optional)", self.sora2_extra_body)
+
+        layout.addLayout(form)
+
+        hint = QLabel(
+            "Known create parameters from current OpenAI SDK docs: prompt, model, seconds, size, input_reference. "
+            "The prompt is generated by the app; fields above control the request payload."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #9fb3c8;")
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return tab
+
+    def _choose_sora2_input_reference(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Input Reference Media",
+            str(self.download_dir),
+            "Media Files (*.png *.jpg *.jpeg *.webp *.mp4 *.mov *.m4v);;All Files (*)",
+        )
+        if file_path:
+            self.sora2_input_reference.setText(file_path)
+
+    def _collect_sora2_settings(self) -> dict[str, object]:
+        settings: dict[str, object] = {
+            "model": self.sora2_model.currentData() or self.sora2_model.currentText().strip() or "sora-2",
+            "seconds": str(self.sora2_seconds.currentData() or "8"),
+            "size": str(self.sora2_size.currentData() or "1280x720"),
+            "input_reference": self.sora2_input_reference.text().strip(),
+            "extra_body": {},
+        }
+
+        raw_extra = self.sora2_extra_body.toPlainText().strip()
+        if raw_extra:
+            parsed = json.loads(raw_extra)
+            if not isinstance(parsed, dict):
+                raise ValueError("Sora 2 extra_body JSON must be an object.")
+            settings["extra_body"] = parsed
+
+        return settings
 
     def _build_browser_training_tab(self) -> QWidget:
         tab = QWidget()
@@ -2274,6 +2391,11 @@ class MainWindow(QMainWindow):
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
+            "sora2_model": self.sora2_model.currentData() or self.sora2_model.currentText(),
+            "sora2_seconds": str(self.sora2_seconds.currentData()),
+            "sora2_size": str(self.sora2_size.currentData()),
+            "sora2_input_reference": self.sora2_input_reference.text(),
+            "sora2_extra_body": self.sora2_extra_body.toPlainText(),
             "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
             "stitch_interpolation_fps": int(self.stitch_interpolation_fps.currentData()),
@@ -2397,6 +2519,26 @@ class MainWindow(QMainWindow):
             aspect_index = self.video_aspect_ratio.findData(str(preferences["video_aspect_ratio"]))
             if aspect_index >= 0:
                 self.video_aspect_ratio.setCurrentIndex(aspect_index)
+
+        if "sora2_model" in preferences:
+            sora_model = str(preferences["sora2_model"])
+            model_index = self.sora2_model.findData(sora_model)
+            if model_index >= 0:
+                self.sora2_model.setCurrentIndex(model_index)
+            else:
+                self.sora2_model.setCurrentText(sora_model)
+        if "sora2_seconds" in preferences:
+            seconds_index = self.sora2_seconds.findData(str(preferences["sora2_seconds"]))
+            if seconds_index >= 0:
+                self.sora2_seconds.setCurrentIndex(seconds_index)
+        if "sora2_size" in preferences:
+            size_index = self.sora2_size.findData(str(preferences["sora2_size"]))
+            if size_index >= 0:
+                self.sora2_size.setCurrentIndex(size_index)
+        if "sora2_input_reference" in preferences:
+            self.sora2_input_reference.setText(str(preferences["sora2_input_reference"]))
+        if "sora2_extra_body" in preferences:
+            self.sora2_extra_body.setPlainText(str(preferences["sora2_extra_body"]))
         if "stitch_crossfade_enabled" in preferences:
             self.stitch_crossfade_checkbox.setChecked(bool(preferences["stitch_crossfade_enabled"]))
         if "stitch_interpolation_enabled" in preferences:
@@ -2707,17 +2849,34 @@ class MainWindow(QMainWindow):
 
         self.browser.page().runJavaScript(script, after)
 
-    def _confirm_openai_sora_settings(self, resolution: str, duration_seconds: int, aspect_ratio: str) -> bool:
+    def _aspect_ratio_from_video_size(self, size: str) -> str:
+        mapping = {
+            "720x1280": "9:16",
+            "1280x720": "16:9",
+            "1024x1792": "4:7",
+            "1792x1024": "7:4",
+        }
+        return mapping.get(size, str(self.video_aspect_ratio.currentData() or "16:9"))
+
+    def _confirm_openai_sora_settings(self, sora_settings: dict[str, object]) -> bool:
+        model = str(sora_settings.get("model") or "sora-2")
+        size = str(sora_settings.get("size") or "1280x720")
+        seconds = str(sora_settings.get("seconds") or "8")
+        input_reference = str(sora_settings.get("input_reference") or "").strip()
+        extra_body = sora_settings.get("extra_body") if isinstance(sora_settings.get("extra_body"), dict) else {}
+        aspect_ratio = self._aspect_ratio_from_video_size(size)
         message = (
             "OpenAI Sora request will be sent with:\n\n"
-            "• model: sora-2\n"
+            f"• model: {model}\n"
             "• prompt: <generated prompt>\n"
-            f"• size: {resolution}\n"
-            f"• duration_seconds: {duration_seconds}\n"
-            f"• aspect ratio target: {aspect_ratio}\n\n"
-            "Compatibility notes:\n"
-            "• The app will retry known duration-field variants if the endpoint rejects one.\n"
-            "• Some accounts/endpoints only support specific duration values.\n\n"
+            f"• size: {size}\n"
+            f"• seconds: {seconds}\n"
+            f"• aspect ratio target: {aspect_ratio}\n"
+            f"• input_reference: {input_reference or '(none)'}\n"
+            f"• extra_body fields: {len(extra_body)}\n\n"
+            "Allowed values (from current OpenAI SDK docs):\n"
+            "• seconds: 4, 8, 12\n"
+            "• size: 720x1280, 1280x720, 1024x1792, 1792x1024\n\n"
             "Continue with generation?"
         )
         answer = QMessageBox.question(
@@ -2775,9 +2934,27 @@ class MainWindow(QMainWindow):
         selected_resolution_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+        openai_sora_settings: dict[str, object] = {}
+
+        if source == "openai":
+            try:
+                openai_sora_settings = self._collect_sora2_settings()
+            except Exception as exc:
+                QMessageBox.warning(self, "Invalid Sora 2 Settings", str(exc))
+                return
+
+            selected_resolution = str(openai_sora_settings.get("size") or selected_resolution)
+            selected_resolution_label = selected_resolution
+            selected_aspect_ratio = self._aspect_ratio_from_video_size(selected_resolution)
+            seconds_value = str(openai_sora_settings.get("seconds") or "8")
+            try:
+                selected_duration_seconds = int(seconds_value)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Sora 2 Settings", "seconds must be one of 4, 8, or 12.")
+                return
 
         if source == "openai" and self._openai_sora_help_always_show:
-            if not self._confirm_openai_sora_settings(selected_resolution, selected_duration_seconds, selected_aspect_ratio):
+            if not self._confirm_openai_sora_settings(openai_sora_settings):
                 self._append_log("OpenAI generation canceled from Sora parameters confirmation dialog.")
                 return
 
@@ -2792,6 +2969,7 @@ class MainWindow(QMainWindow):
             video_resolution_label=selected_resolution_label,
             video_aspect_ratio=selected_aspect_ratio,
             video_duration_seconds=selected_duration_seconds,
+            openai_sora_settings=openai_sora_settings,
         )
 
         self.worker = GenerateWorker(config, prompt_config, self.count.value(), self.download_dir)

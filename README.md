@@ -116,7 +116,8 @@ In **Model/API Settings**, set Prompt Source to **OpenAI API**, then provide an 
 Use **Open Provider Login in Browser** to run a full OAuth code+PKCE flow (Codex-style) in your system browser. On success, the app auto-fills **OpenAI Access Token**.
 When both are set, the app prefers **OpenAI API Key** over **OpenAI Access Token**.
 If a model is responses-only (for example some newer OpenAI models), the app automatically retries on `/v1/responses` when `/v1/chat/completions` returns that compatibility error.
-For Sora video generation, the app now confirms the request parameters before run and retries duration-field variants (`duration_seconds`, `seconds`, then without duration) when an endpoint rejects one.
+For Sora video generation, use the **Sora 2 Video Settings** tab to configure API parameters used by the OpenAI `/videos` create call.
+Supported fields in the UI follow current OpenAI SDK docs: `model`, `seconds` (`4`, `8`, `12`), `size` (`720x1280`, `1280x720`, `1024x1792`, `1792x1024`), optional `input_reference`, plus optional `extra_body` JSON passthrough.
 The token exchange now tries both `https://auth.openai.com/token` and `https://auth.openai.com/oauth/token` so either issuer route works.
 When available in OAuth token claims, requests also include `OpenAI-Organization` and `OpenAI-Project` headers (in addition to `Authorization` and `Content-Type`).
 With ChatGPT/Codex OAuth login, the app prefers the ChatGPT Codex backend so usage follows subscription-authenticated behavior rather than API-key-only billing paths.
