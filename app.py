@@ -4600,13 +4600,15 @@ class MainWindow(QMainWindow):
 
             QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_options_script, _after_image_options))
 
+        submit_delay_ms = 2000
+
         def _after_populate(result):
             if result in (None, ""):
                 self._append_log(
                     f"Manual image variant {variant}: prompt populate callback returned empty result; "
-                    "continuing to submit."
+                    f"waiting {submit_delay_ms / 1000:.1f}s before submit."
                 )
-                QTimer.singleShot(450, _run_submit_attempt)
+                QTimer.singleShot(submit_delay_ms, _run_submit_attempt)
                 return
 
             if not isinstance(result, dict) or not result.get("ok"):
@@ -4614,9 +4616,10 @@ class MainWindow(QMainWindow):
                 return
 
             self._append_log(
-                f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); submitting prompt."
+                f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); "
+                f"waiting {submit_delay_ms / 1000:.1f}s before submitting prompt."
             )
-            QTimer.singleShot(450, _run_submit_attempt)
+            QTimer.singleShot(submit_delay_ms, _run_submit_attempt)
 
         self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
 
