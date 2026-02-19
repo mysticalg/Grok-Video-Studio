@@ -8049,9 +8049,8 @@ class MainWindow(QMainWindow):
         if not safe_stem:
             safe_stem = source_path.stem.title()
         # Keep as much of the description text as possible so TikTok can infer
-        # a complete filename-based caption in browser uploads. Limit only for
-        # broad filesystem compatibility (common filename max is 255 bytes).
-        max_stem_length = 240
+        # a complete filename-based caption in browser uploads.
+        max_stem_length = 4000
         safe_stem = safe_stem[:max_stem_length].strip() or source_path.stem.title()
         extension = source_path.suffix or ".mp4"
         staged_path = source_path.with_name(f"{safe_stem}{extension}")
