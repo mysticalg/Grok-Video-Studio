@@ -4888,18 +4888,54 @@ class MainWindow(QMainWindow):
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
             if not self.manual_image_pick_clicked:
-                self.manual_image_pick_retry_count += 1
-                if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
+                def _queue_pick_retry(current_status: str) -> None:
+                    self.manual_image_pick_retry_count += 1
+                    if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: image pick validation stayed in '{current_status}' for "
+                            f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
+                        )
+                        self.manual_image_pick_retry_count = 0
                     self._append_log(
-                        "WARNING: Variant "
-                        f"{current_variant}: image pick validation stayed in '{status}' for "
-                        f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
+                        f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
                     )
-                    self.manual_image_pick_retry_count = 0
-                self._append_log(
-                    f"Variant {current_variant}: generated image not ready for pick+submit yet ({status}); retrying..."
-                )
-                QTimer.singleShot(3000, self._poll_for_manual_image)
+                    QTimer.singleShot(3000, self._poll_for_manual_image)
+
+                if status == "callback-empty":
+                    pick_ready_probe_script = """
+                        (() => {
+                            try {
+                                const ready = !!document.querySelector(
+                                    "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], " +
+                                    "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
+                                );
+                                const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i]")]
+                                    .find((btn) => !!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)));
+                                return { ready: ready || makeVideoButtonVisible };
+                            } catch (_) {
+                                return { ready: false };
+                            }
+                        })()
+                    """
+
+                    def _after_pick_ready_probe(probe_result):
+                        if isinstance(probe_result, dict) and probe_result.get("ready"):
+                            self._append_log(
+                                f"Variant {current_variant}: detected customize/make-video UI after empty callback; treating image pick as complete."
+                            )
+                            self.manual_image_pick_clicked = True
+                            self.manual_image_pick_retry_count = 0
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            return
+                        _queue_pick_retry(status)
+
+                    self.browser.page().runJavaScript(pick_ready_probe_script, _after_pick_ready_probe)
+                    return
+
+                _queue_pick_retry(status)
                 return
 
             if not self.manual_image_video_mode_selected:
