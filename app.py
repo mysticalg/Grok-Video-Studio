@@ -8798,9 +8798,13 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
-            pending["allow_file_dialog"] = False
-
             is_tiktok = platform_name == "TikTok"
+            if is_tiktok and not file_ready_signal:
+                # Keep trying file-input clicks on TikTok retries until a file is staged.
+                pending["allow_file_dialog"] = True
+            else:
+                pending["allow_file_dialog"] = False
+
             is_youtube = platform_name == "YouTube"
             tiktok_upload_assumed = is_tiktok and attempts >= 3
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists) or tiktok_upload_assumed
