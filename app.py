@@ -7758,6 +7758,13 @@ class MainWindow(QMainWindow):
                     let tiktokPostEnabled = false;
                     const tiktokState = uploadState.tiktok = uploadState.tiktok || {};
                     if (platform === "tiktok") {
+                        if (tiktokState.lastVideoPath !== requestedVideoPath) {
+                            tiktokState.lastVideoPath = requestedVideoPath;
+                            tiktokState.lastSubmitAttemptAtMs = 0;
+                            tiktokState.lastActionAtMs = 0;
+                            tiktokState.captionSetAtMs = 0;
+                            tiktokState.submitClicked = false;
+                        }
                         const nowMs = Date.now();
                         const minTikTokActionGapMs = 900;
                         const actionSpacingElapsed = !tiktokState.lastActionAtMs
@@ -7882,12 +7889,13 @@ class MainWindow(QMainWindow):
                             const dataDisabled = String(tiktokPostButton.getAttribute("data-disabled") || "").toLowerCase();
                             const nativeDisabled = Boolean(tiktokPostButton.disabled);
                             tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
-                            if (captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed) {
+                            if (!tiktokState.submitClicked && captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed) {
                                 submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
                                 if (submitClicked) {
                                     const clickedAtMs = Date.now();
                                     tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
                                     tiktokState.lastActionAtMs = clickedAtMs;
+                                    tiktokState.submitClicked = true;
                                 }
                             }
                         }
@@ -7904,6 +7912,7 @@ class MainWindow(QMainWindow):
                         nextClicked,
                         submitClicked,
                         tiktokPostEnabled,
+                        tiktokSubmitClickedEver: Boolean(tiktokState.submitClicked),
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
@@ -7932,6 +7941,7 @@ class MainWindow(QMainWindow):
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostEnabled"))
+            tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -7953,7 +7963,10 @@ class MainWindow(QMainWindow):
             is_facebook = platform_name == "Facebook"
             is_instagram = platform_name == "Instagram"
             caption_ok = text_filled or not caption_queued
-            submit_ok = submit_clicked if (is_facebook or is_instagram or is_tiktok) else True
+            submit_ok = (
+                submit_clicked
+                or (is_tiktok and tiktok_submit_clicked_ever)
+            ) if (is_facebook or is_instagram or is_tiktok) else True
             completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
                 status_label.setText(
