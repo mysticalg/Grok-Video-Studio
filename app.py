@@ -618,22 +618,9 @@ class GenerateWorker(QThread):
         return candidates[0] if candidates else ""
 
     def _openai_input_reference_payload_variants(self, payload: dict[str, object]) -> list[dict[str, object]]:
-        reference_value = payload.get("input_reference")
-        if not isinstance(reference_value, str) or not reference_value.strip():
-            return [payload]
-
-        reference_id = reference_value.strip()
-        variants: list[dict[str, object]] = [payload]
-
-        as_file_id = dict(payload)
-        as_file_id["input_reference"] = {"file_id": reference_id}
-        variants.append(as_file_id)
-
-        as_id_object = dict(payload)
-        as_id_object["input_reference"] = {"id": reference_id}
-        variants.append(as_id_object)
-
-        return variants
+        # OpenAI Sora expects `input_reference` as a file value (string file id in this integration).
+        # Object forms such as {"file_id": ...} or {"id": ...} trigger invalid_type errors.
+        return [payload]
 
     def _resolve_latest_video_for_sora_continuation(self) -> Path | None:
         video_extensions = {".mp4", ".mov", ".m4v", ".webm"}
@@ -800,9 +787,8 @@ class GenerateWorker(QThread):
                             or "expected" in body_lower
                         )
                     )
-                    if input_reference_type_error and payload_variant_idx < len(request_payload_variants) - 1:
+                    if input_reference_type_error:
                         last_error = body_text[:400]
-                        continue
 
                     seconds_error = (
                         status in {400, 422}
