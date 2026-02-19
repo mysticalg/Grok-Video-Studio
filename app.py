@@ -633,11 +633,6 @@ class GenerateWorker(QThread):
         as_id_object["input_reference"] = {"id": reference_id}
         variants.append(as_id_object)
 
-        as_image_id = dict(payload)
-        as_image_id.pop("input_reference", None)
-        as_image_id["image_id"] = reference_id
-        variants.append(as_image_id)
-
         return variants
 
     def _resolve_latest_video_for_sora_continuation(self) -> Path | None:
@@ -799,7 +794,11 @@ class GenerateWorker(QThread):
                     input_reference_type_error = (
                         status in {400, 422}
                         and "input_reference" in body_lower
-                        and "invalid type" in body_lower
+                        and (
+                            "invalid type" in body_lower
+                            or "unknown parameter" in body_lower
+                            or "expected" in body_lower
+                        )
                     )
                     if input_reference_type_error and payload_variant_idx < len(request_payload_variants) - 1:
                         last_error = body_text[:400]
