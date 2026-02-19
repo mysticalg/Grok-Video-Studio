@@ -406,11 +406,12 @@ def _configure_qtwebengine_runtime() -> None:
     CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE = _resolve_qtwebengine_cache_dir()
 
     default_flags = [
-        "--enable-gpu-rasterization",
-        "--enable-zero-copy",
-        "--ignore-gpu-blocklist",
+        "--disable-gpu",
+        "--disable-gpu-compositing",
+        "--disable-software-rasterizer",
         "--disable-renderer-backgrounding",
         "--autoplay-policy=no-user-gesture-required",
+        f"--js-flags=--max-old-space-size={_env_int('GROK_BROWSER_JS_HEAP_MB', 4096)}",
         f"--media-cache-size={_env_int('GROK_BROWSER_MEDIA_CACHE_BYTES', 268435456)}",
         f"--disk-cache-size={_env_int('GROK_BROWSER_DISK_CACHE_BYTES', 536870912)}",
     ]
@@ -1885,6 +1886,9 @@ class MainWindow(QMainWindow):
 
         self.browser.setUrl(QUrl("https://grok.com/imagine"))
         self.browser.loadFinished.connect(self._on_browser_load_finished)
+        self.browser.renderProcessTerminated.connect(
+            lambda status, code, scope="Main Browser": self._on_webengine_render_terminated(scope, status, code)
+        )
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
 
         log_group = QGroupBox("📡 Activity Log")
@@ -2101,6 +2105,9 @@ class MainWindow(QMainWindow):
             browser.settings().setAttribute(developer_extras_attr, True)
         browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
+        browser.renderProcessTerminated.connect(
+            lambda status, code, p=platform_name: self._on_webengine_render_terminated(f"{p} Upload", status, code)
+        )
         layout.addWidget(browser, 1)
 
         self.social_upload_browsers[platform_name] = browser
@@ -2131,6 +2138,11 @@ class MainWindow(QMainWindow):
             return
         browser.setUrl(QUrl(upload_url))
         self._append_log(f"Opened {platform_name} upload page in dedicated tab.")
+
+    def _on_webengine_render_terminated(self, scope: str, status: object, exit_code: int) -> None:
+        status_name = getattr(status, "name", str(status))
+        message = f"{scope}: WebEngine renderer terminated (status={status_name}, exit_code={exit_code})."
+        self._append_log(f"WARNING: {message}")
 
     def _on_social_browser_load_finished(self, platform_name: str, ok: bool) -> None:
         if not ok:
@@ -7856,14 +7868,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Social Upload", f"{platform_name} upload tab is not initialized.")
             return
 
-        video_file = Path(str(video_path))
-        encoded_video = ""
-        if video_file.exists() and video_file.is_file():
-            try:
-                encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
-            except Exception:
-                encoded_video = ""
-
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
             "video_path": str(video_path),
@@ -7871,9 +7875,6 @@ class MainWindow(QMainWindow):
             "title": str(title or ""),
             "attempts": 0,
             "allow_file_dialog": True,
-            "video_base64": encoded_video,
-            "video_name": video_file.name or "upload.mp4",
-            "video_mime": "video/mp4",
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
         self._append_log(
@@ -7927,9 +7928,6 @@ class MainWindow(QMainWindow):
                 "title": str(pending.get("title") or ""),
                 "platform": platform_name.lower(),
                 "video_path": str(pending.get("video_path") or ""),
-                "video_base64": str(pending.get("video_base64") or ""),
-                "video_name": str(pending.get("video_name") or "upload.mp4"),
-                "video_mime": str(pending.get("video_mime") or "video/mp4"),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
                 "youtube_options": pending.get("youtube_options") or {},
             },
@@ -8066,9 +8064,6 @@ class MainWindow(QMainWindow):
 
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
-                    const videoBase64 = String(payload.video_base64 || "");
-                    const videoName = String(payload.video_name || "upload.mp4");
-                    const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const titleText = String(payload.title || "").trim();
                     const captionText = String(payload.caption || "").trim();
@@ -8242,21 +8237,6 @@ class MainWindow(QMainWindow):
                         return pick(fileInputs);
                     };
                     const fileInput = pickVideoInput();
-                    const setInputFiles = (input, files) => {
-                        try {
-                            const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
-                            if (descriptor && typeof descriptor.set === "function") {
-                                descriptor.set.call(input, files);
-                                return true;
-                            }
-                        } catch (_) {}
-                        try {
-                            Object.defineProperty(input, "files", { value: files, configurable: true });
-                            return true;
-                        } catch (_) {
-                            return false;
-                        }
-                    };
                     let fileDialogTriggered = false;
                     if (fileInput && (platform !== "facebook" || captionReady)) {
                         if (requestedVideoPath) {
@@ -8269,23 +8249,8 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        if (!alreadyHasFile && !alreadyStaged && videoBase64) {
-                            try {
-                                const binary = atob(videoBase64);
-                                const bytes = new Uint8Array(binary.length);
-                                for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-                                const file = new File([bytes], videoName, { type: videoMime });
-                                const dt = new DataTransfer();
-                                dt.items.add(file);
-                                if (setInputFiles(fileInput, dt.files)) {
-                                    fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                                    fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                    fileDialogTriggered = true;
-                                    if (platform === "facebook") {
-                                        facebookState.fileStaged = true;
-                                    }
-                                }
-                            } catch (_) {}
+                        if (!alreadyHasFile && !alreadyStaged && allowFileDialog) {
+                            fileDialogTriggered = clickNodeSingle(fileInput) || fileDialogTriggered;
                         }
                     }
 
