@@ -75,6 +75,7 @@ OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455")
 OPENAI_TOKEN_PATHS = ("/token", "/oauth/token")
 OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.com/backend-api/codex")
 OPENAI_USE_CHATGPT_BACKEND = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
+SEEDANCE_API_BASE = os.getenv("SEEDANCE_API_BASE", "https://api.seedance.ai/v2")
 FACEBOOK_GRAPH_VERSION = os.getenv("FACEBOOK_GRAPH_VERSION", "v21.0")
 FACEBOOK_OAUTH_AUTHORIZE_URL = f"https://www.facebook.com/{FACEBOOK_GRAPH_VERSION}/dialog/oauth"
 FACEBOOK_OAUTH_TOKEN_URL = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/oauth/access_token"
@@ -440,6 +441,7 @@ class PromptConfig:
     video_aspect_ratio: str
     video_duration_seconds: int
     openai_sora_settings: dict[str, object]
+    seedance_settings: dict[str, object]
 
 
 @dataclass
@@ -548,7 +550,11 @@ class GenerateWorker(QThread):
             f"from this concept: {self.prompt_config.concept}. This is variant #{variant}."
         )
 
-        return self.call_openai_chat(system, user) if source == "openai" else self.call_grok_chat(system, user)
+        if source == "openai":
+            return self.call_openai_chat(system, user)
+        if source == "seedance":
+            return self.prompt_config.manual_prompt.strip() or self.prompt_config.concept
+        return self.call_grok_chat(system, user)
 
     def start_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> str:
         self._ensure_not_stopped()
@@ -905,6 +911,118 @@ class GenerateWorker(QThread):
             f"Last error: {last_error or 'none'}"
         )
 
+
+    def _seedance_headers(self) -> dict[str, str]:
+        api_key = str(self.prompt_config.seedance_settings.get("api_key") or "").strip()
+        oauth_token = str(self.prompt_config.seedance_settings.get("oauth_token") or "").strip()
+        credential = api_key or oauth_token
+        if not credential:
+            raise RuntimeError("Seedance API key or OAuth token is required.")
+        return {"Authorization": f"Bearer {credential}", "Content-Type": "application/json"}
+
+    def _seedance_payload_variants(self, prompt: str) -> list[dict[str, object]]:
+        settings = self.prompt_config.seedance_settings if isinstance(self.prompt_config.seedance_settings, dict) else {}
+        model = str(settings.get("model") or "seedance-2.0")
+        aspect_ratio = str(settings.get("aspect_ratio") or "16:9")
+        resolution = str(settings.get("resolution") or self.prompt_config.video_resolution or "1280x720")
+        duration = int(settings.get("duration_seconds") or self.prompt_config.video_duration_seconds or 8)
+        fps = int(settings.get("fps") or 24)
+        motion_strength = float(settings.get("motion_strength") or 0.6)
+        guidance_scale = float(settings.get("guidance_scale") or 7.5)
+        seed_value = str(settings.get("seed") or "").strip()
+        negative_prompt = str(settings.get("negative_prompt") or "").strip()
+        camera_motion = str(settings.get("camera_motion") or "").strip()
+        style_preset = str(settings.get("style_preset") or "").strip()
+
+        payload: dict[str, object] = {
+            "model": model,
+            "prompt": prompt,
+            "duration_seconds": duration,
+            "resolution": resolution,
+            "aspect_ratio": aspect_ratio,
+            "fps": fps,
+            "motion_strength": motion_strength,
+            "guidance_scale": guidance_scale,
+            "watermark": bool(settings.get("watermark", False)),
+        }
+        if seed_value:
+            try:
+                payload["seed"] = int(seed_value)
+            except ValueError:
+                payload["seed"] = seed_value
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        if camera_motion:
+            payload["camera_motion"] = camera_motion
+        if style_preset:
+            payload["style_preset"] = style_preset
+
+        extra_body = settings.get("extra_body") if isinstance(settings.get("extra_body"), dict) else {}
+        payload.update(extra_body)
+
+        variant_without_duration = dict(payload)
+        variant_without_duration.pop("duration_seconds", None)
+        return [payload, variant_without_duration]
+
+    def _start_seedance_video_job(self, prompt: str) -> tuple[str | None, str | None]:
+        self._ensure_not_stopped()
+        headers = self._seedance_headers()
+        endpoints = [
+            f"{SEEDANCE_API_BASE}/videos/generations",
+            f"{SEEDANCE_API_BASE}/videos",
+            f"{SEEDANCE_API_BASE}/video/generations",
+        ]
+        last_error = ""
+        for endpoint in endpoints:
+            for payload in self._seedance_payload_variants(prompt):
+                response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+                if response.ok:
+                    data = response.json() if response.content else {}
+                    job_id = data.get("id") or data.get("job_id")
+                    direct_url = data.get("video_url") or data.get("url") or (data.get("output") or {}).get("video_url")
+                    return job_id, direct_url
+                if response.status_code in {404, 405, 501}:
+                    last_error = response.text[:400]
+                    break
+                body = response.text[:500]
+                lower = body.lower()
+                if response.status_code in {400, 422} and "duration" in lower:
+                    last_error = body
+                    continue
+                raise RuntimeError(f"Seedance request failed: {response.status_code} {body}")
+
+        raise RuntimeError(
+            "Seedance API endpoint not available for this account/base URL. "
+            f"Last error: {last_error or 'none'}"
+        )
+
+    def _poll_seedance_video_job(self, job_id: str, timeout_s: int = 900) -> dict:
+        self._ensure_not_stopped()
+        headers = self._seedance_headers()
+        endpoints = [
+            f"{SEEDANCE_API_BASE}/videos/generations/{job_id}",
+            f"{SEEDANCE_API_BASE}/videos/{job_id}",
+            f"{SEEDANCE_API_BASE}/video/generations/{job_id}",
+        ]
+        start = time.time()
+        while time.time() - start < timeout_s:
+            self._ensure_not_stopped()
+            for endpoint in endpoints:
+                response = requests.get(endpoint, headers=headers, timeout=60)
+                if response.status_code in {404, 405, 501}:
+                    continue
+                if not response.ok:
+                    raise RuntimeError(f"Seedance poll failed: {response.status_code} {response.text[:500]}")
+                payload = response.json() if response.content else {}
+                status = str(payload.get("status") or payload.get("state") or "").lower()
+                if status in {"succeeded", "completed", "ready"}:
+                    return payload
+                if status in {"failed", "error", "cancelled", "canceled"}:
+                    raise RuntimeError(f"Seedance generation failed: {payload.get('error') or payload.get('last_error') or 'unknown error'}")
+            time.sleep(5)
+
+        raise TimeoutError("Timed out waiting for Seedance video generation")
+
     def _resolution_label_for_value(self, resolution: str) -> str:
         mapping = {
             "854x480": "480p",
@@ -1002,6 +1120,20 @@ class GenerateWorker(QThread):
             if not video_url and not openai_job_id:
                 raise RuntimeError("OpenAI Sora completed but no downloadable video URL or job id was returned.")
 
+            effective_resolution = self.prompt_config.video_resolution
+            effective_resolution_label = self.prompt_config.video_resolution_label
+        elif self.prompt_config.source == "seedance":
+            self.status.emit("Starting Seedance 2.0 video generation job...")
+            seedance_job_id, direct_video_url = self._start_seedance_video_job(prompt)
+            if direct_video_url:
+                video_url = direct_video_url
+            elif seedance_job_id:
+                result = self._poll_seedance_video_job(seedance_job_id)
+                video_url = self._extract_video_url_from_payload(result)
+            else:
+                raise RuntimeError("Seedance did not return a job id or downloadable video URL.")
+            if not video_url:
+                raise RuntimeError("Seedance completed but no downloadable video URL was returned.")
             effective_resolution = self.prompt_config.video_resolution
             effective_resolution_label = self.prompt_config.video_resolution_label
         else:
@@ -1882,6 +2014,7 @@ class MainWindow(QMainWindow):
             "TikTok Upload",
         )
         self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
+        self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
         self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
 
         right_splitter = QSplitter(Qt.Vertical)
@@ -2165,6 +2298,151 @@ class MainWindow(QMainWindow):
 
         return settings
 
+    def _build_seedance_settings_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        description = QLabel(
+            "Configure Seedance 2.0 video generation options. "
+            "These settings are applied when Prompt Source is Seedance 2.0 API and you click API Generate Video."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet("color: #9fb3c8;")
+        layout.addWidget(description)
+
+        form = QFormLayout()
+
+        self.seedance_model = QComboBox()
+        self.seedance_model.setEditable(True)
+        for model_name in ["seedance-2.0", "seedance-2.0-pro"]:
+            self.seedance_model.addItem(model_name, model_name)
+        seedance_model_env = os.getenv("SEEDANCE_MODEL", "seedance-2.0").strip() or "seedance-2.0"
+        seedance_model_index = self.seedance_model.findData(seedance_model_env)
+        if seedance_model_index >= 0:
+            self.seedance_model.setCurrentIndex(seedance_model_index)
+        else:
+            self.seedance_model.setCurrentText(seedance_model_env)
+        form.addRow("model", self.seedance_model)
+
+        self.seedance_resolution = QComboBox()
+        for size in ["1280x720", "720x1280", "1024x1024", "1920x1080"]:
+            self.seedance_resolution.addItem(size, size)
+        seedance_size_env = os.getenv("SEEDANCE_RESOLUTION", "1280x720").strip() or "1280x720"
+        seedance_size_index = self.seedance_resolution.findData(seedance_size_env)
+        self.seedance_resolution.setCurrentIndex(seedance_size_index if seedance_size_index >= 0 else 0)
+        form.addRow("resolution", self.seedance_resolution)
+
+        self.seedance_aspect_ratio = QComboBox()
+        for ratio in ["16:9", "9:16", "1:1", "4:3", "3:4"]:
+            self.seedance_aspect_ratio.addItem(ratio, ratio)
+        aspect_env = os.getenv("SEEDANCE_ASPECT_RATIO", "16:9").strip() or "16:9"
+        aspect_index = self.seedance_aspect_ratio.findData(aspect_env)
+        self.seedance_aspect_ratio.setCurrentIndex(aspect_index if aspect_index >= 0 else 0)
+        form.addRow("aspect_ratio", self.seedance_aspect_ratio)
+
+        self.seedance_duration_seconds = QComboBox()
+        for seconds in ["4", "6", "8", "10", "12"]:
+            self.seedance_duration_seconds.addItem(f"{seconds}s", seconds)
+        duration_env = os.getenv("SEEDANCE_DURATION_SECONDS", "8").strip() or "8"
+        duration_index = self.seedance_duration_seconds.findData(duration_env)
+        self.seedance_duration_seconds.setCurrentIndex(duration_index if duration_index >= 0 else 2)
+        form.addRow("duration_seconds", self.seedance_duration_seconds)
+
+        self.seedance_fps = QComboBox()
+        for fps in ["24", "30", "60"]:
+            self.seedance_fps.addItem(fps, fps)
+        fps_env = os.getenv("SEEDANCE_FPS", "24").strip() or "24"
+        fps_index = self.seedance_fps.findData(fps_env)
+        self.seedance_fps.setCurrentIndex(fps_index if fps_index >= 0 else 0)
+        form.addRow("fps", self.seedance_fps)
+
+        self.seedance_motion_strength = QDoubleSpinBox()
+        self.seedance_motion_strength.setRange(0.0, 1.0)
+        self.seedance_motion_strength.setSingleStep(0.1)
+        self.seedance_motion_strength.setDecimals(2)
+        self.seedance_motion_strength.setValue(float(os.getenv("SEEDANCE_MOTION_STRENGTH", "0.6") or "0.6"))
+        form.addRow("motion_strength", self.seedance_motion_strength)
+
+        self.seedance_guidance_scale = QDoubleSpinBox()
+        self.seedance_guidance_scale.setRange(1.0, 20.0)
+        self.seedance_guidance_scale.setSingleStep(0.5)
+        self.seedance_guidance_scale.setDecimals(1)
+        self.seedance_guidance_scale.setValue(float(os.getenv("SEEDANCE_GUIDANCE_SCALE", "7.5") or "7.5"))
+        form.addRow("guidance_scale", self.seedance_guidance_scale)
+
+        self.seedance_seed = QLineEdit(os.getenv("SEEDANCE_SEED", ""))
+        self.seedance_seed.setPlaceholderText("Optional deterministic seed")
+        form.addRow("seed (optional)", self.seedance_seed)
+
+        self.seedance_negative_prompt = QLineEdit(os.getenv("SEEDANCE_NEGATIVE_PROMPT", ""))
+        self.seedance_negative_prompt.setPlaceholderText("Optional negative prompt")
+        form.addRow("negative_prompt (optional)", self.seedance_negative_prompt)
+
+        self.seedance_camera_motion = QComboBox()
+        self.seedance_camera_motion.addItem("Default", "")
+        for motion in ["static", "pan_left", "pan_right", "dolly_in", "dolly_out", "orbit"]:
+            self.seedance_camera_motion.addItem(motion, motion)
+        motion_env = os.getenv("SEEDANCE_CAMERA_MOTION", "").strip()
+        motion_index = self.seedance_camera_motion.findData(motion_env)
+        self.seedance_camera_motion.setCurrentIndex(motion_index if motion_index >= 0 else 0)
+        form.addRow("camera_motion", self.seedance_camera_motion)
+
+        self.seedance_style_preset = QComboBox()
+        self.seedance_style_preset.addItem("Default", "")
+        for style in ["cinematic", "anime", "photoreal", "3d", "watercolor"]:
+            self.seedance_style_preset.addItem(style, style)
+        style_env = os.getenv("SEEDANCE_STYLE_PRESET", "").strip()
+        style_index = self.seedance_style_preset.findData(style_env)
+        self.seedance_style_preset.setCurrentIndex(style_index if style_index >= 0 else 0)
+        form.addRow("style_preset", self.seedance_style_preset)
+
+        self.seedance_watermark = QCheckBox("Include watermark")
+        self.seedance_watermark.setChecked(os.getenv("SEEDANCE_WATERMARK", "0").strip().lower() in {"1", "true", "yes", "on"})
+        form.addRow("watermark", self.seedance_watermark)
+
+        self.seedance_extra_body = QPlainTextEdit()
+        self.seedance_extra_body.setPlaceholderText('{"provider_specific_field": "value"}')
+        self.seedance_extra_body.setMaximumHeight(110)
+        form.addRow("extra_body JSON (optional)", self.seedance_extra_body)
+
+        layout.addLayout(form)
+
+        hint = QLabel(
+            "Available options reflected in this tab: model, prompt, duration_seconds, resolution, aspect_ratio, fps, motion_strength, guidance_scale, seed, negative_prompt, camera_motion, style_preset, watermark, and extra_body JSON overrides."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #9fb3c8;")
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return tab
+
+    def _collect_seedance_settings(self) -> dict[str, object]:
+        settings: dict[str, object] = {
+            "api_key": self.seedance_api_key.text().strip(),
+            "oauth_token": self.seedance_oauth_token.text().strip(),
+            "model": self.seedance_model.currentData() or self.seedance_model.currentText().strip() or "seedance-2.0",
+            "resolution": str(self.seedance_resolution.currentData() or "1280x720"),
+            "aspect_ratio": str(self.seedance_aspect_ratio.currentData() or "16:9"),
+            "duration_seconds": int(self.seedance_duration_seconds.currentData() or "8"),
+            "fps": int(self.seedance_fps.currentData() or "24"),
+            "motion_strength": float(self.seedance_motion_strength.value()),
+            "guidance_scale": float(self.seedance_guidance_scale.value()),
+            "seed": self.seedance_seed.text().strip(),
+            "negative_prompt": self.seedance_negative_prompt.text().strip(),
+            "camera_motion": str(self.seedance_camera_motion.currentData() or ""),
+            "style_preset": str(self.seedance_style_preset.currentData() or ""),
+            "watermark": self.seedance_watermark.isChecked(),
+            "extra_body": {},
+        }
+
+        raw_extra = self.seedance_extra_body.toPlainText().strip()
+        if raw_extra:
+            parsed = json.loads(raw_extra)
+            if not isinstance(parsed, dict):
+                raise ValueError("Seedance extra_body JSON must be an object.")
+            settings["extra_body"] = parsed
+        return settings
+
     def _build_browser_training_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -2289,6 +2567,7 @@ class MainWindow(QMainWindow):
         self.prompt_source.addItem("Manual prompt (no API)", "manual")
         self.prompt_source.addItem("Grok API", "grok")
         self.prompt_source.addItem("OpenAI API", "openai")
+        self.prompt_source.addItem("Seedance 2.0 API", "seedance")
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
         ai_layout.addRow("Prompt Source", self.prompt_source)
 
@@ -2306,6 +2585,18 @@ class MainWindow(QMainWindow):
 
         self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-5.1-codex"))
         ai_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
+
+        self.seedance_api_key = QLineEdit()
+        self.seedance_api_key.setEchoMode(QLineEdit.Password)
+        self.seedance_api_key.setPlaceholderText("Seedance API key")
+        self.seedance_api_key.setText(os.getenv("SEEDANCE_API_KEY", ""))
+        ai_layout.addRow("Seedance API Key", self.seedance_api_key)
+
+        self.seedance_oauth_token = QLineEdit()
+        self.seedance_oauth_token.setEchoMode(QLineEdit.Password)
+        self.seedance_oauth_token.setPlaceholderText("Optional OAuth bearer token (if provided by Seedance)")
+        self.seedance_oauth_token.setText(os.getenv("SEEDANCE_OAUTH_TOKEN", ""))
+        ai_layout.addRow("Seedance OAuth Token", self.seedance_oauth_token)
 
         self.ai_auth_method = QComboBox()
         self.ai_auth_method.addItem("API key", "api_key")
@@ -2614,6 +2905,8 @@ class MainWindow(QMainWindow):
             "openai_api_key": self.openai_api_key.text(),
             "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
+            "seedance_api_key": self.seedance_api_key.text(),
+            "seedance_oauth_token": self.seedance_oauth_token.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
             "youtube_api_key": self.youtube_api_key.text(),
             "facebook_page_id": self.facebook_page_id.text(),
@@ -2641,6 +2934,19 @@ class MainWindow(QMainWindow):
             "sora2_input_reference": self.sora2_input_reference.text(),
             "sora2_continue_from_last_frame": self.sora2_continue_from_last_frame.isChecked(),
             "sora2_extra_body": self.sora2_extra_body.toPlainText(),
+            "seedance_model": self.seedance_model.currentData() or self.seedance_model.currentText(),
+            "seedance_resolution": str(self.seedance_resolution.currentData()),
+            "seedance_aspect_ratio": str(self.seedance_aspect_ratio.currentData()),
+            "seedance_duration_seconds": str(self.seedance_duration_seconds.currentData()),
+            "seedance_fps": str(self.seedance_fps.currentData()),
+            "seedance_motion_strength": self.seedance_motion_strength.value(),
+            "seedance_guidance_scale": self.seedance_guidance_scale.value(),
+            "seedance_seed": self.seedance_seed.text(),
+            "seedance_negative_prompt": self.seedance_negative_prompt.text(),
+            "seedance_camera_motion": str(self.seedance_camera_motion.currentData()),
+            "seedance_style_preset": str(self.seedance_style_preset.currentData()),
+            "seedance_watermark": self.seedance_watermark.isChecked(),
+            "seedance_extra_body": self.seedance_extra_body.toPlainText(),
             "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
             "stitch_interpolation_fps": int(self.stitch_interpolation_fps.currentData()),
@@ -2691,6 +2997,10 @@ class MainWindow(QMainWindow):
             self.openai_access_token.setText(str(preferences["openai_access_token"]))
         if "openai_chat_model" in preferences:
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
+        if "seedance_api_key" in preferences:
+            self.seedance_api_key.setText(str(preferences["seedance_api_key"]))
+        if "seedance_oauth_token" in preferences:
+            self.seedance_oauth_token.setText(str(preferences["seedance_oauth_token"]))
         if "ai_auth_method" in preferences:
             auth_index = self.ai_auth_method.findData(str(preferences["ai_auth_method"]))
             if auth_index >= 0:
@@ -2786,6 +3096,48 @@ class MainWindow(QMainWindow):
             self.sora2_continue_from_last_frame.setChecked(bool(preferences["sora2_continue_from_last_frame"]))
         if "sora2_extra_body" in preferences:
             self.sora2_extra_body.setPlainText(str(preferences["sora2_extra_body"]))
+        if "seedance_model" in preferences:
+            idx = self.seedance_model.findData(str(preferences["seedance_model"]))
+            if idx >= 0:
+                self.seedance_model.setCurrentIndex(idx)
+            else:
+                self.seedance_model.setCurrentText(str(preferences["seedance_model"]))
+        if "seedance_resolution" in preferences:
+            idx = self.seedance_resolution.findData(str(preferences["seedance_resolution"]))
+            if idx >= 0:
+                self.seedance_resolution.setCurrentIndex(idx)
+        if "seedance_aspect_ratio" in preferences:
+            idx = self.seedance_aspect_ratio.findData(str(preferences["seedance_aspect_ratio"]))
+            if idx >= 0:
+                self.seedance_aspect_ratio.setCurrentIndex(idx)
+        if "seedance_duration_seconds" in preferences:
+            idx = self.seedance_duration_seconds.findData(str(preferences["seedance_duration_seconds"]))
+            if idx >= 0:
+                self.seedance_duration_seconds.setCurrentIndex(idx)
+        if "seedance_fps" in preferences:
+            idx = self.seedance_fps.findData(str(preferences["seedance_fps"]))
+            if idx >= 0:
+                self.seedance_fps.setCurrentIndex(idx)
+        if "seedance_motion_strength" in preferences:
+            self.seedance_motion_strength.setValue(float(preferences["seedance_motion_strength"]))
+        if "seedance_guidance_scale" in preferences:
+            self.seedance_guidance_scale.setValue(float(preferences["seedance_guidance_scale"]))
+        if "seedance_seed" in preferences:
+            self.seedance_seed.setText(str(preferences["seedance_seed"]))
+        if "seedance_negative_prompt" in preferences:
+            self.seedance_negative_prompt.setText(str(preferences["seedance_negative_prompt"]))
+        if "seedance_camera_motion" in preferences:
+            idx = self.seedance_camera_motion.findData(str(preferences["seedance_camera_motion"]))
+            if idx >= 0:
+                self.seedance_camera_motion.setCurrentIndex(idx)
+        if "seedance_style_preset" in preferences:
+            idx = self.seedance_style_preset.findData(str(preferences["seedance_style_preset"]))
+            if idx >= 0:
+                self.seedance_style_preset.setCurrentIndex(idx)
+        if "seedance_watermark" in preferences:
+            self.seedance_watermark.setChecked(bool(preferences["seedance_watermark"]))
+        if "seedance_extra_body" in preferences:
+            self.seedance_extra_body.setPlainText(str(preferences["seedance_extra_body"]))
         if "stitch_crossfade_enabled" in preferences:
             self.stitch_crossfade_checkbox.setChecked(bool(preferences["stitch_crossfade_enabled"]))
         if "stitch_interpolation_enabled" in preferences:
@@ -3137,6 +3489,42 @@ class MainWindow(QMainWindow):
         )
         return answer == QMessageBox.StandardButton.Yes
 
+    def _confirm_seedance_settings(self, seedance_settings: dict[str, object]) -> bool:
+        model = str(seedance_settings.get("model") or "seedance-2.0")
+        resolution = str(seedance_settings.get("resolution") or "1280x720")
+        aspect_ratio = str(seedance_settings.get("aspect_ratio") or "16:9")
+        duration_seconds = str(seedance_settings.get("duration_seconds") or "8")
+        fps = str(seedance_settings.get("fps") or "24")
+        motion_strength = str(seedance_settings.get("motion_strength") or "0.6")
+        guidance_scale = str(seedance_settings.get("guidance_scale") or "7.5")
+        camera_motion = str(seedance_settings.get("camera_motion") or "(default)")
+        style_preset = str(seedance_settings.get("style_preset") or "(default)")
+        use_watermark = "yes" if bool(seedance_settings.get("watermark")) else "no"
+        message = (
+            "Seedance 2.0 request will be sent with\n\n"
+            f"• model: {model}\n"
+            "• prompt: <concept/manual prompt from app>\n"
+            f"• resolution: {resolution}\n"
+            f"• aspect_ratio: {aspect_ratio}\n"
+            f"• duration_seconds: {duration_seconds}\n"
+            f"• fps: {fps}\n"
+            f"• motion_strength: {motion_strength}\n"
+            f"• guidance_scale: {guidance_scale}\n"
+            f"• camera_motion: {camera_motion}\n"
+            f"• style_preset: {style_preset}\n"
+            f"• watermark: {use_watermark}\n"
+            f"• extra_body fields: {len(seedance_settings.get('extra_body', {}))}\n\n"
+            "Continue with generation?"
+        )
+        answer = QMessageBox.question(
+            self,
+            "Seedance 2.0 Parameters",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def start_generation(self) -> None:
         self.stop_all_requested = False
         concept = self.concept.toPlainText().strip()
@@ -3165,11 +3553,19 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if source == "seedance" and not (self.seedance_api_key.text().strip() or self.seedance_oauth_token.text().strip()):
+            QMessageBox.warning(
+                self,
+                "Missing Seedance Credentials",
+                "Please provide a Seedance API key or OAuth token in Model/API Settings.",
+            )
+            return
+
         if source == "manual":
             QMessageBox.information(
                 self,
                 "API Mode Required",
-                "Select Grok API or OpenAI API in Prompt Source, then click API Generate Video."
+                "Select Grok API, OpenAI API, or Seedance 2.0 API in Prompt Source, then click API Generate Video."
             )
             return
 
@@ -3184,6 +3580,7 @@ class MainWindow(QMainWindow):
         selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
         openai_sora_settings: dict[str, object] = {}
+        seedance_settings: dict[str, object] = {}
 
         if source == "openai":
             try:
@@ -3207,6 +3604,22 @@ class MainWindow(QMainWindow):
                 self._append_log("OpenAI generation canceled from Sora parameters confirmation dialog.")
                 return
 
+        if source == "seedance":
+            try:
+                seedance_settings = self._collect_seedance_settings()
+            except Exception as exc:
+                QMessageBox.warning(self, "Invalid Seedance Settings", str(exc))
+                return
+
+            selected_resolution = str(seedance_settings.get("resolution") or selected_resolution)
+            selected_resolution_label = selected_resolution
+            selected_aspect_ratio = str(seedance_settings.get("aspect_ratio") or selected_aspect_ratio)
+            selected_duration_seconds = int(seedance_settings.get("duration_seconds") or selected_duration_seconds)
+
+            if not self._confirm_seedance_settings(seedance_settings):
+                self._append_log("Seedance generation canceled from parameter confirmation dialog.")
+                return
+
         prompt_config = PromptConfig(
             source=source,
             concept=concept,
@@ -3219,6 +3632,7 @@ class MainWindow(QMainWindow):
             video_aspect_ratio=selected_aspect_ratio,
             video_duration_seconds=selected_duration_seconds,
             openai_sora_settings=openai_sora_settings,
+            seedance_settings=seedance_settings,
         )
 
         self.worker = GenerateWorker(config, prompt_config, self.count.value(), self.download_dir)
@@ -3596,6 +4010,10 @@ class MainWindow(QMainWindow):
                 self._run_openai_oauth_flow()
             except Exception as exc:
                 self._append_log(f"ERROR: OpenAI OAuth flow failed: {exc}")
+            return
+        if source == "seedance":
+            QDesktopServices.openUrl(QUrl("https://seedance.ai/"))
+            self._append_log("Opened Seedance in browser. If OAuth is supported on your account, complete sign-in and paste token.")
             return
 
         self.browser.setUrl(QUrl("https://grok.com/"))
@@ -5803,10 +6221,13 @@ class MainWindow(QMainWindow):
         source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
         is_manual = source == "manual"
         is_openai = source == "openai"
+        is_seedance = source == "seedance"
         self.manual_prompt.setEnabled(True)
         self.openai_api_key.setEnabled(is_openai)
         self.openai_access_token.setEnabled(is_openai)
         self.openai_chat_model.setEnabled(is_openai)
+        self.seedance_api_key.setEnabled(is_seedance)
+        self.seedance_oauth_token.setEnabled(is_seedance)
         self.chat_model.setEnabled(source == "grok")
         self.generate_btn.setText("🎬 API Generate Video")
         self.generate_image_btn.setText("🖼️ Populate Image Prompt")
