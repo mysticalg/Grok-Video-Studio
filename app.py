@@ -8487,12 +8487,26 @@ class MainWindow(QMainWindow):
                             clickNodeOrAncestor(notKidsLabel);
                         }
 
-                        const nextButton = findClickableByHints(["next"]);
-                        if (nextButton && Number(youtubeState.nextClicks || 0) < 3 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
+                        const nextButton = bySelectors([
+                            'ytcp-button#next-button button',
+                            'ytcp-button[id="next-button"] button',
+                            'button[aria-label*="next" i]',
+                            'ytcp-uploads-dialog ytcp-button[id*="next" i] button',
+                        ]) || findClickableByHints(["next"], { contexts: collectDeep('ytcp-uploads-dialog, tp-yt-paper-dialog, ytcp-dialog') });
+                        const nextDisabled = Boolean(
+                            nextButton
+                            && (
+                                nextButton.disabled
+                                || String(nextButton.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+                                || String(nextButton.getAttribute('disabled') || '').toLowerCase() === 'true'
+                            )
+                        );
+                        if (nextButton && !nextDisabled && Number(youtubeState.nextClicks || 0) < 3 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
                             const clicked = clickNodeOrAncestor(nextButton);
                             if (clicked) {
                                 youtubeState.nextClicks = Number(youtubeState.nextClicks || 0) + 1;
                                 youtubeState.lastActionAtMs = nowMs;
+                                nextClicked = true;
                             }
                         }
 
