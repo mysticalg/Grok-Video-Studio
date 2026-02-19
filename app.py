@@ -8073,21 +8073,26 @@ class MainWindow(QMainWindow):
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
                         if (platform === "instagram") {
-                            const byInstagramVideoAccept = fileInputs.find((node) => {
-                                const accept = norm(node.getAttribute("accept"));
-                                return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*") || accept.includes("video");
-                            });
-                            if (byInstagramVideoAccept) return byInstagramVideoAccept;
                             const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                             if (instagramDialog) {
-                                const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data" i][method="post" i][role="presentation"] input[type="file"], input[type="file"]'));
+                                const strictDialogInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data" i][method="post" i][role="presentation"] input[type="file"]'));
+                                if (strictDialogInputs.length) return strictDialogInputs[0];
+
+                                const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data" i][method="post" i] input[type="file"], input[type="file"]'));
                                 const preferredInDialog = formInputs.find((node) => {
                                     const accept = norm(node.getAttribute("accept"));
                                     return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*") || accept.includes("video");
                                 });
                                 if (preferredInDialog) return preferredInDialog;
                                 if (formInputs.length) return formInputs[0];
+                                return null;
                             }
+
+                            const byInstagramVideoAccept = fileInputs.find((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*") || accept.includes("video");
+                            });
+                            if (byInstagramVideoAccept) return byInstagramVideoAccept;
                         }
                         if (platform === "facebook") {
                             const byFacebookAccept = fileInputs.find((node) => {
