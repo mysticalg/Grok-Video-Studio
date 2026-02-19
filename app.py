@@ -7742,6 +7742,8 @@ class MainWindow(QMainWindow):
             max_attempts = 6
         elif platform_name == "TikTok":
             max_attempts = 12
+        elif platform_name == "Facebook":
+            max_attempts = 8
         else:
             max_attempts = 2
         if attempts > max_attempts:
@@ -7906,6 +7908,7 @@ class MainWindow(QMainWindow):
                     const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
+                    const facebookState = uploadState.facebook = uploadState.facebook || {};
                     if (platform === "instagram") {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
@@ -7952,10 +7955,14 @@ class MainWindow(QMainWindow):
                         }
                     }
 
-                    if (platform === "facebook") {
+                    if (platform === "facebook" && !facebookState.createPostOpened) {
                         const facebookCreatePostButton = findClickableByHints(["create post", "what's on your mind"]);
                         if (facebookCreatePostButton) {
-                            openUploadClicked = clickNodeOrAncestor(facebookCreatePostButton) || openUploadClicked;
+                            const clicked = clickNodeOrAncestor(facebookCreatePostButton);
+                            openUploadClicked = clicked || openUploadClicked;
+                            if (clicked) {
+                                facebookState.createPostOpened = true;
+                            }
                         }
                     }
 
@@ -8015,7 +8022,7 @@ class MainWindow(QMainWindow):
                         captionReady = textFilled;
                     }
 
-                    if (platform === "facebook" && captionReady) {
+                    if (platform === "facebook" && captionReady && !facebookState.uploadChooserOpened) {
                         const facebookUploadButton = findClickableByHints([
                             "photo/video",
                             "photo or video",
@@ -8023,7 +8030,11 @@ class MainWindow(QMainWindow):
                             "add video",
                         ]);
                         if (facebookUploadButton) {
-                            openUploadClicked = clickNodeOrAncestor(facebookUploadButton) || openUploadClicked;
+                            const clicked = clickNodeOrAncestor(facebookUploadButton);
+                            openUploadClicked = clicked || openUploadClicked;
+                            if (clicked) {
+                                facebookState.uploadChooserOpened = true;
+                            }
                         }
                     }
 
@@ -8089,7 +8100,8 @@ class MainWindow(QMainWindow):
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
-                        if (!alreadyHasFile && videoBase64) {
+                        const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
+                        if (!alreadyHasFile && !alreadyStaged && videoBase64) {
                             try {
                                 const binary = atob(videoBase64);
                                 const bytes = new Uint8Array(binary.length);
@@ -8101,6 +8113,9 @@ class MainWindow(QMainWindow):
                                     fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
                                     fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
                                     fileDialogTriggered = true;
+                                    if (platform === "facebook") {
+                                        facebookState.fileStaged = true;
+                                    }
                                 }
                             } catch (_) {}
                         }
@@ -8112,9 +8127,9 @@ class MainWindow(QMainWindow):
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
                     );
 
-                    const facebookState = uploadState.facebook = uploadState.facebook || {};
                     if (platform === "facebook") {
                         if (fileReadySignal) {
+                            facebookState.fileStaged = true;
                             if (!facebookState.fileReadyAtMs) {
                                 facebookState.fileReadyAtMs = Date.now();
                             }
