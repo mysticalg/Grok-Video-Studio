@@ -8252,6 +8252,17 @@ class MainWindow(QMainWindow):
                         return pick(fileInputs);
                     };
                     const fileInput = pickVideoInput();
+                    if (!fileInput && platform === "tiktok" && allowFileDialog) {
+                        const tiktokUploadTrigger = bySelectors([
+                            'button[aria-label*="select video" i]',
+                            'button[aria-label*="upload" i]',
+                            '[role="button"][aria-label*="select video" i]',
+                            '[role="button"][aria-label*="upload" i]',
+                        ]) || findClickableByHints(["select video", "upload video", "upload"]);
+                        if (tiktokUploadTrigger) {
+                            openUploadClicked = clickNodeOrAncestor(tiktokUploadTrigger) || openUploadClicked;
+                        }
+                    }
                     const setInputFiles = (input, files) => {
                         try {
                             const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
@@ -8296,6 +8307,17 @@ class MainWindow(QMainWindow):
                                     }
                                 }
                             } catch (_) {}
+                        } else if (!alreadyHasFile && !alreadyStaged && allowFileDialog && requestedVideoPath) {
+                            try {
+                                if (typeof fileInput.showPicker === "function") {
+                                    fileInput.showPicker();
+                                    fileDialogTriggered = true;
+                                } else {
+                                    fileDialogTriggered = clickNodeSingle(fileInput) || fileDialogTriggered;
+                                }
+                            } catch (_) {
+                                fileDialogTriggered = clickNodeSingle(fileInput) || fileDialogTriggered;
+                            }
                         }
                     }
 
