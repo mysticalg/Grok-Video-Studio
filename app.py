@@ -4510,18 +4510,38 @@ class MainWindow(QMainWindow):
                     collect(document);
 
                     const submitButton = [...new Set(candidates)].find((el) => isVisible(el));
-                    if (!submitButton) return { ok: false, error: "Submit button not found" };
-                    if (submitButton.disabled) {
+                    const form = (submitButton && submitButton.form)
+                        || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
+                        || (composerRoot && typeof composerRoot.closest === "function" ? composerRoot.closest("form") : null)
+                        || document.querySelector("form");
+
+                    if (submitButton && submitButton.disabled) {
                         return { ok: false, waiting: true, status: "submit-disabled" };
                     }
 
-                    const clicked = emulateClick(submitButton);
+                    let clicked = false;
+                    if (submitButton) {
+                        clicked = emulateClick(submitButton);
+                    }
+
+                    let formSubmitted = false;
+                    if (form) {
+                        const ev = new Event("submit", { bubbles: true, cancelable: true });
+                        form.dispatchEvent(ev);
+                        formSubmitted = true;
+                    }
+
+                    if (!submitButton && !form) {
+                        return { ok: false, error: "Submit button/form not found" };
+                    }
+
                     return {
-                        ok: clicked,
-                        waiting: !clicked,
-                        status: clicked ? "submit-clicked" : "submit-click-failed",
-                        ariaLabel: submitButton.getAttribute("aria-label") || "",
-                        disabled: !!submitButton.disabled,
+                        ok: clicked || formSubmitted,
+                        waiting: !clicked && !formSubmitted,
+                        status: clicked || formSubmitted ? "submit-clicked" : "submit-click-failed",
+                        ariaLabel: submitButton ? (submitButton.getAttribute("aria-label") || "") : "",
+                        disabled: !!(submitButton && submitButton.disabled),
+                        formSubmitted,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
