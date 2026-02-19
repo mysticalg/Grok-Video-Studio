@@ -7417,6 +7417,22 @@ class MainWindow(QMainWindow):
                         }
                         return false;
                     };
+                    const clickNodeSingle = (node) => {
+                        if (!node) return false;
+                        try { node.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                        try {
+                            if (typeof node.click === "function") {
+                                node.click();
+                                return true;
+                            }
+                        } catch (_) {}
+                        try {
+                            const ev = new MouseEvent("click", { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 });
+                            node.dispatchEvent(ev);
+                            return true;
+                        } catch (_) {}
+                        return false;
+                    };
                     const findClickableByHints = (hints, options = {}) => {
                         const normalizedHints = hints.map((hint) => norm(hint)).filter(Boolean);
                         const excludeHints = (options.excludeHints || []).map((hint) => norm(hint)).filter(Boolean);
@@ -7890,7 +7906,7 @@ class MainWindow(QMainWindow):
                             const nativeDisabled = Boolean(tiktokPostButton.disabled);
                             tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
                             if (!tiktokState.submitClicked && captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed) {
-                                submitClicked = clickNodeOrAncestor(tiktokPostButton) || submitClicked;
+                                submitClicked = clickNodeSingle(tiktokPostButton) || submitClicked;
                                 if (submitClicked) {
                                     const clickedAtMs = Date.now();
                                     tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
@@ -7952,6 +7968,11 @@ class MainWindow(QMainWindow):
                 f"Status: attempt {attempts} (file={'staged' if file_ready_signal else ('picker' if file_dialog_triggered else ('input' if file_found else 'no'))}, source={'ready' if video_path_exists else 'missing'}, caption={'manual' if caption_queued else 'none'})."
             )
             current_url = browser.url().toString().strip()
+            tiktok_draft_landed = (
+                platform_name == "TikTok"
+                and "tiktokstudio/content" in current_url.lower()
+                and "tab=draft" in current_url.lower()
+            )
             self._append_log(
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
@@ -7965,7 +7986,7 @@ class MainWindow(QMainWindow):
             caption_ok = text_filled or not caption_queued
             submit_ok = (
                 submit_clicked
-                or (is_tiktok and tiktok_submit_clicked_ever)
+                or (is_tiktok and (tiktok_submit_clicked_ever or tiktok_draft_landed))
             ) if (is_facebook or is_instagram or is_tiktok) else True
             completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
