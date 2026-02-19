@@ -7728,15 +7728,17 @@ class MainWindow(QMainWindow):
             chunk_size = video_size
             total_chunk_count = 1
         else:
-            # TikTok validates chunk metadata strictly. Compute chunk count first,
-            # then derive a chunk size that matches that count.
-            total_chunk_count = max(1, math.ceil(video_size / MAX_CHUNK))
-            chunk_size = math.ceil(video_size / total_chunk_count)
-        
+            # TikTok inbox init appears to validate total_chunk_count as the number
+            # of *full* chunks for large uploads, with a possible final remainder chunk.
+            chunk_size = MAX_CHUNK
+            total_chunk_count = max(1, video_size // chunk_size)
+
         # Optional: if video_size < MIN_CHUNK, force single chunk
         if video_size < MIN_CHUNK:
             chunk_size = video_size
             total_chunk_count = 1
+
+        upload_chunk_count = max(1, math.ceil(video_size / chunk_size))
         
         raw_token = self.tiktok_access_token.text().strip()
         if isinstance(raw_token, tuple) or isinstance(raw_token, list):
@@ -7751,6 +7753,7 @@ class MainWindow(QMainWindow):
         print(f"DEBUG: video_size={video_size} bytes (~{video_size / (1024*1024):.2f} MB)")
         print(f"DEBUG: chunk_size={chunk_size} bytes")
         print(f"DEBUG: total_chunk_count={total_chunk_count}")
+        print(f"DEBUG: upload_chunk_count={upload_chunk_count}")
         print(f"DEBUG: access token={access_token}")
         headers = {
         "Authorization": f"Bearer {access_token}",
@@ -7820,7 +7823,7 @@ class MainWindow(QMainWindow):
                 }
 
                 print(
-                    f"DEBUG: Uploading chunk {chunk_index}/{total_chunk_count} "
+                    f"DEBUG: Uploading chunk {chunk_index}/{upload_chunk_count} "
                     f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
                 )
                 upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
