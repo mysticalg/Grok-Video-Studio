@@ -7858,7 +7858,8 @@ class MainWindow(QMainWindow):
 
         video_file = Path(str(video_path))
         encoded_video = ""
-        if video_file.exists() and video_file.is_file():
+        should_embed_video_bytes = platform_name != "TikTok"
+        if should_embed_video_bytes and video_file.exists() and video_file.is_file():
             try:
                 encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
             except Exception:
@@ -8394,6 +8395,7 @@ class MainWindow(QMainWindow):
                             tiktokState.lastSubmitAttemptAtMs = 0;
                             tiktokState.lastActionAtMs = 0;
                             tiktokState.captionSetAtMs = 0;
+                            tiktokState.filePickerOpened = false;
                             tiktokState.submitClicked = false;
                         }
                         const nowMs = Date.now();
@@ -8528,6 +8530,28 @@ class MainWindow(QMainWindow):
                                     tiktokState.lastActionAtMs = clickedAtMs;
                                     tiktokState.submitClicked = true;
                                 }
+                            }
+                        }
+
+                        if (!fileReadySignal && !tiktokState.filePickerOpened && allowFileDialog && fileInput && actionSpacingElapsed) {
+                            let pickerClicked = clickNodeSingle(fileInput);
+                            if (!pickerClicked) {
+                                try {
+                                    fileInput.focus();
+                                    fileInput.click();
+                                    pickerClicked = true;
+                                } catch (_) {}
+                            }
+                            if (!pickerClicked) {
+                                try {
+                                    fileInput.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+                                    pickerClicked = true;
+                                } catch (_) {}
+                            }
+                            if (pickerClicked) {
+                                tiktokState.filePickerOpened = true;
+                                tiktokState.lastActionAtMs = Date.now();
+                                fileDialogTriggered = true;
                             }
                         }
                     }
