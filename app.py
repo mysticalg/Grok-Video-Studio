@@ -687,6 +687,38 @@ class GenerateWorker(QThread):
                 return candidate.strip()
         return ""
 
+    def _download_openai_video_content(self, job_id: str, suffix: str) -> Path:
+        self._ensure_not_stopped()
+        headers = self._openai_video_headers()
+        headers["Accept"] = "application/binary"
+        endpoints = [
+            f"{OPENAI_API_BASE}/videos/{job_id}/content",
+            f"{OPENAI_API_BASE}/videos/generations/{job_id}/content",
+        ]
+
+        last_error = ""
+        for endpoint in endpoints:
+            response = requests.get(endpoint, headers=headers, timeout=240)
+            if response.status_code in {404, 405, 501}:
+                last_error = response.text[:400]
+                continue
+            if not response.ok:
+                raise RuntimeError(
+                    f"OpenAI Sora content download failed: {response.status_code} {response.text[:500]}"
+                )
+
+            self.download_dir.mkdir(parents=True, exist_ok=True)
+            file_path = self.download_dir / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
+            file_path.write_bytes(response.content)
+            if file_path.stat().st_size <= 0:
+                raise RuntimeError("OpenAI Sora content endpoint returned an empty file.")
+            return file_path
+
+        raise RuntimeError(
+            "OpenAI Sora completed but no direct URL or downloadable content endpoint was available. "
+            f"Last error: {last_error or 'none'}"
+        )
+
     def _resolution_label_for_value(self, resolution: str) -> str:
         mapping = {
             "854x480": "480p",
@@ -771,8 +803,14 @@ class GenerateWorker(QThread):
             else:
                 raise RuntimeError("OpenAI Sora did not return a job id or downloadable video URL.")
 
-            if not video_url:
-                raise RuntimeError("OpenAI Sora completed but no downloadable video URL was returned.")
+            downloaded_from_content_endpoint = False
+            if not video_url and openai_job_id:
+                self.status.emit("OpenAI Sora returned no direct URL; downloading from content endpoint...")
+                file_path = self._download_openai_video_content(openai_job_id, f"v{variant}")
+                downloaded_from_content_endpoint = True
+
+            if not video_url and not openai_job_id:
+                raise RuntimeError("OpenAI Sora completed but no downloadable video URL or job id was returned.")
 
             effective_resolution = self.prompt_config.video_resolution
             effective_resolution_label = self.prompt_config.video_resolution_label
@@ -787,13 +825,18 @@ class GenerateWorker(QThread):
             if not video_url:
                 raise RuntimeError("No video URL returned")
 
-        file_path = self.download_video(video_url, f"v{variant}")
+        if self.prompt_config.source == "openai" and 'downloaded_from_content_endpoint' in locals() and downloaded_from_content_endpoint:
+            resolved_video_url = f"{OPENAI_API_BASE}/videos/{openai_job_id}/content"
+        else:
+            file_path = self.download_video(video_url, f"v{variant}")
+            resolved_video_url = video_url
+
         return {
             "title": f"Generated Video {variant}",
             "prompt": prompt,
             "resolution": f"{effective_resolution_label} ({self.prompt_config.video_aspect_ratio})",
             "video_file_path": str(file_path),
-            "source_url": video_url,
+            "source_url": resolved_video_url,
             "requested_resolution": self.prompt_config.video_resolution,
             "effective_resolution": effective_resolution,
         }
