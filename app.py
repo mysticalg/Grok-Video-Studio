@@ -4807,9 +4807,35 @@ class MainWindow(QMainWindow):
                 }}
                 await sleep(ACTION_DELAY_MS);
 
-                promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                try {{
+                    promptInput.dispatchEvent(new InputEvent("beforeinput", {{
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true,
+                        inputType: "insertText",
+                        data: prompt.slice(-1),
+                    }}));
+                }} catch (_) {{}}
                 await sleep(ACTION_DELAY_MS);
-                promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+
+                promptInput.dispatchEvent(new Event("input", {{ bubbles: true, composed: true }}));
+                await sleep(ACTION_DELAY_MS);
+
+                try {{
+                    promptInput.dispatchEvent(new KeyboardEvent("keyup", {{
+                        key: " ",
+                        code: "Space",
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true,
+                    }}));
+                }} catch (_) {{}}
+                await sleep(ACTION_DELAY_MS);
+
+                promptInput.dispatchEvent(new Event("change", {{ bubbles: true, composed: true }}));
+                await sleep(ACTION_DELAY_MS);
+
+                promptInput.dispatchEvent(new Event("blur", {{ bubbles: true, composed: true }}));
                 await sleep(ACTION_DELAY_MS);
 
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
