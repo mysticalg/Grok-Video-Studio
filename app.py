@@ -7814,14 +7814,22 @@ class MainWindow(QMainWindow):
         print(f"DEBUG: Uploading {video_size} bytes with range: bytes 0-{last_byte}/{video_size}")
 
         upload_resp = requests.put(upload_url, headers=upload_headers, data=video_bytes)
-        data = upload_resp.json()
-        print("Status response:", data)
         print(f"DEBUG: Upload status code: {upload_resp.status_code}")
-        print(f"DEBUG: Upload response: {upload_resp}")
-        self.check_tiktok_status(access_token, publish_id)
-        
-        if upload_resp.status_code != 201:
+
+        upload_data = None
+        if upload_resp.text.strip():
+            try:
+                upload_data = upload_resp.json()
+                print("Status response:", upload_data)
+            except ValueError:
+                print("DEBUG: Upload response is not JSON:", upload_resp.text[:500])
+        else:
+            print("DEBUG: Upload response body is empty.")
+
+        if upload_resp.status_code not in (200, 201, 204):
             raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
+
+        self.check_tiktok_status(access_token, publish_id)
         self._append_log(f"TikTok Upload complete")
         # Success! Video is in user's TikTok inbox/drafts.
         # Optionally: poll status with publish_id
