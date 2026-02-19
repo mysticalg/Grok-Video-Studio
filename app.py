@@ -7946,7 +7946,6 @@ class MainWindow(QMainWindow):
                         } else {
                             let clickedReelEntry = false;
                             if (onReelCreatePage) {
-                                instagramState.createClicked = true;
                                 const reelStartButton = findClickableByHints([
                                     "select from computer",
                                     "choose files",
@@ -7958,6 +7957,7 @@ class MainWindow(QMainWindow):
                                     const clicked = clickNodeOrAncestor(reelStartButton);
                                     openUploadClicked = clicked || openUploadClicked;
                                     clickedReelEntry = clickedReelEntry || clicked;
+                                    if (clicked) instagramState.createClicked = true;
                                 }
                             }
                             if (!clickedReelEntry) {
@@ -7976,7 +7976,7 @@ class MainWindow(QMainWindow):
                                         const text = normalizedNodeText(node);
                                         const aria = norm(node.getAttribute("aria-label"));
                                         return text.includes("create") || aria.includes("new post") || aria === "create";
-                                    }));
+                                    })) || pick(collectDeep('svg[aria-label="New post" i], svg[aria-label*="new post" i]'));
                                     if (createButton) {
                                         dispatchHover(createButton);
                                         const clicked = clickNodeOrAncestor(createButton);
@@ -7990,6 +7990,9 @@ class MainWindow(QMainWindow):
                                         ...collectDeep('div[role="menu"]'),
                                         ...collectDeep('div[role="dialog"]:not([aria-label*="create new post" i])'),
                                     ];
+                                    if (!menuContexts.length && !onReelCreatePage) {
+                                        instagramState.createClicked = false;
+                                    }
                                     const preferVideoFlow = videoMime.includes("video") || requestedVideoPath.endsWith(".mp4") || requestedVideoPath.endsWith(".mov");
                                     const postButton =
                                         (preferVideoFlow
