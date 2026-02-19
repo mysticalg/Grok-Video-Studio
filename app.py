@@ -752,7 +752,7 @@ class GenerateWorker(QThread):
                         endpoint,
                         headers=request_headers,
                         data=data,
-                        files={"input_reference": (candidate_path.name, handle, "application/octet-stream")},
+                        files={"input_reference": (candidate_path.name, handle, "image/png")},
                         timeout=90,
                     )
         return requests.post(endpoint, headers=headers, json=payload, timeout=90)
