@@ -7915,41 +7915,53 @@ class MainWindow(QMainWindow):
                             instagramState.dialogSeen = true;
                             instagramState.postClicked = true;
                         } else {
+                            const dispatchHover = (node) => {
+                                if (!node) return;
+                                const events = ["pointerenter", "mouseenter", "mouseover", "pointerover"];
+                                for (const eventName of events) {
+                                    try {
+                                        node.dispatchEvent(new MouseEvent(eventName, { bubbles: true, cancelable: true, composed: true }));
+                                    } catch (_) {}
+                                }
+                            };
                             if (!instagramState.createClicked) {
-                                const createSpanButton = pick(collectDeep('span.html-span[aria-describedby="_r_m_"], span[aria-describedby="_r_m_"], span.html-span[aria-describedby], span[aria-describedby^="_r_"]'));
-                                const createButton = createSpanButton
-                                    || bySelectors([
-                                        'div[role="button"][tabindex="0"]',
-                                        'button',
-                                        'a[role="link"]',
-                                    ])
-                                    || findClickableByHints(["create", "new post"]);
+                                const createButton =
+                                    findClickableByHints(["create"]) ||
+                                    pick(collectDeep('a[href="#"][role="link"], div[role="button"], button').filter((node) => {
+                                        const text = normalizedNodeText(node);
+                                        const aria = norm(node.getAttribute("aria-label"));
+                                        return text.includes("create") || aria.includes("new post") || aria.includes("create");
+                                    })) ||
+                                    pick(collectDeep('svg[aria-label="New post" i], svg[aria-label*="new post" i]'));
                                 if (createButton) {
+                                    dispatchHover(createButton);
                                     const clicked = clickNodeOrAncestor(createButton);
                                     openUploadClicked = clicked || openUploadClicked;
                                     if (clicked) instagramState.createClicked = true;
                                 }
-                            } else if (!instagramState.dialogSeen) {
+                            }
+
+                            if (instagramState.createClicked && !instagramState.postClicked) {
                                 const menuContexts = [
                                     ...collectDeep('div[role="menu"]'),
                                     ...collectDeep('div[role="dialog"]:not([aria-label*="create new post" i])'),
                                 ];
-                                const postButton = pick(
-                                    menuContexts.flatMap((ctx) => {
+                                const postButton =
+                                    findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel", "story", "live"] }) ||
+                                    pick(menuContexts.flatMap((ctx) => {
                                         try {
-                                            return Array.from(ctx.querySelectorAll('a[href="#"][role="link"][tabindex="0"] > div.html-div, a[href="#"][role="link"][tabindex="0"], a[role="link"][href="#"][tabindex="0"]'));
+                                            return Array.from(ctx.querySelectorAll('a[role="link"], div[role="button"], button, span, div'));
                                         } catch (_) {
                                             return [];
                                         }
-                                    })
-                                ) || findClickableByHints(["post"], { contexts: menuContexts, excludeHints: ["reel"] });
+                                    }).filter((node) => {
+                                        const text = normalizedNodeText(node);
+                                        return text.includes("post") && !text.includes("reel") && !text.includes("story") && !text.includes("live");
+                                    }));
                                 if (postButton) {
-                                    const postText = normalizedNodeText(postButton);
-                                    if (postText.includes("post") && !postText.includes("reel")) {
-                                        const clicked = clickNodeOrAncestor(postButton);
-                                        openUploadClicked = clicked || openUploadClicked;
-                                        if (clicked) instagramState.postClicked = true;
-                                    }
+                                    const clicked = clickNodeOrAncestor(postButton);
+                                    openUploadClicked = clicked || openUploadClicked;
+                                    if (clicked) instagramState.postClicked = true;
                                 }
                             }
                         }
@@ -8042,16 +8054,15 @@ class MainWindow(QMainWindow):
                     const pickVideoInput = () => {
                         if (platform === "instagram") {
                             const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
-                            if (!instagramDialog) return null;
-
-                            const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data" i][method="post" i][role="presentation"] input[type="file"]'));
-                            const exactInstagramInput = formInputs.find((node) => {
-                                const accept = norm(node.getAttribute("accept"));
-                                const className = norm(node.className);
-                                return accept.includes("video/mp4") && accept.includes("video/quicktime") && className.includes("x1s85apg");
-                            });
-                            if (exactInstagramInput) return exactInstagramInput;
-                            return null;
+                            if (instagramDialog) {
+                                const formInputs = Array.from(instagramDialog.querySelectorAll('form[enctype="multipart/form-data" i][method="post" i][role="presentation"] input[type="file"], input[type="file"]'));
+                                const preferredInDialog = formInputs.find((node) => {
+                                    const accept = norm(node.getAttribute("accept"));
+                                    return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*") || accept.includes("video");
+                                });
+                                if (preferredInDialog) return preferredInDialog;
+                                if (formInputs.length) return formInputs[0];
+                            }
                         }
                         if (platform === "facebook") {
                             const byFacebookAccept = fileInputs.find((node) => {
