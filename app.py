@@ -8517,7 +8517,7 @@ class MainWindow(QMainWindow):
                                 'tp-yt-paper-radio-group#privacy-radios',
                                 'ytcp-video-visibility-select tp-yt-paper-radio-group',
                             ]);
-                            const visibilityRadio = visibility === "private"
+                            let visibilityRadio = visibility === "private"
                                 ? bySelectors([
                                     'tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button#private-radio-button',
                                     'tp-yt-paper-radio-button#private-radio-button',
@@ -8534,13 +8534,50 @@ class MainWindow(QMainWindow):
                                         'tp-yt-paper-radio-button#public-radio-button',
                                         'tp-yt-paper-radio-button[name="PUBLIC"]',
                                     ]));
+
+                            if (!visibilityRadio && actionSpacingElapsed) {
+                                const dialogScroller = bySelectors([
+                                    'ytcp-uploads-dialog #scrollable-content',
+                                    'ytcp-uploads-dialog #dialog',
+                                    'ytcp-uploads-dialog',
+                                ]);
+                                try {
+                                    if (dialogScroller && typeof dialogScroller.scrollBy === 'function') {
+                                        dialogScroller.scrollBy({ top: 280, left: 0, behavior: 'instant' });
+                                        youtubeState.lastActionAtMs = nowMs;
+                                    }
+                                } catch (_) {}
+                            }
+
+                            if (!visibilityRadio) {
+                                const visibilityContexts = [
+                                    bySelectors(['ytcp-video-visibility-select', 'ytcp-uploads-dialog']),
+                                ].filter(Boolean);
+                                const visibilityFallback = visibility === "private"
+                                    ? findClickableByHints(["private"], { contexts: visibilityContexts })
+                                    : (visibility === "unlisted"
+                                        ? findClickableByHints(["unlisted"], { contexts: visibilityContexts })
+                                        : findClickableByHints(["public"], { contexts: visibilityContexts }));
+                                if (visibilityFallback && actionSpacingElapsed) {
+                                    const clickedFallback = clickNodeOrAncestor(visibilityFallback);
+                                    if (clickedFallback) {
+                                        youtubeState.lastActionAtMs = nowMs;
+                                    }
+                                }
+                                visibilityRadio = visibility === "private"
+                                    ? bySelectors(['tp-yt-paper-radio-button#private-radio-button', 'tp-yt-paper-radio-button[name="PRIVATE"]'])
+                                    : (visibility === "unlisted"
+                                        ? bySelectors(['tp-yt-paper-radio-button#unlisted-radio-button', 'tp-yt-paper-radio-button[name="UNLISTED"]'])
+                                        : bySelectors(['tp-yt-paper-radio-button#public-radio-button', 'tp-yt-paper-radio-button[name="PUBLIC"]']));
+                            }
+
                             const visibilitySelected = Boolean(
                                 visibilityRadio
                                 && String(visibilityRadio.getAttribute('aria-checked') || '').toLowerCase() === 'true'
                             );
                             if (visibilityRadio && !visibilitySelected && actionSpacingElapsed) {
                                 const innerRadioTarget = pick([
-                                    visibilityRadio.querySelector && visibilityRadio.querySelector('div#radioContainer, div[role="radio"], #radioLabel, .onRadio'),
+                                    visibilityRadio.querySelector && visibilityRadio.querySelector('div#radioContainer, div[role="radio"], #radioLabel, .onRadio, .offRadio'),
                                     visibilityRadio,
                                 ]);
                                 const clickedVisibility = clickNodeSingle(innerRadioTarget) || clickNodeOrAncestor(visibilityRadio);
