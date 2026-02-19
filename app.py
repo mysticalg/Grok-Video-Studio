@@ -7875,7 +7875,6 @@ class MainWindow(QMainWindow):
             "title": str(title or ""),
             "attempts": 0,
             "allow_file_dialog": True,
-            "awaiting_manual_file_click": False,
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
         self._append_log(
@@ -8250,9 +8249,8 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        if (!alreadyHasFile && !alreadyStaged) {
-                            // Native chooser requires trusted user activation in Chromium; keep input available for a manual click.
-                            fileDialogTriggered = false;
+                        if (!alreadyHasFile && !alreadyStaged && allowFileDialog) {
+                            fileDialogTriggered = clickNodeSingle(fileInput) || fileDialogTriggered;
                         }
                     }
 
@@ -8785,18 +8783,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
-            if file_dialog_triggered or file_ready_signal:
-                pending["allow_file_dialog"] = False
-
-            if file_found and not file_ready_signal and not file_dialog_triggered and video_path_exists:
-                if not bool(pending.get("awaiting_manual_file_click", False)):
-                    self._append_log(
-                        f"{platform_name}: waiting for a manual click on the page file input (Chromium blocks synthetic file chooser without user activation)."
-                    )
-                    pending["awaiting_manual_file_click"] = True
-                status_label.setText("Status: click the upload/file picker in this tab once to continue.")
-            elif file_ready_signal:
-                pending["awaiting_manual_file_click"] = False
+            pending["allow_file_dialog"] = False
 
             is_tiktok = platform_name == "TikTok"
             is_youtube = platform_name == "YouTube"
