@@ -1462,6 +1462,7 @@ class MainWindow(QMainWindow):
         self.upload_worker: UploadWorker | None = None
         self.social_upload_pending: dict[str, dict[str, Any]] = {}
         self.social_upload_timers: dict[str, QTimer] = {}
+        self.social_playback_hack_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
         self.social_upload_status_labels: dict[str, QLabel] = {}
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
@@ -2105,6 +2106,12 @@ class MainWindow(QMainWindow):
         timer.timeout.connect(lambda p=platform_name: self._run_social_browser_upload_step(p))
         self.social_upload_timers[platform_name] = timer
 
+        playback_timer = QTimer(self)
+        playback_timer.setInterval(1800)
+        playback_timer.setSingleShot(True)
+        playback_timer.timeout.connect(lambda p=platform_name: self._ensure_social_browser_media_playback(p))
+        self.social_playback_hack_timers[platform_name] = playback_timer
+
         return tab
 
     def _facebook_upload_home_url(self) -> str:
@@ -2128,10 +2135,20 @@ class MainWindow(QMainWindow):
     def _on_social_browser_load_finished(self, platform_name: str, ok: bool) -> None:
         if not ok:
             return
+        playback_timer = self.social_playback_hack_timers.get(platform_name)
+        if playback_timer is not None:
+            playback_timer.start()
+        self._ensure_social_browser_media_playback(platform_name)
         if platform_name in self.social_upload_pending:
             timer = self.social_upload_timers.get(platform_name)
             if timer is not None:
                 timer.start(900)
+
+    def _ensure_social_browser_media_playback(self, platform_name: str) -> None:
+        browser = self.social_upload_browsers.get(platform_name)
+        if browser is None:
+            return
+        self._ensure_web_media_playback(browser, f"{platform_name} tab")
 
     def _resolve_social_auto_file_selection(
         self,
@@ -3413,11 +3430,19 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "browser") or self.browser is None:
             return
 
+        self._ensure_web_media_playback(self.browser, "embedded browser")
+
+    def _ensure_web_media_playback(self, browser: QWebEngineView, label: str) -> None:
+        if browser is None:
+            return
+
         script = r"""
             (() => {
                 try {
                     const videos = [...document.querySelectorAll("video")];
-                    if (!videos.length) return { ok: true, found: 0, attempted: 0, playing: 0 };
+                    const audios = [...document.querySelectorAll("audio")];
+                    const media = [...videos, ...audios];
+                    if (!media.length) return { ok: true, found: 0, attempted: 0, playing: 0 };
 
                     const pokeUserGesture = () => {
                         try {
@@ -3441,69 +3466,78 @@ class MainWindow(QMainWindow):
 
                     let attempted = 0;
                     let playing = 0;
-                    for (const video of videos) {
+                    for (const element of media) {
                         try {
                             // Chromium/WebEngine autoplay policies are stricter for unmuted media.
                             // Start muted so playback can begin reliably, then attempt an unmute.
-                            video.muted = true;
-                            video.defaultMuted = true;
-                            video.volume = Math.max(video.volume || 0, 0.01);
-                            video.autoplay = true;
-                            video.playsInline = true;
-                            video.loop = false;
-                            video.setAttribute("muted", "");
-                            video.setAttribute("autoplay", "");
-                            video.setAttribute("playsinline", "");
-                            video.setAttribute("webkit-playsinline", "");
-                            video.controls = true;
-                            video.preload = "auto";
+                            const wasMuted = Boolean(element.muted);
+                            element.muted = true;
+                            if ("defaultMuted" in element) {
+                                element.defaultMuted = true;
+                            }
+                            element.volume = Math.max(element.volume || 0, 0.01);
+                            element.autoplay = true;
+                            if ("playsInline" in element) {
+                                element.playsInline = true;
+                                element.setAttribute("playsinline", "");
+                                element.setAttribute("webkit-playsinline", "");
+                            }
+                            element.loop = false;
+                            element.setAttribute("muted", "");
+                            element.setAttribute("autoplay", "");
+                            element.controls = true;
+                            element.preload = "auto";
 
-                            const st = getComputedStyle(video);
-                            if (st.display === "none") video.style.display = "block";
-                            if (st.visibility === "hidden") video.style.visibility = "visible";
-                            if (Number(st.opacity || "1") < 0.1) video.style.opacity = "1";
+                            const st = getComputedStyle(element);
+                            if (st.display === "none") element.style.display = "block";
+                            if (st.visibility === "hidden") element.style.visibility = "visible";
+                            if (Number(st.opacity || "1") < 0.1) element.style.opacity = "1";
 
-                            if (video.paused || video.readyState < 2) {
+                            if (element.paused || element.readyState < 2) {
                                 attempted += 1;
-                                const p = video.play();
+                                const p = element.play();
                                 if (p && typeof p.catch === "function") {
                                     p.catch(() => {
-                                        const playButton = video.closest("[role='button'], button")
-                                            || video.parentElement?.querySelector("button, [role='button']");
+                                        const playButton = element.closest("[role='button'], button")
+                                            || element.parentElement?.querySelector("button, [role='button']");
                                         synthClick(playButton);
-                                        const p2 = video.play();
+                                        const p2 = element.play();
                                         if (p2 && typeof p2.catch === "function") p2.catch(() => {});
                                     });
                                     p.then(() => {
                                         // Best-effort unmute; if policy rejects it we keep muted playback.
                                         try {
-                                            video.muted = false;
-                                            video.defaultMuted = false;
-                                            video.removeAttribute("muted");
-                                            video.volume = Math.max(video.volume || 0, 0.2);
+                                            if (!wasMuted) {
+                                                element.muted = false;
+                                                if ("defaultMuted" in element) {
+                                                    element.defaultMuted = false;
+                                                }
+                                                element.removeAttribute("muted");
+                                            }
+                                            element.volume = Math.max(element.volume || 0, 0.2);
                                         } catch (_) {}
                                     });
                                 }
 
-                                if (video.muted) {
+                                if (element.muted) {
                                     // Keep muted for autoplay reliability.
                                 }
 
-                                if (video.readyState < 2) {
-                                    video.addEventListener("canplay", () => {
-                                        const p3 = video.play();
+                                if (element.readyState < 2) {
+                                    element.addEventListener("canplay", () => {
+                                        const p3 = element.play();
                                         if (p3 && typeof p3.catch === "function") p3.catch(() => {});
                                     }, { once: true });
                                 }
                             }
 
-                            if (!video.paused && !video.ended && video.currentTime >= 0) {
+                            if (!element.paused && !element.ended && element.currentTime >= 0) {
                                 playing += 1;
                             }
                         } catch (_) {}
                     }
 
-                    return { ok: true, found: videos.length, attempted, playing };
+                    return { ok: true, found: media.length, attempted, playing };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
                 }
@@ -3515,11 +3549,11 @@ class MainWindow(QMainWindow):
                 return
             if result.get("found", 0) > 0 and result.get("playing", 0) > 0 and not self._playback_hack_success_logged:
                 self._append_log(
-                    f"Playback hack active: {result.get('playing')}/{result.get('found')} embedded video element(s) are playing."
+                    f"Playback hack active in {label}: {result.get('playing')}/{result.get('found')} media element(s) are playing."
                 )
                 self._playback_hack_success_logged = True
 
-        self.browser.page().runJavaScript(script, after)
+        browser.page().runJavaScript(script, after)
 
     def _aspect_ratio_from_video_size(self, size: str) -> str:
         mapping = {
