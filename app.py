@@ -563,41 +563,61 @@ class GenerateWorker(QThread):
         response.raise_for_status()
         return response.json().get("id")
 
-    def _start_openai_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> tuple[str | None, str | None]:
-        self._ensure_not_stopped()
-        headers = self._openai_video_headers()
-        payload = {
+    def _openai_sora_payload_variants(self, prompt: str, resolution: str, duration_seconds: int) -> list[dict[str, object]]:
+        base = {
             "model": "sora-2",
             "prompt": prompt,
             "size": resolution,
-            "duration": duration_seconds,
         }
+        return [
+            {**base, "duration_seconds": duration_seconds},
+            {**base, "seconds": duration_seconds},
+            base,
+        ]
+
+    def _start_openai_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> tuple[str | None, str | None]:
+        self._ensure_not_stopped()
+        headers = self._openai_video_headers()
 
         endpoints = [
             f"{OPENAI_API_BASE}/videos/generations",
             f"{OPENAI_API_BASE}/videos",
         ]
 
+        payload_variants = self._openai_sora_payload_variants(prompt, resolution, duration_seconds)
         last_error = ""
         for endpoint in endpoints:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
-            if response.ok:
-                data = response.json() if response.content else {}
-                job_id = data.get("id") or data.get("job_id")
-                if not job_id and isinstance(data.get("data"), list) and data["data"]:
-                    job_id = data["data"][0].get("id")
-                direct_url = (
-                    data.get("video_url")
-                    or data.get("url")
-                    or (data.get("output") or {}).get("video_url")
-                )
-                return job_id, direct_url
+            for idx, payload in enumerate(payload_variants):
+                response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+                if response.ok:
+                    data = response.json() if response.content else {}
+                    job_id = data.get("id") or data.get("job_id")
+                    if not job_id and isinstance(data.get("data"), list) and data["data"]:
+                        job_id = data["data"][0].get("id")
+                    direct_url = (
+                        data.get("video_url")
+                        or data.get("url")
+                        or (data.get("output") or {}).get("video_url")
+                    )
+                    return job_id, direct_url
 
-            status = response.status_code
-            if status in {404, 405, 501}:
-                last_error = response.text[:400]
-                continue
-            raise RuntimeError(f"OpenAI Sora request failed: {status} {response.text[:500]}")
+                status = response.status_code
+                body_text = response.text[:500]
+                body_lower = body_text.lower()
+                if status in {404, 405, 501}:
+                    last_error = body_text[:400]
+                    break
+
+                duration_error = (
+                    status in {400, 422}
+                    and "unknown parameter" in body_lower
+                    and ("duration" in body_lower or "seconds" in body_lower)
+                )
+                if duration_error and idx < len(payload_variants) - 1:
+                    last_error = body_text[:400]
+                    continue
+
+                raise RuntimeError(f"OpenAI Sora request failed: {status} {body_text}")
 
         raise RuntimeError(
             "OpenAI Sora API endpoint not available for this account/base URL. "
@@ -1113,6 +1133,7 @@ class MainWindow(QMainWindow):
         self.last_extracted_frame_path: Path | None = None
         self.preview_muted = False
         self.preview_volume = 100
+        self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
@@ -2686,6 +2707,28 @@ class MainWindow(QMainWindow):
 
         self.browser.page().runJavaScript(script, after)
 
+    def _confirm_openai_sora_settings(self, resolution: str, duration_seconds: int, aspect_ratio: str) -> bool:
+        message = (
+            "OpenAI Sora request will be sent with:\n\n"
+            "• model: sora-2\n"
+            "• prompt: <generated prompt>\n"
+            f"• size: {resolution}\n"
+            f"• duration_seconds: {duration_seconds}\n"
+            f"• aspect ratio target: {aspect_ratio}\n\n"
+            "Compatibility notes:\n"
+            "• The app will retry known duration-field variants if the endpoint rejects one.\n"
+            "• Some accounts/endpoints only support specific duration values.\n\n"
+            "Continue with generation?"
+        )
+        answer = QMessageBox.question(
+            self,
+            "OpenAI Sora Parameters",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def start_generation(self) -> None:
         self.stop_all_requested = False
         concept = self.concept.toPlainText().strip()
@@ -2732,6 +2775,11 @@ class MainWindow(QMainWindow):
         selected_resolution_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+
+        if source == "openai" and self._openai_sora_help_always_show:
+            if not self._confirm_openai_sora_settings(selected_resolution, selected_duration_seconds, selected_aspect_ratio):
+                self._append_log("OpenAI generation canceled from Sora parameters confirmation dialog.")
+                return
 
         prompt_config = PromptConfig(
             source=source,
