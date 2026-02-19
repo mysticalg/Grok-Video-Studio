@@ -4659,6 +4659,29 @@ class MainWindow(QMainWindow):
                 }};
 
                 if (phase === "pick") {{
+                    const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
+
+                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i]")]
+                        .filter((btn) => isVisible(btn) && !btn.disabled);
+
+                    if (makeVideoButtons.length) {{
+                        makeVideoButtons.sort((a, b) => {{
+                            const ar = a.getBoundingClientRect();
+                            const br = b.getBoundingClientRect();
+                            const rowDelta = Math.abs(ar.top - br.top);
+                            if (rowDelta > 20) return ar.top - br.top;
+                            return ar.left - br.left;
+                        }});
+
+                        const firstButton = makeVideoButtons[0];
+                        const tile = listItemOf(firstButton) || firstButton.parentElement;
+                        const tileImage = tile?.querySelector?.("img") || null;
+                        const clickedTile = emulateClick(tileImage) || emulateClick(tile) || emulateClick(firstButton);
+                        if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
+                        await sleep(ACTION_DELAY_MS);
+                        return {{ ok: true, status: "generated-image-clicked" }};
+                    }}
+
                     const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
                         .filter((img) => {{
                             if (!isVisible(img)) return false;
@@ -4666,20 +4689,15 @@ class MainWindow(QMainWindow):
                             const title = (img.getAttribute("title") || "").trim().toLowerCase();
                             const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
                             const descriptor = (alt + " " + title + " " + aria).trim();
-                            if (/\\bedit\\s+image\\b/i.test(descriptor)) return false;
+                            if (/\bedit\\s+image\b/i.test(descriptor)) return false;
                             const width = img.naturalWidth || img.width || img.clientWidth || 0;
                             const height = img.naturalHeight || img.height || img.clientHeight || 0;
                             return width >= 220 && height >= 220;
                         }});
 
-                    const generatedImages = listItemImages.length
-                        ? listItemImages
-                        : [...document.querySelectorAll("img[alt='Generated image'], img[alt*='generated' i], img[aria-label*='generated' i]")]
-                            .filter((img) => isVisible(img));
+                    if (!listItemImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
 
-                    if (!generatedImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
-
-                    generatedImages.sort((a, b) => {{
+                    listItemImages.sort((a, b) => {{
                         const ar = a.getBoundingClientRect();
                         const br = b.getBoundingClientRect();
                         const rowDelta = Math.abs(ar.top - br.top);
@@ -4687,9 +4705,9 @@ class MainWindow(QMainWindow):
                         return ar.left - br.left;
                     }});
 
-                    const firstImage = generatedImages[0];
-                    const listItem = firstImage.closest("[role='listitem'], button, [role='button'], li, article, figure");
-                    const clickedImage = emulateClick(listItem) || emulateClick(firstImage) || emulateClick(firstImage.parentElement);
+                    const firstImage = listItemImages[0];
+                    const listItem = listItemOf(firstImage) || firstImage.closest("button, [role='button']") || firstImage.parentElement;
+                    const clickedImage = emulateClick(firstImage) || emulateClick(listItem);
                     if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
                     await sleep(ACTION_DELAY_MS);
                     return {{ ok: true, status: "generated-image-clicked" }};
