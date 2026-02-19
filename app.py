@@ -7775,7 +7775,7 @@ class MainWindow(QMainWindow):
         elif platform_name == "Facebook":
             max_attempts = 8
         elif platform_name == "YouTube":
-            max_attempts = 14
+            max_attempts = 24
         else:
             max_attempts = 2
         if attempts > max_attempts:
@@ -8513,11 +8513,29 @@ class MainWindow(QMainWindow):
                         }
 
                         if (Number(youtubeState.nextClicks || 0) >= 4) {
-                            const visibilityButton = visibility === "private"
-                                ? findClickableByHints(["private"])
-                                : (visibility === "unlisted" ? findClickableByHints(["unlisted"]) : findClickableByHints(["public"]));
-                            if (visibilityButton) {
-                                clickNodeOrAncestor(visibilityButton);
+                            const visibilityRadio = visibility === "private"
+                                ? bySelectors([
+                                    'tp-yt-paper-radio-button#private-radio-button',
+                                    'tp-yt-paper-radio-button[name="PRIVATE"]',
+                                ])
+                                : (visibility === "unlisted"
+                                    ? bySelectors([
+                                        'tp-yt-paper-radio-button#unlisted-radio-button',
+                                        'tp-yt-paper-radio-button[name="UNLISTED"]',
+                                    ])
+                                    : bySelectors([
+                                        'tp-yt-paper-radio-button#public-radio-button',
+                                        'tp-yt-paper-radio-button[name="PUBLIC"]',
+                                    ]));
+                            const visibilitySelected = Boolean(
+                                visibilityRadio
+                                && String(visibilityRadio.getAttribute('aria-checked') || '').toLowerCase() === 'true'
+                            );
+                            if (visibilityRadio && !visibilitySelected && actionSpacingElapsed) {
+                                const clickedVisibility = clickNodeOrAncestor(visibilityRadio);
+                                if (clickedVisibility) {
+                                    youtubeState.lastActionAtMs = nowMs;
+                                }
                             }
 
                             const scheduleText = String(youtubeOptions.schedule || "").trim();
@@ -8530,8 +8548,21 @@ class MainWindow(QMainWindow):
                                 }
                             }
 
-                            const doneButton = findClickableByHints(["publish", "done", "save"]);
-                            if (doneButton && !youtubeState.submitted && actionSpacingElapsed) {
+                            const doneButton = bySelectors([
+                                'ytcp-button#done-button button',
+                                'ytcp-button[id="done-button"] button',
+                                'button[aria-label*="save" i]',
+                                'button[aria-label*="publish" i]',
+                            ]) || findClickableByHints(["publish", "done", "save"]);
+                            const doneDisabled = Boolean(
+                                doneButton
+                                && (
+                                    doneButton.disabled
+                                    || String(doneButton.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+                                    || String(doneButton.getAttribute('disabled') || '').toLowerCase() === 'true'
+                                )
+                            );
+                            if (doneButton && !doneDisabled && !youtubeState.submitted && actionSpacingElapsed) {
                                 submitClicked = clickNodeOrAncestor(doneButton) || submitClicked;
                                 if (submitClicked) {
                                     youtubeState.submitted = true;
