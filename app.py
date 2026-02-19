@@ -4243,8 +4243,10 @@ class MainWindow(QMainWindow):
         """
 
         set_image_mode_script = r"""
-            (() => {
+            (async () => {
                 try {
+                    const ACTION_DELAY_MS = 200;
+                    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const emulateClick = (el) => {
@@ -4257,10 +4259,11 @@ class MainWindow(QMainWindow):
                         return true;
                     };
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
+                    const isImageLabel = (text) => /(^|\s)image(s)?(\s|$)/i.test(text) || /generate\s+multiple\s+images/i.test(text);
                     const hasImageSelectionMarker = () => {
                         const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
                             .filter((el) => isVisible(el));
-                        return selectedEls.some((el) => /(^|\s)image(\s|$)/i.test(textOf(el)));
+                        return selectedEls.some((el) => isImageLabel(textOf(el)));
                     };
 
                     const modelTriggerCandidates = [
@@ -4274,9 +4277,21 @@ class MainWindow(QMainWindow):
                         return /model|video|image|options|settings/i.test(txt) || (el.id || "") === "model-select-trigger";
                     }) || null;
 
+                    if (hasImageSelectionMarker() || (modelTrigger && isImageLabel(textOf(modelTrigger)))) {
+                        return {
+                            ok: true,
+                            imageSelected: true,
+                            optionsOpened: false,
+                            imageItemFound: true,
+                            imageClicked: false,
+                            triggerText: modelTrigger ? textOf(modelTrigger) : "",
+                        };
+                    }
+
                     let optionsOpened = false;
                     if (modelTrigger) {
                         optionsOpened = emulateClick(modelTrigger);
+                        await sleep(ACTION_DELAY_MS);
                     }
 
                     const menuItemSelectors = [
@@ -4293,12 +4308,15 @@ class MainWindow(QMainWindow):
 
                     const imageItem = menuItems.find((el) => {
                         const txt = textOf(el);
-                        return /(^|\s)image(\s|$)/i.test(txt) || /generate multiple images/i.test(txt);
+                        return isImageLabel(txt);
                     }) || null;
 
                     const imageClicked = imageItem ? emulateClick(imageItem) : false;
+                    if (imageClicked) {
+                        await sleep(ACTION_DELAY_MS);
+                    }
 
-                    const triggerNowSaysImage = !!(modelTrigger && /(^|\s)image(\s|$)/i.test(textOf(modelTrigger)));
+                    const triggerNowSaysImage = !!(modelTrigger && isImageLabel(textOf(modelTrigger)));
                     const imageSelected = imageClicked || hasImageSelectionMarker() || triggerNowSaysImage;
 
                     return {
