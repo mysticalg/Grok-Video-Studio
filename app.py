@@ -7728,11 +7728,9 @@ class MainWindow(QMainWindow):
             chunk_size = video_size
             total_chunk_count = 1
         else:
-            # For >64 MB: pick a safe chunk size (e.g. 20-64 MB)
-            chunk_size = MAX_CHUNK  # or e.g. 20*1024*1024 for smaller chunks
-            total_chunk_count = math.floor(video_size / chunk_size)
-            if total_chunk_count < 1:
-                total_chunk_count = 1
+            # For >64 MB, split into multiple chunks (TikTok max chunk is 64 MB)
+            chunk_size = MAX_CHUNK
+            total_chunk_count = max(1, math.ceil(video_size / chunk_size))
         
         # Optional: if video_size < MIN_CHUNK, force single chunk
         if video_size < MIN_CHUNK:
@@ -7798,36 +7796,50 @@ class MainWindow(QMainWindow):
         upload_url = data['data']['upload_url']  # or check exact key in response
         publish_id = data['data'].get('publish_id')  # save for status check later
 
-        # ── SINGLE-CHUNK UPLOAD (your case) ───────────────────────────────────
-        video_size = os.path.getsize(video_path)
-        last_byte = video_size - 1
-
-        upload_headers = {
-            "Content-Type": "video/mp4",  # change if MOV/WebM/etc.
-            "Content-Length": str(video_size),
-            "Content-Range": f"bytes 0-{last_byte}/{video_size}"
-        }
+        # Upload in one or more chunks using Content-Range.
+        # Large files fail with 413 if sent in one request.
+        upload_resp = None
+        bytes_uploaded = 0
 
         with open(video_path, "rb") as f:
-            video_bytes = f.read()  # safe since small file
+            chunk_index = 0
+            while bytes_uploaded < video_size:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
 
-        print(f"DEBUG: Uploading {video_size} bytes with range: bytes 0-{last_byte}/{video_size}")
+                start_byte = bytes_uploaded
+                end_byte = start_byte + len(chunk) - 1
+                chunk_index += 1
 
-        upload_resp = requests.put(upload_url, headers=upload_headers, data=video_bytes)
-        print(f"DEBUG: Upload status code: {upload_resp.status_code}")
+                upload_headers = {
+                    "Content-Type": "video/mp4",
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {start_byte}-{end_byte}/{video_size}",
+                }
 
-        upload_data = None
-        if upload_resp.text.strip():
-            try:
-                upload_data = upload_resp.json()
-                print("Status response:", upload_data)
-            except ValueError:
-                print("DEBUG: Upload response is not JSON:", upload_resp.text[:500])
-        else:
-            print("DEBUG: Upload response body is empty.")
+                print(
+                    f"DEBUG: Uploading chunk {chunk_index}/{total_chunk_count} "
+                    f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
+                )
+                upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
+                print(f"DEBUG: Chunk upload status code: {upload_resp.status_code}")
 
-        if upload_resp.status_code not in (200, 201, 204):
-            raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
+                if upload_resp.status_code not in (200, 201, 202, 204, 206):
+                    raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
+
+                if upload_resp.text.strip():
+                    try:
+                        print("DEBUG: Chunk upload response:", upload_resp.json())
+                    except ValueError:
+                        print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
+
+                bytes_uploaded += len(chunk)
+
+        if upload_resp is None or bytes_uploaded != video_size:
+            raise RuntimeError(
+                f"Upload failed: sent {bytes_uploaded} bytes, expected {video_size} bytes."
+            )
 
         self.check_tiktok_status(access_token, publish_id)
         self._append_log(f"TikTok Upload complete")
