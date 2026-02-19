@@ -1645,7 +1645,6 @@ class MainWindow(QMainWindow):
             "border: 1px solid #1565c0; border-radius: 6px; padding: 8px;"
         )
         self.populate_video_btn.clicked.connect(self.populate_video_prompt)
-        actions_layout.addWidget(self.populate_video_btn, 0, 0)
 
         self.generate_image_btn = QPushButton("🖼️ Populate Image Prompt")
         self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
@@ -1654,7 +1653,6 @@ class MainWindow(QMainWindow):
             "border: 1px solid #2e7d32; border-radius: 6px; padding: 8px;"
         )
         self.generate_image_btn.clicked.connect(self.start_image_generation)
-        actions_layout.addWidget(self.generate_image_btn, 0, 1)
 
         self.generate_btn = QPushButton("🎬 API Generate Video")
         self.generate_btn.setToolTip("Generate and download video via the selected API provider.")
@@ -1681,7 +1679,6 @@ class MainWindow(QMainWindow):
             "border: 1px solid #f9a825; border-radius: 6px; padding: 8px;"
         )
         self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
-        actions_layout.addWidget(self.continue_frame_btn, 2, 0)
 
         self.continue_image_btn = QPushButton("🖼️ Continue from Local Image (paste + generate)")
         self.continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
@@ -1690,16 +1687,14 @@ class MainWindow(QMainWindow):
             "border: 1px solid #fbc02d; border-radius: 6px; padding: 8px;"
         )
         self.continue_image_btn.clicked.connect(self.continue_from_local_image)
-        actions_layout.addWidget(self.continue_image_btn, 2, 1)
 
-        self.show_browser_btn = QPushButton("🌐 Show Browser (grok.com/imagine)")
-        self.show_browser_btn.setToolTip("Bring the embedded Grok browser to the front.")
-        self.show_browser_btn.setStyleSheet(
+        self.browser_home_btn = QPushButton("🏠 Homepage")
+        self.browser_home_btn.setToolTip("Open grok.com/imagine in the embedded browser tab.")
+        self.browser_home_btn.setStyleSheet(
             "background-color: #ffffff; color: #222; font-weight: 700;"
             "border: 1px solid #cfcfcf; border-radius: 6px; padding: 8px;"
         )
-        self.show_browser_btn.clicked.connect(self.show_browser_page)
-        actions_layout.addWidget(self.show_browser_btn, 3, 0)
+        self.browser_home_btn.clicked.connect(self.show_browser_page)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
@@ -1988,8 +1983,19 @@ class MainWindow(QMainWindow):
         bottom_splitter.addWidget(log_group)
         bottom_splitter.setSizes([500, 800])
 
+        self.grok_browser_tab = QWidget()
+        grok_browser_layout = QVBoxLayout(self.grok_browser_tab)
+        grok_browser_controls = QGridLayout()
+        grok_browser_controls.addWidget(self.populate_video_btn, 0, 0)
+        grok_browser_controls.addWidget(self.generate_image_btn, 0, 1)
+        grok_browser_controls.addWidget(self.continue_frame_btn, 1, 0)
+        grok_browser_controls.addWidget(self.continue_image_btn, 1, 1)
+        grok_browser_controls.addWidget(self.browser_home_btn, 2, 0, 1, 2)
+        grok_browser_layout.addLayout(grok_browser_controls)
+        grok_browser_layout.addWidget(self.browser)
+
         self.browser_tabs = QTabWidget()
-        self.browser_tabs.addTab(self.browser, "Browser")
+        self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
         self.social_upload_tab_indices["Facebook"] = self.browser_tabs.addTab(
             self._build_social_upload_tab("Facebook", self._facebook_upload_home_url()),
             "Facebook Upload",
