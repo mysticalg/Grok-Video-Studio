@@ -37,14 +37,62 @@ jobs:
         run: |
           Compress-Archive -Path dist/GrokVideoDesktopStudio/* -DestinationPath dist/GrokVideoDesktopStudio-windows-x64.zip
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $appVersion = "0.0.0"
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            $appVersion = "${{ github.ref_name }}".TrimStart('v')
+          }
+
+          @"
+          [Setup]
+          AppId={{39F61D6D-E3AB-4170-BD86-4B880C6BBE87}
+          AppName=Grok Video Desktop Studio
+          AppVersion=$appVersion
+          AppPublisher=Grok Video Studio
+          DefaultDirName={autopf}\\GrokVideoDesktopStudio
+          DefaultGroupName=Grok Video Desktop Studio
+          OutputDir=dist
+          OutputBaseFilename=GrokVideoDesktopStudio-setup-windows-x64
+          Compression=lzma
+          SolidCompression=yes
+          WizardStyle=modern
+          ArchitecturesInstallIn64BitMode=x64
+
+          [Files]
+          Source: "dist\\GrokVideoDesktopStudio\\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{autoprograms}\\Grok Video Desktop Studio"; Filename: "{app}\\GrokVideoDesktopStudio.exe"
+          Name: "{autodesktop}\\Grok Video Desktop Studio"; Filename: "{app}\\GrokVideoDesktopStudio.exe"; Tasks: desktopicon
+
+          [Tasks]
+          Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"
+
+          [Run]
+          Filename: "{app}\\GrokVideoDesktopStudio.exe"; Description: "Launch Grok Video Desktop Studio"; Flags: nowait postinstall skipifsilent
+          "@ | Out-File installer.iss -Encoding ASCII
+
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: GrokVideoDesktopStudio-windows-x64
-          path: dist/GrokVideoDesktopStudio-windows-x64.zip
+          path: |
+            dist/GrokVideoDesktopStudio-windows-x64.zip
+            dist/GrokVideoDesktopStudio-setup-windows-x64.exe
 
       - name: Publish release asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/GrokVideoDesktopStudio-windows-x64.zip
+          files: |
+            dist/GrokVideoDesktopStudio-windows-x64.zip
+            dist/GrokVideoDesktopStudio-setup-windows-x64.exe
