@@ -4263,7 +4263,7 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("#model-select-trigger"),
                         ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
                         ...document.querySelectorAll("button, [role='button']"),
-                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
 
                     const modelTrigger = modelTriggerCandidates.find((el) => {
                         const txt = textOf(el);
@@ -4659,13 +4659,63 @@ class MainWindow(QMainWindow):
                 }};
 
                 if (phase === "pick") {{
-                    const generatedImages = [...document.querySelectorAll("img[alt='Generated image']")]
-                        .filter((img) => isVisible(img));
-                    if (!generatedImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
+                    const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
 
-                    const firstImage = generatedImages[0];
-                    const listItem = firstImage.closest("[role='listitem']");
-                    const clickedImage = emulateClick(firstImage) || emulateClick(listItem) || emulateClick(firstImage.parentElement);
+                    const customizePromptReady = !!document.querySelector(
+                        "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
+                        + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
+                    );
+                    if (customizePromptReady) {{
+                        return {{ ok: true, status: "generated-image-clicked" }};
+                    }}
+
+                    const makeVideoButtons = [...document.querySelectorAll("[role='listitem'] button[aria-label*='make video' i]")]
+                        .filter((btn) => isVisible(btn) && !btn.disabled);
+
+                    if (makeVideoButtons.length) {{
+                        makeVideoButtons.sort((a, b) => {{
+                            const ar = a.getBoundingClientRect();
+                            const br = b.getBoundingClientRect();
+                            const rowDelta = Math.abs(ar.top - br.top);
+                            if (rowDelta > 20) return ar.top - br.top;
+                            return ar.left - br.left;
+                        }});
+
+                        const firstButton = makeVideoButtons[0];
+                        const tile = listItemOf(firstButton) || firstButton.parentElement;
+                        const tileImage = tile?.querySelector?.("img") || null;
+                        const clickedTile = emulateClick(tileImage) || emulateClick(tile) || emulateClick(firstButton);
+                        if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
+                        await sleep(ACTION_DELAY_MS);
+                        return {{ ok: true, status: "generated-image-clicked" }};
+                    }}
+
+                    const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
+                        .filter((img) => {{
+                            if (!isVisible(img)) return false;
+                            const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
+                            const title = (img.getAttribute("title") || "").trim().toLowerCase();
+                            const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
+                            const descriptor = (alt + " " + title + " " + aria).trim();
+                            if (/\bedit\\s+image\b/i.test(descriptor)) return false;
+                            const width = img.naturalWidth || img.width || img.clientWidth || 0;
+                            const height = img.naturalHeight || img.height || img.clientHeight || 0;
+                            return width >= 220 && height >= 220;
+                        }});
+
+                    if (!listItemImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
+
+                    listItemImages.sort((a, b) => {{
+                        const ar = a.getBoundingClientRect();
+                        const br = b.getBoundingClientRect();
+                        const rowDelta = Math.abs(ar.top - br.top);
+                        if (rowDelta > 20) return ar.top - br.top;
+                        return ar.left - br.left;
+                    }});
+
+                    const firstImage = listItemImages[0];
+                    const listItem = listItemOf(firstImage) || firstImage.closest("button, [role='button']") || firstImage.parentElement;
+                    const clickedImage = emulateClick(firstImage) || emulateClick(listItem);
                     if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
                     await sleep(ACTION_DELAY_MS);
                     return {{ ok: true, status: "generated-image-clicked" }};
@@ -4673,11 +4723,13 @@ class MainWindow(QMainWindow):
 
                 if (phase === "video-mode") {{
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
+                    const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
+                    const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(`${{textOf(el)}} ${{ariaOf(el)}}`);
                     const modelTriggerCandidates = [
                         ...document.querySelectorAll("#model-select-trigger"),
                         ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
                         ...document.querySelectorAll("button, [role='button']"),
-                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
 
                     const modelTrigger = modelTriggerCandidates.find((el) => {{
                         const txt = textOf(el);
@@ -4836,22 +4888,85 @@ class MainWindow(QMainWindow):
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
             if not self.manual_image_pick_clicked:
-                self.manual_image_pick_retry_count += 1
-                if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
+                def _queue_pick_retry(current_status: str) -> None:
+                    self.manual_image_pick_retry_count += 1
+                    if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
+                        if current_status == "callback-empty":
+                            self._append_log(
+                                "WARNING: Variant "
+                                f"{current_variant}: image pick stayed callback-empty for "
+                                f"{self.manual_image_pick_retry_count} checks; assuming pick stage already completed and advancing."
+                            )
+                            self.manual_image_pick_clicked = True
+                            self.manual_image_video_mode_selected = True
+                            self.manual_image_pick_retry_count = 0
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            return
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: image pick validation stayed in '{current_status}' for "
+                            f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
+                        )
+                        self.manual_image_pick_retry_count = 0
                     self._append_log(
-                        "WARNING: Variant "
-                        f"{current_variant}: image pick validation stayed in '{status}' for "
-                        f"{self.manual_image_pick_retry_count} checks; forcing prompt submit stage."
+                        f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
                     )
-                    self.manual_image_pick_clicked = True
-                    self.manual_image_pick_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(1000, self._poll_for_manual_image)
+                    QTimer.singleShot(3000, self._poll_for_manual_image)
+
+                if status == "callback-empty":
+                    pick_ready_probe_script = """
+                        (() => {
+                            try {
+                                const customizePromptVisible = !!document.querySelector(
+                                    "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], " +
+                                    "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
+                                );
+                                const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i]")]
+                                    .find((btn) => !!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)));
+                                const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
+                                    .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
+                                const path = String((window.location && window.location.pathname) || "").toLowerCase();
+                                const onPostView = path.includes("/imagine/post/");
+                                const ready = customizePromptVisible || (onPostView && (editImageVisible || makeVideoButtonVisible));
+                                return {
+                                    ready,
+                                    customizePromptVisible,
+                                    makeVideoButtonVisible,
+                                    editImageVisible,
+                                    onPostView,
+                                };
+                            } catch (_) {
+                                return { ready: false };
+                            }
+                        })()
+                    """
+
+                    def _after_pick_ready_probe(probe_result):
+                        if isinstance(probe_result, dict) and probe_result.get("ready"):
+                            ready_flags = (
+                                f"customizePrompt={bool(probe_result.get('customizePromptVisible'))}, "
+                                f"makeVideoBtn={bool(probe_result.get('makeVideoButtonVisible'))}, "
+                                f"editImage={bool(probe_result.get('editImageVisible'))}, "
+                                f"postView={bool(probe_result.get('onPostView'))}"
+                            )
+                            self._append_log(
+                                f"Variant {current_variant}: detected post/customize UI after empty callback ({ready_flags}); treating image pick as complete."
+                            )
+                            self.manual_image_pick_clicked = True
+                            self.manual_image_video_mode_selected = True
+                            self.manual_image_pick_retry_count = 0
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            return
+                        _queue_pick_retry(status)
+
+                    self.browser.page().runJavaScript(pick_ready_probe_script, _after_pick_ready_probe)
                     return
-                self._append_log(
-                    f"Variant {current_variant}: generated image not ready for pick+submit yet ({status}); retrying..."
-                )
-                QTimer.singleShot(3000, self._poll_for_manual_image)
+
+                _queue_pick_retry(status)
                 return
 
             if not self.manual_image_video_mode_selected:
@@ -4860,13 +4975,9 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: video-mode validation stayed in '{status}' for "
-                        f"{self.manual_image_video_mode_retry_count} checks; forcing prompt submit stage."
+                        f"{self.manual_image_video_mode_retry_count} checks; continuing to wait for video-mode state."
                     )
-                    self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(800, self._poll_for_manual_image)
-                    return
 
                 self._append_log(
                     f"Variant {current_variant}: waiting for video mode selection ({status}); retrying..."
