@@ -136,7 +136,22 @@ jobs:
         env:
           APP_VERSION: ${{ steps.meta.outputs.app_version }}
         run: |
-          & "C:\Program Files (x86)\WiX Toolset v3.11\bin\heat.exe" dir dist\GrokVideoDesktopStudio -cg AppFiles -dr INSTALLFOLDER -gg -srd -sreg -sfrag -var var.SourceDir -out files.wxs
+          $heatCmd = Get-Command heat.exe -ErrorAction SilentlyContinue
+          $wixBin = if ($heatCmd) { Split-Path $heatCmd.Source -Parent } else { $null }
+          if (-not $wixBin) {
+            $wixBin = @(
+              "C:\Program Files (x86)\WiX Toolset v3.14\bin",
+              "C:\Program Files (x86)\WiX Toolset v3.11\bin",
+              "C:\Program Files\WiX Toolset v3.14\bin",
+              "C:\Program Files\WiX Toolset v3.11\bin"
+            ) | Where-Object { Test-Path (Join-Path $_ "heat.exe") } | Select-Object -First 1
+          }
+
+          if (-not $wixBin) {
+            throw "WiX binaries not found after installation."
+          }
+
+          & (Join-Path $wixBin "heat.exe") dir dist\GrokVideoDesktopStudio -cg AppFiles -dr INSTALLFOLDER -gg -srd -sreg -sfrag -var var.SourceDir -out files.wxs
 
           @"
           <?xml version="1.0" encoding="UTF-8"?>
@@ -201,8 +216,8 @@ jobs:
           </Wix>
           "@ | Out-File installer.wxs -Encoding UTF8
 
-          & "C:\Program Files (x86)\WiX Toolset v3.11\bin\candle.exe" -dSourceDir=dist\GrokVideoDesktopStudio installer.wxs files.wxs -arch x64 -out .\
-          & "C:\Program Files (x86)\WiX Toolset v3.11\bin\light.exe" installer.wixobj files.wixobj -out dist/GrokVideoDesktopStudio-setup-windows-x64.msi
+          & (Join-Path $wixBin "candle.exe") -dSourceDir=dist\GrokVideoDesktopStudio installer.wxs files.wxs -arch x64 -out .\
+          & (Join-Path $wixBin "light.exe") installer.wixobj files.wixobj -out dist/GrokVideoDesktopStudio-setup-windows-x64.msi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
