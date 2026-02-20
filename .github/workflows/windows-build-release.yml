@@ -179,7 +179,7 @@ jobs:
 
               <DirectoryRef Id="INSTALLFOLDER">
                 <Component Id="MainExecutableShortcutComponent" Guid="A2A46E95-EB6F-47D6-AEC0-1F57B9A5A147" Win64="yes">
-                  <RegistryValue Root="HKLM" Key="Software\\GrokVideoStudio\\GrokVideoDesktopStudio" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                  <RegistryValue Root="HKLM" Key="Software\GrokVideoStudio\GrokVideoDesktopStudio" Name="installed" Type="integer" Value="1" KeyPath="yes" />
                 </Component>
               </DirectoryRef>
 
@@ -191,7 +191,7 @@ jobs:
                             Target="[INSTALLFOLDER]GrokVideoDesktopStudio.exe"
                             WorkingDirectory="INSTALLFOLDER"/>
                   <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
-                  <RegistryValue Root="HKCU" Key="Software\\GrokVideoStudio\\GrokVideoDesktopStudio" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                  <RegistryValue Root="HKCU" Key="Software\GrokVideoStudio\GrokVideoDesktopStudio" Name="installed" Type="integer" Value="1" KeyPath="yes" />
                 </Component>
               </DirectoryRef>
 
@@ -202,7 +202,7 @@ jobs:
                             Description="Grok Video Desktop Studio"
                             Target="[INSTALLFOLDER]GrokVideoDesktopStudio.exe"
                             WorkingDirectory="INSTALLFOLDER" />
-                  <RegistryValue Root="HKCU" Key="Software\\GrokVideoStudio\\GrokVideoDesktopStudio" Name="desktop-shortcut" Type="integer" Value="1" KeyPath="yes" />
+                  <RegistryValue Root="HKCU" Key="Software\GrokVideoStudio\GrokVideoDesktopStudio" Name="desktop-shortcut" Type="integer" Value="1" KeyPath="yes" />
                 </Component>
               </DirectoryRef>
 
