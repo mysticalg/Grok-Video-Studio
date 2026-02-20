@@ -7154,6 +7154,7 @@ class MainWindow(QMainWindow):
                     "-i",
                     str(list_file),
                     *self._video_encoder_args(use_gpu_encoding),
+                    *self._mp4_compatibility_args(),
                     "-c:a",
                     "aac",
                     str(output_file),
@@ -7266,6 +7267,11 @@ class MainWindow(QMainWindow):
             return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(max(18, min(30, crf + 1))), "-b:v", "0"]
         return ["-c:v", "libx264", "-preset", "fast", "-crf", str(crf)]
 
+    def _mp4_compatibility_args(self) -> list[str]:
+        # Keep stitched output broadly compatible with Windows thumbnails, Android playback,
+        # and social upload transcoders.
+        return ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+
     def _run_ffmpeg_with_progress(
         self,
         ffmpeg_cmd: list[str],
@@ -7375,6 +7381,7 @@ class MainWindow(QMainWindow):
                 "-map",
                 f"[{video_prev}]",
                 *self._video_encoder_args(use_gpu_encoding),
+                *self._mp4_compatibility_args(),
                 str(output_file),
             ]
         )
@@ -7434,6 +7441,7 @@ class MainWindow(QMainWindow):
             "-vf",
             ",".join(vf_filters),
             *self._video_encoder_args(use_gpu_encoding, crf=18),
+            *self._mp4_compatibility_args(),
             "-c:a",
             "copy",
             str(output_file),
@@ -7511,6 +7519,7 @@ class MainWindow(QMainWindow):
             "-map",
             f"[{audio_output_label}]",
             *self._video_encoder_args(use_gpu_encoding),
+            *self._mp4_compatibility_args(),
             "-c:a",
             "aac",
             "-shortest",
