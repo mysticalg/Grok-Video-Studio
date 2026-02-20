@@ -1668,6 +1668,14 @@ class MainWindow(QMainWindow):
         )
         self.browser_home_btn.clicked.connect(self.show_browser_page)
 
+        self.open_firefox_btn = QPushButton("🦊 Open in Firefox")
+        self.open_firefox_btn.setToolTip("Open grok.com/imagine in external Firefox (Qt embedded browser remains Chromium-based).")
+        self.open_firefox_btn.setStyleSheet(
+            "background-color: #ffefe0; color: #6b2f00; font-weight: 700;"
+            "border: 1px solid #ffb366; border-radius: 6px; padding: 8px;"
+        )
+        self.open_firefox_btn.clicked.connect(self.open_grok_in_firefox)
+
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
         self.stitch_btn.setStyleSheet(
@@ -1937,7 +1945,8 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.generate_image_btn, 0, 1)
         grok_browser_controls.addWidget(self.continue_frame_btn, 1, 0)
         grok_browser_controls.addWidget(self.continue_image_btn, 1, 1)
-        grok_browser_controls.addWidget(self.browser_home_btn, 2, 0, 1, 2)
+        grok_browser_controls.addWidget(self.browser_home_btn, 2, 0)
+        grok_browser_controls.addWidget(self.open_firefox_btn, 2, 1)
 
         grok_video_options = QHBoxLayout()
         grok_video_options.addWidget(QLabel("Resolution"))
@@ -7029,7 +7038,39 @@ class MainWindow(QMainWindow):
     def show_browser_page(self) -> None:
         self.browser_tabs.setCurrentIndex(0)
         self.browser.setUrl(QUrl("https://grok.com/imagine"))
-        self._append_log("Navigated embedded browser to grok.com/imagine.")
+        self._append_log("Navigated embedded browser to grok.com/imagine (QtWebEngine/Chromium).")
+
+    def open_grok_in_firefox(self) -> None:
+        url = "https://grok.com/imagine"
+        candidates = ["firefox", "firefox-esr"]
+        if sys.platform.startswith("win"):
+            candidates.extend(["firefox.exe", r"C:\\Program Files\\Mozilla Firefox\\firefox.exe", r"C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe"])
+
+        firefox_binary = ""
+        for candidate in candidates:
+            resolved = shutil.which(candidate)
+            if resolved:
+                firefox_binary = resolved
+                break
+            if Path(candidate).exists():
+                firefox_binary = candidate
+                break
+
+        if not firefox_binary:
+            QMessageBox.warning(
+                self,
+                "Firefox Not Found",
+                "Could not find Firefox on PATH. Install Firefox or launch it manually and open https://grok.com/imagine",
+            )
+            self._append_log("Firefox launch requested but no Firefox executable was found.")
+            return
+
+        try:
+            subprocess.Popen([firefox_binary, url])
+            self._append_log(f"Opened {url} in external Firefox: {firefox_binary}")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Firefox Launch Failed", f"Could not launch Firefox:\n{exc}")
+            self._append_log(f"Firefox launch failed: {exc}")
 
     def stitch_all_videos(self) -> None:
         if self.stitch_worker and self.stitch_worker.isRunning():
