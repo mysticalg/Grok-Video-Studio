@@ -660,30 +660,57 @@ class GenerateWorker(QThread):
 
         for attempt_index, seek_args in enumerate(extraction_attempts):
             frame_path = self.download_dir / f"sora_last_frame_{int(time.time() * 1000)}_{attempt_index}.png"
-            cmd = [
-                "ffmpeg",
-                "-y",
-                *seek_args,
-                "-i",
-                str(video_path),
-                "-frames:v",
-                "1",
-                str(frame_path),
+            extraction_cmds = [
+                [
+                    "ffmpeg",
+                    "-y",
+                    *seek_args,
+                    "-i",
+                    str(video_path),
+                    "-vf",
+                    "scale=in_range=tv:out_range=pc,format=rgba",
+                    "-frames:v",
+                    "1",
+                    "-color_range",
+                    "pc",
+                    "-colorspace",
+                    "bt709",
+                    "-color_primaries",
+                    "bt709",
+                    "-color_trc",
+                    "iec61966-2-1",
+                    str(frame_path),
+                ],
+                [
+                    "ffmpeg",
+                    "-y",
+                    *seek_args,
+                    "-i",
+                    str(video_path),
+                    "-frames:v",
+                    "1",
+                    str(frame_path),
+                ],
             ]
-            try:
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            except FileNotFoundError as exc:
-                raise RuntimeError(
-                    "ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH."
-                ) from exc
-            except subprocess.CalledProcessError as exc:
-                failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
-                continue
+
+            result = None
+            for cmd in extraction_cmds:
+                try:
+                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    break
+                except FileNotFoundError as exc:
+                    raise RuntimeError(
+                        "ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH."
+                    ) from exc
+                except subprocess.CalledProcessError as exc:
+                    failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
+                    result = None
 
             if frame_path.exists() and frame_path.stat().st_size > 0:
                 return frame_path
 
-            failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
+            if result is not None:
+                failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
 
         raise RuntimeError(
             "Sora continuity frame extraction produced an empty image. "
@@ -6470,36 +6497,65 @@ class MainWindow(QMainWindow):
 
         for attempt_index, offset in enumerate(extraction_attempts):
             frame_path = self.download_dir / f"last_frame_{int(time.time() * 1000)}_{attempt_index}.png"
-            try:
-                result = subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-sseof",
-                        offset,
-                        "-i",
-                        video_path,
-                        "-frames:v",
-                        "1",
-                        str(frame_path),
-                    ],
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-            except FileNotFoundError:
-                QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
-                return None
-            except subprocess.CalledProcessError as exc:
-                failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
-                continue
+            extraction_cmds = [
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-sseof",
+                    offset,
+                    "-i",
+                    video_path,
+                    "-vf",
+                    "scale=in_range=tv:out_range=pc,format=rgba",
+                    "-frames:v",
+                    "1",
+                    "-color_range",
+                    "pc",
+                    "-colorspace",
+                    "bt709",
+                    "-color_primaries",
+                    "bt709",
+                    "-color_trc",
+                    "iec61966-2-1",
+                    str(frame_path),
+                ],
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-sseof",
+                    offset,
+                    "-i",
+                    video_path,
+                    "-frames:v",
+                    "1",
+                    str(frame_path),
+                ],
+            ]
+
+            result = None
+            for cmd in extraction_cmds:
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    break
+                except FileNotFoundError:
+                    QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
+                    return None
+                except subprocess.CalledProcessError as exc:
+                    failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
+                    result = None
 
             if frame_path.exists() and frame_path.stat().st_size > 0:
                 self._append_log(f"Completed ffmpeg last-frame extraction: {frame_path}")
                 return frame_path
 
-            failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
+            if result is not None:
+                failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
 
         QMessageBox.critical(
             self,
