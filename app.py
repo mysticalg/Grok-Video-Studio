@@ -406,6 +406,133 @@ def _resolve_qtwebengine_cache_dir() -> tuple[Path, bool]:
     return fallback, False
 
 
+
+
+def _probe_video_color_properties(video_path: str | Path) -> dict[str, str]:
+    path_str = str(video_path)
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=color_range,color_space,color_transfer,color_primaries,pix_fmt,width,height",
+        "-of",
+        "json",
+        path_str,
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except Exception:
+        return {}
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+    streams = payload.get("streams")
+    if not isinstance(streams, list) or not streams:
+        return {}
+
+    stream = streams[0] if isinstance(streams[0], dict) else {}
+    normalized: dict[str, str] = {}
+    for key in ("color_range", "color_space", "color_transfer", "color_primaries", "pix_fmt"):
+        value = str(stream.get(key) or "").strip().lower()
+        if value and value not in {"unknown", "unspecified", "n/a"}:
+            normalized[key] = value
+
+    width = stream.get("width")
+    height = stream.get("height")
+    if isinstance(width, int):
+        normalized["width"] = str(width)
+    if isinstance(height, int):
+        normalized["height"] = str(height)
+    return normalized
+
+
+def _infer_color_matrix(color_meta: dict[str, str]) -> str:
+    matrix = color_meta.get("color_space", "").strip().lower()
+    if matrix:
+        return matrix
+
+    width = int(color_meta.get("width", "0") or 0)
+    height = int(color_meta.get("height", "0") or 0)
+    if max(width, height) >= 720:
+        return "bt709"
+
+    pix_fmt = color_meta.get("pix_fmt", "")
+    if pix_fmt.startswith("yuv"):
+        return "smpte170m"
+
+    return "bt709"
+
+
+def _build_last_frame_extraction_cmds(video_path: str | Path, seek_args: list[str], frame_path: Path) -> list[list[str]]:
+    color_meta = _probe_video_color_properties(video_path)
+    matrix = _infer_color_matrix(color_meta)
+    range_raw = color_meta.get("color_range", "")
+    in_range = "full" if range_raw in {"pc", "jpeg", "full"} else "limited"
+
+    color_filter = (
+        f"scale=in_range={in_range}:out_range=full:"
+        f"in_color_matrix={matrix}:out_color_matrix={matrix},format=rgb48le"
+    )
+
+    path_str = str(video_path)
+    frame_str = str(frame_path)
+    return [
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-vf",
+            color_filter,
+            "-frames:v",
+            "1",
+            frame_str,
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "rgb48be",
+            "-sws_flags",
+            "accurate_rnd+full_chroma_int",
+            frame_str,
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "rgba",
+            frame_str,
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-frames:v",
+            "1",
+            frame_str,
+        ],
+    ]
+
 def _configure_qtwebengine_runtime() -> None:
     global CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE
     CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE = _resolve_qtwebengine_cache_dir()
@@ -660,30 +787,30 @@ class GenerateWorker(QThread):
 
         for attempt_index, seek_args in enumerate(extraction_attempts):
             frame_path = self.download_dir / f"sora_last_frame_{int(time.time() * 1000)}_{attempt_index}.png"
-            cmd = [
-                "ffmpeg",
-                "-y",
-                *seek_args,
-                "-i",
+            extraction_cmds = _build_last_frame_extraction_cmds(
                 str(video_path),
-                "-frames:v",
-                "1",
-                str(frame_path),
-            ]
-            try:
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            except FileNotFoundError as exc:
-                raise RuntimeError(
-                    "ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH."
-                ) from exc
-            except subprocess.CalledProcessError as exc:
-                failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
-                continue
+                list(seek_args),
+                frame_path,
+            )
+
+            result = None
+            for cmd in extraction_cmds:
+                try:
+                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    break
+                except FileNotFoundError as exc:
+                    raise RuntimeError(
+                        "ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH."
+                    ) from exc
+                except subprocess.CalledProcessError as exc:
+                    failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
+                    result = None
 
             if frame_path.exists() and frame_path.stat().st_size > 0:
                 return frame_path
 
-            failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
+            if result is not None:
+                failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
 
         raise RuntimeError(
             "Sora continuity frame extraction produced an empty image. "
@@ -6470,36 +6597,36 @@ class MainWindow(QMainWindow):
 
         for attempt_index, offset in enumerate(extraction_attempts):
             frame_path = self.download_dir / f"last_frame_{int(time.time() * 1000)}_{attempt_index}.png"
-            try:
-                result = subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-sseof",
-                        offset,
-                        "-i",
-                        video_path,
-                        "-frames:v",
-                        "1",
-                        str(frame_path),
-                    ],
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-            except FileNotFoundError:
-                QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
-                return None
-            except subprocess.CalledProcessError as exc:
-                failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
-                continue
+            extraction_cmds = _build_last_frame_extraction_cmds(
+                video_path,
+                ["-sseof", offset],
+                frame_path,
+            )
+
+            result = None
+            for cmd in extraction_cmds:
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    break
+                except FileNotFoundError:
+                    QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
+                    return None
+                except subprocess.CalledProcessError as exc:
+                    failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
+                    result = None
 
             if frame_path.exists() and frame_path.stat().st_size > 0:
                 self._append_log(f"Completed ffmpeg last-frame extraction: {frame_path}")
                 return frame_path
 
-            failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
+            if result is not None:
+                failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
 
         QMessageBox.critical(
             self,
