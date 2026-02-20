@@ -6464,36 +6464,50 @@ class MainWindow(QMainWindow):
         return "png" if download_type == "image" else "mp4"
 
     def _extract_last_frame(self, video_path: str) -> Path | None:
-        frame_path = self.download_dir / f"last_frame_{int(time.time() * 1000)}.png"
         self._append_log(f"Starting ffmpeg last-frame extraction from: {video_path}")
+        extraction_attempts = ["-0", "-0.05", "-0.5", "-1.0"]
+        failure_messages: list[str] = []
 
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-sseof",
-                    "-0.1",
-                    "-i",
-                    video_path,
-                    "-frames:v",
-                    "1",
-                    str(frame_path),
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except FileNotFoundError:
-            QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
-            return None
-        except subprocess.CalledProcessError as exc:
-            QMessageBox.critical(self, "Frame Extraction Failed", exc.stderr[-800:] or "ffmpeg failed.")
-            return None
+        for attempt_index, offset in enumerate(extraction_attempts):
+            frame_path = self.download_dir / f"last_frame_{int(time.time() * 1000)}_{attempt_index}.png"
+            try:
+                result = subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-sseof",
+                        offset,
+                        "-i",
+                        video_path,
+                        "-frames:v",
+                        "1",
+                        str(frame_path),
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            except FileNotFoundError:
+                QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
+                return None
+            except subprocess.CalledProcessError as exc:
+                failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
+                continue
 
-        self._append_log(f"Completed ffmpeg last-frame extraction: {frame_path}")
-        return frame_path
+            if frame_path.exists() and frame_path.stat().st_size > 0:
+                self._append_log(f"Completed ffmpeg last-frame extraction: {frame_path}")
+                return frame_path
+
+            failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
+
+        QMessageBox.critical(
+            self,
+            "Frame Extraction Failed",
+            "Could not extract the final frame. "
+            f"Attempts failed with: {' | '.join(msg.strip() for msg in failure_messages if msg.strip())[:800]}",
+        )
+        return None
 
     def _copy_image_to_clipboard(self, frame_path: Path) -> bool:
         self._append_log(f"Copying extracted frame to clipboard: {frame_path}")
