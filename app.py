@@ -452,26 +452,10 @@ def _probe_video_color_properties(video_path: str | Path) -> dict[str, str]:
     return normalized
 
 
-def _infer_color_matrix(color_meta: dict[str, str]) -> str:
-    matrix = color_meta.get("color_space", "").strip().lower()
-    if matrix:
-        return matrix
-
-    width = int(color_meta.get("width", "0") or 0)
-    height = int(color_meta.get("height", "0") or 0)
-    if max(width, height) >= 720:
-        return "bt709"
-
-    pix_fmt = color_meta.get("pix_fmt", "")
-    if pix_fmt.startswith("yuv"):
-        return "smpte170m"
-
-    return "bt709"
-
 
 def _build_last_frame_extraction_cmds(video_path: str | Path, seek_args: list[str], frame_path: Path) -> list[list[str]]:
     color_meta = _probe_video_color_properties(video_path)
-    matrix = _infer_color_matrix(color_meta)
+    matrix = "bt709"
     range_raw = color_meta.get("color_range", "")
     in_range = "full" if range_raw in {"pc", "jpeg", "full"} else "limited"
 
@@ -483,6 +467,19 @@ def _build_last_frame_extraction_cmds(video_path: str | Path, seek_args: list[st
     path_str = str(video_path)
     frame_str = str(frame_path)
     return [
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-vf",
+            "format=uyvy422,scale=in_range=full:out_range=full:"
+            "in_color_matrix=bt709:out_color_matrix=bt709,format=rgb48le",
+            "-frames:v",
+            "1",
+            frame_str,
+        ],
         [
             "ffmpeg",
             "-y",
@@ -6655,11 +6652,29 @@ class MainWindow(QMainWindow):
         import base64
 
         self._append_log(f"Starting browser-side image paste for frame: {frame_path.name}")
-        frame_base64 = base64.b64encode(frame_path.read_bytes()).decode("ascii")
+
+        upload_file_path = frame_path
+        upload_file_name = frame_path.name
+        upload_mime = "image/png"
+
+        converted_jpeg = self.download_dir / f"{frame_path.stem}_upload.jpg"
+        image = QImage(str(frame_path))
+        if not image.isNull() and image.save(str(converted_jpeg), "JPG", 100):
+            upload_file_path = converted_jpeg
+            upload_file_name = converted_jpeg.name
+            upload_mime = "image/jpeg"
+            self._append_log(
+                f"Continue-from-last-frame: using high-quality JPEG upload payload ({converted_jpeg.name}) to preserve Grok in-app color rendering."
+            )
+        else:
+            self._append_log("Continue-from-last-frame: JPEG conversion failed; falling back to PNG upload payload.")
+
+        frame_base64 = base64.b64encode(upload_file_path.read_bytes()).decode("ascii")
         upload_script = r"""
             (() => {
                 const base64Data = __FRAME_BASE64__;
                 const fileName = __FRAME_NAME__;
+                const mimeType = __FRAME_MIME__;
                 const selectors = [
                     "textarea[placeholder*='Type to imagine' i]",
                     "input[placeholder*='Type to imagine' i]",
@@ -6724,7 +6739,7 @@ class MainWindow(QMainWindow):
                         const binary = atob(base64Data);
                         const bytes = new Uint8Array(binary.length);
                         for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-                        const file = new File([bytes], fileName, { type: "image/png" });
+                        const file = new File([bytes], fileName, { type: mimeType });
 
                         const dt = new DataTransfer();
                         dt.items.add(file);
@@ -6764,7 +6779,11 @@ class MainWindow(QMainWindow):
             })()
         """
 
-        upload_script = upload_script.replace("__FRAME_BASE64__", repr(frame_base64)).replace("__FRAME_NAME__", repr(frame_path.name))
+        upload_script = (
+            upload_script.replace("__FRAME_BASE64__", repr(frame_base64))
+            .replace("__FRAME_NAME__", repr(upload_file_name))
+            .replace("__FRAME_MIME__", repr(upload_mime))
+        )
 
         def after_focus(_result):
             if callable(on_uploaded):
