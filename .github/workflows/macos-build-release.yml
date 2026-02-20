@@ -2,6 +2,9 @@ name: Build macOS Binary
 
 on:
   workflow_dispatch:
+  release:
+    types:
+      - published
   push:
     branches:
       - main
@@ -35,6 +38,9 @@ jobs:
 
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             RELEASE_TAG="${GITHUB_REF_NAME}"
+            SHOULD_RELEASE="true"
+          elif [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
             SHOULD_RELEASE="true"
           elif [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
             VERSION="$(tr -d '[:space:]' < VERSION)"

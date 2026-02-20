@@ -2,6 +2,9 @@ name: Build Windows Binary
 
 on:
   workflow_dispatch:
+  release:
+    types:
+      - published
   push:
     branches:
       - main
@@ -39,6 +42,10 @@ jobs:
             $releaseTag = "${{ github.ref_name }}"
             $appVersion = $releaseTag.TrimStart('v')
             $shouldRelease = "true"
+          } elseif ("${{ github.event_name }}" -eq "release") {
+            $releaseTag = "${{ github.event.release.tag_name }}"
+            $appVersion = $releaseTag.TrimStart('v')
+            $shouldRelease = "true"
           } elseif ("${{ github.event_name }}" -eq "workflow_run") {
             $version = (Get-Content VERSION).Trim()
             if ($version) {
@@ -72,6 +79,11 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path dist/GrokVideoDesktopStudio/* -DestinationPath dist/GrokVideoDesktopStudio-windows-x64.zip
+
+      - name: Copy portable exe
+        shell: pwsh
+        run: |
+          Copy-Item -Path dist/GrokVideoDesktopStudio/GrokVideoDesktopStudio.exe -Destination dist/GrokVideoDesktopStudio-windows-x64.exe -Force
 
       - name: Install Inno Setup
         shell: pwsh
@@ -114,13 +126,93 @@ jobs:
 
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          choco install wixtoolset --no-progress -y
+
+      - name: Build MSI installer
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+        run: |
+          & "C:\Program Files (x86)\WiX Toolset v3.11\bin\heat.exe" dir dist\GrokVideoDesktopStudio -cg AppFiles -dr INSTALLFOLDER -gg -srd -sreg -sfrag -var var.SourceDir -out files.wxs
+
+          @"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*"
+                     Name="Grok Video Desktop Studio"
+                     Language="1033"
+                     Version="$env:APP_VERSION"
+                     Manufacturer="Grok Video Studio"
+                     UpgradeCode="D3D219B1-EA7E-43FA-9EFA-56F53CD5AB45">
+              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
+
+              <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+              <MediaTemplate EmbedCab="yes" />
+
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="GrokVideoDesktopStudio" />
+                </Directory>
+                <Directory Id="ProgramMenuFolder">
+                  <Directory Id="ApplicationProgramsFolder" Name="Grok Video Desktop Studio" />
+                </Directory>
+                <Directory Id="DesktopFolder" />
+              </Directory>
+
+              <DirectoryRef Id="INSTALLFOLDER">
+                <Component Id="MainExecutableShortcutComponent" Guid="A2A46E95-EB6F-47D6-AEC0-1F57B9A5A147" Win64="yes">
+                  <RegistryValue Root="HKLM" Key="Software\\GrokVideoStudio\\GrokVideoDesktopStudio" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </DirectoryRef>
+
+              <DirectoryRef Id="ApplicationProgramsFolder">
+                <Component Id="ProgramMenuShortcutComponent" Guid="4B8E689A-20A4-47A0-A178-887D63E9A679">
+                  <Shortcut Id="ApplicationStartMenuShortcut"
+                            Name="Grok Video Desktop Studio"
+                            Description="Grok Video Desktop Studio"
+                            Target="[INSTALLFOLDER]GrokVideoDesktopStudio.exe"
+                            WorkingDirectory="INSTALLFOLDER"/>
+                  <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
+                  <RegistryValue Root="HKCU" Key="Software\\GrokVideoStudio\\GrokVideoDesktopStudio" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </DirectoryRef>
+
+              <DirectoryRef Id="DesktopFolder">
+                <Component Id="DesktopShortcutComponent" Guid="654A9AC2-A8D1-4FF6-92FA-C2A164C380E0">
+                  <Shortcut Id="ApplicationDesktopShortcut"
+                            Name="Grok Video Desktop Studio"
+                            Description="Grok Video Desktop Studio"
+                            Target="[INSTALLFOLDER]GrokVideoDesktopStudio.exe"
+                            WorkingDirectory="INSTALLFOLDER" />
+                  <RegistryValue Root="HKCU" Key="Software\\GrokVideoStudio\\GrokVideoDesktopStudio" Name="desktop-shortcut" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </DirectoryRef>
+
+              <Feature Id="ProductFeature" Title="Grok Video Desktop Studio" Level="1">
+                <ComponentGroupRef Id="AppFiles" />
+                <ComponentRef Id="MainExecutableShortcutComponent" />
+                <ComponentRef Id="ProgramMenuShortcutComponent" />
+                <ComponentRef Id="DesktopShortcutComponent" />
+              </Feature>
+            </Product>
+          </Wix>
+          "@ | Out-File installer.wxs -Encoding UTF8
+
+          & "C:\Program Files (x86)\WiX Toolset v3.11\bin\candle.exe" -dSourceDir=dist\GrokVideoDesktopStudio installer.wxs files.wxs -arch x64 -out .\
+          & "C:\Program Files (x86)\WiX Toolset v3.11\bin\light.exe" installer.wixobj files.wixobj -out dist/GrokVideoDesktopStudio-setup-windows-x64.msi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: GrokVideoDesktopStudio-windows-x64
           path: |
             dist/GrokVideoDesktopStudio-windows-x64.zip
+            dist/GrokVideoDesktopStudio-windows-x64.exe
             dist/GrokVideoDesktopStudio-setup-windows-x64.exe
+            dist/GrokVideoDesktopStudio-setup-windows-x64.msi
 
       - name: Publish release asset
         if: steps.meta.outputs.should_release == 'true'
@@ -129,4 +221,6 @@ jobs:
           tag_name: ${{ steps.meta.outputs.release_tag }}
           files: |
             dist/GrokVideoDesktopStudio-windows-x64.zip
+            dist/GrokVideoDesktopStudio-windows-x64.exe
             dist/GrokVideoDesktopStudio-setup-windows-x64.exe
+            dist/GrokVideoDesktopStudio-setup-windows-x64.msi
