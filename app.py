@@ -1494,7 +1494,7 @@ class VideoOverlayWorker(QThread):
         font_name: str,
         font_size: int,
         text_position: str,
-        ai_callback: Callable[[str, str], str],
+        ai_callback: Callable[[Path, float], str],
         ai_source: str,
     ):
         super().__init__()
@@ -1591,17 +1591,8 @@ class VideoOverlayWorker(QThread):
         if self.overlay_mode == "manual":
             return self.manual_text
 
-        image_bytes = frame_path.read_bytes()
-        data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
-        system = "You describe video frames with concise subtitle-style captions."
-        user = (
-            "Analyze this frame image and return one short subtitle line (max 12 words, no hashtags, no quotes). "
-            f"Timestamp in source video: {timestamp_seconds:.2f}s. "
-            "If uncertain, provide a neutral literal scene description.\n\n"
-            f"Frame image (data URL): {data_url}"
-        )
         try:
-            response = self.ai_callback(system, user)
+            response = self.ai_callback(frame_path, timestamp_seconds)
         except Exception as exc:
             self.progress.emit(
                 f"AI caption request failed at {timestamp_seconds:.1f}s ({exc}); using fallback caption."
@@ -4546,6 +4537,87 @@ class MainWindow(QMainWindow):
         self.browser.setUrl(QUrl("https://grok.com/"))
         self._append_log("Opened Grok in browser for sign-in.")
 
+    def _describe_overlay_frame_with_selected_ai(self, frame_path: Path, timestamp_seconds: float) -> str:
+        source = self.prompt_source.currentData()
+        instruction = (
+            "Analyze this frame image and return one short subtitle line (max 12 words, no hashtags, no quotes). "
+            f"Timestamp in source video: {timestamp_seconds:.2f}s. "
+            "If uncertain, provide a neutral literal scene description."
+        )
+
+        if source == "openai":
+            openai_credential = self.openai_api_key.text().strip() or self.openai_access_token.text().strip()
+            if not openai_credential:
+                raise RuntimeError("OpenAI API key or access token is required.")
+
+            model = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
+            upload_headers = _openai_headers_from_credential(openai_credential)
+            upload_headers.pop("Content-Type", None)
+
+            file_id = ""
+            with frame_path.open("rb") as image_handle:
+                files_payload = {
+                    "file": (frame_path.name, image_handle, "image/png"),
+                }
+                upload_response = requests.post(
+                    f"{OPENAI_API_BASE}/files",
+                    headers=upload_headers,
+                    data={"purpose": "vision"},
+                    files=files_payload,
+                    timeout=120,
+                )
+            if not upload_response.ok:
+                raise RuntimeError(f"OpenAI file upload failed: {upload_response.status_code} {upload_response.text[:400]}")
+
+            file_id = str(upload_response.json().get("id") or "").strip()
+            if not file_id:
+                raise RuntimeError("OpenAI file upload did not return a file id.")
+
+            try:
+                response_headers = _openai_headers_from_credential(openai_credential)
+                payload = {
+                    "model": model,
+                    "instructions": "You describe video frames with concise subtitle-style captions.",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": instruction},
+                                {"type": "input_image", "file_id": file_id},
+                            ],
+                        }
+                    ],
+                    "store": False,
+                }
+                response = requests.post(
+                    f"{OPENAI_API_BASE}/responses",
+                    headers=response_headers,
+                    json=payload,
+                    timeout=120,
+                )
+                if not response.ok:
+                    raise RuntimeError(f"OpenAI vision request failed: {response.status_code} {response.text[:400]}")
+                text = _extract_text_from_responses_body(response.json())
+                if text:
+                    return text.strip()
+                raise RuntimeError("OpenAI vision response did not include text output.")
+            finally:
+                try:
+                    requests.delete(
+                        f"{OPENAI_API_BASE}/files/{file_id}",
+                        headers=_openai_headers_from_credential(openai_credential),
+                        timeout=30,
+                    )
+                except Exception:
+                    pass
+
+        image_bytes = frame_path.read_bytes()
+        data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        return self._call_selected_ai(
+            "You describe video frames with concise subtitle-style captions.",
+            f"{instruction}\n\nFrame image (data URL): {data_url}",
+        )
+
     def _call_selected_ai(self, system: str, user: str) -> str:
         source = self.prompt_source.currentData()
         headers = {"Content-Type": "application/json"}
@@ -6879,7 +6951,7 @@ class MainWindow(QMainWindow):
             font_name=str(options.get("font_name") or self.font().family()),
             font_size=int(options.get("font_size") or 22),
             text_position=str(options.get("text_position") or "bottom"),
-            ai_callback=self._call_selected_ai,
+            ai_callback=self._describe_overlay_frame_with_selected_ai,
             ai_source=str(self.prompt_source.currentData() or "grok"),
         )
         self.overlay_worker.progress.connect(self._append_log)
