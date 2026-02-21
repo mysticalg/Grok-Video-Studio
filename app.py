@@ -9003,9 +9003,9 @@ class MainWindow(QMainWindow):
 
             source_info = {
                 "source": "FILE_UPLOAD",
-                "video_size": video_size,
+
                 "chunk_size": chunk_size,
-                "total_chunk_count": total_chunk_count,
+                
             }
             payload = {
                 "source_info": source_info,
