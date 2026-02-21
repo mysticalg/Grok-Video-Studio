@@ -2,6 +2,7 @@ import os
 import json
 import re
 import base64
+import concurrent.futures
 import hashlib
 import secrets
 import shutil
@@ -1922,6 +1923,7 @@ class MainWindow(QMainWindow):
         self.upload_worker: UploadWorker | None = None
         self.social_upload_pending: dict[str, dict[str, Any]] = {}
         self._cdp_relay_temporarily_disabled = False
+        self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
         self.social_upload_status_labels: dict[str, QLabel] = {}
@@ -7176,6 +7178,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self.stop_all_jobs()
+        try:
+            self._cdp_relay_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
         workers: list[tuple[str, QThread | None]] = [
             ("generation", self.worker),
             ("stitch", self.stitch_worker),
@@ -9350,12 +9356,34 @@ class MainWindow(QMainWindow):
             "qtwebengine_remote_debugging": os.getenv("QTWEBENGINE_REMOTE_DEBUGGING", "").strip(),
         }
 
-        try:
-            response = requests.post(relay_url, json=payload, timeout=CDP_RELAY_TIMEOUT_SECONDS)
-            relay_data = response.json() if response.content else {}
-            if not response.ok:
-                raise RuntimeError(f"HTTP {response.status_code}: {str(relay_data)[:300]}")
-        except requests.exceptions.ReadTimeout as exc:
+        relay_future = pending.get("cdp_relay_future")
+        if isinstance(relay_future, concurrent.futures.Future):
+            if not relay_future.done():
+                status_label.setText("Status: waiting for CDP relay response...")
+                timer.start(250)
+                return True
+
+            pending.pop("cdp_relay_future", None)
+            try:
+                relay_result = relay_future.result()
+            except Exception as exc:
+                relay_result = {
+                    "kind": "error",
+                    "error": str(exc),
+                }
+        else:
+            pending["cdp_relay_future"] = self._cdp_relay_executor.submit(
+                self._request_cdp_relay_step,
+                relay_url,
+                payload,
+            )
+            status_label.setText("Status: CDP relay step running...")
+            timer.start(250)
+            return True
+
+        result_kind = str(relay_result.get("kind") or "error")
+        if result_kind == "timeout":
+            exc = relay_result.get("error", "timeout")
             status_label.setText("Status: CDP relay request timed out; retrying...")
             if not pending.get("cdp_relay_timeout_logged"):
                 self._append_log(
@@ -9364,7 +9392,8 @@ class MainWindow(QMainWindow):
                 pending["cdp_relay_timeout_logged"] = True
             timer.start(1500)
             return True
-        except Exception as exc:
+        if result_kind != "ok":
+            exc = relay_result.get("error", "unknown relay error")
             self._cdp_relay_temporarily_disabled = True
             status_label.setText("Status: CDP relay unavailable; retry paused for this session.")
             if not pending.get("cdp_relay_error_logged"):
@@ -9378,6 +9407,8 @@ class MainWindow(QMainWindow):
                 pending["cdp_relay_error_logged"] = True
             timer.start(1500)
             return True
+
+        relay_data = relay_result.get("relay_data")
 
         if not isinstance(relay_data, dict):
             relay_data = {}
@@ -9405,6 +9436,30 @@ class MainWindow(QMainWindow):
         retry_ms = int(relay_data.get("retry_ms", 1500) or 1500)
         timer.start(max(400, retry_ms))
         return True
+
+    def _request_cdp_relay_step(self, relay_url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = requests.post(relay_url, json=payload, timeout=CDP_RELAY_TIMEOUT_SECONDS)
+            relay_data = response.json() if response.content else {}
+            if not response.ok:
+                return {
+                    "kind": "http_error",
+                    "error": f"HTTP {response.status_code}: {str(relay_data)[:300]}",
+                }
+            return {
+                "kind": "ok",
+                "relay_data": relay_data,
+            }
+        except requests.exceptions.ReadTimeout as exc:
+            return {
+                "kind": "timeout",
+                "error": str(exc),
+            }
+        except Exception as exc:
+            return {
+                "kind": "error",
+                "error": str(exc),
+            }
 
     def _run_social_browser_upload_step(self, platform_name: str) -> None:
         pending = self.social_upload_pending.get(platform_name)
