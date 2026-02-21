@@ -80,6 +80,67 @@ See full Android packaging/signing/deployment steps in [`android/README.md`](and
 
 Set the Android app entry URL (for full feature-parity web deployment) with `APP_ENTRY_URL` in `android/app/build.gradle.kts`.
 
+
+## CDP relay architecture (QtWebEngine-safe automation)
+
+To build a more durable automation layer that avoids brittle UI click scripts, this app can run QtWebEngine as the visual shell and expose Chromium DevTools Protocol (CDP) as the control plane:
+
+- **Viewer:** embedded `QWebEngineView` tabs remain the UX surface for operators.
+- **Controller:** a CDP relay can connect to the embedded browser target and drive behavior through:
+  - DOM + Runtime introspection (state-aware actions)
+  - Network event hooks (`Network.requestWillBeSent`, `Network.responseReceived`)
+  - Request/response rewriting hooks where needed
+- **Result:** fewer selector-only assumptions, better recovery from layout shifts, and a path to reusable automations across OpenAI Creator/Sora, TikTok, and YouTube flows.
+
+### Enable QtWebEngine remote debugging
+
+Set an environment variable before launch:
+
+```bash
+export GROK_QTWEBENGINE_REMOTE_DEBUG_PORT=9222
+python app.py
+```
+
+The app will mirror this into `QTWEBENGINE_REMOTE_DEBUGGING` (unless already set), allowing an external CDP relay to attach to the embedded Chromium instance without changing the GUI workflow.
+
+You can also enable this in **Model/API Settings → App Preferences**:
+- Turn on **Enable QtWebEngine CDP remote debugging**
+- Set **CDP Debug Port**
+- Save settings and restart the app
+
+For existing browser automations (TikTok/YouTube/Facebook/Instagram), you can optionally route each upload step through a local CDP relay in **Model/API Settings → App Preferences**:
+- Enable **Use CDP relay for social browser automation**
+- Set **CDP Relay URL** (default: `http://127.0.0.1:8765/social-upload-step`)
+- CDP Relay Mode is now CDP-first/relay-only for social browser automation attempts. If relay is unavailable, the upload step stays in relay mode (no DOM fallback), and relay retries pause for the current session until you toggle relay mode off/on or restart.
+
+
+### Quickstart: run a local relay (no connection-refused errors)
+
+If you do not have a relay service yet, start the included stub relay:
+
+```bash
+python tools/cdp_social_relay.py --host 127.0.0.1 --port 8765
+```
+
+Then in the app:
+1. Open **Model/API Settings → App Preferences**
+2. Enable **Use CDP relay for social browser automation**
+3. Set **CDP Relay URL** to `http://127.0.0.1:8765/social-upload-step`
+4. Save settings
+
+What this relay does now:
+- Connects to QtWebEngine via CDP (`QTWEBENGINE_REMOTE_DEBUGGING` port).
+- Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (file-input staging, file-chooser trigger staging, caption/title/publish/share clicks).
+- Returns `handled: true` when CDP step execution succeeds, with progress + status details.
+- Relay console now prints per-step `relay result: handled=... done=... status=...` for quick diagnosis.
+- Relay also writes JSONL request/response logs to `logs/cdp-relay/` by default (override with `GROK_CDP_RELAY_LOG_DIR`).
+- Relay processes requests in a single server thread to avoid Playwright cross-thread context errors on Windows.
+- Returns `handled: false` when CDP attach fails; app remains in relay-only mode for that upload attempt and schedules retry/status updates.
+
+If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.
+If relay steps are slow on your machine, increase `GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS` (default `6`) before launching the relay.
+- On Windows, if a client drops the HTTP connection mid-response, the relay now treats it as non-fatal and continues serving subsequent requests.
+
 ## Configure credentials
 
 In **Model/API Settings** tab configure what you need:
