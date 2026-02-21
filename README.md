@@ -113,6 +113,27 @@ For existing browser automations (TikTok/YouTube/Facebook/Instagram), you can op
 - Set **CDP Relay URL** (default: `http://127.0.0.1:8765/social-upload-step`)
 - If the relay is unavailable, the app automatically falls back to built-in DOM automation and pauses relay attempts for the current session (toggle relay mode off/on or restart to retry).
 
+
+### Quickstart: run a local relay (no connection-refused errors)
+
+If you do not have a relay service yet, start the included stub relay:
+
+```bash
+python tools/cdp_social_relay.py --host 127.0.0.1 --port 8765
+```
+
+Then in the app:
+1. Open **Model/API Settings → App Preferences**
+2. Enable **Use CDP relay for social browser automation**
+3. Set **CDP Relay URL** to `http://127.0.0.1:8765/social-upload-step`
+4. Save settings
+
+What this stub does:
+- Confirms relay connectivity and logs each upload step payload.
+- Returns `handled: false` so the app intentionally falls back to built-in DOM automation.
+
+To make it fully CDP-driven, extend `tools/cdp_social_relay.py` to connect to your Chromium devtools target and return `handled: true` with step progress.
+
 ## Configure credentials
 
 In **Model/API Settings** tab configure what you need:
