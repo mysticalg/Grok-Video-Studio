@@ -238,6 +238,13 @@ def _openai_chat_target(credential: str) -> tuple[str, dict[str, str], bool]:
     return f"{OPENAI_API_BASE}/chat/completions", headers, False
 
 
+def _openai_is_likely_api_key(credential: str) -> bool:
+    value = credential.strip()
+    if not value:
+        return False
+    return value.startswith("sk-") or value.startswith("rk-")
+
+
 
 
 def _extract_text_from_responses_body(body: object) -> str:
@@ -4551,37 +4558,53 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("OpenAI API key or access token is required.")
 
             model = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
-            upload_headers = _openai_headers_from_credential(openai_credential)
-            upload_headers.pop("Content-Type", None)
+            image_bytes = frame_path.read_bytes()
+            data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
 
             file_id = ""
-            with frame_path.open("rb") as image_handle:
-                files_payload = {
-                    "file": (frame_path.name, image_handle, "image/png"),
-                }
-                upload_response = requests.post(
-                    f"{OPENAI_API_BASE}/files",
-                    headers=upload_headers,
-                    data={"purpose": "vision"},
-                    files=files_payload,
-                    timeout=120,
-                )
-            if not upload_response.ok:
-                raise RuntimeError(f"OpenAI file upload failed: {upload_response.status_code} {upload_response.text[:400]}")
+            use_uploaded_file = _openai_is_likely_api_key(openai_credential)
+            if use_uploaded_file:
+                upload_headers = _openai_headers_from_credential(openai_credential)
+                upload_headers.pop("Content-Type", None)
+                with frame_path.open("rb") as image_handle:
+                    files_payload = {
+                        "file": (frame_path.name, image_handle, "image/png"),
+                    }
+                    upload_response = requests.post(
+                        f"{OPENAI_API_BASE}/files",
+                        headers=upload_headers,
+                        data={"purpose": "vision"},
+                        files=files_payload,
+                        timeout=120,
+                    )
+                if not upload_response.ok:
+                    if upload_response.status_code == 401 and "must be made with a secret key" in upload_response.text:
+                        use_uploaded_file = False
+                    else:
+                        raise RuntimeError(
+                            f"OpenAI file upload failed: {upload_response.status_code} {upload_response.text[:400]}"
+                        )
 
-            try:
-                upload_payload = upload_response.json() if upload_response.content else {}
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"OpenAI file upload returned non-JSON response ({exc}): {upload_response.text[:300]}"
-                ) from exc
+                if use_uploaded_file:
+                    try:
+                        upload_payload = upload_response.json() if upload_response.content else {}
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError(
+                            f"OpenAI file upload returned non-JSON response ({exc}): {upload_response.text[:300]}"
+                        ) from exc
 
-            file_id = str((upload_payload or {}).get("id") or "").strip()
-            if not file_id:
-                raise RuntimeError("OpenAI file upload did not return a file id.")
+                    file_id = str((upload_payload or {}).get("id") or "").strip()
+                    if not file_id:
+                        raise RuntimeError("OpenAI file upload did not return a file id.")
 
             try:
                 response_headers = _openai_headers_from_credential(openai_credential)
+                image_part: dict[str, str]
+                if use_uploaded_file and file_id:
+                    image_part = {"type": "input_image", "file_id": file_id}
+                else:
+                    image_part = {"type": "input_image", "image_url": data_url}
+
                 payload = {
                     "model": model,
                     "instructions": "You describe video frames with concise subtitle-style captions.",
@@ -4590,7 +4613,7 @@ class MainWindow(QMainWindow):
                             "role": "user",
                             "content": [
                                 {"type": "input_text", "text": instruction},
-                                {"type": "input_image", "file_id": file_id},
+                                image_part,
                             ],
                         }
                     ],
@@ -4622,14 +4645,15 @@ class MainWindow(QMainWindow):
 
                 raise RuntimeError("OpenAI vision response did not include text output.")
             finally:
-                try:
-                    requests.delete(
-                        f"{OPENAI_API_BASE}/files/{file_id}",
-                        headers=_openai_headers_from_credential(openai_credential),
-                        timeout=30,
-                    )
-                except Exception:
-                    pass
+                if file_id:
+                    try:
+                        requests.delete(
+                            f"{OPENAI_API_BASE}/files/{file_id}",
+                            headers=_openai_headers_from_credential(openai_credential),
+                            timeout=30,
+                        )
+                    except Exception:
+                        pass
 
         image_bytes = frame_path.read_bytes()
         data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
