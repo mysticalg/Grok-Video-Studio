@@ -6030,9 +6030,9 @@ class MainWindow(QMainWindow):
                     };
 
                     const settingsCandidates = [
-                        ...document.querySelectorAll("button[aria-label='Settings']"),
-                        ...document.querySelectorAll("button[aria-haspopup='menu'][aria-label='Settings']"),
-                        ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings']")
+                        ...document.querySelectorAll("button[aria-label='Settings'][id='radix-:rg:']"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu'][aria-label='Settings'][id='radix-:rg:']"),
+                        ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings'][id='radix-:rg:']")
                     ].filter((el, index, arr) => arr.indexOf(el) === index);
                     const settingsButton = settingsCandidates.find((el) => isVisible(el) && !el.disabled) || null;
 
@@ -6353,7 +6353,7 @@ class MainWindow(QMainWindow):
                     };
 
                     let closed = false;
-                    const settingsButton = [...document.querySelectorAll("button[aria-label='Settings']")]
+                    const settingsButton = [...document.querySelectorAll("button[aria-label='Settings']")[1]]
                         .find((el) => isVisible(el) && !el.disabled);
                     if (settingsButton) closed = emulateClick(settingsButton);
 
