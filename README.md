@@ -80,6 +80,39 @@ See full Android packaging/signing/deployment steps in [`android/README.md`](and
 
 Set the Android app entry URL (for full feature-parity web deployment) with `APP_ENTRY_URL` in `android/app/build.gradle.kts`.
 
+
+## CDP relay architecture (QtWebEngine-safe automation)
+
+To build a more durable automation layer that avoids brittle UI click scripts, this app can run QtWebEngine as the visual shell and expose Chromium DevTools Protocol (CDP) as the control plane:
+
+- **Viewer:** embedded `QWebEngineView` tabs remain the UX surface for operators.
+- **Controller:** a CDP relay can connect to the embedded browser target and drive behavior through:
+  - DOM + Runtime introspection (state-aware actions)
+  - Network event hooks (`Network.requestWillBeSent`, `Network.responseReceived`)
+  - Request/response rewriting hooks where needed
+- **Result:** fewer selector-only assumptions, better recovery from layout shifts, and a path to reusable automations across OpenAI Creator/Sora, TikTok, and YouTube flows.
+
+### Enable QtWebEngine remote debugging
+
+Set an environment variable before launch:
+
+```bash
+export GROK_QTWEBENGINE_REMOTE_DEBUG_PORT=9222
+python app.py
+```
+
+The app will mirror this into `QTWEBENGINE_REMOTE_DEBUGGING` (unless already set), allowing an external CDP relay to attach to the embedded Chromium instance without changing the GUI workflow.
+
+You can also enable this in **Model/API Settings → App Preferences**:
+- Turn on **Enable QtWebEngine CDP remote debugging**
+- Set **CDP Debug Port**
+- Save settings and restart the app
+
+For existing browser automations (TikTok/YouTube/Facebook/Instagram), you can optionally route each upload step through a local CDP relay in **Model/API Settings → App Preferences**:
+- Enable **Use CDP relay for social browser automation**
+- Set **CDP Relay URL** (default: `http://127.0.0.1:8765/social-upload-step`)
+- If the relay is unavailable, the app automatically falls back to built-in DOM automation.
+
 ## Configure credentials
 
 In **Model/API Settings** tab configure what you need:

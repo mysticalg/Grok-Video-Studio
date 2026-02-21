@@ -100,6 +100,8 @@ TIKTOK_PKCE_CHALLENGE_ENCODING = os.getenv("TIKTOK_PKCE_CHALLENGE_ENCODING", "he
 if TIKTOK_PKCE_CHALLENGE_ENCODING not in {"hex", "base64url"}:
     TIKTOK_PKCE_CHALLENGE_ENCODING = "hex"
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
+CDP_RELAY_SOCIAL_UPLOAD_URL = os.getenv("GROK_CDP_RELAY_SOCIAL_UPLOAD_URL", "http://127.0.0.1:8765/social-upload-step")
+CDP_RELAY_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_TIMEOUT_SECONDS", "8")))
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
 GITHUB_ACTIONS_RUNS_URL = f"{GITHUB_REPO_URL}/actions"
@@ -386,6 +388,29 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _get_qtwebengine_remote_debug_port_from_preferences(default: int = 0) -> int:
+    if not DEFAULT_PREFERENCES_FILE.exists():
+        return default
+
+    try:
+        with open(DEFAULT_PREFERENCES_FILE, "r", encoding="utf-8") as handle:
+            preferences = json.load(handle)
+    except Exception:
+        return default
+
+    if not isinstance(preferences, dict):
+        return default
+
+    enabled = preferences.get("qtwebengine_remote_debug_enabled", False)
+    if not enabled:
+        return default
+
+    try:
+        port = int(preferences.get("qtwebengine_remote_debug_port", default) or 0)
+    except (TypeError, ValueError):
+        return default
+
+    return port if port > 0 else default
 
 
 def _path_supports_rw(path: Path) -> bool:
@@ -598,6 +623,12 @@ def _configure_qtwebengine_runtime() -> None:
 
     existing_flags = os.getenv("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(default_flags + ([existing_flags] if existing_flags else []))
+
+    remote_debug_port = _env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 0)
+    if remote_debug_port <= 0:
+        remote_debug_port = _get_qtwebengine_remote_debug_port_from_preferences(default=0)
+    if remote_debug_port > 0 and not os.getenv("QTWEBENGINE_REMOTE_DEBUGGING"):
+        os.environ["QTWEBENGINE_REMOTE_DEBUGGING"] = str(remote_debug_port)
 
 
 @dataclass
@@ -3206,6 +3237,29 @@ class MainWindow(QMainWindow):
         self.manual_prompt_default_input.setPlainText(DEFAULT_MANUAL_PROMPT_TEXT)
         app_layout.addRow("Default Manual Prompt", self.manual_prompt_default_input)
 
+        self.qtwebengine_remote_debug_enabled = QCheckBox("Enable QtWebEngine CDP remote debugging")
+        self.qtwebengine_remote_debug_enabled.setChecked(_env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 0) > 0)
+        app_layout.addRow("CDP Remote Debugging", self.qtwebengine_remote_debug_enabled)
+
+        self.qtwebengine_remote_debug_port = QSpinBox()
+        self.qtwebengine_remote_debug_port.setRange(1, 65535)
+        self.qtwebengine_remote_debug_port.setValue(max(1, _env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 9222)))
+        self.qtwebengine_remote_debug_port.setToolTip("Port used for QTWEBENGINE_REMOTE_DEBUGGING when enabled.")
+        app_layout.addRow("CDP Debug Port", self.qtwebengine_remote_debug_port)
+
+        remote_debug_note = QLabel("Applies on next app launch. Save settings, then restart the app.")
+        remote_debug_note.setWordWrap(True)
+        app_layout.addRow("CDP Note", remote_debug_note)
+
+        self.cdp_social_upload_relay_enabled = QCheckBox("Use CDP relay for social browser automation")
+        self.cdp_social_upload_relay_enabled.setChecked(False)
+        app_layout.addRow("CDP Relay Mode", self.cdp_social_upload_relay_enabled)
+
+        self.cdp_social_upload_relay_url = QLineEdit(CDP_RELAY_SOCIAL_UPLOAD_URL)
+        self.cdp_social_upload_relay_url.setPlaceholderText("http://127.0.0.1:8765/social-upload-step")
+        self.cdp_social_upload_relay_url.setToolTip("Optional HTTP relay endpoint that performs CDP-backed social upload actions.")
+        app_layout.addRow("CDP Relay URL", self.cdp_social_upload_relay_url)
+
         settings_layout.addWidget(ai_group)
         settings_layout.addWidget(youtube_group)
         settings_layout.addWidget(facebook_group)
@@ -3588,6 +3642,10 @@ class MainWindow(QMainWindow):
             "concept": self.concept.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
+            "qtwebengine_remote_debug_enabled": self.qtwebengine_remote_debug_enabled.isChecked(),
+            "qtwebengine_remote_debug_port": int(self.qtwebengine_remote_debug_port.value()),
+            "cdp_social_upload_relay_enabled": self.cdp_social_upload_relay_enabled.isChecked(),
+            "cdp_social_upload_relay_url": self.cdp_social_upload_relay_url.text().strip(),
             "count": self.count.value(),
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
@@ -3714,6 +3772,19 @@ class MainWindow(QMainWindow):
             self.manual_prompt_default_input.setPlainText(default_prompt)
             if "manual_prompt" not in preferences:
                 self.manual_prompt.setPlainText(default_prompt)
+        if "qtwebengine_remote_debug_enabled" in preferences:
+            self.qtwebengine_remote_debug_enabled.setChecked(bool(preferences["qtwebengine_remote_debug_enabled"]))
+        if "qtwebengine_remote_debug_port" in preferences:
+            try:
+                port_value = int(preferences["qtwebengine_remote_debug_port"])
+                if port_value > 0:
+                    self.qtwebengine_remote_debug_port.setValue(port_value)
+            except (TypeError, ValueError):
+                pass
+        if "cdp_social_upload_relay_enabled" in preferences:
+            self.cdp_social_upload_relay_enabled.setChecked(bool(preferences["cdp_social_upload_relay_enabled"]))
+        if "cdp_social_upload_relay_url" in preferences:
+            self.cdp_social_upload_relay_url.setText(str(preferences["cdp_social_upload_relay_url"]))
         if "ai_social_metadata" in preferences and isinstance(preferences["ai_social_metadata"], dict):
             metadata = preferences["ai_social_metadata"]
             hashtags = metadata.get("hashtags", self.ai_social_metadata.hashtags)
@@ -3927,7 +3998,16 @@ class MainWindow(QMainWindow):
 
     def save_model_api_settings(self) -> None:
         if self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=True):
-            QMessageBox.information(self, "Settings Saved", f"Settings saved to:\n{DEFAULT_PREFERENCES_FILE}")
+            if self.qtwebengine_remote_debug_enabled.isChecked():
+                os.environ["GROK_QTWEBENGINE_REMOTE_DEBUG_PORT"] = str(self.qtwebengine_remote_debug_port.value())
+            else:
+                os.environ.pop("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", None)
+            QMessageBox.information(
+                self,
+                "Settings Saved",
+                f"Settings saved to:\n{DEFAULT_PREFERENCES_FILE}\n\n"
+                "QtWebEngine remote debugging changes apply after restarting the app.",
+            )
 
     def _load_startup_preferences(self) -> None:
         self._load_preferences_from_path(DEFAULT_PREFERENCES_FILE, show_feedback=False)
@@ -9116,6 +9196,71 @@ class MainWindow(QMainWindow):
         self.browser_tabs.setCurrentIndex(tab_index)
         self._run_social_browser_upload_step(platform_name)
 
+    def _try_social_upload_step_via_cdp_relay(
+        self,
+        platform_name: str,
+        pending: dict,
+        browser: QWebEngineView,
+        attempts: int,
+        status_label: QLabel,
+        progress_bar: QProgressBar,
+        timer: QTimer,
+    ) -> bool:
+        if not self.cdp_social_upload_relay_enabled.isChecked():
+            return False
+
+        relay_url = self.cdp_social_upload_relay_url.text().strip()
+        if not relay_url:
+            return False
+
+        payload = {
+            "platform": platform_name.lower(),
+            "attempt": attempts,
+            "current_url": browser.url().toString().strip(),
+            "video_path": str(pending.get("video_path") or ""),
+            "caption": str(pending.get("caption") or ""),
+            "title": str(pending.get("title") or ""),
+            "youtube_options": pending.get("youtube_options") or {},
+            "qtwebengine_remote_debugging": os.getenv("QTWEBENGINE_REMOTE_DEBUGGING", "").strip(),
+        }
+
+        try:
+            response = requests.post(relay_url, json=payload, timeout=CDP_RELAY_TIMEOUT_SECONDS)
+            relay_data = response.json() if response.content else {}
+            if not response.ok:
+                raise RuntimeError(f"HTTP {response.status_code}: {str(relay_data)[:300]}")
+        except Exception as exc:
+            if not pending.get("cdp_relay_error_logged"):
+                self._append_log(
+                    f"WARNING: {platform_name} CDP relay call failed ({exc}); falling back to in-app DOM automation."
+                )
+                pending["cdp_relay_error_logged"] = True
+            return False
+
+        if not isinstance(relay_data, dict):
+            relay_data = {}
+
+        handled = bool(relay_data.get("handled", True))
+        if not handled:
+            return False
+
+        progress = int(relay_data.get("progress", min(95, 20 + attempts * 6)) or 0)
+        progress_bar.setVisible(True)
+        progress_bar.setValue(max(0, min(100, progress)))
+        status_label.setText(str(relay_data.get("status") or f"Status: CDP relay step {attempts}."))
+
+        relay_log = str(relay_data.get("log") or "").strip()
+        if relay_log:
+            self._append_log(f"{platform_name} CDP relay: {relay_log}")
+
+        if bool(relay_data.get("done")):
+            self.social_upload_pending.pop(platform_name, None)
+            return True
+
+        retry_ms = int(relay_data.get("retry_ms", 1500) or 1500)
+        timer.start(max(400, retry_ms))
+        return True
+
     def _run_social_browser_upload_step(self, platform_name: str) -> None:
         pending = self.social_upload_pending.get(platform_name)
         browser = self.social_upload_browsers.get(platform_name)
@@ -9147,6 +9292,9 @@ class MainWindow(QMainWindow):
             self.social_upload_pending.pop(platform_name, None)
             return
             
+
+        if self._try_social_upload_step_via_cdp_relay(platform_name, pending, browser, attempts, status_label, progress_bar, timer):
+            return
 
         payload_json = json.dumps(
             {
