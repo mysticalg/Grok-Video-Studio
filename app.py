@@ -9386,29 +9386,24 @@ class MainWindow(QMainWindow):
         result_kind = str(relay_result.get("kind") or "error")
         if result_kind == "timeout":
             exc = relay_result.get("error", "timeout")
-            status_label.setText("Status: CDP relay request timed out; retrying...")
+            status_label.setText("Status: CDP relay timed out; falling back to built-in DOM automation.")
             if not pending.get("cdp_relay_timeout_logged"):
                 self._append_log(
-                    f"WARNING: {platform_name} CDP relay request timed out ({exc}); keeping relay mode active and retrying."
+                    f"WARNING: {platform_name} CDP relay request timed out ({exc}); continuing with built-in DOM upload automation."
                 )
                 pending["cdp_relay_timeout_logged"] = True
-            timer.start(1500)
-            return True
+            return False
         if result_kind != "ok":
             exc = relay_result.get("error", "unknown relay error")
             self._cdp_relay_temporarily_disabled = True
-            status_label.setText("Status: CDP relay unavailable; retry paused for this session.")
+            pending["allow_file_dialog"] = True
+            status_label.setText("Status: CDP relay unavailable; falling back to built-in DOM automation.")
             if not pending.get("cdp_relay_error_logged"):
                 self._append_log(
-                    f"WARNING: {platform_name} CDP relay unavailable ({exc}); CDP relay mode is active, so DOM fallback is disabled "
-                    "for this upload and relay attempts are paused for this session."
-                )
-                self._append_log(
-                    "TIP: Start your CDP relay service and toggle CDP Relay Mode off/on (or restart app) to retry relay mode."
+                    f"WARNING: {platform_name} CDP relay unavailable ({exc}); continuing with built-in DOM upload automation."
                 )
                 pending["cdp_relay_error_logged"] = True
-            timer.start(1500)
-            return True
+            return False
 
         relay_data = relay_result.get("relay_data")
 
@@ -9422,6 +9417,7 @@ class MainWindow(QMainWindow):
 
             if "cdp unavailable" in relay_status.lower() or "browser.setdownloadbehavior" in relay_status.lower():
                 self._cdp_relay_temporarily_disabled = True
+                pending["allow_file_dialog"] = True
                 if not pending.get("cdp_relay_fallback_logged"):
                     self._append_log(
                         f"WARNING: {platform_name} CDP relay reported unsupported target ({relay_status or 'unavailable'}); "
@@ -10490,7 +10486,10 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
-            pending["allow_file_dialog"] = False
+            if file_ready_signal or file_dialog_triggered:
+                pending["allow_file_dialog"] = False
+            else:
+                pending["allow_file_dialog"] = bool(video_path_exists)
 
             is_tiktok = platform_name == "TikTok"
             is_youtube = platform_name == "YouTube"
