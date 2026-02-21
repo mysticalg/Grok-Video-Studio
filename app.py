@@ -50,12 +50,14 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTabWidget,
     QStatusBar,
+    QStyle,
     QScrollArea,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
     QMenu,
+    QToolBar,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -1743,54 +1745,42 @@ class MainWindow(QMainWindow):
         actions_group = QGroupBox("🚀 Actions")
         actions_layout = QGridLayout(actions_group)
 
-        self.populate_video_btn = QPushButton("📝 Populate Video Prompt")
-        self.populate_video_btn.setToolTip("Populate the browser prompt box and generate manually in the current Grok tab.")
-        self.populate_video_btn.setStyleSheet(
-            "background-color: #1e88e5; color: white; font-weight: 700;"
-            "border: 1px solid #1565c0; border-radius: 6px; padding: 8px;"
-        )
-        self.populate_video_btn.clicked.connect(self.populate_video_prompt)
-
-        self.generate_image_btn = QPushButton("🖼️ Populate Image Prompt")
+        self.generate_image_btn = QPushButton("🎬 Create New Video")
         self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
-        self.generate_image_btn.setStyleSheet(
-            "background-color: #43a047; color: white; font-weight: 700;"
-            "border: 1px solid #2e7d32; border-radius: 6px; padding: 8px;"
+        self.generate_image_btn.setCheckable(True)
+        self.generate_image_btn.setStyleSheet(self._action_button_style("#43a047", "white", "#2e7d32", "#2e7d32", "#1b5e20"))
+        self.generate_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.generate_image_btn, self.start_image_generation)
         )
-        self.generate_image_btn.clicked.connect(self.start_image_generation)
 
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
-        self.stop_all_btn.setStyleSheet(
-            "background-color: #8b0000; color: white; font-weight: 700;"
-            "border: 1px solid #5c0000; border-radius: 6px; padding: 8px;"
-        )
-        self.stop_all_btn.clicked.connect(self.stop_all_jobs)
+        self.stop_all_btn.setCheckable(True)
+        self.stop_all_btn.setStyleSheet(self._action_button_style("#8b0000", "white", "#5c0000", "#5c0000", "#2f0000"))
+        self.stop_all_btn.clicked.connect(lambda: self._run_with_button_feedback(self.stop_all_btn, self.stop_all_jobs))
         actions_layout.addWidget(self.stop_all_btn, 1, 0)
 
-        self.continue_frame_btn = QPushButton("🟨 Continue from Last Frame (paste + generate)")
+        self.continue_frame_btn = QPushButton("🟨 Continue Last Video")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
-        self.continue_frame_btn.setStyleSheet(
-            "background-color: #fdd835; color: #222; font-weight: 700;"
-            "border: 1px solid #f9a825; border-radius: 6px; padding: 8px;"
+        self.continue_frame_btn.setCheckable(True)
+        self.continue_frame_btn.setStyleSheet(self._action_button_style("#fdd835", "#222", "#f9a825", "#fbc02d", "#f57f17"))
+        self.continue_frame_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.continue_frame_btn, self.continue_from_last_frame)
         )
-        self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
 
-        self.continue_image_btn = QPushButton("🖼️ Continue from Local Image (paste + generate)")
+        self.continue_image_btn = QPushButton("🖼️ Create From Image")
         self.continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
-        self.continue_image_btn.setStyleSheet(
-            "background-color: #fff176; color: #222; font-weight: 700;"
-            "border: 1px solid #fbc02d; border-radius: 6px; padding: 8px;"
+        self.continue_image_btn.setCheckable(True)
+        self.continue_image_btn.setStyleSheet(self._action_button_style("#fff176", "#222", "#fbc02d", "#ffe082", "#ff8f00"))
+        self.continue_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.continue_image_btn, self.continue_from_local_image)
         )
-        self.continue_image_btn.clicked.connect(self.continue_from_local_image)
 
         self.browser_home_btn = QPushButton("🏠 Homepage")
         self.browser_home_btn.setToolTip("Open grok.com/imagine in the embedded browser tab.")
-        self.browser_home_btn.setStyleSheet(
-            "background-color: #ffffff; color: #222; font-weight: 700;"
-            "border: 1px solid #cfcfcf; border-radius: 6px; padding: 8px;"
-        )
-        self.browser_home_btn.clicked.connect(self.show_browser_page)
+        self.browser_home_btn.setCheckable(True)
+        self.browser_home_btn.setStyleSheet(self._action_button_style("#ffffff", "#222", "#cfcfcf", "#eceff1", "#90a4ae"))
+        self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
@@ -2057,28 +2047,19 @@ class MainWindow(QMainWindow):
         self.grok_browser_tab = QWidget()
         grok_browser_layout = QVBoxLayout(self.grok_browser_tab)
         grok_browser_controls = QGridLayout()
-        grok_browser_controls.addWidget(self.populate_video_btn, 0, 0)
-        grok_browser_controls.addWidget(self.generate_image_btn, 0, 1)
-        grok_browser_controls.addWidget(self.continue_frame_btn, 1, 0)
-        grok_browser_controls.addWidget(self.continue_image_btn, 1, 1)
-        grok_browser_controls.addWidget(self.browser_home_btn, 2, 0, 1, 2)
+        grok_browser_controls.addWidget(self.generate_image_btn, 0, 0)
+        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
+        grok_browser_controls.addWidget(self.continue_image_btn, 1, 0)
+        grok_browser_controls.addWidget(self.browser_home_btn, 1, 1)
 
-        grok_video_options = QHBoxLayout()
-        grok_video_options.addWidget(QLabel("Resolution"))
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
         self.video_resolution.addItem("720p (1280x720)", "1280x720")
         self.video_resolution.setCurrentIndex(1)
-        grok_video_options.addWidget(self.video_resolution)
-
-        grok_video_options.addWidget(QLabel("Duration"))
         self.video_duration = QComboBox()
         self.video_duration.addItem("6s", 6)
         self.video_duration.addItem("10s", 10)
         self.video_duration.setCurrentIndex(1)
-        grok_video_options.addWidget(self.video_duration)
-
-        grok_video_options.addWidget(QLabel("Aspect"))
         self.video_aspect_ratio = QComboBox()
         self.video_aspect_ratio.addItem("2:3", "2:3")
         self.video_aspect_ratio.addItem("3:2", "3:2")
@@ -2086,11 +2067,7 @@ class MainWindow(QMainWindow):
         self.video_aspect_ratio.addItem("9:16", "9:16")
         self.video_aspect_ratio.addItem("16:9", "16:9")
         self.video_aspect_ratio.setCurrentIndex(4)
-        grok_video_options.addWidget(self.video_aspect_ratio)
-        grok_video_options.addStretch(1)
-
         grok_browser_layout.addLayout(grok_browser_controls)
-        grok_browser_layout.addLayout(grok_video_options)
         grok_browser_layout.addWidget(self.browser)
 
         self.browser_tabs = QTabWidget()
@@ -2913,6 +2890,7 @@ class MainWindow(QMainWindow):
 
         video_menu = menu_bar.addMenu("Video")
         self.video_settings_menu = video_menu.addMenu("Settings")
+        self.video_grok_settings_menu = video_menu.addMenu("Grok Settings")
 
         audio_menu = menu_bar.addMenu("Audio")
         self.audio_settings_menu = audio_menu.addMenu("Settings")
@@ -2936,6 +2914,51 @@ class MainWindow(QMainWindow):
         actions_action.triggered.connect(self.open_github_actions_runs_page)
         help_menu.addAction(actions_action)
 
+        self.quick_actions_toolbar = QToolBar("Quick Actions", self)
+        self.quick_actions_toolbar.setMovable(False)
+        self.quick_actions_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.quick_actions_toolbar)
+
+        stop_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop), "Stop All Jobs", self)
+        stop_action.setToolTip("Stop all active generation jobs.")
+        stop_action.triggered.connect(self.stop_all_jobs)
+        self.quick_actions_toolbar.addAction(stop_action)
+
+        create_video_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "Create New Video", self)
+        create_video_action.setToolTip("Create a new video from the current prompt in Grok.")
+        create_video_action.triggered.connect(self.start_image_generation)
+        self.quick_actions_toolbar.addAction(create_video_action)
+
+        continue_last_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward), "Continue Last Video", self)
+        continue_last_action.setToolTip("Continue from the last generated video's final frame.")
+        continue_last_action.triggered.connect(self.continue_from_last_frame)
+        self.quick_actions_toolbar.addAction(continue_last_action)
+
+        continue_image_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton), "Create From Image", self)
+        continue_image_action.setToolTip("Choose a local image and generate a new continuation video.")
+        continue_image_action.triggered.connect(self.continue_from_local_image)
+        self.quick_actions_toolbar.addAction(continue_image_action)
+
+        self.quick_actions_toolbar.addSeparator()
+        homepage_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon), "Open Grok Homepage", self)
+        homepage_action.setToolTip("Open grok.com/imagine in the embedded browser.")
+        homepage_action.triggered.connect(self.show_browser_page)
+        self.quick_actions_toolbar.addAction(homepage_action)
+
+    def _action_button_style(self, bg: str, fg: str, border: str, pressed_bg: str, checked_border: str) -> str:
+        return (
+            f"QPushButton {{background-color: {bg}; color: {fg}; font-weight: 700;"
+            f"border: 1px solid {border}; border-radius: 6px; padding: 8px;}}"
+            f"QPushButton:pressed {{background-color: {pressed_bg}; padding-top: 9px; padding-left: 9px;}}"
+            f"QPushButton:checked {{border: 2px solid {checked_border}; background-color: {pressed_bg};}}"
+        )
+
+    def _run_with_button_feedback(self, button: QPushButton, callback: Callable[[], None]) -> None:
+        if button is not None and button.isCheckable():
+            button.setChecked(True)
+            QTimer.singleShot(220, lambda: button.setChecked(False))
+        callback()
+
     def _add_widget_to_menu(self, menu: QMenu, widget: QWidget) -> None:
         action = QWidgetAction(menu)
         action.setDefaultWidget(widget)
@@ -2943,6 +2966,7 @@ class MainWindow(QMainWindow):
 
     def _populate_top_settings_menus(self) -> None:
         self.video_settings_menu.clear()
+        self.video_grok_settings_menu.clear()
         self.audio_settings_menu.clear()
         self.automation_menu.clear()
 
@@ -2956,6 +2980,27 @@ class MainWindow(QMainWindow):
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_upscale_target)
         self.video_settings_menu.addSeparator()
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_gpu_checkbox)
+
+        grok_resolution_widget = QWidget(self)
+        grok_resolution_layout = QHBoxLayout(grok_resolution_widget)
+        grok_resolution_layout.setContentsMargins(8, 4, 8, 4)
+        grok_resolution_layout.addWidget(QLabel("Resolution"))
+        grok_resolution_layout.addWidget(self.video_resolution)
+        self._add_widget_to_menu(self.video_grok_settings_menu, grok_resolution_widget)
+
+        grok_duration_widget = QWidget(self)
+        grok_duration_layout = QHBoxLayout(grok_duration_widget)
+        grok_duration_layout.setContentsMargins(8, 4, 8, 4)
+        grok_duration_layout.addWidget(QLabel("Duration"))
+        grok_duration_layout.addWidget(self.video_duration)
+        self._add_widget_to_menu(self.video_grok_settings_menu, grok_duration_widget)
+
+        grok_aspect_widget = QWidget(self)
+        grok_aspect_layout = QHBoxLayout(grok_aspect_widget)
+        grok_aspect_layout.setContentsMargins(8, 4, 8, 4)
+        grok_aspect_layout.addWidget(QLabel("Aspect"))
+        grok_aspect_layout.addWidget(self.video_aspect_ratio)
+        self._add_widget_to_menu(self.video_grok_settings_menu, grok_aspect_widget)
 
         self._add_widget_to_menu(self.audio_settings_menu, self.stitch_mute_original_checkbox)
         self.audio_settings_menu.addSeparator()
@@ -6563,9 +6608,8 @@ class MainWindow(QMainWindow):
         self.chat_model.setEnabled(uses_grok)
         self.sora_generate_btn.setText("🎬 API Generate Video")
         self.seedance_generate_btn.setText("🎬 API Generate Video")
-        self.generate_image_btn.setText("🖼️ Populate Image Prompt")
+        self.generate_image_btn.setText("🎬 Create New Video")
         self.generate_image_btn.setEnabled(True)
-        self.populate_video_btn.setEnabled(True)
 
     def _resolve_download_extension(self, download, download_type: str) -> str:
         suggested = ""
