@@ -11,9 +11,13 @@ import argparse
 import json
 import os
 import socket
+import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+
+RELAY_CDP_STEP_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS", "6")))
 
 
 def _parse_debug_port(payload: dict[str, Any]) -> int:
@@ -326,6 +330,44 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _handle_with_cdp_bounded(payload: dict[str, Any]) -> dict[str, Any]:
+    result_holder: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            result_holder["value"] = _handle_with_cdp(payload)
+        except Exception as exc:  # noqa: BLE001
+            result_holder["value"] = {
+                "handled": False,
+                "done": False,
+                "status": "CDP relay worker failed.",
+                "retry_ms": 1200,
+                "log": str(exc),
+            }
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join(timeout=RELAY_CDP_STEP_TIMEOUT_SECONDS)
+
+    if thread.is_alive():
+        return {
+            "handled": False,
+            "done": False,
+            "status": (
+                "CDP relay step exceeded timeout "
+                f"({RELAY_CDP_STEP_TIMEOUT_SECONDS:.1f}s); retrying next step."
+            ),
+            "retry_ms": 1200,
+            "log": "cdp-step-timeout",
+        }
+
+    value = result_holder.get("value")
+    if isinstance(value, dict):
+        return value
+    return {"handled": False, "done": False, "status": "CDP relay returned no result.", "retry_ms": 1200}
+
+
+
 class RelayHandler(BaseHTTPRequestHandler):
     server_version = "GrokCDPRelay/0.2"
 
@@ -368,7 +410,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             f"debug_port={debug_port} url={current_url}"
         )
 
-        response = _handle_with_cdp(payload)
+        response = _handle_with_cdp_bounded(payload)
         self._send_json(200, response)
 
 

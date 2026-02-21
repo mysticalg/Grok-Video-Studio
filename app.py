@@ -9243,6 +9243,15 @@ class MainWindow(QMainWindow):
             relay_data = response.json() if response.content else {}
             if not response.ok:
                 raise RuntimeError(f"HTTP {response.status_code}: {str(relay_data)[:300]}")
+        except requests.exceptions.ReadTimeout as exc:
+            status_label.setText("Status: CDP relay request timed out; retrying...")
+            if not pending.get("cdp_relay_timeout_logged"):
+                self._append_log(
+                    f"WARNING: {platform_name} CDP relay request timed out ({exc}); keeping relay mode active and retrying."
+                )
+                pending["cdp_relay_timeout_logged"] = True
+            timer.start(1500)
+            return True
         except Exception as exc:
             self._cdp_relay_temporarily_disabled = True
             status_label.setText("Status: CDP relay unavailable; retry paused for this session.")

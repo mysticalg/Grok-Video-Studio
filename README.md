@@ -135,6 +135,7 @@ What this relay does now:
 - Returns `handled: false` when CDP attach fails; app remains in relay-only mode for that upload attempt and schedules retry/status updates.
 
 If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.
+If relay steps are slow on your machine, increase `GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS` (default `6`) before launching the relay.
 - On Windows, if a client drops the HTTP connection mid-response, the relay now treats it as non-fatal and continues serving subsequent requests.
 
 ## Configure credentials
