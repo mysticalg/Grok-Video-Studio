@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlencode, urlparse
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QEventLoop, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtTest import QTest
 
 from social_uploaders import upload_video_to_facebook_page, upload_video_to_instagram_reels, upload_video_to_tiktok
 from youtube_uploader import upload_video_to_youtube
@@ -2143,6 +2144,50 @@ class MainWindow(QMainWindow):
         status_name = getattr(status, "name", str(status))
         message = f"{scope}: WebEngine renderer terminated (status={status_name}, exit_code={exit_code})."
         self._append_log(f"WARNING: {message}")
+
+    def _trigger_native_social_file_input_click(self, platform_name: str) -> bool:
+        browser = self.social_upload_browsers.get(platform_name)
+        if browser is None:
+            return False
+
+        result: dict[str, object] = {}
+        loop = QEventLoop()
+
+        script = """
+            (() => {
+                const nodes = Array.from(document.querySelectorAll('input[type="file"]'));
+                const visible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
+                const node = nodes.find((n) => visible(n)) || nodes[0] || null;
+                if (!node) return null;
+                try { node.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                const rect = node.getBoundingClientRect();
+                return {
+                    x: Math.max(1, Math.floor(rect.left + Math.min(rect.width / 2, Math.max(6, rect.width - 6)))),
+                    y: Math.max(1, Math.floor(rect.top + Math.min(rect.height / 2, Math.max(6, rect.height - 6)))),
+                };
+            })();
+        """
+
+        def _after(js_result):
+            if isinstance(js_result, dict):
+                result.update(js_result)
+            loop.quit()
+
+        browser.page().runJavaScript(script, _after)
+        QTimer.singleShot(300, loop.quit)
+        loop.exec()
+
+        try:
+            x = int(result.get("x", 0))
+            y = int(result.get("y", 0))
+        except Exception:
+            return False
+        if x <= 0 or y <= 0:
+            return False
+
+        browser.setFocus(Qt.FocusReason.OtherFocusReason)
+        QTest.mouseClick(browser, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, y), 10)
+        return True
 
     def _on_social_browser_load_finished(self, platform_name: str, ok: bool) -> None:
         if not ok:
@@ -7875,6 +7920,7 @@ class MainWindow(QMainWindow):
             "title": str(title or ""),
             "attempts": 0,
             "allow_file_dialog": True,
+            "native_file_click_attempts": 0,
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
         self._append_log(
@@ -8246,23 +8292,7 @@ class MainWindow(QMainWindow):
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
-                        if (platform === "tiktok") {
-                            try {
-                                fileInput.click();
-                                fileDialogTriggered = true;
-                            } catch (_) {}
-                        }
-
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
-                        if (platform === "tiktok" && alreadyHasFile) {
-                            try {
-                                const postInjectClicked = fileInput.getAttribute("data-codex-postinject-clicked") === "1";
-                                if (!postInjectClicked) {
-                                    fileInput.click();
-                                    fileInput.setAttribute("data-codex-postinject-clicked", "1");
-                                }
-                            } catch (_) {}
-                        }
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
                         if (!alreadyHasFile && !alreadyStaged && allowFileDialog) {
                             fileDialogTriggered = clickNodeSingle(fileInput) || fileDialogTriggered;
@@ -8783,6 +8813,20 @@ class MainWindow(QMainWindow):
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
+
+            if (
+                platform_name == "TikTok"
+                and allow_file_dialog
+                and file_found
+                and not file_ready_signal
+                and video_path_exists
+            ):
+                native_clicked = self._trigger_native_social_file_input_click(platform_name)
+                pending["native_file_click_attempts"] = int(pending.get("native_file_click_attempts", 0)) + 1
+                if native_clicked:
+                    self._append_log(
+                        f"{platform_name}: triggered native file-input click attempt #{pending['native_file_click_attempts']} to satisfy user-activation gating."
+                    )
 
             progress_bar.setVisible(True)
             progress_bar.setValue(min(95, 20 + attempts * 6))
