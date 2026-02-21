@@ -1492,6 +1492,8 @@ class VideoOverlayWorker(QThread):
         overlay_mode: str,
         manual_text: str,
         font_name: str,
+        font_size: int,
+        text_position: str,
         ai_callback: Callable[[str, str], str],
         ai_source: str,
     ):
@@ -1503,6 +1505,8 @@ class VideoOverlayWorker(QThread):
         self.overlay_mode = overlay_mode
         self.manual_text = manual_text.strip()
         self.font_name = self._sanitize_font_name(font_name)
+        self.font_size = max(8, min(120, int(font_size)))
+        self.ass_alignment = self._position_to_ass_alignment(text_position)
         self.ai_callback = ai_callback
         self.ai_source = ai_source
 
@@ -1511,6 +1515,14 @@ class VideoOverlayWorker(QThread):
         cleaned = re.sub(r"[\r\n]+", " ", value or "").strip()
         cleaned = cleaned.replace(",", " ").replace(":", " ").replace("'", "")
         return cleaned or "Arial"
+
+    def _position_to_ass_alignment(self, value: str) -> int:
+        normalized = str(value or "bottom").strip().lower()
+        if normalized == "top":
+            return 8
+        if normalized in {"middle", "center"}:
+            return 5
+        return 2
 
     def _ffmpeg_filter_escape(self, value: str) -> str:
         escaped = (value or "").replace("\\", "/")
@@ -1522,9 +1534,9 @@ class VideoOverlayWorker(QThread):
     def _build_subtitles_filter(self, srt_path: Path) -> str:
         escaped_path = self._ffmpeg_filter_escape(str(srt_path))
         style = (
-            "Alignment=2,"
+            f"Alignment={self.ass_alignment},"
             f"FontName={self.font_name},"
-            "FontSize=22,"
+            f"FontSize={self.font_size},"
             "PrimaryColour=&H00FFFFFF,"
             "OutlineColour=&H00202020,"
             "BorderStyle=1,"
@@ -6734,6 +6746,15 @@ class MainWindow(QMainWindow):
         subtitle_duration_spin.setValue(4.5)
         subtitle_duration_spin.setSuffix(" s")
 
+        text_size_spin = QSpinBox(dialog)
+        text_size_spin.setRange(8, 120)
+        text_size_spin.setValue(22)
+
+        text_position_combo = QComboBox(dialog)
+        text_position_combo.addItem("Bottom", "bottom")
+        text_position_combo.addItem("Middle", "middle")
+        text_position_combo.addItem("Top", "top")
+
         font_combo = QFontComboBox(dialog)
         font_combo.setCurrentFont(self.font())
 
@@ -6750,6 +6771,8 @@ class MainWindow(QMainWindow):
         layout.addRow("Mode", mode_combo)
         layout.addRow("Sample interval", interval_spin)
         layout.addRow("Subtitle duration", subtitle_duration_spin)
+        layout.addRow("Text size", text_size_spin)
+        layout.addRow("Text position", text_position_combo)
         layout.addRow("Font", font_combo)
         layout.addRow("Manual text", manual_text)
 
@@ -6773,6 +6796,8 @@ class MainWindow(QMainWindow):
             "subtitle_duration_seconds": float(subtitle_duration_spin.value()),
             "manual_text": manual_value,
             "font_name": font_combo.currentFont().family(),
+            "font_size": int(text_size_spin.value()),
+            "text_position": str(text_position_combo.currentData() or "bottom"),
         }, True
 
     def add_overlay_to_selected_video(self) -> None:
@@ -6805,6 +6830,8 @@ class MainWindow(QMainWindow):
             overlay_mode=str(options["mode"]),
             manual_text=str(options["manual_text"]),
             font_name=str(options.get("font_name") or self.font().family()),
+            font_size=int(options.get("font_size") or 22),
+            text_position=str(options.get("text_position") or "bottom"),
             ai_callback=self._call_selected_ai,
             ai_source=str(self.prompt_source.currentData() or "grok"),
         )
