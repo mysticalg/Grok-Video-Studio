@@ -1601,6 +1601,7 @@ class MainWindow(QMainWindow):
         self._ffmpeg_nvenc_checked = False
         self._ffmpeg_nvenc_available = False
         self.preview_fullscreen_overlay_btn: QPushButton | None = None
+        self.preview_fullscreen_progress_bar: QProgressBar | None = None
         self.stop_all_requested = False
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
@@ -1661,6 +1662,11 @@ class MainWindow(QMainWindow):
         self._apply_default_theme()
 
     def eventFilter(self, watched, event):
+        if watched is getattr(self, "preview", None) and event.type() in (QEvent.Type.Resize, QEvent.Type.Move):
+            if self.preview.isFullScreen():
+                self._position_preview_fullscreen_overlay()
+                self._position_preview_fullscreen_progress_bar()
+
         if (
             self.stop_all_requested
             and isinstance(watched, QPushButton)
@@ -1874,7 +1880,7 @@ class MainWindow(QMainWindow):
 
         self.video_picker = QComboBox()
         self.video_picker.setIconSize(QPixmap(180, 102).size())
-        self.video_picker.setMinimumHeight(82)
+        self.video_picker.setMinimumHeight(118)
         self.video_picker.setMaxVisibleItems(3)
         self.video_picker.view().setMinimumHeight(330)
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
@@ -1907,6 +1913,7 @@ class MainWindow(QMainWindow):
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
         self.preview = QVideoWidget()
+        self.preview.installEventFilter(self)
         self.player.setVideoOutput(self.preview)
 
         self.browser = QWebEngineView()
@@ -1950,18 +1957,19 @@ class MainWindow(QMainWindow):
         self.log.setMinimumHeight(120)
         log_layout.addWidget(self.log)
 
-        self.stitch_progress_label = QLabel("Stitch progress: idle")
-        self.stitch_progress_label.setStyleSheet("color: #9fb3c8;")
-        log_layout.addWidget(self.stitch_progress_label)
-
-        self.stitch_progress_bar = QProgressBar()
-        self.stitch_progress_bar.setRange(0, 100)
-        self.stitch_progress_bar.setValue(0)
-        self.stitch_progress_bar.setVisible(False)
-        log_layout.addWidget(self.stitch_progress_bar)
-
         log_actions_layout = QHBoxLayout()
         log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
+
+        self.clear_log_btn = QPushButton("🧹 Clear Log")
+        self.clear_log_btn.setToolTip("Clear all activity log entries.")
+        self.clear_log_btn.clicked.connect(self.clear_activity_log)
+        log_actions_layout.addWidget(self.clear_log_btn, alignment=Qt.AlignLeft)
+
+        self.jump_to_bottom_btn = QPushButton("⤓ Jump to Bottom")
+        self.jump_to_bottom_btn.setToolTip("Jump to the latest activity log entry.")
+        self.jump_to_bottom_btn.clicked.connect(self.jump_activity_log_to_bottom)
+        log_actions_layout.addWidget(self.jump_to_bottom_btn, alignment=Qt.AlignLeft)
+
         log_actions_layout.addStretch(1)
         log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
         log_layout.addLayout(log_actions_layout)
@@ -2110,6 +2118,7 @@ class MainWindow(QMainWindow):
 
         self.upload_progress_label = QLabel("Upload progress: idle")
         self.upload_progress_label.setToolTip("Upload progress details")
+        self.upload_progress_label.setVisible(False)
         status_bar.addWidget(self.upload_progress_label, 1)
 
         self.upload_progress_bar = QProgressBar()
@@ -2118,6 +2127,18 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setVisible(False)
         self.upload_progress_bar.setFixedWidth(260)
         status_bar.addPermanentWidget(self.upload_progress_bar)
+
+        self.stitch_progress_label = QLabel("Stitch all video progress: idle")
+        self.stitch_progress_label.setStyleSheet("color: #9fb3c8;")
+        self.stitch_progress_label.setVisible(False)
+        status_bar.addWidget(self.stitch_progress_label, 1)
+
+        self.stitch_progress_bar = QProgressBar()
+        self.stitch_progress_bar.setRange(0, 100)
+        self.stitch_progress_bar.setValue(0)
+        self.stitch_progress_bar.setVisible(False)
+        self.stitch_progress_bar.setFixedWidth(260)
+        status_bar.addPermanentWidget(self.stitch_progress_bar)
 
         self._populate_top_settings_menus()
         self._toggle_prompt_source_fields()
@@ -3516,6 +3537,13 @@ class MainWindow(QMainWindow):
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log.appendPlainText(f"[{timestamp}] {text}")
+
+    def clear_activity_log(self) -> None:
+        self.log.clear()
+        self._append_log("Activity log cleared.")
+
+    def jump_activity_log_to_bottom(self) -> None:
+        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
     def _on_browser_load_finished(self, ok: bool) -> None:
         if ok:
@@ -6488,6 +6516,7 @@ class MainWindow(QMainWindow):
         self.preview_position_label.setText(
             f"{self._format_time_ms(position)} / {self._format_time_ms(self.player.duration())}"
         )
+        self._sync_preview_fullscreen_progress()
 
     def _on_preview_duration_changed(self, duration: int) -> None:
         self.preview_seek_slider.blockSignals(True)
@@ -6496,6 +6525,7 @@ class MainWindow(QMainWindow):
         self.preview_position_label.setText(
             f"{self._format_time_ms(self.player.position())} / {self._format_time_ms(duration)}"
         )
+        self._sync_preview_fullscreen_progress()
 
     def seek_preview(self, position: int) -> None:
         self.player.setPosition(max(0, int(position)))
@@ -6511,6 +6541,22 @@ class MainWindow(QMainWindow):
         overlay_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview_fullscreen_overlay_btn = overlay_btn
 
+    def _ensure_preview_fullscreen_progress_bar(self) -> None:
+        if self.preview_fullscreen_progress_bar is not None:
+            return
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 1000)
+        progress_bar.setTextVisible(False)
+        progress_bar.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        progress_bar.setWindowFlag(Qt.FramelessWindowHint, True)
+        progress_bar.setFixedHeight(12)
+        progress_bar.setStyleSheet(
+            "QProgressBar { background: rgba(10,10,10,0.65); border: 1px solid rgba(220,220,220,0.35); border-radius: 5px; }"
+            "QProgressBar::chunk { background-color: #4da3ff; border-radius: 5px; }"
+        )
+        self.preview_fullscreen_progress_bar = progress_bar
+
     def _position_preview_fullscreen_overlay(self) -> None:
         if self.preview_fullscreen_overlay_btn is None:
             return
@@ -6521,6 +6567,29 @@ class MainWindow(QMainWindow):
         y = preview_frame.top() + 20
         self.preview_fullscreen_overlay_btn.move(max(10, x), max(10, y))
 
+    def _position_preview_fullscreen_progress_bar(self) -> None:
+        if self.preview_fullscreen_progress_bar is None:
+            return
+
+        preview_frame = self.preview.frameGeometry()
+        width = max(220, preview_frame.width() - 80)
+        x = preview_frame.left() + (preview_frame.width() - width) // 2
+        y = preview_frame.bottom() - self.preview_fullscreen_progress_bar.height() - 20
+        self.preview_fullscreen_progress_bar.setFixedWidth(width)
+        self.preview_fullscreen_progress_bar.move(max(10, x), max(10, y))
+
+    def _sync_preview_fullscreen_progress(self) -> None:
+        if self.preview_fullscreen_progress_bar is None:
+            return
+
+        duration = max(0, int(self.player.duration()))
+        position = max(0, int(self.player.position()))
+        if duration <= 0:
+            self.preview_fullscreen_progress_bar.setValue(0)
+            return
+        ratio = min(1.0, position / duration)
+        self.preview_fullscreen_progress_bar.setValue(int(ratio * 1000))
+
     def _on_preview_fullscreen_changed(self, fullscreen: bool) -> None:
         self.preview_fullscreen_btn.setText("🗗" if fullscreen else "⛶")
 
@@ -6530,11 +6599,20 @@ class MainWindow(QMainWindow):
             if self.preview_fullscreen_overlay_btn is not None:
                 self.preview_fullscreen_overlay_btn.show()
                 self.preview_fullscreen_overlay_btn.raise_()
+
+            self._ensure_preview_fullscreen_progress_bar()
+            self._position_preview_fullscreen_progress_bar()
+            self._sync_preview_fullscreen_progress()
+            if self.preview_fullscreen_progress_bar is not None:
+                self.preview_fullscreen_progress_bar.show()
+                self.preview_fullscreen_progress_bar.raise_()
             self._append_log("Preview entered fullscreen mode.")
             return
 
         if self.preview_fullscreen_overlay_btn is not None:
             self.preview_fullscreen_overlay_btn.hide()
+        if self.preview_fullscreen_progress_bar is not None:
+            self.preview_fullscreen_progress_bar.hide()
         self._append_log("Preview exited fullscreen mode.")
 
     def toggle_preview_fullscreen(self) -> None:
@@ -7256,6 +7334,7 @@ class MainWindow(QMainWindow):
         )
 
         started_at = time.time()
+        self.stitch_progress_label.setVisible(True)
         self.stitch_progress_bar.setVisible(True)
 
         def update_progress(value: int, stage: str) -> None:
@@ -7268,19 +7347,21 @@ class MainWindow(QMainWindow):
 
             self.stitch_progress_bar.setValue(bounded_value)
             self.stitch_progress_label.setText(
-                f"{stage} | {bounded_value}% | Elapsed: {elapsed:.1f}s | ETA: {eta_label} | {settings_summary}"
+                f"Upload progress: {stage} | {bounded_value}% | Elapsed: {elapsed:.1f}s | ETA: {eta_label} | {settings_summary}"
             )
 
         def on_stitch_failed(title: str, message: str) -> None:
-            self.stitch_progress_label.setText(f"Stitch progress: failed ({message[:120]})")
+            self.stitch_progress_label.setText(f"Upload progress: failed ({message[:120]})")
             self.stitch_progress_bar.setVisible(False)
+            self.stitch_progress_label.setVisible(False)
             QMessageBox.critical(self, title, message)
 
         def on_stitch_finished(stitched_video: dict) -> None:
             self._append_log(f"Stitched video created: {stitched_video['video_file_path']}")
-            self.stitch_progress_label.setText("Stitch progress: complete")
+            self.stitch_progress_label.setText("Upload progress: complete")
             self.stitch_progress_bar.setValue(100)
             self.stitch_progress_bar.setVisible(False)
+            self.stitch_progress_label.setVisible(False)
             self.on_video_finished(stitched_video)
 
         def on_stitch_complete() -> None:
@@ -9142,6 +9223,7 @@ class MainWindow(QMainWindow):
         self.upload_youtube_btn.setEnabled(False)
 
         self.upload_progress_label.setText(f"Upload progress: starting {platform_name} upload...")
+        self.upload_progress_label.setVisible(True)
         self.upload_progress_bar.setValue(0)
         self.upload_progress_bar.setVisible(True)
         self._append_log(f"Starting {platform_name} upload...")
@@ -9160,7 +9242,8 @@ class MainWindow(QMainWindow):
         formatted_message = self._format_upload_progress_message(message)
         self.upload_progress_label.setText(f"Upload progress: {formatted_message}")
         self.upload_progress_label.setToolTip(str(message or ""))
-        self.upload_progress_bar.setVisible(True)
+        self.upload_progress_label.setVisible(bounded_value > 0)
+        self.upload_progress_bar.setVisible(bounded_value > 0)
         self.upload_progress_bar.setValue(bounded_value)
 
     def _format_upload_progress_message(self, message: str, max_length: int = 180) -> str:
@@ -9172,12 +9255,15 @@ class MainWindow(QMainWindow):
     def _on_upload_finished(self, platform_name: str, upload_id: str, dialog_title: str, success_prefix: str) -> None:
         self.upload_progress_label.setText("Upload progress: complete")
         self.upload_progress_bar.setValue(100)
+        self.upload_progress_bar.setVisible(False)
+        self.upload_progress_label.setVisible(False)
         self._append_log(f"{platform_name} upload complete. ID: {upload_id}")
         QMessageBox.information(self, dialog_title, f"{success_prefix} {upload_id}")
 
     def _on_upload_failed(self, platform_name: str, error_message: str) -> None:
         self.upload_progress_label.setText(f"Upload progress: failed ({error_message[:120]})")
         self.upload_progress_bar.setVisible(False)
+        self.upload_progress_label.setVisible(False)
         self._append_log(f"ERROR: {platform_name} upload failed: {error_message}")
         QMessageBox.critical(self, f"{platform_name} Upload Failed", error_message)
 
