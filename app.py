@@ -1546,12 +1546,53 @@ class VideoOverlayWorker(QThread):
         )
         return f"subtitles=filename='{escaped_path}':force_style='{style}'"
 
+    def _extract_frame_image(self, timestamp_seconds: float, frame_path: Path) -> None:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{timestamp_seconds:.3f}",
+                "-i",
+                str(self.input_video),
+                "-map",
+                "0:v:0",
+                "-frames:v",
+                "1",
+                "-an",
+                "-sn",
+                "-dn",
+                "-c:v",
+                "png",
+                str(frame_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def _estimate_frame_brightness(self, frame_path: Path) -> float:
+        image = QImage(str(frame_path))
+        if image.isNull():
+            return 255.0
+        sample_w = max(1, image.width() // 48)
+        sample_h = max(1, image.height() // 48)
+        total = 0.0
+        count = 0
+        for y in range(0, image.height(), sample_h):
+            for x in range(0, image.width(), sample_w):
+                color = image.pixelColor(x, y)
+                total += (0.2126 * color.red()) + (0.7152 * color.green()) + (0.0722 * color.blue())
+                count += 1
+        return (total / max(1, count)) if count else 255.0
+
     def _build_overlay_text(self, frame_path: Path, timestamp_seconds: float) -> str:
         if self.overlay_mode == "manual":
             return self.manual_text
 
         image_bytes = frame_path.read_bytes()
-        data_url = f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
         system = "You describe video frames with concise subtitle-style captions."
         user = (
             "Analyze this frame image and return one short subtitle line (max 12 words, no hashtags, no quotes). "
@@ -1581,27 +1622,21 @@ class VideoOverlayWorker(QThread):
             srt_lines: list[str] = []
             for idx, point in enumerate(frame_points, start=1):
                 self.progress.emit(f"Generating overlay text for {point:.1f}s...")
-                frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}.jpg"
+                frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}.png"
                 temp_files.append(frame_path)
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-ss",
-                        f"{point:.3f}",
-                        "-i",
-                        str(self.input_video),
-                        "-frames:v",
-                        "1",
-                        "-q:v",
-                        "3",
-                        str(frame_path),
-                    ],
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
+                self._extract_frame_image(point, frame_path)
+
+                brightness = self._estimate_frame_brightness(frame_path)
+                if brightness < 20.0 and (point + 1.0) < duration:
+                    alternate_frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}_alt.png"
+                    temp_files.append(alternate_frame_path)
+                    self._extract_frame_image(point + 1.0, alternate_frame_path)
+                    alternate_brightness = self._estimate_frame_brightness(alternate_frame_path)
+                    if alternate_brightness > brightness:
+                        frame_path = alternate_frame_path
+                        self.progress.emit(
+                            f"Frame at {point:.1f}s was very dark; used {point + 1.0:.1f}s alternative for AI captioning."
+                        )
 
                 subtitle_text = _escape_srt_text(self._build_overlay_text(frame_path, point))
                 start_time = point
