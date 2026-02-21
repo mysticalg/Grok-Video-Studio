@@ -6684,19 +6684,19 @@ class MainWindow(QMainWindow):
 
         upload_file_path = frame_path
         upload_file_name = frame_path.name
-        upload_mime = "image/png"
-
-        converted_jpeg = self.download_dir / f"{frame_path.stem}_upload.jpg"
-        image = QImage(str(frame_path))
-        if not image.isNull() and image.save(str(converted_jpeg), "JPG", 100):
-            upload_file_path = converted_jpeg
-            upload_file_name = converted_jpeg.name
-            upload_mime = "image/jpeg"
-            self._append_log(
-                f"Continue-from-last-frame: using high-quality JPEG upload payload ({converted_jpeg.name}) to preserve Grok in-app color rendering."
-            )
-        else:
-            self._append_log("Continue-from-last-frame: JPEG conversion failed; falling back to PNG upload payload.")
+        suffix = frame_path.suffix.lower().lstrip(".")
+        mime_by_ext = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "webp": "image/webp",
+            "bmp": "image/bmp",
+            "gif": "image/gif",
+        }
+        upload_mime = mime_by_ext.get(suffix, "image/png")
+        self._append_log(
+            f"Continue-from-last-frame: using extracted frame in native format ({upload_file_name}, {upload_mime}) for best color/profile fidelity."
+        )
 
         frame_base64 = base64.b64encode(upload_file_path.read_bytes()).decode("ascii")
         upload_script = r"""
