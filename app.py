@@ -454,6 +454,34 @@ def _probe_video_color_properties(video_path: str | Path) -> dict[str, str]:
     return normalized
 
 
+def _probe_video_duration_seconds(video_path: str | Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return max(0.0, float((result.stdout or "0").strip() or "0"))
+
+
+def _seconds_to_srt_time(value: float) -> str:
+    clamped_ms = max(0, int(round(value * 1000)))
+    hours, rem = divmod(clamped_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def _escape_srt_text(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    return cleaned.replace("-->", "→")
+
+
 
 def _build_last_frame_extraction_cmds(video_path: str | Path, seek_args: list[str], frame_path: Path) -> list[list[str]]:
     color_meta = _probe_video_color_properties(video_path)
@@ -1449,6 +1477,152 @@ class UploadWorker(QThread):
             self.failed.emit(self.platform_name, str(exc))
 
 
+class VideoOverlayWorker(QThread):
+    progress = Signal(str)
+    finished_overlay = Signal(dict)
+    failed = Signal(str, str)
+
+    def __init__(
+        self,
+        input_video: Path,
+        output_video: Path,
+        interval_seconds: int,
+        subtitle_duration_seconds: float,
+        overlay_mode: str,
+        manual_text: str,
+        ai_callback: Callable[[str, str], str],
+        ai_source: str,
+    ):
+        super().__init__()
+        self.input_video = input_video
+        self.output_video = output_video
+        self.interval_seconds = max(1, int(interval_seconds))
+        self.subtitle_duration_seconds = max(0.8, float(subtitle_duration_seconds))
+        self.overlay_mode = overlay_mode
+        self.manual_text = manual_text.strip()
+        self.ai_callback = ai_callback
+        self.ai_source = ai_source
+
+    def _build_overlay_text(self, frame_path: Path, timestamp_seconds: float) -> str:
+        if self.overlay_mode == "manual":
+            return self.manual_text
+
+        image_bytes = frame_path.read_bytes()
+        data_url = f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        system = "You describe video frames with concise subtitle-style captions."
+        user = (
+            "Analyze this frame image and return one short subtitle line (max 12 words, no hashtags, no quotes). "
+            f"Timestamp in source video: {timestamp_seconds:.2f}s. "
+            "If uncertain, provide a neutral literal scene description.\n\n"
+            f"Frame image (data URL): {data_url}"
+        )
+        response = self.ai_callback(system, user)
+        first_line = re.split(r"[\r\n]+", response.strip(), maxsplit=1)[0].strip()
+        return first_line or f"Scene at {timestamp_seconds:.1f}s"
+
+    def run(self) -> None:
+        temp_files: list[Path] = []
+        try:
+            duration = _probe_video_duration_seconds(self.input_video)
+            if duration <= 0.0:
+                raise RuntimeError("Could not read video duration.")
+
+            frame_points: list[float] = []
+            current = 0.0
+            while current < duration:
+                frame_points.append(round(current, 3))
+                current += self.interval_seconds
+            if not frame_points:
+                frame_points = [0.0]
+
+            srt_lines: list[str] = []
+            for idx, point in enumerate(frame_points, start=1):
+                self.progress.emit(f"Generating overlay text for {point:.1f}s...")
+                frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}.jpg"
+                temp_files.append(frame_path)
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-ss",
+                        f"{point:.3f}",
+                        "-i",
+                        str(self.input_video),
+                        "-frames:v",
+                        "1",
+                        "-q:v",
+                        "3",
+                        str(frame_path),
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+
+                subtitle_text = _escape_srt_text(self._build_overlay_text(frame_path, point))
+                start_time = point
+                end_time = min(duration, point + self.subtitle_duration_seconds)
+                if end_time <= start_time:
+                    end_time = min(duration, start_time + 0.8)
+                srt_lines.extend(
+                    [
+                        str(idx),
+                        f"{_seconds_to_srt_time(start_time)} --> {_seconds_to_srt_time(end_time)}",
+                        subtitle_text,
+                        "",
+                    ]
+                )
+
+            srt_path = self.output_video.parent / f"overlay_{self.output_video.stem}.srt"
+            srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
+            temp_files.append(srt_path)
+
+            self.progress.emit("Rendering video with text overlay...")
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(self.input_video),
+                    "-vf",
+                    f"subtitles={str(srt_path).replace(':', '\\:')}:force_style='Alignment=2,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00202020,BorderStyle=1,Outline=2,Shadow=0,MarginV=24'",
+                    "-c:a",
+                    "copy",
+                    str(self.output_video),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            self.finished_overlay.emit(
+                {
+                    "title": f"Overlay: {self.input_video.stem}",
+                    "prompt": f"overlay-{self.overlay_mode}",
+                    "resolution": "same",
+                    "video_file_path": str(self.output_video),
+                    "source_url": "local-overlay",
+                    "overlay_mode": self.overlay_mode,
+                    "ai_source": self.ai_source,
+                }
+            )
+        except FileNotFoundError:
+            self.failed.emit("ffmpeg Missing", "ffmpeg is required for text overlays but was not found in PATH.")
+        except subprocess.CalledProcessError as exc:
+            self.failed.emit("Overlay Failed", exc.stderr[-1000:] or "ffmpeg failed.")
+        except Exception as exc:
+            self.failed.emit("Overlay Failed", str(exc))
+        finally:
+            for temp_file in temp_files:
+                try:
+                    if temp_file.exists():
+                        temp_file.unlink()
+                except Exception:
+                    pass
+
+
 class BrowserTrainingWorker(QThread):
     status = Signal(str)
     finished = Signal(str, str)
@@ -1590,6 +1764,7 @@ class MainWindow(QMainWindow):
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
         self.browser_training_worker: BrowserTrainingWorker | None = None
+        self.overlay_worker: VideoOverlayWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -1906,6 +2081,11 @@ class MainWindow(QMainWindow):
         self.video_remove_btn.setToolTip("Remove selected video from Generated Videos list.")
         self.video_remove_btn.clicked.connect(self.remove_selected_video)
         video_list_controls.addWidget(self.video_remove_btn)
+
+        self.video_overlay_btn = QPushButton("📝 Overlay Text")
+        self.video_overlay_btn.setToolTip("Create subtitle-style text overlays on the selected video.")
+        self.video_overlay_btn.clicked.connect(lambda: self._run_with_button_feedback(self.video_overlay_btn, self.add_overlay_to_selected_video))
+        video_list_controls.addWidget(self.video_overlay_btn)
 
         left_layout.addLayout(video_list_controls)
 
@@ -6366,6 +6546,7 @@ class MainWindow(QMainWindow):
             ("stitch", self.stitch_worker),
             ("upload", self.upload_worker),
             ("browser-training", self.browser_training_worker),
+            ("overlay", self.overlay_worker),
         ]
         for worker_name, worker in workers:
             if worker is None or not worker.isRunning():
@@ -6500,6 +6681,114 @@ class MainWindow(QMainWindow):
             self._refresh_video_picker(selected_index=min(index, len(self.videos) - 1))
 
         self._append_log(f"Removed video from list: {removed.get('video_file_path', 'unknown')}")
+
+    def _show_overlay_options_dialog(self) -> tuple[dict[str, object] | None, bool]:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Text Overlay Options")
+        layout = QFormLayout(dialog)
+
+        mode_combo = QComboBox(dialog)
+        mode_combo.addItem("AI generated from sampled frames", "ai")
+        mode_combo.addItem("Manual text", "manual")
+
+        interval_spin = QSpinBox(dialog)
+        interval_spin.setRange(1, 60)
+        interval_spin.setValue(5)
+        interval_spin.setSuffix(" s")
+
+        subtitle_duration_spin = QDoubleSpinBox(dialog)
+        subtitle_duration_spin.setRange(0.8, 30.0)
+        subtitle_duration_spin.setDecimals(1)
+        subtitle_duration_spin.setSingleStep(0.5)
+        subtitle_duration_spin.setValue(4.5)
+        subtitle_duration_spin.setSuffix(" s")
+
+        manual_text = QLineEdit(dialog)
+        manual_text.setPlaceholderText("Enter subtitle text used at each interval")
+
+        def _sync_mode(index: int) -> None:
+            selected = mode_combo.itemData(index)
+            manual_text.setEnabled(selected == "manual")
+
+        mode_combo.currentIndexChanged.connect(_sync_mode)
+        _sync_mode(mode_combo.currentIndex())
+
+        layout.addRow("Mode", mode_combo)
+        layout.addRow("Sample interval", interval_spin)
+        layout.addRow("Subtitle duration", subtitle_duration_spin)
+        layout.addRow("Manual text", manual_text)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addRow(button_box)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None, False
+
+        selected_mode = str(mode_combo.currentData() or "ai")
+        manual_value = manual_text.text().strip()
+        if selected_mode == "manual" and not manual_value:
+            QMessageBox.warning(self, "Manual Text Required", "Enter manual text or choose AI mode.")
+            return None, False
+
+        return {
+            "mode": selected_mode,
+            "interval_seconds": int(interval_spin.value()),
+            "subtitle_duration_seconds": float(subtitle_duration_spin.value()),
+            "manual_text": manual_value,
+        }, True
+
+    def add_overlay_to_selected_video(self) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            QMessageBox.warning(self, "No Video Selected", "Select a video first.")
+            return
+        if self.overlay_worker is not None and self.overlay_worker.isRunning():
+            QMessageBox.information(self, "Overlay In Progress", "Please wait for the current text overlay job to finish.")
+            return
+
+        selected_video = self.videos[index]
+        input_video = Path(str(selected_video.get("video_file_path") or "")).expanduser()
+        if not input_video.exists():
+            QMessageBox.warning(self, "Missing Video", "The selected video file no longer exists.")
+            return
+
+        options, accepted = self._show_overlay_options_dialog()
+        if not accepted or options is None:
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_video = input_video.with_name(f"{input_video.stem}_overlay_{timestamp}.mp4")
+
+        self.overlay_worker = VideoOverlayWorker(
+            input_video=input_video,
+            output_video=output_video,
+            interval_seconds=int(options["interval_seconds"]),
+            subtitle_duration_seconds=float(options["subtitle_duration_seconds"]),
+            overlay_mode=str(options["mode"]),
+            manual_text=str(options["manual_text"]),
+            ai_callback=self._call_selected_ai,
+            ai_source=str(self.prompt_source.currentData() or "grok"),
+        )
+        self.overlay_worker.progress.connect(self._append_log)
+        self.overlay_worker.finished_overlay.connect(self._on_overlay_finished)
+        self.overlay_worker.failed.connect(self._on_overlay_failed)
+        self.overlay_worker.start()
+        self._append_log(
+            f"Started text overlay on '{input_video.name}' (mode={options['mode']}, interval={options['interval_seconds']}s)."
+        )
+
+    def _on_overlay_finished(self, video: dict) -> None:
+        self.on_video_finished(video)
+        self._append_log(f"Text overlay complete: {video.get('video_file_path', '')}")
+        QMessageBox.information(self, "Overlay Complete", "Text overlay video created and added to the Generated Videos list.")
+        self.overlay_worker = None
+
+    def _on_overlay_failed(self, title: str, message: str) -> None:
+        self._append_log(f"ERROR: Text overlay failed: {title}: {message}")
+        QMessageBox.critical(self, title, message)
+        self.overlay_worker = None
 
     def _format_time_ms(self, ms: int) -> str:
         total_seconds = max(0, int(ms // 1000))
