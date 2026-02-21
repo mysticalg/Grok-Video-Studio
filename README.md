@@ -128,11 +128,13 @@ Then in the app:
 3. Set **CDP Relay URL** to `http://127.0.0.1:8765/social-upload-step`
 4. Save settings
 
-What this stub does:
-- Confirms relay connectivity and logs each upload step payload.
-- Returns `handled: false` so the app intentionally falls back to built-in DOM automation.
+What this relay does now:
+- Connects to QtWebEngine via CDP (`QTWEBENGINE_REMOTE_DEBUGGING` port).
+- Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (caption/title/publish/share clicks).
+- Returns `handled: true` when CDP step execution succeeds, with progress + status details.
+- Returns `handled: false` automatically when CDP attach fails, so app fallback still works.
 
-To make it fully CDP-driven, extend `tools/cdp_social_relay.py` to connect to your Chromium devtools target and return `handled: true` with step progress.
+If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.
 
 ## Configure credentials
 
