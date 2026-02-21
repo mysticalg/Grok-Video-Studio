@@ -7401,38 +7401,73 @@ class MainWindow(QMainWindow):
         progress_callback: Callable[[float], None] | None = None,
         use_gpu_encoding: bool = False,
     ) -> None:
-        list_file = self.download_dir / f"stitch_list_{int(time.time() * 1000)}.txt"
+        stream_infos = [self._probe_video_stream_info(path) for path in video_paths]
+        has_audio = all(self._video_has_audio_stream(path) for path in video_paths)
 
-        concat_lines = []
-        for video_path in video_paths:
-            quoted_path = video_path.as_posix().replace("'", "'\\''")
-            concat_lines.append(f"file '{quoted_path}'")
-        list_file.write_text("\n".join(concat_lines), encoding="utf-8")
+        target_width = stream_infos[0]["width"]
+        target_height = stream_infos[0]["height"]
+        target_fps = stream_infos[0].get("fps") or 24.0
 
-        try:
-            total_duration = sum(self._probe_video_duration(path) for path in video_paths)
-            self._run_ffmpeg_with_progress(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    str(list_file),
-                    *self._video_encoder_args(use_gpu_encoding),
-                    *self._mp4_compatibility_args(),
-                    "-c:a",
-                    "aac",
-                    str(output_file),
-                ],
-                total_duration=total_duration,
-                progress_callback=progress_callback,
+        ffmpeg_cmd = ["ffmpeg", "-y"]
+        for path in video_paths:
+            ffmpeg_cmd.extend(["-i", str(path)])
+
+        filter_parts: list[str] = []
+        total_duration = 0.0
+        for idx, info in enumerate(stream_infos):
+            frame_trim_seconds = 0.0
+            if idx > 0:
+                fps = info.get("fps") or target_fps
+                frame_trim_seconds = 1.0 / fps if fps > 0 else 0.0
+
+            trim_video = "trim=start_frame=1,setpts=PTS-STARTPTS," if idx > 0 else ""
+            filter_parts.append(
+                f"[{idx}:v]{trim_video}fps={target_fps:.6f},"
+                f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
+                f"setsar=1,format=yuv420p[v{idx}]"
             )
-        finally:
-            if list_file.exists():
-                list_file.unlink()
+
+            clip_duration = max(0.0, info["duration"] - frame_trim_seconds)
+            total_duration += clip_duration
+
+            if has_audio:
+                trim_audio = f"atrim=start={frame_trim_seconds:.6f},asetpts=PTS-STARTPTS," if idx > 0 else ""
+                filter_parts.append(
+                    f"[{idx}:a]{trim_audio}"
+                    "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+                    "aresample=async=1[a"
+                    f"{idx}]"
+                )
+
+        concat_video_inputs = "".join(f"[v{idx}]" for idx in range(len(video_paths)))
+        if has_audio:
+            concat_audio_inputs = "".join(f"[a{idx}]" for idx in range(len(video_paths)))
+            filter_parts.append(
+                f"{concat_video_inputs}{concat_audio_inputs}concat=n={len(video_paths)}:v=1:a=1[vout][aout]"
+            )
+        else:
+            filter_parts.append(f"{concat_video_inputs}concat=n={len(video_paths)}:v=1:a=0[vout]")
+
+        ffmpeg_cmd.extend(
+            [
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                "[vout]",
+                *self._video_encoder_args(use_gpu_encoding),
+                *self._mp4_compatibility_args(),
+                str(output_file),
+            ]
+        )
+        if has_audio:
+            ffmpeg_cmd[-1:-1] = ["-map", "[aout]", "-c:a", "aac"]
+
+        self._run_ffmpeg_with_progress(
+            ffmpeg_cmd,
+            total_duration=total_duration,
+            progress_callback=progress_callback,
+        )
 
     def _probe_video_duration(self, video_path: Path) -> float:
         result = subprocess.run(
@@ -7465,7 +7500,7 @@ class MainWindow(QMainWindow):
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=width,height,duration",
+                "stream=width,height,duration,avg_frame_rate,r_frame_rate",
                 "-of",
                 "json",
                 str(video_path),
@@ -7484,9 +7519,37 @@ class MainWindow(QMainWindow):
         height = int(stream.get("height") or 0)
         duration_raw = stream.get("duration")
         duration = float(duration_raw) if duration_raw not in (None, "N/A", "") else self._probe_video_duration(video_path)
+        fps = self._parse_ffprobe_rate(stream.get("avg_frame_rate"))
+        if fps <= 0:
+            fps = self._parse_ffprobe_rate(stream.get("r_frame_rate"))
+        if fps <= 0:
+            fps = 24.0
+
         if width <= 0 or height <= 0 or duration <= 0:
             raise RuntimeError(f"Could not probe valid video stream info for {video_path.name}.")
-        return {"width": width, "height": height, "duration": duration}
+        return {"width": width, "height": height, "duration": duration, "fps": fps}
+
+    @staticmethod
+    def _parse_ffprobe_rate(rate_value: object) -> float:
+        if rate_value in (None, "", "N/A"):
+            return 0.0
+        text = str(rate_value).strip()
+        if not text or text in {"0", "0/0"}:
+            return 0.0
+        if "/" in text:
+            numerator, denominator = text.split("/", 1)
+            try:
+                num = float(numerator)
+                den = float(denominator)
+            except ValueError:
+                return 0.0
+            if den == 0:
+                return 0.0
+            return num / den
+        try:
+            return float(text)
+        except ValueError:
+            return 0.0
 
     def _video_has_audio_stream(self, video_path: Path) -> bool:
         result = subprocess.run(
