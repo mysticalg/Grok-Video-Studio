@@ -2107,7 +2107,7 @@ class MainWindow(QMainWindow):
         )
 
         self.sora_browser_home_btn = QPushButton("🏠 Homepage")
-        self.sora_browser_home_btn.setToolTip("Open sora.chatgpt.com/profile in the embedded Sora browser tab.")
+        self.sora_browser_home_btn.setToolTip("Open sora.chatgpt.com/drafts in the embedded Sora browser tab.")
         self.sora_browser_home_btn.setCheckable(True)
         self.sora_browser_home_btn.clicked.connect(
             lambda: self._run_with_button_feedback(self.sora_browser_home_btn, self.show_sora_browser_page)
@@ -2301,7 +2301,7 @@ class MainWindow(QMainWindow):
                 browser_settings.setAttribute(developer_extras_attr, True)
 
         self.grok_browser_view.setUrl(QUrl("https://grok.com/imagine"))
-        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/profile"))
+        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/drafts"))
         self.grok_browser_view.loadFinished.connect(self._on_browser_load_finished)
         self.sora_browser.loadFinished.connect(self._on_browser_load_finished)
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
@@ -6763,6 +6763,26 @@ class MainWindow(QMainWindow):
                 const video = document.querySelector("video");
                 const source = document.querySelector("video source");
                 const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
+                const videoAnchor = video ? video.closest("a[href]") : null;
+                const anchorHref = videoAnchor ? (videoAnchor.getAttribute("href") || "").trim() : "";
+                const anchorUrl = (() => {{
+                    if (!anchorHref) return "";
+                    try {{
+                        return new URL(anchorHref, window.location.href).toString();
+                    }} catch (_) {{
+                        return anchorHref;
+                    }}
+                }})();
+                const isOpenAIVideoUrl = (url) => {{
+                    if (!url) return false;
+                    return /^https:[/][/]videos[.]openai[.]com[/]/i.test(url) && /[/]raw(?:$|[?#])/i.test(url);
+                }};
+                if (isOpenAIVideoUrl(anchorUrl)) {{
+                    return {{ status: "direct-url-ready", src: anchorUrl, sourceType: "video-anchor" }};
+                }}
+                if (isOpenAIVideoUrl(src)) {{
+                    return {{ status: "direct-url-ready", src, sourceType: "video-src" }};
+                }}
                 const enoughData = !!(video && video.readyState >= 3 && Number(video.duration || 0) > 0);
                 return {{
                     status: src ? (enoughData ? "video-src-ready" : "video-buffering") : "waiting",
@@ -6827,8 +6847,10 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_timer.start(3000)
                 return
 
+            if status == "direct-url-ready" and src:
+                self._append_log(f"Variant {current_variant} ready; downloading from detected OpenAI video URL ({result.get('sourceType') or 'video-link'}).")
             min_wait_elapsed = self.manual_download_started_at is not None and (time.time() - self.manual_download_started_at) >= 8
-            if status != "video-src-ready" or not src or not min_wait_elapsed:
+            if status not in ("video-src-ready", "direct-url-ready") or not src or not min_wait_elapsed:
                 self.manual_download_poll_timer.start(3000)
                 return
 
@@ -6959,8 +6981,8 @@ class MainWindow(QMainWindow):
                         "source_url": "browser-session",
                     }
                 )
-                self._append_log("Download complete; returning embedded browser to grok.com/imagine.")
-                QTimer.singleShot(0, self.show_browser_page)
+                self._append_log("Download complete; returning embedded browser to sora.chatgpt.com/drafts.")
+                QTimer.singleShot(0, self.show_sora_browser_page)
                 self.pending_manual_variant_for_download = None
                 self.pending_manual_download_type = None
                 self.pending_manual_image_prompt = None
@@ -8149,8 +8171,8 @@ class MainWindow(QMainWindow):
     def show_sora_browser_page(self) -> None:
         self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
         self.browser = self.sora_browser
-        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/profile"))
-        self._append_log("Navigated embedded browser to sora.chatgpt.com/profile.")
+        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/drafts"))
+        self._append_log("Navigated embedded browser to sora.chatgpt.com/drafts.")
 
     def stitch_all_videos(self) -> None:
         if self.stitch_worker and self.stitch_worker.isRunning():
