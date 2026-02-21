@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFontComboBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -252,6 +253,13 @@ def _openai_chat_target(credential: str) -> tuple[str, dict[str, str], bool]:
     return f"{OPENAI_API_BASE}/chat/completions", headers, False
 
 
+def _openai_is_likely_api_key(credential: str) -> bool:
+    value = credential.strip()
+    if not value:
+        return False
+    return value.startswith("sk-") or value.startswith("rk-")
+
+
 
 
 def _extract_text_from_responses_body(body: object) -> str:
@@ -467,6 +475,34 @@ def _probe_video_color_properties(video_path: str | Path) -> dict[str, str]:
     if isinstance(height, int):
         normalized["height"] = str(height)
     return normalized
+
+
+def _probe_video_duration_seconds(video_path: str | Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return max(0.0, float((result.stdout or "0").strip() or "0"))
+
+
+def _seconds_to_srt_time(value: float) -> str:
+    clamped_ms = max(0, int(round(value * 1000)))
+    hours, rem = divmod(clamped_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def _escape_srt_text(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    return cleaned.replace("-->", "→")
 
 
 
@@ -1480,6 +1516,245 @@ class UploadWorker(QThread):
             self.failed.emit(self.platform_name, str(exc))
 
 
+class VideoOverlayWorker(QThread):
+    progress = Signal(str)
+    finished_overlay = Signal(dict)
+    failed = Signal(str, str)
+
+    def __init__(
+        self,
+        input_video: Path,
+        output_video: Path,
+        interval_seconds: int,
+        subtitle_duration_seconds: float,
+        overlay_mode: str,
+        manual_text: str,
+        font_name: str,
+        font_size: int,
+        text_position: str,
+        ai_callback: Callable[[Path, float], str],
+        ai_prompt_callback: Callable[[str, float], str],
+        ai_source: str,
+    ):
+        super().__init__()
+        self.input_video = input_video
+        self.output_video = output_video
+        self.interval_seconds = max(1, int(interval_seconds))
+        self.subtitle_duration_seconds = max(0.8, float(subtitle_duration_seconds))
+        self.overlay_mode = overlay_mode
+        self.manual_text = manual_text.strip()
+        self.font_name = self._sanitize_font_name(font_name)
+        self.font_size = max(8, min(120, int(font_size)))
+        self.ass_alignment = self._position_to_ass_alignment(text_position)
+        self.ai_callback = ai_callback
+        self.ai_prompt_callback = ai_prompt_callback
+        self.ai_source = ai_source
+
+
+    def _sanitize_font_name(self, value: str) -> str:
+        cleaned = re.sub(r"[\r\n]+", " ", value or "").strip()
+        cleaned = cleaned.replace(",", " ").replace(":", " ").replace("'", "")
+        return cleaned or "Arial"
+
+    def _position_to_ass_alignment(self, value: str) -> int:
+        normalized = str(value or "bottom").strip().lower()
+        if normalized == "top":
+            return 8
+        if normalized in {"middle", "center"}:
+            return 5
+        return 2
+
+    def _ffmpeg_filter_escape(self, value: str) -> str:
+        escaped = (value or "").replace("\\", "/")
+        escaped = escaped.replace("'", r"\'")
+        escaped = escaped.replace(":", r"\:")
+        escaped = escaped.replace(",", r"\,")
+        return escaped
+
+    def _build_subtitles_filter(self, srt_path: Path) -> str:
+        escaped_path = self._ffmpeg_filter_escape(str(srt_path))
+        style = (
+            f"Alignment={self.ass_alignment},"
+            f"FontName={self.font_name},"
+            f"FontSize={self.font_size},"
+            "PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00202020,"
+            "BorderStyle=1,"
+            "Outline=2,"
+            "Shadow=0,"
+            "MarginV=24"
+        )
+        return f"subtitles=filename='{escaped_path}':force_style='{style}'"
+
+    def _extract_frame_image(self, timestamp_seconds: float, frame_path: Path) -> None:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{timestamp_seconds:.3f}",
+                "-i",
+                str(self.input_video),
+                "-map",
+                "0:v:0",
+                "-frames:v",
+                "1",
+                "-an",
+                "-sn",
+                "-dn",
+                "-c:v",
+                "png",
+                str(frame_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def _estimate_frame_brightness(self, frame_path: Path) -> float:
+        image = QImage(str(frame_path))
+        if image.isNull():
+            return 255.0
+        sample_w = max(1, image.width() // 48)
+        sample_h = max(1, image.height() // 48)
+        total = 0.0
+        count = 0
+        for y in range(0, image.height(), sample_h):
+            for x in range(0, image.width(), sample_w):
+                color = image.pixelColor(x, y)
+                total += (0.2126 * color.red()) + (0.7152 * color.green()) + (0.0722 * color.blue())
+                count += 1
+        return (total / max(1, count)) if count else 255.0
+
+    def _build_overlay_text(self, frame_path: Path, timestamp_seconds: float) -> str:
+        if self.overlay_mode == "manual":
+            return self.manual_text
+
+        try:
+            if self.manual_text:
+                response = self.ai_prompt_callback(self.manual_text, timestamp_seconds)
+            else:
+                response = self.ai_callback(frame_path, timestamp_seconds)
+        except Exception as exc:
+            self.progress.emit(
+                f"AI caption request failed at {timestamp_seconds:.1f}s ({exc}); skipping subtitle at this timestamp."
+            )
+            return ""
+
+        first_line = re.split(r"[\r\n]+", (response or "").strip(), maxsplit=1)[0].strip()
+        if not first_line:
+            self.progress.emit(
+                f"AI returned empty caption at {timestamp_seconds:.1f}s; skipping subtitle at this timestamp."
+            )
+            return ""
+        return first_line
+
+    def run(self) -> None:
+        temp_files: list[Path] = []
+        try:
+            duration = _probe_video_duration_seconds(self.input_video)
+            if duration <= 0.0:
+                raise RuntimeError("Could not read video duration.")
+
+            frame_points: list[float] = []
+            current = 0.0
+            while current < duration:
+                frame_points.append(round(current, 3))
+                current += self.interval_seconds
+            if not frame_points:
+                frame_points = [0.0]
+
+            srt_lines: list[str] = []
+            caption_idx = 1
+            for idx, point in enumerate(frame_points, start=1):
+                self.progress.emit(f"Generating overlay text for {point:.1f}s...")
+                frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}.png"
+                temp_files.append(frame_path)
+                self._extract_frame_image(point, frame_path)
+
+                brightness = self._estimate_frame_brightness(frame_path)
+                if brightness < 20.0 and (point + 1.0) < duration:
+                    alternate_frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}_alt.png"
+                    temp_files.append(alternate_frame_path)
+                    self._extract_frame_image(point + 1.0, alternate_frame_path)
+                    alternate_brightness = self._estimate_frame_brightness(alternate_frame_path)
+                    if alternate_brightness > brightness:
+                        frame_path = alternate_frame_path
+                        self.progress.emit(
+                            f"Frame at {point:.1f}s was very dark; used {point + 1.0:.1f}s alternative for AI captioning."
+                        )
+
+                subtitle_text = _escape_srt_text(self._build_overlay_text(frame_path, point))
+                if not subtitle_text.strip():
+                    continue
+
+                start_time = point
+                end_time = min(duration, point + self.subtitle_duration_seconds)
+                if end_time <= start_time:
+                    end_time = min(duration, start_time + 0.8)
+                srt_lines.extend(
+                    [
+                        str(caption_idx),
+                        f"{_seconds_to_srt_time(start_time)} --> {_seconds_to_srt_time(end_time)}",
+                        subtitle_text,
+                        "",
+                    ]
+                )
+                caption_idx += 1
+
+            if not srt_lines:
+                raise RuntimeError("No AI captions were generated. Try adjusting your prompt or provider settings.")
+
+            srt_path = self.output_video.parent / f"overlay_{self.output_video.stem}.srt"
+            srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
+            temp_files.append(srt_path)
+
+            self.progress.emit("Rendering video with text overlay...")
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(self.input_video),
+                    "-vf",
+                    self._build_subtitles_filter(srt_path),
+                    "-c:a",
+                    "copy",
+                    str(self.output_video),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            self.finished_overlay.emit(
+                {
+                    "title": f"Overlay: {self.input_video.stem}",
+                    "prompt": f"overlay-{self.overlay_mode}",
+                    "resolution": "same",
+                    "video_file_path": str(self.output_video),
+                    "source_url": "local-overlay",
+                    "overlay_mode": self.overlay_mode,
+                    "ai_source": self.ai_source,
+                }
+            )
+        except FileNotFoundError:
+            self.failed.emit("ffmpeg Missing", "ffmpeg is required for text overlays but was not found in PATH.")
+        except subprocess.CalledProcessError as exc:
+            self.failed.emit("Overlay Failed", exc.stderr[-1000:] or "ffmpeg failed.")
+        except Exception as exc:
+            self.failed.emit("Overlay Failed", str(exc))
+        finally:
+            for temp_file in temp_files:
+                try:
+                    if temp_file.exists():
+                        temp_file.unlink()
+                except Exception:
+                    pass
+
+
 class BrowserTrainingWorker(QThread):
     status = Signal(str)
     finished = Signal(str, str)
@@ -1621,6 +1896,7 @@ class MainWindow(QMainWindow):
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
         self.browser_training_worker: BrowserTrainingWorker | None = None
+        self.overlay_worker: VideoOverlayWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -1943,6 +2219,11 @@ class MainWindow(QMainWindow):
         self.video_remove_btn.setToolTip("Remove selected video from Generated Videos list.")
         self.video_remove_btn.clicked.connect(self.remove_selected_video)
         video_list_controls.addWidget(self.video_remove_btn)
+
+        self.video_overlay_btn = QPushButton("📝 Overlay Text")
+        self.video_overlay_btn.setToolTip("Create subtitle-style text overlays on the selected video.")
+        self.video_overlay_btn.clicked.connect(lambda: self._run_with_button_feedback(self.video_overlay_btn, self.add_overlay_to_selected_video))
+        video_list_controls.addWidget(self.video_overlay_btn)
 
         left_layout.addLayout(video_list_controls)
 
@@ -4366,6 +4647,139 @@ class MainWindow(QMainWindow):
         self.browser.setUrl(QUrl("https://grok.com/"))
         self._append_log("Opened Grok in browser for sign-in.")
 
+    def _describe_overlay_frame_with_selected_ai(self, frame_path: Path, timestamp_seconds: float) -> str:
+        source = self.prompt_source.currentData()
+        instruction = (
+            "Analyze this frame image and return one short subtitle line (max 12 words, no hashtags, no quotes). "
+            f"Timestamp in source video: {timestamp_seconds:.2f}s. "
+            "If uncertain, provide a neutral literal scene description."
+        )
+
+        if source == "openai":
+            openai_credential = self.openai_api_key.text().strip() or self.openai_access_token.text().strip()
+            if not openai_credential:
+                raise RuntimeError("OpenAI API key or access token is required.")
+
+            model = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
+            image_bytes = frame_path.read_bytes()
+            data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+            file_id = ""
+            use_uploaded_file = _openai_is_likely_api_key(openai_credential)
+            if use_uploaded_file:
+                upload_headers = _openai_headers_from_credential(openai_credential)
+                upload_headers.pop("Content-Type", None)
+                with frame_path.open("rb") as image_handle:
+                    files_payload = {
+                        "file": (frame_path.name, image_handle, "image/png"),
+                    }
+                    upload_response = requests.post(
+                        f"{OPENAI_API_BASE}/files",
+                        headers=upload_headers,
+                        data={"purpose": "vision"},
+                        files=files_payload,
+                        timeout=120,
+                    )
+                if not upload_response.ok:
+                    if upload_response.status_code == 401 and "must be made with a secret key" in upload_response.text:
+                        use_uploaded_file = False
+                    else:
+                        raise RuntimeError(
+                            f"OpenAI file upload failed: {upload_response.status_code} {upload_response.text[:400]}"
+                        )
+
+                if use_uploaded_file:
+                    try:
+                        upload_payload = upload_response.json() if upload_response.content else {}
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError(
+                            f"OpenAI file upload returned non-JSON response ({exc}): {upload_response.text[:300]}"
+                        ) from exc
+
+                    file_id = str((upload_payload or {}).get("id") or "").strip()
+                    if not file_id:
+                        raise RuntimeError("OpenAI file upload did not return a file id.")
+
+            try:
+                response_headers = _openai_headers_from_credential(openai_credential)
+                image_part: dict[str, str]
+                if use_uploaded_file and file_id:
+                    image_part = {"type": "input_image", "file_id": file_id}
+                else:
+                    image_part = {"type": "input_image", "image_url": data_url}
+
+                payload = {
+                    "model": model,
+                    "instructions": "You describe video frames with concise subtitle-style captions.",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": instruction},
+                                image_part,
+                            ],
+                        }
+                    ],
+                    "store": False,
+                }
+                response = requests.post(
+                    f"{OPENAI_API_BASE}/responses",
+                    headers=response_headers,
+                    json=payload,
+                    timeout=120,
+                )
+                if not response.ok:
+                    raise RuntimeError(f"OpenAI vision request failed: {response.status_code} {response.text[:400]}")
+
+                streamed_text = _extract_text_from_responses_sse(response.text)
+                if streamed_text:
+                    return streamed_text.strip()
+
+                try:
+                    response_payload = response.json() if response.content else {}
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"OpenAI vision returned non-JSON response ({exc}): {response.text[:300]}"
+                    ) from exc
+
+                text = _extract_text_from_responses_body(response_payload)
+                if text:
+                    return text.strip()
+
+                raise RuntimeError("OpenAI vision response did not include text output.")
+            finally:
+                if file_id:
+                    try:
+                        requests.delete(
+                            f"{OPENAI_API_BASE}/files/{file_id}",
+                            headers=_openai_headers_from_credential(openai_credential),
+                            timeout=30,
+                        )
+                    except Exception:
+                        pass
+
+        image_bytes = frame_path.read_bytes()
+        data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        return self._call_selected_ai(
+            "You describe video frames with concise subtitle-style captions.",
+            f"{instruction}\n\nFrame image (data URL): {data_url}",
+        )
+
+    def _describe_overlay_prompt_with_selected_ai(self, prompt_text: str, timestamp_seconds: float) -> str:
+        cleaned_prompt = (prompt_text or "").strip()
+        if not cleaned_prompt:
+            raise RuntimeError("Prompt text is required for prompt-only AI captioning.")
+
+        return self._call_selected_ai(
+            "You write concise subtitle lines for videos.",
+            (
+                "Generate one short subtitle line (max 12 words, no hashtags, no quotes) based on the prompt context. "
+                f"Timestamp in source video: {timestamp_seconds:.2f}s. "
+                "Vary phrasing naturally across timestamps while staying consistent with the prompt context.\n\n"
+                f"Prompt context: {cleaned_prompt}"
+            ),
+        )
+
     def _call_selected_ai(self, system: str, user: str) -> str:
         source = self.prompt_source.currentData()
         headers = {"Content-Type": "application/json"}
@@ -6462,6 +6876,7 @@ class MainWindow(QMainWindow):
             ("stitch", self.stitch_worker),
             ("upload", self.upload_worker),
             ("browser-training", self.browser_training_worker),
+            ("overlay", self.overlay_worker),
         ]
         for worker_name, worker in workers:
             if worker is None or not worker.isRunning():
@@ -6606,6 +7021,133 @@ class MainWindow(QMainWindow):
             self._refresh_video_picker(selected_index=min(index, len(self.videos) - 1))
 
         self._append_log(f"Removed video from list: {removed.get('video_file_path', 'unknown')}")
+
+    def _show_overlay_options_dialog(self) -> tuple[dict[str, object] | None, bool]:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Text Overlay Options")
+        layout = QFormLayout(dialog)
+
+        mode_combo = QComboBox(dialog)
+        mode_combo.addItem("AI generated from sampled frames", "ai")
+        mode_combo.addItem("Manual text", "manual")
+
+        interval_spin = QSpinBox(dialog)
+        interval_spin.setRange(1, 60)
+        interval_spin.setValue(5)
+        interval_spin.setSuffix(" s")
+
+        subtitle_duration_spin = QDoubleSpinBox(dialog)
+        subtitle_duration_spin.setRange(0.8, 30.0)
+        subtitle_duration_spin.setDecimals(1)
+        subtitle_duration_spin.setSingleStep(0.5)
+        subtitle_duration_spin.setValue(4.5)
+        subtitle_duration_spin.setSuffix(" s")
+
+        text_size_spin = QSpinBox(dialog)
+        text_size_spin.setRange(8, 120)
+        text_size_spin.setValue(22)
+
+        text_position_combo = QComboBox(dialog)
+        text_position_combo.addItem("Bottom", "bottom")
+        text_position_combo.addItem("Middle", "middle")
+        text_position_combo.addItem("Top", "top")
+
+        font_combo = QFontComboBox(dialog)
+        font_combo.setCurrentFont(self.font())
+
+        manual_text = QLineEdit(dialog)
+        manual_text.setPlaceholderText("Optional: manual subtitle text, or AI prompt context when in AI mode")
+        concept_default = self.concept.toPlainText().strip() if hasattr(self, "concept") else ""
+        if concept_default:
+            manual_text.setText(concept_default)
+
+
+        layout.addRow("Mode", mode_combo)
+        layout.addRow("Sample interval", interval_spin)
+        layout.addRow("Subtitle duration", subtitle_duration_spin)
+        layout.addRow("Text size", text_size_spin)
+        layout.addRow("Text position", text_position_combo)
+        layout.addRow("Font", font_combo)
+        layout.addRow("Manual text / AI prompt", manual_text)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addRow(button_box)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None, False
+
+        selected_mode = str(mode_combo.currentData() or "ai")
+        manual_value = manual_text.text().strip()
+        if selected_mode == "manual" and not manual_value:
+            QMessageBox.warning(self, "Manual Text Required", "Enter manual text or choose AI mode.")
+            return None, False
+
+        return {
+            "mode": selected_mode,
+            "interval_seconds": int(interval_spin.value()),
+            "subtitle_duration_seconds": float(subtitle_duration_spin.value()),
+            "manual_text": manual_value,
+            "font_name": font_combo.currentFont().family(),
+            "font_size": int(text_size_spin.value()),
+            "text_position": str(text_position_combo.currentData() or "bottom"),
+        }, True
+
+    def add_overlay_to_selected_video(self) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            QMessageBox.warning(self, "No Video Selected", "Select a video first.")
+            return
+        if self.overlay_worker is not None and self.overlay_worker.isRunning():
+            QMessageBox.information(self, "Overlay In Progress", "Please wait for the current text overlay job to finish.")
+            return
+
+        selected_video = self.videos[index]
+        input_video = Path(str(selected_video.get("video_file_path") or "")).expanduser()
+        if not input_video.exists():
+            QMessageBox.warning(self, "Missing Video", "The selected video file no longer exists.")
+            return
+
+        options, accepted = self._show_overlay_options_dialog()
+        if not accepted or options is None:
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_video = input_video.with_name(f"{input_video.stem}_overlay_{timestamp}.mp4")
+
+        self.overlay_worker = VideoOverlayWorker(
+            input_video=input_video,
+            output_video=output_video,
+            interval_seconds=int(options["interval_seconds"]),
+            subtitle_duration_seconds=float(options["subtitle_duration_seconds"]),
+            overlay_mode=str(options["mode"]),
+            manual_text=str(options["manual_text"]),
+            font_name=str(options.get("font_name") or self.font().family()),
+            font_size=int(options.get("font_size") or 22),
+            text_position=str(options.get("text_position") or "bottom"),
+            ai_callback=self._describe_overlay_frame_with_selected_ai,
+            ai_prompt_callback=self._describe_overlay_prompt_with_selected_ai,
+            ai_source=str(self.prompt_source.currentData() or "grok"),
+        )
+        self.overlay_worker.progress.connect(self._append_log)
+        self.overlay_worker.finished_overlay.connect(self._on_overlay_finished)
+        self.overlay_worker.failed.connect(self._on_overlay_failed)
+        self.overlay_worker.start()
+        self._append_log(
+            f"Started text overlay on '{input_video.name}' (mode={options['mode']}, interval={options['interval_seconds']}s)."
+        )
+
+    def _on_overlay_finished(self, video: dict) -> None:
+        self.on_video_finished(video)
+        self._append_log(f"Text overlay complete: {video.get('video_file_path', '')}")
+        QMessageBox.information(self, "Overlay Complete", "Text overlay video created and added to the Generated Videos list.")
+        self.overlay_worker = None
+
+    def _on_overlay_failed(self, title: str, message: str) -> None:
+        self._append_log(f"ERROR: Text overlay failed: {title}: {message}")
+        QMessageBox.critical(self, title, message)
+        self.overlay_worker = None
 
     def _format_time_ms(self, ms: int) -> str:
         total_seconds = max(0, int(ms // 1000))
