@@ -185,53 +185,110 @@ def _upload_trigger_selectors_for_platform(platform: str) -> list[str]:
 
 def _prime_upload_surface(page, platform: str) -> str:
     if platform == "youtube":
-        create_selectors = [
-            'button[aria-label*="create" i]',
-            'ytcp-button#create-icon button',
-            'ytcp-button[id="create-icon"] button',
-            'ytcp-button[aria-label*="create" i] button',
-            'tp-yt-paper-icon-button[aria-label*="create" i]',
-        ]
-        upload_menu_selectors = [
-            'tp-yt-paper-item[test-id="upload"]',
-            'tp-yt-paper-item#text-item-0[test-id="upload"]',
-            'tp-yt-paper-item:has-text("Upload videos")',
-            '[role="menuitem"][test-id="upload"]',
-        ]
+        try:
+            create_result = page.evaluate(
+                """
+                () => {
+                    const selectors = [
+                        'button[aria-label*="create" i]',
+                        'ytcp-button#create-icon button',
+                        'ytcp-button[id="create-icon"] button',
+                        'ytcp-button[aria-label*="create" i] button',
+                        'tp-yt-paper-icon-button[aria-label*="create" i]',
+                        'yt-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response',
+                    ];
+                    const fireClick = (node) => {
+                        if (!node) return false;
+                        try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+                        const target = node.closest('button, [role="button"], tp-yt-paper-item, ytcp-button') || node;
+                        const events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+                        try {
+                            target.focus?.();
+                            for (const name of events) {
+                                target.dispatchEvent(new MouseEvent(name, { bubbles: true, cancelable: true, composed: true, view: window }));
+                            }
+                            target.click?.();
+                            return true;
+                        } catch (_) {
+                            try { target.click(); return true; } catch (_) { return false; }
+                        }
+                    };
 
-        create_clicked = False
-        for selector in create_selectors:
-            try:
-                node = page.locator(selector).first
-                if node.count() < 1:
-                    continue
-                node.click(timeout=900)
-                create_clicked = True
-                break
-            except Exception:
-                continue
+                    for (const selector of selectors) {
+                        const node = document.querySelector(selector);
+                        if (!node) continue;
+                        if (fireClick(node)) {
+                            return { clicked: true, selector };
+                        }
+                    }
+                    return { clicked: false, selector: '' };
+                }
+                """
+            )
+        except Exception:
+            create_result = {"clicked": False, "selector": ""}
 
+        create_clicked = bool((create_result or {}).get("clicked"))
         if create_clicked:
             try:
-                page.wait_for_timeout(250)
+                page.wait_for_timeout(350)
             except Exception:
                 pass
 
-        for selector in upload_menu_selectors:
+        try:
+            upload_result = page.evaluate(
+                """
+                () => {
+                    const candidates = Array.from(document.querySelectorAll('tp-yt-paper-item, [role="menuitem"], ytcp-ve'));
+                    const fireClick = (node) => {
+                        if (!node) return false;
+                        try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+                        const target = node.closest('tp-yt-paper-item, [role="menuitem"], button, [role="button"]') || node;
+                        const events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+                        try {
+                            target.focus?.();
+                            for (const name of events) {
+                                target.dispatchEvent(new MouseEvent(name, { bubbles: true, cancelable: true, composed: true, view: window }));
+                            }
+                            target.click?.();
+                            return true;
+                        } catch (_) {
+                            try { target.click(); return true; } catch (_) { return false; }
+                        }
+                    };
+
+                    const selectorMatches = [
+                        'tp-yt-paper-item[test-id="upload"]',
+                        'tp-yt-paper-item#text-item-0[test-id="upload"]',
+                        '[role="menuitem"][test-id="upload"]',
+                    ];
+                    for (const selector of selectorMatches) {
+                        const node = document.querySelector(selector);
+                        if (!node) continue;
+                        if (fireClick(node)) return { clicked: true, via: selector };
+                    }
+
+                    for (const node of candidates) {
+                        const text = String(node.textContent || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+                        if (!text.includes('upload videos')) continue;
+                        if (fireClick(node)) return { clicked: true, via: 'text:upload videos' };
+                    }
+
+                    return { clicked: false, via: '' };
+                }
+                """
+            )
+        except Exception:
+            upload_result = {"clicked": False, "via": ""}
+
+        if bool((upload_result or {}).get("clicked")):
             try:
-                node = page.locator(selector).first
-                if node.count() < 1:
-                    continue
-                node.click(timeout=1200)
-                try:
-                    page.wait_for_timeout(300)
-                except Exception:
-                    pass
-                if create_clicked:
-                    return "clicked YouTube create + upload videos menu"
-                return "clicked YouTube upload videos menu"
+                page.wait_for_timeout(350)
             except Exception:
-                continue
+                pass
+            if create_clicked:
+                return "clicked YouTube create + upload videos menu"
+            return "clicked YouTube upload videos menu"
 
         if create_clicked:
             return "clicked YouTube create trigger"
