@@ -111,7 +111,7 @@ You can also enable this in **Model/API Settings → App Preferences**:
 For existing browser automations (TikTok/YouTube/Facebook/Instagram), you can optionally route each upload step through a local CDP relay in **Model/API Settings → App Preferences**:
 - Enable **Use CDP relay for social browser automation**
 - Set **CDP Relay URL** (default: `http://127.0.0.1:8765/social-upload-step`)
-- If the relay is unavailable, the app automatically falls back to built-in DOM automation.
+- If the relay is unavailable, the app automatically falls back to built-in DOM automation and pauses relay attempts for the current session (toggle relay mode off/on or restart to retry).
 
 ## Configure credentials
 

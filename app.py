@@ -1921,6 +1921,7 @@ class MainWindow(QMainWindow):
         self.stitch_worker: StitchWorker | None = None
         self.upload_worker: UploadWorker | None = None
         self.social_upload_pending: dict[str, dict[str, Any]] = {}
+        self._cdp_relay_temporarily_disabled = False
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
         self.social_upload_status_labels: dict[str, QLabel] = {}
@@ -2543,6 +2544,7 @@ class MainWindow(QMainWindow):
         self._populate_top_settings_menus()
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
+        self._reset_cdp_relay_session_state()
         self._refresh_status_bar_visibility()
 
     def _build_social_upload_tab(self, platform_name: str, upload_url: str) -> QWidget:
@@ -3258,6 +3260,8 @@ class MainWindow(QMainWindow):
         self.cdp_social_upload_relay_url = QLineEdit(CDP_RELAY_SOCIAL_UPLOAD_URL)
         self.cdp_social_upload_relay_url.setPlaceholderText("http://127.0.0.1:8765/social-upload-step")
         self.cdp_social_upload_relay_url.setToolTip("Optional HTTP relay endpoint that performs CDP-backed social upload actions.")
+        self.cdp_social_upload_relay_enabled.toggled.connect(lambda _: self._reset_cdp_relay_session_state())
+        self.cdp_social_upload_relay_url.editingFinished.connect(self._reset_cdp_relay_session_state)
         app_layout.addRow("CDP Relay URL", self.cdp_social_upload_relay_url)
 
         settings_layout.addWidget(ai_group)
@@ -4002,12 +4006,16 @@ class MainWindow(QMainWindow):
                 os.environ["GROK_QTWEBENGINE_REMOTE_DEBUG_PORT"] = str(self.qtwebengine_remote_debug_port.value())
             else:
                 os.environ.pop("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", None)
+            self._reset_cdp_relay_session_state()
             QMessageBox.information(
                 self,
                 "Settings Saved",
                 f"Settings saved to:\n{DEFAULT_PREFERENCES_FILE}\n\n"
                 "QtWebEngine remote debugging changes apply after restarting the app.",
             )
+
+    def _reset_cdp_relay_session_state(self) -> None:
+        self._cdp_relay_temporarily_disabled = False
 
     def _load_startup_preferences(self) -> None:
         self._load_preferences_from_path(DEFAULT_PREFERENCES_FILE, show_feedback=False)
@@ -9208,6 +9216,8 @@ class MainWindow(QMainWindow):
     ) -> bool:
         if not self.cdp_social_upload_relay_enabled.isChecked():
             return False
+        if self._cdp_relay_temporarily_disabled:
+            return False
 
         relay_url = self.cdp_social_upload_relay_url.text().strip()
         if not relay_url:
@@ -9230,9 +9240,14 @@ class MainWindow(QMainWindow):
             if not response.ok:
                 raise RuntimeError(f"HTTP {response.status_code}: {str(relay_data)[:300]}")
         except Exception as exc:
+            self._cdp_relay_temporarily_disabled = True
             if not pending.get("cdp_relay_error_logged"):
                 self._append_log(
-                    f"WARNING: {platform_name} CDP relay call failed ({exc}); falling back to in-app DOM automation."
+                    f"WARNING: {platform_name} CDP relay unavailable ({exc}); falling back to in-app DOM automation "
+                    "and pausing relay attempts for this session."
+                )
+                self._append_log(
+                    "TIP: Start your CDP relay service and toggle CDP Relay Mode off/on (or restart app) to retry relay mode."
                 )
                 pending["cdp_relay_error_logged"] = True
             return False
