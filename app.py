@@ -9556,27 +9556,22 @@ class MainWindow(QMainWindow):
                                     userPrompt.id = promptId;
                                     userPrompt.setAttribute("role", "button");
                                     userPrompt.tabIndex = 0;
-                                    userPrompt.style.position = "fixed";
-                                    userPrompt.style.zIndex = "2147483647";
-                                    userPrompt.style.top = "24px";
-                                    userPrompt.style.left = "50%";
-                                    userPrompt.style.transform = "translateX(-50%)";
-                                    userPrompt.style.maxWidth = "92vw";
-                                    userPrompt.style.width = "min(1100px, 92vw)";
-                                    userPrompt.style.padding = "28px 32px";
-                                    userPrompt.style.fontSize = "42px";
-                                    userPrompt.style.fontWeight = "900";
-                                    userPrompt.style.lineHeight = "1.2";
-                                    userPrompt.style.textAlign = "center";
+                                    userPrompt.style.display = "inline-block";
+                                    userPrompt.style.marginLeft = "12px";
+                                    userPrompt.style.verticalAlign = "middle";
+                                    userPrompt.style.maxWidth = "min(520px, 70vw)";
+                                    userPrompt.style.padding = "10px 14px";
+                                    userPrompt.style.fontSize = "16px";
+                                    userPrompt.style.fontWeight = "700";
+                                    userPrompt.style.lineHeight = "1.35";
+                                    userPrompt.style.textAlign = "left";
                                     userPrompt.style.cursor = "pointer";
                                     userPrompt.style.textDecoration = "none";
-                                    userPrompt.style.border = "5px solid #ff4d4f";
-                                    userPrompt.style.borderRadius = "18px";
-                                    userPrompt.style.boxShadow = "0 16px 42px rgba(0, 0, 0, 0.42), 0 0 0 4px rgba(255, 77, 79, 0.25)";
-                                    userPrompt.style.background = "rgba(255, 255, 255, 0.97)";
+                                    userPrompt.style.border = "2px solid #ff4d4f";
+                                    userPrompt.style.borderRadius = "8px";
+                                    userPrompt.style.boxShadow = "0 4px 10px rgba(0, 0, 0, 0.18)";
+                                    userPrompt.style.background = "rgba(255, 255, 255, 0.98)";
                                     userPrompt.style.color = "#b00020";
-                                    userPrompt.style.backdropFilter = "blur(4px)";
-                                    userPrompt.style.webkitBackdropFilter = "blur(4px)";
                                     userPrompt.textContent = "User Interaction Required, Click here to continue!";
                                     const activateFileInput = () => {
                                         try {
@@ -9598,7 +9593,11 @@ class MainWindow(QMainWindow):
                                             activateFileInput();
                                         }
                                     });
-                                    document.body.appendChild(userPrompt);
+                                    if (fileInput.parentElement) {
+                                        try { fileInput.insertAdjacentElement("afterend", userPrompt); } catch (_) { fileInput.parentElement.appendChild(userPrompt); }
+                                    } else {
+                                        document.body.appendChild(userPrompt);
+                                    }
                                 }
                             } catch (_) {}
                         }
