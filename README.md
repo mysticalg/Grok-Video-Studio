@@ -72,11 +72,13 @@ Use the Android project in `android/` to build and sign installable artifacts.
 
 ```bash
 cd android
-./gradlew assembleDebug
-./gradlew bundleRelease
+gradle assembleDebug
+gradle bundleRelease
 ```
 
 See full Android packaging/signing/deployment steps in [`android/README.md`](android/README.md).
+
+Set the Android app entry URL (for full feature-parity web deployment) with `APP_ENTRY_URL` in `android/app/build.gradle.kts`.
 
 ## Configure credentials
 

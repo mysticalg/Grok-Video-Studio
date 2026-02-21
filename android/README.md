@@ -1,39 +1,49 @@
 # Android build and Play Store release
 
-This Android module wraps Grok Video Studio into a mobile-first app shell and is ready to produce installable APK/AAB artifacts for internal testing and Google Play deployment.
+This Android project provides a production Android wrapper for **Grok Video Studio** and can generate installable APK/AAB artifacts for testing and Google Play submission.
 
-## What this Android port contains
+## Feature parity model
 
-- Kotlin + Jetpack Compose launcher app
-- Full-screen `WebView` shell pointed at `https://grok.com/imagine`
-- File picker support for uploading videos/images from Android storage
-- Production release config with R8 shrinking/minification
-- Environment-driven signing config for CI/CD
+The desktop app (`app.py`) is PySide-based and not directly executable on Android. To preserve the same end-user features on mobile, the Android app ships as a hardened WebView container and loads a full web deployment of Grok Video Studio.
+
+- Configure the hosted full app URL with `APP_ENTRY_URL` in `android/app/build.gradle.kts`.
+- You can also override it at launch time using an intent extra named `app_url`.
+- Browser-based capabilities (generation, uploads, account login flows, content management) are available through the loaded web app.
+
+## What this Android app includes
+
+- Kotlin + Jetpack Compose full-screen WebView container
+- JavaScript/DOM/media/cookie support for modern web app flows
+- Native file upload picker (single and multi-select)
+- DownloadManager integration for exported assets
+- External deep-link handling (`mailto:`, app schemes, etc.)
+- Release-safe build setup (R8 + resource shrinking)
+- Optional env-based signing config for CI/CD
 
 ## Build requirements
 
 - Android Studio Jellyfish+ or command-line Android SDK
 - JDK 17
 - Android SDK Platform 34 + Build Tools
-- Gradle (or Android Studio managed Gradle)
+- Gradle 8.14+
 
 ## Local build
 
-From the `android/` directory:
+From `android/`:
 
 ```bash
-./gradlew assembleDebug
-./gradlew bundleRelease
+gradle assembleDebug
+gradle bundleRelease
 ```
 
-Generated artifacts:
+Artifacts:
 
 - Debug APK: `app/build/outputs/apk/debug/app-debug.apk`
 - Release AAB: `app/build/outputs/bundle/release/app-release.aab`
 
 ## Configure release signing
 
-Set these environment variables before building release artifacts:
+Set these before `bundleRelease`:
 
 - `ANDROID_KEYSTORE_PATH`
 - `ANDROID_KEYSTORE_PASSWORD`
@@ -47,13 +57,13 @@ export ANDROID_KEYSTORE_PATH=/path/to/release.jks
 export ANDROID_KEYSTORE_PASSWORD='***'
 export ANDROID_KEY_ALIAS='grokvideostudio'
 export ANDROID_KEY_PASSWORD='***'
-./gradlew bundleRelease
+gradle bundleRelease
 ```
 
-## Google Play upload checklist
+## Google Play release checklist
 
 1. Create app in Play Console (`com.grokvideostudio.app`).
-2. Upload `app-release.aab` to internal testing track first.
-3. Complete Data safety + privacy disclosures.
-4. Upload store listing screenshots, icon, feature graphic.
-5. Promote to production after test rollout.
+2. Upload `app-release.aab` to Internal testing.
+3. Complete Data safety + privacy declarations.
+4. Add store listing assets and screenshots.
+5. Roll out staged production release.
