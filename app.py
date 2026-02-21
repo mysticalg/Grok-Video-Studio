@@ -1756,7 +1756,7 @@ class MainWindow(QMainWindow):
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
         self.stop_all_btn.setCheckable(True)
         self.stop_all_btn.clicked.connect(lambda: self._run_with_button_feedback(self.stop_all_btn, self.stop_all_jobs))
-        actions_layout.addWidget(self.stop_all_btn, 1, 0)
+        self.stop_all_btn.setMaximumWidth(140)
 
         self.continue_frame_btn = QPushButton("🟨 Continue Last Video")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
@@ -1828,7 +1828,6 @@ class MainWindow(QMainWindow):
         self.music_file_label = QLabel("Music: none selected")
         self.music_file_label.setStyleSheet("color: #9fb3c8;")
         self.music_file_label.setWordWrap(True)
-        actions_layout.addWidget(self.music_file_label, 8, 0, 1, 2)
 
         music_actions_layout = QHBoxLayout()
         self.choose_music_btn = QPushButton("🎵 Choose Music (wav/mp3)")
@@ -1840,7 +1839,7 @@ class MainWindow(QMainWindow):
         self.clear_music_btn.setToolTip("Remove any selected custom background music file.")
         self.clear_music_btn.clicked.connect(self._clear_custom_music_file)
         music_actions_layout.addWidget(self.clear_music_btn)
-        actions_layout.addLayout(music_actions_layout, 9, 0, 1, 2)
+        self.music_actions_row = music_actions_layout
 
         self.stitch_mute_original_checkbox = QCheckBox("Mute original video audio when music is used")
         self.stitch_mute_original_checkbox.setToolTip("If enabled, only the selected music is audible in the stitched output.")
@@ -1878,6 +1877,9 @@ class MainWindow(QMainWindow):
 
         left_layout.addWidget(QLabel("Generated Videos"))
         left_layout.addWidget(self.stitch_btn)
+        left_layout.addWidget(self.music_file_label)
+        left_layout.addLayout(self.music_actions_row)
+
         self.video_picker = QComboBox()
         self.video_picker.setIconSize(QPixmap(180, 102).size())
         self.video_picker.setMinimumHeight(82)
@@ -1964,7 +1966,11 @@ class MainWindow(QMainWindow):
         self.stitch_progress_bar.setVisible(False)
         log_layout.addWidget(self.stitch_progress_bar)
 
-        log_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
+        log_actions_layout = QHBoxLayout()
+        log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
+        log_actions_layout.addStretch(1)
+        log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
+        log_layout.addLayout(log_actions_layout)
 
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
@@ -2914,6 +2920,27 @@ class MainWindow(QMainWindow):
         homepage_action.setToolTip("Open grok.com/imagine in the embedded browser.")
         homepage_action.triggered.connect(self.show_browser_page)
         self.quick_actions_toolbar.addAction(homepage_action)
+
+        self.quick_actions_toolbar.addSeparator()
+        youtube_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to YouTube", self)
+        youtube_upload_action.setToolTip("Upload selected video to YouTube.")
+        youtube_upload_action.triggered.connect(self.upload_selected_to_youtube)
+        self.quick_actions_toolbar.addAction(youtube_upload_action)
+
+        facebook_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to Facebook", self)
+        facebook_upload_action.setToolTip("Upload selected video to Facebook.")
+        facebook_upload_action.triggered.connect(self.upload_selected_to_facebook)
+        self.quick_actions_toolbar.addAction(facebook_upload_action)
+
+        instagram_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to Instagram", self)
+        instagram_upload_action.setToolTip("Upload selected video to Instagram.")
+        instagram_upload_action.triggered.connect(self.upload_selected_to_instagram)
+        self.quick_actions_toolbar.addAction(instagram_upload_action)
+
+        tiktok_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to TikTok", self)
+        tiktok_upload_action.setToolTip("Upload selected video to TikTok.")
+        tiktok_upload_action.triggered.connect(self.upload_selected_to_tiktok)
+        self.quick_actions_toolbar.addAction(tiktok_upload_action)
 
     def _run_with_button_feedback(self, button: QPushButton, callback: Callable[[], None]) -> None:
         if button is not None and button.isCheckable():
