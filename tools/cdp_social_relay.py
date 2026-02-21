@@ -21,6 +21,12 @@ from typing import Any
 
 RELAY_CDP_STEP_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS", "6")))
 RELAY_LOGS_DIR = Path(os.getenv("GROK_CDP_RELAY_LOG_DIR", "logs/cdp-relay")).expanduser()
+RELAY_NETWORK_REPLAY_ENABLED = os.getenv("GROK_CDP_RELAY_ENABLE_NETWORK_REPLAY", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 _PLAYWRIGHT_INSTANCE = None
 _CDP_BROWSERS_BY_ENDPOINT: dict[str, Any] = {}
@@ -78,6 +84,163 @@ def _append_relay_log(event: str, payload: dict[str, Any]) -> None:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def _wants_network_replay(payload: dict[str, Any]) -> bool:
+    candidate = payload.get("use_network_relay_actions")
+    if candidate is None:
+        return RELAY_NETWORK_REPLAY_ENABLED
+    if isinstance(candidate, bool):
+        return candidate
+    return str(candidate).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sanitize_replay_headers(headers: dict[str, Any]) -> dict[str, str]:
+    blocked = {
+        "host",
+        "content-length",
+        "connection",
+        "origin",
+        "referer",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+    }
+    sanitized: dict[str, str] = {}
+    for key, value in (headers or {}).items():
+        if not key:
+            continue
+        lower = str(key).strip().lower()
+        if lower in blocked:
+            continue
+        sanitized[str(key)] = str(value)
+    return sanitized
+
+
+def _capture_network_candidates(page, platform: str, capture_ms: int = 1500) -> list[dict[str, Any]]:
+    try:
+        cdp_session = page.context.new_cdp_session(page)
+    except Exception:
+        return []
+
+    requests: dict[str, dict[str, Any]] = {}
+    captured: list[dict[str, Any]] = []
+
+    platform_hints = {
+        "youtube": ("youtubei/v1", "graphql", "upload"),
+        "tiktok": ("graphql", "api", "post"),
+        "facebook": ("graphql", "api", "composer"),
+        "instagram": ("graphql", "api", "media"),
+    }.get(platform, ("graphql", "api", "upload"))
+
+    def _on_request(params: dict[str, Any]) -> None:
+        request = params.get("request") or {}
+        request_id = str(params.get("requestId") or "")
+        url = str(request.get("url") or "")
+        method = str(request.get("method") or "GET").upper()
+        resource_type = str(params.get("type") or "")
+        lower_url = url.lower()
+        if method not in {"POST", "PUT", "PATCH"}:
+            return
+        if resource_type not in {"XHR", "Fetch", "Other"}:
+            return
+        if not any(hint in lower_url for hint in platform_hints):
+            return
+        requests[request_id] = {
+            "request_id": request_id,
+            "url": url,
+            "method": method,
+            "headers": request.get("headers") or {},
+            "post_data": request.get("postData") or "",
+            "resource_type": resource_type,
+        }
+
+    def _on_response(params: dict[str, Any]) -> None:
+        request_id = str(params.get("requestId") or "")
+        base = requests.get(request_id)
+        if not base:
+            return
+        response = params.get("response") or {}
+        mime_type = str(response.get("mimeType") or "")
+        if not any(token in mime_type.lower() for token in ("json", "graphql", "javascript", "text")):
+            return
+        captured.append(
+            {
+                **base,
+                "status": int(response.get("status") or 0),
+                "response_mime": mime_type,
+            }
+        )
+
+    try:
+        cdp_session.send("Network.enable")
+        cdp_session.on("Network.requestWillBeSent", _on_request)
+        cdp_session.on("Network.responseReceived", _on_response)
+        page.wait_for_timeout(max(250, capture_ms))
+    except Exception:
+        return []
+    finally:
+        try:
+            cdp_session.detach()
+        except Exception:
+            pass
+
+    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in captured:
+        key = (str(item.get("method") or ""), str(item.get("url") or ""), str(item.get("post_data") or "")[:200])
+        deduped[key] = item
+    return list(deduped.values())[:8]
+
+
+def _replay_network_candidates(page, payload: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_results: list[dict[str, Any]] = []
+    for candidate in candidates:
+        url = str(candidate.get("url") or "")
+        method = str(candidate.get("method") or "POST")
+        if not url:
+            continue
+        headers = _sanitize_replay_headers(candidate.get("headers") or {})
+        post_data = str(candidate.get("post_data") or "")
+        try:
+            result = page.evaluate(
+                """async ([url, method, headers, body]) => {
+                    try {
+                        const response = await fetch(url, {
+                            method,
+                            headers,
+                            credentials: 'include',
+                            body: body || undefined,
+                        });
+                        return {
+                            ok: response.ok,
+                            status: response.status,
+                            redirected: response.redirected,
+                            url: response.url || url,
+                        };
+                    } catch (error) {
+                        return { ok: false, status: 0, error: String(error), url };
+                    }
+                }""",
+                [url, method, headers, post_data],
+            )
+        except Exception as exc:
+            result = {"ok": False, "status": 0, "error": str(exc), "url": url}
+
+        replay_results.append(
+            {
+                "url": url,
+                "method": method,
+                "status": int((result or {}).get("status") or 0),
+                "ok": bool((result or {}).get("ok")),
+                "error": str((result or {}).get("error") or "")[:200],
+            }
+        )
+        if len(replay_results) >= int(payload.get("max_network_replays") or 3):
+            break
+    return replay_results
 
 
 def _parse_debug_port(payload: dict[str, Any]) -> int:
@@ -570,6 +733,26 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                 video_mime=str(payload.get("video_mime") or "video/mp4"),
             )
 
+            network_capture_detail = {
+                "enabled": False,
+                "captured": 0,
+                "replayed": 0,
+                "results": [],
+            }
+            if _wants_network_replay(payload):
+                captured_candidates = _capture_network_candidates(
+                    page,
+                    platform,
+                    capture_ms=int(payload.get("network_capture_ms") or 1400),
+                )
+                replay_results = _replay_network_candidates(page, payload, captured_candidates)
+                network_capture_detail = {
+                    "enabled": True,
+                    "captured": len(captured_candidates),
+                    "replayed": len(replay_results),
+                    "results": replay_results,
+                }
+
             script = _script_for_platform(platform)
             result = page.evaluate(
                 """([payload, script]) => {
@@ -606,6 +789,11 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
 
     done = bool(result.get("done"))
     status = str(result.get("status") or f"{platform}: CDP step executed")
+    if network_capture_detail.get("enabled"):
+        status = (
+            f"{status} Network replay captured={network_capture_detail.get('captured', 0)} "
+            f"replayed={network_capture_detail.get('replayed', 0)}."
+        )
     if not done and file_staged:
         status = f"{status} File staged via CDP."
     return {
@@ -618,6 +806,7 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
             "result": result,
             "file_staged": file_staged,
             "file_stage_detail": file_stage_detail,
+            "network_replay": network_capture_detail,
         }, ensure_ascii=False)[:700],
     }
 
