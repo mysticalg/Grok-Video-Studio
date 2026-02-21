@@ -1739,9 +1739,6 @@ class MainWindow(QMainWindow):
 
         left_layout.addWidget(prompt_group)
 
-        actions_group = QGroupBox("🚀 Actions")
-        actions_layout = QGridLayout(actions_group)
-
         self.generate_image_btn = QPushButton("🎬 Create New Video")
         self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
         self.generate_image_btn.setCheckable(True)
@@ -1870,8 +1867,6 @@ class MainWindow(QMainWindow):
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
-        left_layout.addWidget(actions_group)
-
         left_layout.addWidget(QLabel("Generated Videos"))
         left_layout.addWidget(self.stitch_btn)
         left_layout.addWidget(self.music_file_label)
@@ -1880,6 +1875,8 @@ class MainWindow(QMainWindow):
         self.video_picker = QComboBox()
         self.video_picker.setIconSize(QPixmap(180, 102).size())
         self.video_picker.setMinimumHeight(82)
+        self.video_picker.setMaxVisibleItems(3)
+        self.video_picker.view().setMinimumHeight(330)
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
         left_layout.addWidget(self.video_picker)
 
@@ -1981,30 +1978,34 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(self.preview)
 
         preview_controls = QHBoxLayout()
-        self.preview_play_btn = QPushButton("▶️ Play")
+        self.preview_play_btn = QPushButton("▶️")
         self.preview_play_btn.setToolTip("Play the selected video in the preview pane.")
         self.preview_play_btn.clicked.connect(self.play_preview)
         preview_controls.addWidget(self.preview_play_btn)
-        self.preview_stop_btn = QPushButton("⏹️ Stop")
+        self.preview_stop_btn = QPushButton("⏹️")
         self.preview_stop_btn.setToolTip("Stop playback in the preview pane.")
         self.preview_stop_btn.clicked.connect(self.stop_preview)
         preview_controls.addWidget(self.preview_stop_btn)
 
-        self.preview_mute_checkbox = QCheckBox("Mute")
+        self.preview_mute_checkbox = QCheckBox("🔇")
+        self.preview_mute_checkbox.setToolTip("Mute/unmute preview audio.")
         self.preview_mute_checkbox.toggled.connect(self._set_preview_muted)
         preview_controls.addWidget(self.preview_mute_checkbox)
 
-        self.preview_volume_label = QLabel("Volume")
+        self.preview_volume_label = QLabel("🔊")
         preview_controls.addWidget(self.preview_volume_label)
 
         self.preview_volume_slider = QSpinBox()
         self.preview_volume_slider.setRange(0, 100)
         self.preview_volume_slider.setValue(self.preview_volume)
         self.preview_volume_slider.setSuffix("%")
+        self.preview_volume_slider.setButtonSymbols(QSpinBox.NoButtons)
+        self.preview_volume_slider.setFixedWidth(58)
+        self.preview_volume_slider.setStyleSheet("font-size: 11px;")
         self.preview_volume_slider.valueChanged.connect(self._set_preview_volume)
         preview_controls.addWidget(self.preview_volume_slider)
 
-        self.preview_fullscreen_btn = QPushButton("⛶ Fullscreen")
+        self.preview_fullscreen_btn = QPushButton("⛶")
         self.preview_fullscreen_btn.setToolTip("Toggle fullscreen preview.")
         self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
@@ -6503,7 +6504,7 @@ class MainWindow(QMainWindow):
         if self.preview_fullscreen_overlay_btn is not None:
             return
 
-        overlay_btn = QPushButton("🗗 Exit Fullscreen")
+        overlay_btn = QPushButton("🗗")
         overlay_btn.setToolTip("Exit fullscreen preview")
         overlay_btn.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         overlay_btn.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -6521,7 +6522,7 @@ class MainWindow(QMainWindow):
         self.preview_fullscreen_overlay_btn.move(max(10, x), max(10, y))
 
     def _on_preview_fullscreen_changed(self, fullscreen: bool) -> None:
-        self.preview_fullscreen_btn.setText("🗗 Exit Fullscreen" if fullscreen else "⛶ Fullscreen")
+        self.preview_fullscreen_btn.setText("🗗" if fullscreen else "⛶")
 
         if fullscreen:
             self._ensure_preview_fullscreen_overlay()
