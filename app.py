@@ -6041,7 +6041,8 @@ class MainWindow(QMainWindow):
                     }
 
                     const wasExpanded = settingsButton.getAttribute("aria-expanded") === "true";
-                    const opened = wasExpanded || emulateClick(settingsButton);
+                    const menuBefore = findOpenMenu();
+                    const opened = menuBefore ? true : emulateClick(settingsButton);
                     const menu = findOpenMenu();
                     return {
                         ok: opened || !!menu,
@@ -6385,7 +6386,10 @@ class MainWindow(QMainWindow):
                         "button[type='submit'][aria-label='Submit']",
                         "button[aria-label='Submit'][type='submit']",
                         "button[type='submit']",
-                        "button[aria-label='Submit']"
+                        "button[aria-label='Submit']",
+                        "button[aria-label='Create video']",
+                        "button[aria-label*='Create video' i]",
+                        "button[data-disabled='false']"
                     ];
 
                     const submitCandidates = [];
@@ -6429,24 +6433,35 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                     };
 
+                    const allButtons = [...document.querySelectorAll("button")].filter((el) => isVisible(el));
+                    const createVideoButton = allButtons.find((btn) => {
+                        const label = (btn.getAttribute("aria-label") || "").trim();
+                        const txt = (btn.textContent || "").trim();
+                        const srOnly = (btn.querySelector(".sr-only")?.textContent || "").trim();
+                        return /create\s*video/i.test(label) || /create\s*video/i.test(txt) || /create\s*video/i.test(srOnly);
+                    }) || submitButton;
+
                     let clicked = false;
-                    
+                    if (createVideoButton) {
+                        emulateClick(createVideoButton);
+                        clicked = true;
+                    }
 
                     let formSubmitted = false;
-                    if (form) {
+                    if (!clicked && form) {
                         const ev = new Event("submit", { bubbles: true, cancelable: true });
-                        formSubmitted = form.dispatchEvent(ev); // lets React handlers run
+                        form.dispatchEvent(ev); // lets React handlers run
                         formSubmitted = true;
                     }
 
                     return {
-                        ok: true,
+                        ok: clicked || formSubmitted,
                         submitted: clicked || formSubmitted,
-                        doubleClicked: !!submitButton,
+                        doubleClicked: !!createVideoButton,
                         formSubmitted,
-                        forceEnabled: !!submitButton,
-                        buttonText: submitButton ? (submitButton.textContent || "").trim() : "",
-                        buttonAriaLabel: submitButton ? (submitButton.getAttribute("aria-label") || "") : ""
+                        forceEnabled: !!createVideoButton,
+                        buttonText: createVideoButton ? (createVideoButton.textContent || "").trim() : "",
+                        buttonAriaLabel: createVideoButton ? (createVideoButton.getAttribute("aria-label") || "") : ""
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
