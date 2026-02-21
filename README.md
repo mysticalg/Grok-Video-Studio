@@ -133,6 +133,7 @@ What this relay does now:
 - Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (file-input staging, file-chooser trigger staging, file-backed simulated drag/drop events, caption/title/publish/share clicks).
 - Returns `handled: true` when CDP step execution succeeds, with progress + status details.
 - Relay console now prints per-step `relay result: handled=... done=... status=...` for quick diagnosis.
+- Relay also writes JSONL request/response logs to `logs/cdp-relay/` by default (override with `GROK_CDP_RELAY_LOG_DIR`).
 - Returns `handled: false` when CDP attach fails; app remains in relay-only mode for that upload attempt and schedules retry/status updates.
 
 If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.

@@ -14,10 +14,39 @@ import socket
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 
 RELAY_CDP_STEP_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS", "6")))
+RELAY_LOGS_DIR = Path(os.getenv("GROK_CDP_RELAY_LOG_DIR", "logs/cdp-relay")).expanduser()
+
+
+def _redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(payload or {})
+    if "video_base64" in redacted:
+        raw = str(redacted.get("video_base64") or "")
+        redacted["video_base64"] = f"<base64:{len(raw)} chars>" if raw else ""
+    if "caption" in redacted:
+        redacted["caption"] = str(redacted.get("caption") or "")[:500]
+    if "title" in redacted:
+        redacted["title"] = str(redacted.get("title") or "")[:300]
+    return redacted
+
+
+def _append_relay_log(event: str, payload: dict[str, Any]) -> None:
+    try:
+        RELAY_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        log_file = RELAY_LOGS_DIR / f"relay-{datetime.now().strftime('%Y-%m-%d')}.jsonl"
+        entry = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "event": event,
+            "payload": payload,
+        }
+        with open(log_file, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def _parse_debug_port(payload: dict[str, Any]) -> int:
@@ -582,6 +611,13 @@ class RelayHandler(BaseHTTPRequestHandler):
             f"relay step: platform={platform} attempt={attempt} "
             f"debug_port={debug_port} url={current_url}"
         )
+        _append_relay_log("request", {
+            "platform": platform,
+            "attempt": attempt,
+            "debug_port": debug_port,
+            "current_url": current_url,
+            "payload": _redact_payload(payload),
+        })
 
         response = _handle_with_cdp_bounded(payload)
         print(
@@ -589,6 +625,16 @@ class RelayHandler(BaseHTTPRequestHandler):
             f"handled={bool(response.get('handled'))} done={bool(response.get('done'))} "
             f"status={str(response.get('status') or '')[:160]}"
         )
+        _append_relay_log("response", {
+            "platform": platform,
+            "attempt": attempt,
+            "handled": bool(response.get("handled")),
+            "done": bool(response.get("done")),
+            "status": str(response.get("status") or ""),
+            "retry_ms": int(response.get("retry_ms", 0) or 0),
+            "progress": int(response.get("progress", 0) or 0),
+            "log": str(response.get("log") or "")[:1200],
+        })
         self._send_json(200, response)
 
 
