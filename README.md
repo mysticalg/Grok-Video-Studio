@@ -130,7 +130,7 @@ Then in the app:
 
 What this relay does now:
 - Connects to QtWebEngine via CDP (`QTWEBENGINE_REMOTE_DEBUGGING` port).
-- Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (file-input staging, file-chooser trigger staging, file-backed simulated drag/drop events, caption/title/publish/share clicks).
+- Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (file-input staging, file-chooser trigger staging, caption/title/publish/share clicks).
 - Returns `handled: true` when CDP step execution succeeds, with progress + status details.
 - Relay console now prints per-step `relay result: handled=... done=... status=...` for quick diagnosis.
 - Relay also writes JSONL request/response logs to `logs/cdp-relay/` by default (override with `GROK_CDP_RELAY_LOG_DIR`).
