@@ -130,7 +130,7 @@ Then in the app:
 
 What this relay does now:
 - Connects to QtWebEngine via CDP (`QTWEBENGINE_REMOTE_DEBUGGING` port).
-- Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (caption/title/publish/share clicks).
+- Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (file staging, simulated drag/drop affordance events, caption/title/publish/share clicks).
 - Returns `handled: true` when CDP step execution succeeds, with progress + status details.
 - Returns `handled: false` when CDP attach fails; app remains in relay-only mode for that upload attempt and schedules retry/status updates.
 

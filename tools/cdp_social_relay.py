@@ -83,6 +83,101 @@ def _upload_selectors_for_platform(platform: str) -> list[str]:
     return ['input[type="file"]']
 
 
+def _upload_trigger_selectors_for_platform(platform: str) -> list[str]:
+    if platform == "tiktok":
+        return [
+            '[data-e2e*="upload"]',
+            'button[data-e2e*="upload"]',
+            'div[data-e2e*="upload"]',
+            'button:has-text("Select video")',
+            'button:has-text("Upload")',
+            '[role="button"]:has-text("Select file")',
+        ]
+    if platform == "youtube":
+        return [
+            'input[type="file"][name="Filedata"] + *',
+            'button[aria-label*="select files" i]',
+            'ytcp-button[id*="upload"] button',
+            'ytcp-button button:has-text("Select files")',
+        ]
+    if platform == "facebook":
+        return [
+            'div[role="button"]:has-text("Add video")',
+            'button:has-text("Add video")',
+            'button:has-text("Upload")',
+        ]
+    if platform == "instagram":
+        return [
+            'button:has-text("Select from computer")',
+            'button:has-text("Select")',
+            'div[role="button"]:has-text("Select")',
+        ]
+    return ['button:has-text("Upload")', '[role="button"]:has-text("Upload")']
+
+
+def _stage_file_upload_via_file_chooser(page, platform: str, video_path: str) -> tuple[bool, str]:
+    selectors = _upload_trigger_selectors_for_platform(platform)
+    for selector in selectors:
+        locator = page.locator(selector)
+        count = locator.count()
+        for idx in range(min(count, 4)):
+            node = locator.nth(idx)
+            try:
+                with page.expect_file_chooser(timeout=1200) as chooser_info:
+                    node.click(timeout=1000)
+                chooser = chooser_info.value
+                chooser.set_files(video_path)
+                return True, f"staged via file chooser trigger '{selector}'"
+            except Exception:
+                continue
+    return False, "no file chooser trigger matched"
+
+
+def _simulate_drag_drop_affordance(page, platform: str) -> str:
+    if platform == "tiktok":
+        selectors = [
+            '[data-e2e*="upload"]',
+            '[class*="upload"]',
+            '[class*="drop"]',
+            'main',
+        ]
+    else:
+        selectors = ['[class*="drop"]', '[data-testid*="upload"]', 'main']
+
+    script = """
+        (selectors) => {
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 4 && rect.height > 4;
+            };
+            for (const selector of selectors) {
+                const nodes = Array.from(document.querySelectorAll(selector));
+                for (const node of nodes) {
+                    if (!isVisible(node)) continue;
+                    const evts = ['dragenter', 'dragover', 'drop'];
+                    for (const evt of evts) {
+                        try {
+                            node.dispatchEvent(new DragEvent(evt, { bubbles: true, cancelable: true }));
+                        } catch (_) {
+                            node.dispatchEvent(new Event(evt, { bubbles: true, cancelable: true }));
+                        }
+                    }
+                    return `simulated drag/drop events on ${selector}`;
+                }
+            }
+            return 'no visible drop target found';
+        }
+    """
+    try:
+        result = page.evaluate(script, selectors)
+        return str(result or "drag/drop simulation attempted")
+    except Exception as exc:
+        return f"drag/drop simulation failed: {exc}"
+
+
 def _stage_file_upload(page, platform: str, video_path: str) -> tuple[bool, str]:
     if not video_path:
         return False, "video_path missing"
@@ -101,7 +196,12 @@ def _stage_file_upload(page, platform: str, video_path: str) -> tuple[bool, str]
             except Exception:
                 continue
 
-    return False, "no writable file input found"
+    chooser_staged, chooser_detail = _stage_file_upload_via_file_chooser(page, platform, video_path)
+    if chooser_staged:
+        return True, chooser_detail
+
+    dnd_detail = _simulate_drag_drop_affordance(page, platform)
+    return False, f"no writable file input found; {chooser_detail}; {dnd_detail}"
 
 def _script_for_platform(platform: str) -> str:
     common = r'''
