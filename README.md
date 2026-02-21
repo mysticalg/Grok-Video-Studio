@@ -134,6 +134,7 @@ What this relay does now:
 - Returns `handled: true` when CDP step execution succeeds, with progress + status details.
 - Relay console now prints per-step `relay result: handled=... done=... status=...` for quick diagnosis.
 - Relay also writes JSONL request/response logs to `logs/cdp-relay/` by default (override with `GROK_CDP_RELAY_LOG_DIR`).
+- Relay processes requests in a single server thread to avoid Playwright cross-thread context errors on Windows.
 - Returns `handled: false` when CDP attach fails; app remains in relay-only mode for that upload attempt and schedules retry/status updates.
 
 If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.

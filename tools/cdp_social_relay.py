@@ -14,7 +14,7 @@ import os
 import socket
 import threading
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -562,7 +562,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765)")
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer((args.host, args.port), RelayHandler)
+    server = HTTPServer((args.host, args.port), RelayHandler)
     print(f"CDP relay listening on http://{args.host}:{args.port}/social-upload-step", flush=True)
     try:
         server.serve_forever()
