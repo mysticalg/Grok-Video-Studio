@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFontComboBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -1490,6 +1491,7 @@ class VideoOverlayWorker(QThread):
         subtitle_duration_seconds: float,
         overlay_mode: str,
         manual_text: str,
+        font_name: str,
         ai_callback: Callable[[str, str], str],
         ai_source: str,
     ):
@@ -1500,8 +1502,15 @@ class VideoOverlayWorker(QThread):
         self.subtitle_duration_seconds = max(0.8, float(subtitle_duration_seconds))
         self.overlay_mode = overlay_mode
         self.manual_text = manual_text.strip()
+        self.font_name = self._sanitize_font_name(font_name)
         self.ai_callback = ai_callback
         self.ai_source = ai_source
+
+
+    def _sanitize_font_name(self, value: str) -> str:
+        cleaned = re.sub(r"[\r\n]+", " ", value or "").strip()
+        cleaned = cleaned.replace(",", " ").replace(":", " ").replace("'", "")
+        return cleaned or "Arial"
 
     def _build_overlay_text(self, frame_path: Path, timestamp_seconds: float) -> str:
         if self.overlay_mode == "manual":
@@ -1586,7 +1595,7 @@ class VideoOverlayWorker(QThread):
                     "-i",
                     str(self.input_video),
                     "-vf",
-                    f"subtitles={str(srt_path).replace(':', '\\:')}:force_style='Alignment=2,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00202020,BorderStyle=1,Outline=2,Shadow=0,MarginV=24'",
+                    f"subtitles={str(srt_path).replace(':', '\\:')}:force_style='Alignment=2,FontName={self.font_name},FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00202020,BorderStyle=1,Outline=2,Shadow=0,MarginV=24'",
                     "-c:a",
                     "copy",
                     str(self.output_video),
@@ -6703,6 +6712,9 @@ class MainWindow(QMainWindow):
         subtitle_duration_spin.setValue(4.5)
         subtitle_duration_spin.setSuffix(" s")
 
+        font_combo = QFontComboBox(dialog)
+        font_combo.setCurrentFont(self.font())
+
         manual_text = QLineEdit(dialog)
         manual_text.setPlaceholderText("Enter subtitle text used at each interval")
 
@@ -6716,6 +6728,7 @@ class MainWindow(QMainWindow):
         layout.addRow("Mode", mode_combo)
         layout.addRow("Sample interval", interval_spin)
         layout.addRow("Subtitle duration", subtitle_duration_spin)
+        layout.addRow("Font", font_combo)
         layout.addRow("Manual text", manual_text)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
@@ -6737,6 +6750,7 @@ class MainWindow(QMainWindow):
             "interval_seconds": int(interval_spin.value()),
             "subtitle_duration_seconds": float(subtitle_duration_spin.value()),
             "manual_text": manual_value,
+            "font_name": font_combo.currentFont().family(),
         }, True
 
     def add_overlay_to_selected_video(self) -> None:
@@ -6768,6 +6782,7 @@ class MainWindow(QMainWindow):
             subtitle_duration_seconds=float(options["subtitle_duration_seconds"]),
             overlay_mode=str(options["mode"]),
             manual_text=str(options["manual_text"]),
+            font_name=str(options.get("font_name") or self.font().family()),
             ai_callback=self._call_selected_ai,
             ai_source=str(self.prompt_source.currentData() or "grok"),
         )
