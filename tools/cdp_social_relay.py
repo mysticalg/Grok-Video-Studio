@@ -8,6 +8,7 @@ currently open QtWebEngine page via Chromium CDP.
 from __future__ import annotations
 
 import argparse
+import base64
 import atexit
 import json
 import os
@@ -263,12 +264,111 @@ def _wants_ai_actions(payload: dict[str, Any]) -> bool:
     return str(candidate).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _relay_ai_api_key() -> str:
-    return (
+def _decode_openai_access_token(access_token: str) -> dict[str, Any]:
+    try:
+        parts = access_token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8"))
+        return decoded if isinstance(decoded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_claim_string(source: object, keys: tuple[str, ...]) -> str:
+    if not isinstance(source, dict):
+        return ""
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_openai_org_project_ids(access_token: str) -> tuple[str, str]:
+    claims = _decode_openai_access_token(access_token)
+    auth_claim = claims.get("https://api.openai.com/auth")
+
+    org_id = _extract_claim_string(auth_claim, ("organization_id", "org_id", "organization"))
+    project_id = _extract_claim_string(auth_claim, ("project_id", "project"))
+
+    if not org_id:
+        org_id = _extract_claim_string(claims, ("organization_id", "org_id", "organization"))
+    if not project_id:
+        project_id = _extract_claim_string(claims, ("project_id", "project"))
+
+    return org_id, project_id
+
+
+def _relay_ai_credential(payload: dict[str, Any]) -> tuple[str, str]:
+    payload_credential = str(payload.get("openai_credential") or "").strip()
+    if payload_credential:
+        return payload_credential, "payload"
+
+    # Prefer OAuth token when available to match existing in-app authenticated connection.
+    oauth_token = str(payload.get("openai_access_token") or "").strip() or os.getenv("OPENAI_ACCESS_TOKEN", "").strip()
+    if oauth_token:
+        return oauth_token, "oauth"
+
+    api_key = (
         os.getenv("OPENAI_API_KEY", "").strip()
         or os.getenv("GROK_API_KEY", "").strip()
         or os.getenv("XAI_API_KEY", "").strip()
     )
+    if api_key:
+        return api_key, "api_key"
+
+    return "", "none"
+
+
+def _openai_headers_from_credential(credential: str) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {credential}",
+        "Content-Type": "application/json",
+    }
+    org_id, project_id = _extract_openai_org_project_ids(credential)
+    if org_id:
+        headers["OpenAI-Organization"] = org_id
+    if project_id:
+        headers["OpenAI-Project"] = project_id
+    return headers
+
+
+def _relay_ai_endpoint_and_payload(credential: str, messages: list[dict[str, str]]) -> tuple[str, dict[str, Any], dict[str, str]]:
+    claims = _decode_openai_access_token(credential)
+    issuer = str(claims.get("iss", "")).strip()
+    # OAuth access tokens from auth.openai.com should use ChatGPT responses backend.
+    if RELAY_AI_BASE_URL == "https://api.openai.com/v1" and issuer == "https://auth.openai.com":
+        endpoint = "https://chatgpt.com/backend-api/codex/responses"
+        payload = {
+            "model": RELAY_AI_MODEL,
+            "input": [
+                {
+                    "role": m.get("role", "user"),
+                    "content": [{"type": "input_text", "text": m.get("content", "")}],
+                }
+                for m in messages
+            ],
+            "reasoning": {"effort": "medium"},
+        }
+        auth_claim = claims.get("https://api.openai.com/auth")
+        account_id = _extract_claim_string(auth_claim, ("chatgpt_account_id",))
+        extra_headers: dict[str, str] = {}
+        if account_id:
+            extra_headers["ChatGPT-Account-ID"] = account_id
+        return endpoint, payload, extra_headers
+
+    endpoint = f"{RELAY_AI_BASE_URL}/chat/completions"
+    payload = {
+        "model": RELAY_AI_MODEL,
+        "messages": messages,
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
+    }
+    return endpoint, payload, {}
+
 
 
 def _build_ai_dom_snapshot(page) -> dict[str, Any]:
@@ -302,9 +402,9 @@ def _build_ai_dom_snapshot(page) -> dict[str, Any]:
 
 
 def _request_ai_action_script(payload: dict[str, Any], dom_snapshot: dict[str, Any]) -> dict[str, Any]:
-    api_key = _relay_ai_api_key()
-    if not api_key:
-        return {"ok": False, "error": "AI relay actions enabled, but OPENAI_API_KEY/GROK_API_KEY is not set."}
+    credential, credential_kind = _relay_ai_credential(payload)
+    if not credential:
+        return {"ok": False, "error": "AI relay actions enabled, but no OAuth token or API key is available."}
 
     instruction = {
         "platform": str(payload.get("platform") or ""),
@@ -329,31 +429,35 @@ def _request_ai_action_script(payload: dict[str, Any], dom_snapshot: dict[str, A
         },
     ]
 
-    body = {
-        "model": RELAY_AI_MODEL,
-        "messages": messages,
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-    }
+    endpoint, request_body, extra_headers = _relay_ai_endpoint_and_payload(credential, messages)
 
     try:
+        headers = _openai_headers_from_credential(credential)
+        headers.update(extra_headers)
         response = requests.post(
-            f"{RELAY_AI_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
+            endpoint,
+            headers=headers,
+            json=request_body,
             timeout=RELAY_AI_TIMEOUT_SECONDS,
         )
         data = response.json() if response.content else {}
         if not response.ok:
             return {"ok": False, "error": f"AI request failed HTTP {response.status_code}"}
-        content = (
-            (((data.get("choices") or [{}])[0]).get("message") or {}).get("content")
-            if isinstance(data, dict)
-            else ""
-        )
+        content = ""
+        if isinstance(data, dict):
+            if isinstance(data.get("choices"), list):
+                content = str(((((data.get("choices") or [{}])[0]).get("message") or {}).get("content")) or "")
+            elif isinstance(data.get("output"), list):
+                parts: list[str] = []
+                for item in data.get("output") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    for chunk in item.get("content") or []:
+                        if isinstance(chunk, dict):
+                            txt = str(chunk.get("text") or chunk.get("output_text") or "").strip()
+                            if txt:
+                                parts.append(txt)
+                content = "\n".join(parts)
         parsed = json.loads(content) if content else {}
         script = str(parsed.get("script") or "").strip()
         if not script:
@@ -363,6 +467,7 @@ def _request_ai_action_script(payload: dict[str, Any], dom_snapshot: dict[str, A
             "status": str(parsed.get("status") or "AI action planned."),
             "done": bool(parsed.get("done")),
             "script": script[:6000],
+            "auth": credential_kind,
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

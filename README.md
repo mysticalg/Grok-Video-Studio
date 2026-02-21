@@ -142,7 +142,7 @@ What this relay does now:
 If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.
 If relay steps are slow on your machine, increase `GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS` (default `6`) before launching the relay.
 - To enable network replay mode globally, set `GROK_CDP_RELAY_ENABLE_NETWORK_REPLAY=1` before launching the relay. You can also pass `use_network_relay_actions: true` in relay payloads for per-request control.
-- To enable AI relay actions, set `GROK_CDP_RELAY_ENABLE_AI_ACTIONS=1` and provide `OPENAI_API_KEY` (or `GROK_API_KEY`/`XAI_API_KEY`). Optional overrides: `GROK_CDP_RELAY_AI_BASE_URL`, `GROK_CDP_RELAY_AI_MODEL`, and `GROK_CDP_RELAY_AI_TIMEOUT_SECONDS`.
+- To enable AI relay actions, set `GROK_CDP_RELAY_ENABLE_AI_ACTIONS=1`; the relay will prefer your existing `OPENAI_ACCESS_TOKEN` OAuth session from app settings (no API key required), and can fall back to `OPENAI_API_KEY`/`GROK_API_KEY`/`XAI_API_KEY`. Optional overrides: `GROK_CDP_RELAY_AI_BASE_URL`, `GROK_CDP_RELAY_AI_MODEL`, and `GROK_CDP_RELAY_AI_TIMEOUT_SECONDS`.
 - On Windows, if a client drops the HTTP connection mid-response, the relay now treats it as non-fatal and continues serving subsequent requests.
 
 ## Configure credentials
