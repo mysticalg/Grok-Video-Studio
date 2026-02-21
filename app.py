@@ -1502,6 +1502,7 @@ class VideoOverlayWorker(QThread):
         font_size: int,
         text_position: str,
         ai_callback: Callable[[Path, float], str],
+        ai_prompt_callback: Callable[[str, float], str],
         ai_source: str,
     ):
         super().__init__()
@@ -1515,6 +1516,7 @@ class VideoOverlayWorker(QThread):
         self.font_size = max(8, min(120, int(font_size)))
         self.ass_alignment = self._position_to_ass_alignment(text_position)
         self.ai_callback = ai_callback
+        self.ai_prompt_callback = ai_prompt_callback
         self.ai_source = ai_source
 
 
@@ -1599,7 +1601,10 @@ class VideoOverlayWorker(QThread):
             return self.manual_text
 
         try:
-            response = self.ai_callback(frame_path, timestamp_seconds)
+            if self.manual_text:
+                response = self.ai_prompt_callback(self.manual_text, timestamp_seconds)
+            else:
+                response = self.ai_callback(frame_path, timestamp_seconds)
         except Exception as exc:
             self.progress.emit(
                 f"AI caption request failed at {timestamp_seconds:.1f}s ({exc}); using fallback caption."
@@ -4662,6 +4667,21 @@ class MainWindow(QMainWindow):
             f"{instruction}\n\nFrame image (data URL): {data_url}",
         )
 
+    def _describe_overlay_prompt_with_selected_ai(self, prompt_text: str, timestamp_seconds: float) -> str:
+        cleaned_prompt = (prompt_text or "").strip()
+        if not cleaned_prompt:
+            raise RuntimeError("Prompt text is required for prompt-only AI captioning.")
+
+        return self._call_selected_ai(
+            "You write concise subtitle lines for videos.",
+            (
+                "Generate one short subtitle line (max 12 words, no hashtags, no quotes) based on the prompt context. "
+                f"Timestamp in source video: {timestamp_seconds:.2f}s. "
+                "Vary phrasing naturally across timestamps while staying consistent with the prompt context.\n\n"
+                f"Prompt context: {cleaned_prompt}"
+            ),
+        )
+
     def _call_selected_ai(self, system: str, user: str) -> str:
         source = self.prompt_source.currentData()
         headers = {"Content-Type": "application/json"}
@@ -6922,14 +6942,8 @@ class MainWindow(QMainWindow):
         font_combo.setCurrentFont(self.font())
 
         manual_text = QLineEdit(dialog)
-        manual_text.setPlaceholderText("Enter subtitle text used at each interval")
+        manual_text.setPlaceholderText("Optional: manual subtitle text, or AI prompt context when in AI mode")
 
-        def _sync_mode(index: int) -> None:
-            selected = mode_combo.itemData(index)
-            manual_text.setEnabled(selected == "manual")
-
-        mode_combo.currentIndexChanged.connect(_sync_mode)
-        _sync_mode(mode_combo.currentIndex())
 
         layout.addRow("Mode", mode_combo)
         layout.addRow("Sample interval", interval_spin)
@@ -6937,7 +6951,7 @@ class MainWindow(QMainWindow):
         layout.addRow("Text size", text_size_spin)
         layout.addRow("Text position", text_position_combo)
         layout.addRow("Font", font_combo)
-        layout.addRow("Manual text", manual_text)
+        layout.addRow("Manual text / AI prompt", manual_text)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
         button_box.accepted.connect(dialog.accept)
@@ -6996,6 +7010,7 @@ class MainWindow(QMainWindow):
             font_size=int(options.get("font_size") or 22),
             text_position=str(options.get("text_position") or "bottom"),
             ai_callback=self._describe_overlay_frame_with_selected_ai,
+            ai_prompt_callback=self._describe_overlay_prompt_with_selected_ai,
             ai_source=str(self.prompt_source.currentData() or "grok"),
         )
         self.overlay_worker.progress.connect(self._append_log)
