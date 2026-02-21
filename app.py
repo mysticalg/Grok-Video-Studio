@@ -9088,7 +9088,7 @@ class MainWindow(QMainWindow):
         if video_file.exists() and video_file.is_file():
             # Avoid embedding very large TikTok blobs into in-page JS payloads.
             # Large base64 payloads can freeze the browser process before upload starts.
-            tiktok_inline_limit_bytes = 100 * 1024 * 1024
+            tiktok_inline_limit_bytes = 200 * 1024 * 1024
             should_inline_video = (
                 platform_name != "TikTok"
                 or video_file.stat().st_size <= tiktok_inline_limit_bytes
@@ -9544,6 +9544,36 @@ class MainWindow(QMainWindow):
                                 const probeDt = new DataTransfer();
                                 probeDt.items.add(probeFile);
                                 fakeProbeInjected = setInputFiles(probeInput, probeDt.files);
+
+                                const promptId = "codex-tiktok-user-interaction-required";
+                                const existingPrompt = document.getElementById(promptId);
+                                if (existingPrompt && existingPrompt.parentElement) existingPrompt.parentElement.removeChild(existingPrompt);
+                                const userPrompt = document.createElement("div");
+                                userPrompt.id = promptId;
+                                userPrompt.setAttribute("role", "button");
+                                userPrompt.tabIndex = 0;
+                                userPrompt.style.fontSize = "25px";
+                                userPrompt.style.marginTop = "10px";
+                                userPrompt.style.cursor = "pointer";
+                                userPrompt.style.textDecoration = "underline";
+                                userPrompt.style.color = "#ff4d4f";
+                                userPrompt.textContent = "User Interaction Required, Click here to continue!";
+                                const activateFileInput = () => {
+                                    try { fileInput.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                                    try { fileInput.click(); } catch (_) {}
+                                };
+                                userPrompt.addEventListener("click", activateFileInput);
+                                userPrompt.addEventListener("keydown", (ev) => {
+                                    if (ev.key === "Enter" || ev.key === " ") {
+                                        ev.preventDefault();
+                                        activateFileInput();
+                                    }
+                                });
+                                if (fileInput.parentElement) {
+                                    try { fileInput.insertAdjacentElement("afterend", userPrompt); } catch (_) { fileInput.parentElement.appendChild(userPrompt); }
+                                } else {
+                                    document.body.appendChild(userPrompt);
+                                }
                             } catch (_) {}
                         }
                     }
