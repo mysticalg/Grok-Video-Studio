@@ -2180,6 +2180,7 @@ class MainWindow(QMainWindow):
         self._populate_top_settings_menus()
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
+        self._refresh_status_bar_visibility()
 
     def _build_social_upload_tab(self, platform_name: str, upload_url: str) -> QWidget:
         tab = QWidget()
@@ -2909,6 +2910,21 @@ class MainWindow(QMainWindow):
         painter.fillRect(tinted.rect(), QColor(color_hex))
         painter.end()
         return QIcon(tinted)
+
+    def _status_bar_has_active_content(self) -> bool:
+        tracked_widgets = [
+            getattr(self, "upload_progress_label", None),
+            getattr(self, "upload_progress_bar", None),
+            getattr(self, "stitch_progress_label", None),
+            getattr(self, "stitch_progress_bar", None),
+        ]
+        return any(widget is not None and widget.isVisible() for widget in tracked_widgets)
+
+    def _refresh_status_bar_visibility(self) -> None:
+        status_bar = self.statusBar()
+        should_show = self._status_bar_has_active_content()
+        status_bar.setVisible(should_show)
+        status_bar.setMaximumHeight(16777215 if should_show else 0)
 
     def _build_menu_bar(self) -> None:
         menu_bar = self.menuBar()
@@ -7426,6 +7442,7 @@ class MainWindow(QMainWindow):
         started_at = time.time()
         self.stitch_progress_label.setVisible(True)
         self.stitch_progress_bar.setVisible(True)
+        self._refresh_status_bar_visibility()
 
         def update_progress(value: int, stage: str) -> None:
             bounded_value = max(0, min(100, int(value)))
@@ -7444,6 +7461,7 @@ class MainWindow(QMainWindow):
             self.stitch_progress_label.setText(f"Upload progress: failed ({message[:120]})")
             self.stitch_progress_bar.setVisible(False)
             self.stitch_progress_label.setVisible(False)
+            self._refresh_status_bar_visibility()
             QMessageBox.critical(self, title, message)
 
         def on_stitch_finished(stitched_video: dict) -> None:
@@ -7452,6 +7470,7 @@ class MainWindow(QMainWindow):
             self.stitch_progress_bar.setValue(100)
             self.stitch_progress_bar.setVisible(False)
             self.stitch_progress_label.setVisible(False)
+            self._refresh_status_bar_visibility()
             self.on_video_finished(stitched_video)
 
         def on_stitch_complete() -> None:
@@ -9325,6 +9344,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setVisible(True)
         self.upload_progress_bar.setValue(0)
         self.upload_progress_bar.setVisible(True)
+        self._refresh_status_bar_visibility()
         self._append_log(f"Starting {platform_name} upload...")
 
         self.upload_worker = UploadWorker(platform_name=platform_name, upload_fn=upload_fn, upload_kwargs=upload_kwargs)
@@ -9344,6 +9364,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setVisible(bounded_value > 0)
         self.upload_progress_bar.setVisible(bounded_value > 0)
         self.upload_progress_bar.setValue(bounded_value)
+        self._refresh_status_bar_visibility()
 
     def _format_upload_progress_message(self, message: str, max_length: int = 180) -> str:
         text = " ".join(str(message or "").split())
@@ -9356,6 +9377,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setValue(100)
         self.upload_progress_bar.setVisible(False)
         self.upload_progress_label.setVisible(False)
+        self._refresh_status_bar_visibility()
         self._append_log(f"{platform_name} upload complete. ID: {upload_id}")
         QMessageBox.information(self, dialog_title, f"{success_prefix} {upload_id}")
 
@@ -9363,6 +9385,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setText(f"Upload progress: failed ({error_message[:120]})")
         self.upload_progress_bar.setVisible(False)
         self.upload_progress_label.setVisible(False)
+        self._refresh_status_bar_visibility()
         self._append_log(f"ERROR: {platform_name} upload failed: {error_message}")
         QMessageBox.critical(self, f"{platform_name} Upload Failed", error_message)
 
