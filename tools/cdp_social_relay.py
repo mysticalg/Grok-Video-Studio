@@ -8,6 +8,7 @@ currently open QtWebEngine page via Chromium CDP.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import socket
@@ -20,6 +21,31 @@ from typing import Any
 
 RELAY_CDP_STEP_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS", "6")))
 RELAY_LOGS_DIR = Path(os.getenv("GROK_CDP_RELAY_LOG_DIR", "logs/cdp-relay")).expanduser()
+
+_PLAYWRIGHT_INSTANCE = None
+_CDP_BROWSERS_BY_ENDPOINT: dict[str, Any] = {}
+_CDP_CONNECT_LOCK = threading.Lock()
+_CDP_ACTION_LOCK = threading.Lock()
+
+
+def _close_cdp_runtime() -> None:
+    global _PLAYWRIGHT_INSTANCE
+    with _CDP_CONNECT_LOCK:
+        for endpoint, browser in list(_CDP_BROWSERS_BY_ENDPOINT.items()):
+            try:
+                browser.close()
+            except Exception:
+                pass
+            _CDP_BROWSERS_BY_ENDPOINT.pop(endpoint, None)
+        if _PLAYWRIGHT_INSTANCE is not None:
+            try:
+                _PLAYWRIGHT_INSTANCE.stop()
+            except Exception:
+                pass
+            _PLAYWRIGHT_INSTANCE = None
+
+
+atexit.register(_close_cdp_runtime)
 
 
 def _redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -450,36 +476,51 @@ def _script_for_platform(platform: str) -> str:
     return "return {platform: payload.platform || 'unknown', done: false, status: 'Unsupported platform for CDP relay.'};"
 
 
+def _get_cdp_browser(endpoint: str):
+    global _PLAYWRIGHT_INSTANCE
+    from playwright.sync_api import sync_playwright  # type: ignore
+
+    with _CDP_CONNECT_LOCK:
+        if _PLAYWRIGHT_INSTANCE is None:
+            _PLAYWRIGHT_INSTANCE = sync_playwright().start()
+
+        cached = _CDP_BROWSERS_BY_ENDPOINT.get(endpoint)
+        if cached is not None:
+            try:
+                _ = len(cached.contexts)
+                return cached
+            except Exception:
+                _CDP_BROWSERS_BY_ENDPOINT.pop(endpoint, None)
+
+        browser = _PLAYWRIGHT_INSTANCE.chromium.connect_over_cdp(endpoint)
+        _CDP_BROWSERS_BY_ENDPOINT[endpoint] = browser
+        return browser
+
+
 def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
     platform = str(payload.get("platform") or "").strip().lower()
     if not platform:
         return {"handled": False, "done": False, "status": "Missing platform."}
 
-    try:
-        from playwright.sync_api import sync_playwright  # type: ignore
-    except Exception as exc:
-        return {
-            "handled": False,
-            "done": False,
-            "status": "Playwright missing; relay cannot use CDP.",
-            "log": f"{exc}",
-        }
-
     port = _parse_debug_port(payload)
     endpoint = f"http://127.0.0.1:{port}"
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(endpoint)
+        browser = _get_cdp_browser(endpoint)
+        with _CDP_ACTION_LOCK:
             page = _pick_page(browser, str(payload.get("current_url") or ""), platform)
             if page is None:
-                browser.close()
                 return {
                     "handled": False,
                     "done": False,
                     "status": f"No CDP page target found for {platform}.",
                     "retry_ms": 1500,
                 }
+
+            try:
+                page.set_default_timeout(int(RELAY_CDP_STEP_TIMEOUT_SECONDS * 1000))
+            except Exception:
+                pass
 
             file_staged, file_stage_detail = _stage_file_upload(
                 page,
@@ -501,7 +542,6 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                 }""",
                 [payload, script],
             )
-            browser.close()
     except Exception as exc:
         return {
             "handled": False,
@@ -530,44 +570,6 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
             "file_stage_detail": file_stage_detail,
         }, ensure_ascii=False)[:700],
     }
-
-
-def _handle_with_cdp_bounded(payload: dict[str, Any]) -> dict[str, Any]:
-    result_holder: dict[str, Any] = {}
-
-    def _runner() -> None:
-        try:
-            result_holder["value"] = _handle_with_cdp(payload)
-        except Exception as exc:  # noqa: BLE001
-            result_holder["value"] = {
-                "handled": False,
-                "done": False,
-                "status": "CDP relay worker failed.",
-                "retry_ms": 1200,
-                "log": str(exc),
-            }
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join(timeout=RELAY_CDP_STEP_TIMEOUT_SECONDS)
-
-    if thread.is_alive():
-        return {
-            "handled": False,
-            "done": False,
-            "status": (
-                "CDP relay step exceeded timeout "
-                f"({RELAY_CDP_STEP_TIMEOUT_SECONDS:.1f}s); retrying next step."
-            ),
-            "retry_ms": 1200,
-            "log": "cdp-step-timeout",
-        }
-
-    value = result_holder.get("value")
-    if isinstance(value, dict):
-        return value
-    return {"handled": False, "done": False, "status": "CDP relay returned no result.", "retry_ms": 1200}
-
 
 
 class RelayHandler(BaseHTTPRequestHandler):
@@ -609,7 +611,8 @@ class RelayHandler(BaseHTTPRequestHandler):
         debug_port = _parse_debug_port(payload)
         print(
             f"relay step: platform={platform} attempt={attempt} "
-            f"debug_port={debug_port} url={current_url}"
+            f"debug_port={debug_port} url={current_url}",
+            flush=True,
         )
         _append_relay_log("request", {
             "platform": platform,
@@ -619,11 +622,12 @@ class RelayHandler(BaseHTTPRequestHandler):
             "payload": _redact_payload(payload),
         })
 
-        response = _handle_with_cdp_bounded(payload)
+        response = _handle_with_cdp(payload)
         print(
             "relay result: "
             f"handled={bool(response.get('handled'))} done={bool(response.get('done'))} "
-            f"status={str(response.get('status') or '')[:160]}"
+            f"status={str(response.get('status') or '')[:160]}",
+            flush=True,
         )
         _append_relay_log("response", {
             "platform": platform,
@@ -645,7 +649,7 @@ def main() -> None:
     args = parser.parse_args()
 
     server = ThreadingHTTPServer((args.host, args.port), RelayHandler)
-    print(f"CDP relay listening on http://{args.host}:{args.port}/social-upload-step")
+    print(f"CDP relay listening on http://{args.host}:{args.port}/social-upload-step", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

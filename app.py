@@ -101,7 +101,7 @@ if TIKTOK_PKCE_CHALLENGE_ENCODING not in {"hex", "base64url"}:
     TIKTOK_PKCE_CHALLENGE_ENCODING = "hex"
 DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
 CDP_RELAY_SOCIAL_UPLOAD_URL = os.getenv("GROK_CDP_RELAY_SOCIAL_UPLOAD_URL", "http://127.0.0.1:8765/social-upload-step")
-CDP_RELAY_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_TIMEOUT_SECONDS", "8")))
+CDP_RELAY_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_TIMEOUT_SECONDS", "25")))
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
 GITHUB_ACTIONS_RUNS_URL = f"{GITHUB_REPO_URL}/actions"
