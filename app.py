@@ -1748,7 +1748,6 @@ class MainWindow(QMainWindow):
         self.generate_image_btn = QPushButton("🎬 Create New Video")
         self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
         self.generate_image_btn.setCheckable(True)
-        self.generate_image_btn.setStyleSheet(self._action_button_style("#43a047", "white", "#2e7d32", "#2e7d32", "#1b5e20"))
         self.generate_image_btn.clicked.connect(
             lambda: self._run_with_button_feedback(self.generate_image_btn, self.start_image_generation)
         )
@@ -1756,14 +1755,12 @@ class MainWindow(QMainWindow):
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
         self.stop_all_btn.setCheckable(True)
-        self.stop_all_btn.setStyleSheet(self._action_button_style("#8b0000", "white", "#5c0000", "#5c0000", "#2f0000"))
         self.stop_all_btn.clicked.connect(lambda: self._run_with_button_feedback(self.stop_all_btn, self.stop_all_jobs))
         actions_layout.addWidget(self.stop_all_btn, 1, 0)
 
         self.continue_frame_btn = QPushButton("🟨 Continue Last Video")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
         self.continue_frame_btn.setCheckable(True)
-        self.continue_frame_btn.setStyleSheet(self._action_button_style("#fdd835", "#222", "#f9a825", "#fbc02d", "#f57f17"))
         self.continue_frame_btn.clicked.connect(
             lambda: self._run_with_button_feedback(self.continue_frame_btn, self.continue_from_last_frame)
         )
@@ -1771,7 +1768,6 @@ class MainWindow(QMainWindow):
         self.continue_image_btn = QPushButton("🖼️ Create From Image")
         self.continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
         self.continue_image_btn.setCheckable(True)
-        self.continue_image_btn.setStyleSheet(self._action_button_style("#fff176", "#222", "#fbc02d", "#ffe082", "#ff8f00"))
         self.continue_image_btn.clicked.connect(
             lambda: self._run_with_button_feedback(self.continue_image_btn, self.continue_from_local_image)
         )
@@ -1779,15 +1775,10 @@ class MainWindow(QMainWindow):
         self.browser_home_btn = QPushButton("🏠 Homepage")
         self.browser_home_btn.setToolTip("Open grok.com/imagine in the embedded browser tab.")
         self.browser_home_btn.setCheckable(True)
-        self.browser_home_btn.setStyleSheet(self._action_button_style("#ffffff", "#222", "#cfcfcf", "#eceff1", "#90a4ae"))
         self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
-        self.stitch_btn.setStyleSheet(
-            "background-color: #81d4fa; color: #0d47a1; font-weight: 700;"
-            "border: 1px solid #4fc3f7; border-radius: 6px; padding: 8px;"
-        )
         self.stitch_btn.clicked.connect(self.stitch_all_videos)
 
         self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
@@ -1881,7 +1872,6 @@ class MainWindow(QMainWindow):
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
-        self.buy_coffee_btn.setStyleSheet("font-size: 12px; font-weight: 700; padding: 4px 8px;")
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
         left_layout.addWidget(actions_group)
@@ -1994,10 +1984,6 @@ class MainWindow(QMainWindow):
         preview_controls.addWidget(self.preview_play_btn)
         self.preview_stop_btn = QPushButton("⏹️ Stop")
         self.preview_stop_btn.setToolTip("Stop playback in the preview pane.")
-        self.preview_stop_btn.setStyleSheet(
-            "background-color: #8b0000; color: white; font-weight: 700;"
-            "border: 1px solid #5c0000; border-radius: 6px; padding: 6px 10px;"
-        )
         self.preview_stop_btn.clicked.connect(self.stop_preview)
         preview_controls.addWidget(self.preview_stop_btn)
 
@@ -2364,10 +2350,6 @@ class MainWindow(QMainWindow):
 
         self.sora_generate_btn = QPushButton("🎬 API Generate Video")
         self.sora_generate_btn.setToolTip("Generate and download video via the selected API provider.")
-        self.sora_generate_btn.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: 700;"
-            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
-        )
         self.sora_generate_btn.clicked.connect(self.start_generation)
         layout.addWidget(self.sora_generate_btn)
 
@@ -2521,10 +2503,6 @@ class MainWindow(QMainWindow):
 
         self.seedance_generate_btn = QPushButton("🎬 API Generate Video")
         self.seedance_generate_btn.setToolTip("Generate and download video via the selected API provider.")
-        self.seedance_generate_btn.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: 700;"
-            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
-        )
         self.seedance_generate_btn.clicked.connect(self.start_generation)
         layout.addWidget(self.seedance_generate_btn)
 
@@ -2619,19 +2597,11 @@ class MainWindow(QMainWindow):
 
         run_actions = QHBoxLayout()
         self.training_start_btn = QPushButton("Start Training")
-        self.training_start_btn.setStyleSheet(
-            "background-color: #1976d2; color: white; font-weight: 700;"
-            "border: 1px solid #0d47a1; border-radius: 6px; padding: 6px 10px;"
-        )
         self.training_start_btn.clicked.connect(self.start_browser_training)
         run_actions.addWidget(self.training_start_btn)
 
         self.training_stop_btn = QPushButton("Stop Training")
         self.training_stop_btn.setToolTip("Stop embedded training capture and save raw_training_trace.json.")
-        self.training_stop_btn.setStyleSheet(
-            "background-color: #8b0000; color: white; font-weight: 700;"
-            "border: 1px solid #5c0000; border-radius: 6px; padding: 6px 10px;"
-        )
         self.training_stop_btn.setEnabled(False)
         self.training_stop_btn.clicked.connect(self.stop_browser_training)
         run_actions.addWidget(self.training_stop_btn)
@@ -2944,14 +2914,6 @@ class MainWindow(QMainWindow):
         homepage_action.setToolTip("Open grok.com/imagine in the embedded browser.")
         homepage_action.triggered.connect(self.show_browser_page)
         self.quick_actions_toolbar.addAction(homepage_action)
-
-    def _action_button_style(self, bg: str, fg: str, border: str, pressed_bg: str, checked_border: str) -> str:
-        return (
-            f"QPushButton {{background-color: {bg}; color: {fg}; font-weight: 700;"
-            f"border: 1px solid {border}; border-radius: 6px; padding: 8px;}}"
-            f"QPushButton:pressed {{background-color: {pressed_bg}; padding-top: 9px; padding-left: 9px;}}"
-            f"QPushButton:checked {{border: 2px solid {checked_border}; background-color: {pressed_bg};}}"
-        )
 
     def _run_with_button_feedback(self, button: QPushButton, callback: Callable[[], None]) -> None:
         if button is not None and button.isCheckable():
@@ -6519,10 +6481,6 @@ class MainWindow(QMainWindow):
 
         overlay_btn = QPushButton("🗗 Exit Fullscreen")
         overlay_btn.setToolTip("Exit fullscreen preview")
-        overlay_btn.setStyleSheet(
-            "background-color: rgba(15, 24, 40, 0.85); color: white; font-weight: 700;"
-            "border: 1px solid #4fc3f7; border-radius: 8px; padding: 8px 12px;"
-        )
         overlay_btn.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         overlay_btn.setWindowFlag(Qt.FramelessWindowHint, True)
         overlay_btn.clicked.connect(self.toggle_preview_fullscreen)
