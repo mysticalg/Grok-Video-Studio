@@ -8944,9 +8944,11 @@ class MainWindow(QMainWindow):
         "Content-Type": "application/json; charset=UTF-8"
         }
 
-        # Use /inbox/ for draft (user approves) or /video/ for direct post
-        # Start with inbox — safer for testing
-        init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
+        # Try draft inbox init first, then fallback to direct post init.
+        init_url_candidates = [
+            ("inbox_draft", "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"),
+            ("direct_post", "https://open.tiktokapis.com/v2/post/publish/video/init/"),
+        ]
 
         # TikTok metadata validation can vary. Build only API-valid chunking strategies
         # and use the first one that both initializes and uploads successfully.
@@ -8980,7 +8982,25 @@ class MainWindow(QMainWindow):
 
         strategy_candidates = normalized_candidates
 
+        def _extract_uploaded_end_from_headers(response: requests.Response) -> int | None:
+            header_value = str(response.headers.get("Range") or response.headers.get("Content-Range") or "").strip()
+            if not header_value:
+                return None
+            match = re.search(r"(\d+)-(\d+)", header_value)
+            if not match:
+                return None
+            try:
+                end_value = int(match.group(2))
+            except (TypeError, ValueError):
+                return None
+            if end_value < 0:
+                return None
+            return end_value
+
         last_error = None
+        publish_id = None
+        upload_succeeded = False
+
         for chunk_size, total_chunk_count, strategy_name in strategy_candidates:
             upload_chunk_count = max(1, math.ceil(video_size / chunk_size))
             print(f"DEBUG: strategy={strategy_name} chunk_size={chunk_size} total_chunk_count={total_chunk_count} upload_chunk_count={upload_chunk_count}")
@@ -8989,115 +9009,121 @@ class MainWindow(QMainWindow):
                 "source": "FILE_UPLOAD",
                 "video_size": video_size,
                 "chunk_size": chunk_size,
-                "total_chunk_count": total_chunk_count
+                "total_chunk_count": total_chunk_count,
             }
 
             payload = {
                 "source_info": source_info,
                 "post_info": {
-                    "title": self._compose_social_text(caption, hashtags), # or separate title if you have one
+                    "title": self._compose_social_text(caption, hashtags),
                     "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
                     "disable_comment": False,
                     "disable_duet": False,
                     "disable_stitch": False,
-                }
+                },
             }
 
-            resp = requests.post(init_url, headers=headers, json=payload)
-            data = resp.json()
-            if resp.status_code != 200:
-                print("Status check failed:", data)
-                last_error = RuntimeError(f"TikTok init failed ({strategy_name}): {resp.status_code} - {data}")
-                continue
-
-            print("Status response:", data)
-            upload_url = data['data']['upload_url']
-            publish_id = data['data'].get('publish_id')
-
-            upload_resp = None
-            bytes_uploaded = 0
-
-            def _extract_uploaded_end_from_headers(response: requests.Response) -> int | None:
-                header_value = str(response.headers.get("Range") or response.headers.get("Content-Range") or "").strip()
-                if not header_value:
-                    return None
-                match = re.search(r"(\d+)-(\d+)", header_value)
-                if not match:
-                    return None
+            for init_mode, init_url in init_url_candidates:
+                print(f"DEBUG: init_mode={init_mode} init_url={init_url}")
+                resp = requests.post(init_url, headers=headers, json=payload)
                 try:
-                    end_value = int(match.group(2))
-                except (TypeError, ValueError):
-                    return None
-                if end_value < 0:
-                    return None
-                return end_value
+                    data = resp.json()
+                except ValueError:
+                    data = {"raw": resp.text[:500]}
 
-            try:
-                with open(video_path, "rb") as f:
-                    chunk_index = 0
-                    while bytes_uploaded < video_size:
-                        f.seek(bytes_uploaded)
-                        chunk = f.read(min(chunk_size, video_size - bytes_uploaded))
-                        if not chunk:
-                            break
-
-                        start_byte = bytes_uploaded
-                        end_byte = start_byte + len(chunk) - 1
-                        chunk_index += 1
-
-                        upload_headers = {
-                            "Content-Type": "video/mp4",
-                            "Content-Length": str(len(chunk)),
-                            "Content-Range": f"bytes {start_byte}-{end_byte}/{video_size}",
-                        }
-
-                        print(
-                            f"DEBUG: Uploading chunk {chunk_index}/{upload_chunk_count} "
-                            f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
-                        )
-                        upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
-                        print(f"DEBUG: Chunk upload status code: {upload_resp.status_code}")
-
-                        if upload_resp.text.strip():
-                            try:
-                                print("DEBUG: Chunk upload response:", upload_resp.json())
-                            except ValueError:
-                                print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
-
-                        server_uploaded_end = _extract_uploaded_end_from_headers(upload_resp)
-
-                        if upload_resp.status_code == 416:
-                            if server_uploaded_end is not None and server_uploaded_end + 1 > bytes_uploaded:
-                                bytes_uploaded = min(video_size, server_uploaded_end + 1)
-                                print(
-                                    f"DEBUG: Recovered from HTTP 416 using server range; continuing at offset {bytes_uploaded}."
-                                )
-                                continue
-                            raise RuntimeError(f"Upload failed ({strategy_name}): {upload_resp.status_code} - {upload_resp.text}")
-
-                        if upload_resp.status_code not in (200, 201, 202, 204, 206):
-                            raise RuntimeError(f"Upload failed ({strategy_name}): {upload_resp.status_code} - {upload_resp.text}")
-
-                        next_offset = start_byte + len(chunk)
-                        if server_uploaded_end is not None:
-                            next_offset = max(next_offset, server_uploaded_end + 1)
-                        bytes_uploaded = min(video_size, next_offset)
-
-                if upload_resp is None or bytes_uploaded < video_size:
-                    raise RuntimeError(
-                        f"Upload failed ({strategy_name}): sent {bytes_uploaded} bytes, expected {video_size} bytes."
+                if resp.status_code != 200:
+                    print("Status check failed:", data)
+                    last_error = RuntimeError(
+                        f"TikTok init failed ({strategy_name}, {init_mode}): {resp.status_code} - {data}"
                     )
+                    continue
 
-                # Successful upload for this strategy.
+                print("Status response:", data)
+                upload_url = data["data"]["upload_url"]
+                publish_id = data["data"].get("publish_id")
+
+                upload_resp = None
+                bytes_uploaded = 0
+
+                try:
+                    with open(video_path, "rb") as f:
+                        chunk_index = 0
+                        while bytes_uploaded < video_size:
+                            f.seek(bytes_uploaded)
+                            chunk = f.read(min(chunk_size, video_size - bytes_uploaded))
+                            if not chunk:
+                                break
+
+                            start_byte = bytes_uploaded
+                            end_byte = start_byte + len(chunk) - 1
+                            chunk_index += 1
+
+                            upload_headers = {
+                                "Content-Type": "video/mp4",
+                                "Content-Length": str(len(chunk)),
+                                "Content-Range": f"bytes {start_byte}-{end_byte}/{video_size}",
+                            }
+
+                            print(
+                                f"DEBUG: Uploading chunk {chunk_index}/{upload_chunk_count} "
+                                f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
+                            )
+                            upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
+                            print(f"DEBUG: Chunk upload status code: {upload_resp.status_code}")
+
+                            if upload_resp.text.strip():
+                                try:
+                                    print("DEBUG: Chunk upload response:", upload_resp.json())
+                                except ValueError:
+                                    print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
+
+                            server_uploaded_end = _extract_uploaded_end_from_headers(upload_resp)
+
+                            if upload_resp.status_code == 416:
+                                if server_uploaded_end is not None and server_uploaded_end + 1 > bytes_uploaded:
+                                    bytes_uploaded = min(video_size, server_uploaded_end + 1)
+                                    print(
+                                        f"DEBUG: Recovered from HTTP 416 using server range; continuing at offset {bytes_uploaded}."
+                                    )
+                                    continue
+                                raise RuntimeError(
+                                    f"Upload failed ({strategy_name}, {init_mode}): {upload_resp.status_code} - {upload_resp.text}"
+                                )
+
+                            if upload_resp.status_code not in (200, 201, 202, 204, 206):
+                                raise RuntimeError(
+                                    f"Upload failed ({strategy_name}, {init_mode}): {upload_resp.status_code} - {upload_resp.text}"
+                                )
+
+                            next_offset = start_byte + len(chunk)
+                            if server_uploaded_end is not None:
+                                next_offset = max(next_offset, server_uploaded_end + 1)
+                            bytes_uploaded = min(video_size, next_offset)
+
+                    if upload_resp is None or bytes_uploaded < video_size:
+                        raise RuntimeError(
+                            f"Upload failed ({strategy_name}, {init_mode}): sent {bytes_uploaded} bytes, expected {video_size} bytes."
+                        )
+
+                    upload_succeeded = True
+                    break
+                except RuntimeError as upload_error:
+                    last_error = upload_error
+                    print(
+                        f"DEBUG: strategy {strategy_name} mode={init_mode} failed, retrying with next init/strategy. error={upload_error}"
+                    )
+                    continue
+
+            if upload_succeeded:
                 break
-            except RuntimeError as upload_error:
-                last_error = upload_error
-                print(f"DEBUG: strategy {strategy_name} failed, retrying with next strategy. error={upload_error}")
-                continue
-        else:
+
+        if not upload_succeeded:
             if last_error:
                 raise last_error
             raise RuntimeError("TikTok upload failed: no chunking strategy succeeded.")
+
+        if not publish_id:
+            raise RuntimeError("TikTok upload succeeded but publish_id was not returned.")
 
         self.check_tiktok_status(access_token, publish_id)
         self._append_log(f"TikTok Upload complete")
