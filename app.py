@@ -8923,11 +8923,11 @@ class MainWindow(QMainWindow):
             return
 
         video_size = os.path.getsize(video_path)  # MUST be exact bytes!
-        MIN_CHUNK = 5 * 1024 * 1024     # 5242880
-        MAX_CHUNK = 64 * 1024 * 1024    # 67108864
+        MIN_CHUNK = 5 * 1024 * 1024
+        MAX_CHUNK = 64 * 1024 * 1024
 
         raw_token = self.tiktok_access_token.text().strip()
-        if isinstance(raw_token, tuple) or isinstance(raw_token, list):
+        if isinstance(raw_token, (tuple, list)):
             access_token = raw_token[0] if raw_token else ""
         else:
             access_token = raw_token
@@ -8937,121 +8937,198 @@ class MainWindow(QMainWindow):
             return
 
         print(f"DEBUG: video_size={video_size} bytes (~{video_size / (1024*1024):.2f} MB)")
-        print(f"DEBUG: access token={access_token}")
+        masked_token = f"{access_token[:10]}...{access_token[-6:]}" if len(access_token) > 20 else access_token
+        print(f"DEBUG: access token={masked_token}")
+
         headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json; charset=UTF-8"
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json; charset=UTF-8",
         }
 
-        # Use /inbox/ for draft (user approves) or /video/ for direct post
-        # Start with inbox — safer for testing
-        init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
+        init_url_direct = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+        init_url_inbox = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 
-        # TikTok metadata validation can vary. Try a few valid chunking strategies
-        # and use the first one that both initializes and uploads successfully.
-        if video_size < MIN_CHUNK or video_size <= MAX_CHUNK:
-            strategy_candidates = [(video_size, 1, "single_chunk")]
+        strategy_candidates: list[tuple[int, int, str]] = []
+        if video_size <= MAX_CHUNK:
+            strategy_candidates.append((video_size, 1, "single_chunk"))
         else:
             ceil_count = max(1, math.ceil(video_size / MAX_CHUNK))
-            floor_count = max(1, video_size // MAX_CHUNK)
-            strategy_candidates = [
-                (MAX_CHUNK, ceil_count, "fixed_64mb_ceil_count"),
-                (math.ceil(video_size / ceil_count), ceil_count, "even_ceil_count"),
-                (MAX_CHUNK, floor_count, "fixed_64mb_floor_count"),
-            ]
+            even_chunk = max(MIN_CHUNK, math.ceil(video_size / ceil_count))
+            strategy_candidates.extend([
+                (even_chunk, ceil_count, "even_ceil_count"),
+                (64 * 1024 * 1024, math.ceil(video_size / (64 * 1024 * 1024)), "fixed_64mb"),
+                (32 * 1024 * 1024, math.ceil(video_size / (32 * 1024 * 1024)), "fixed_32mb"),
+                (16 * 1024 * 1024, math.ceil(video_size / (16 * 1024 * 1024)), "fixed_16mb"),
+                (8 * 1024 * 1024, math.ceil(video_size / (8 * 1024 * 1024)), "fixed_8mb"),
+            ])
 
-        last_error = None
+        normalized_candidates: list[tuple[int, int, str]] = []
+        seen_candidates: set[tuple[int, int]] = set()
+        for raw_chunk_size, _raw_total_count, strategy_name in strategy_candidates:
+            chunk_size = max(1, int(raw_chunk_size))
+            if video_size > MAX_CHUNK:
+                chunk_size = min(MAX_CHUNK, max(MIN_CHUNK, chunk_size))
+            total_chunk_count = max(1, math.ceil(video_size / chunk_size))
+            key = (chunk_size, total_chunk_count)
+            if key in seen_candidates:
+                continue
+            seen_candidates.add(key)
+            normalized_candidates.append((chunk_size, total_chunk_count, strategy_name))
+
+        strategy_candidates = normalized_candidates
+
+        def _extract_uploaded_end_from_headers(response: requests.Response) -> int | None:
+            header_value = str(response.headers.get("Range") or response.headers.get("Content-Range") or "").strip()
+            if not header_value:
+                return None
+            match = re.search(r"(\d+)-(\d+)", header_value)
+            if not match:
+                return None
+            try:
+                end_value = int(match.group(2))
+            except (TypeError, ValueError):
+                return None
+            return end_value if end_value >= 0 else None
+
+        last_error: Exception | None = None
+        publish_id: str | None = None
+        upload_succeeded = False
+
         for chunk_size, total_chunk_count, strategy_name in strategy_candidates:
             upload_chunk_count = max(1, math.ceil(video_size / chunk_size))
-            print(f"DEBUG: strategy={strategy_name} chunk_size={chunk_size} total_chunk_count={total_chunk_count} upload_chunk_count={upload_chunk_count}")
+            print(
+                f"DEBUG: strategy={strategy_name} chunk_size={chunk_size} "
+                f"total_chunk_count={total_chunk_count} upload_chunk_count={upload_chunk_count}"
+            )
 
             source_info = {
                 "source": "FILE_UPLOAD",
-                "video_size": video_size,
-                "chunk_size": chunk_size,
-                "total_chunk_count": total_chunk_count
-            }
 
+                "chunk_size": chunk_size,
+                
+            }
             payload = {
                 "source_info": source_info,
                 "post_info": {
-                    "title": self._compose_social_text(caption, hashtags), # or separate title if you have one
+                    "title": self._compose_social_text(caption, hashtags),
                     "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
                     "disable_comment": False,
                     "disable_duet": False,
                     "disable_stitch": False,
-                }
+                },
             }
 
-            resp = requests.post(init_url, headers=headers, json=payload)
-            data = resp.json()
-            if resp.status_code != 200:
-                print("Status check failed:", data)
-                last_error = RuntimeError(f"TikTok init failed ({strategy_name}): {resp.status_code} - {data}")
-                continue
+            # Direct post init is generally more permissive for chunk metadata.
+            init_modes: list[tuple[str, str]] = [("direct_post", init_url_direct)]
+            if total_chunk_count == 1:
+                init_modes.append(("inbox_draft", init_url_inbox))
 
-            print("Status response:", data)
-            upload_url = data['data']['upload_url']
-            publish_id = data['data'].get('publish_id')
+            for init_mode, init_url in init_modes:
+                print(f"DEBUG: init_mode={init_mode} init_url={init_url}")
+                resp = requests.post(init_url, headers=headers, json=payload)
+                try:
+                    init_data = resp.json()
+                except ValueError:
+                    init_data = {"raw": resp.text[:500]}
 
-            upload_resp = None
-            bytes_uploaded = 0
-            try:
-                with open(video_path, "rb") as f:
-                    chunk_index = 0
-                    while bytes_uploaded < video_size:
-                        chunk = f.read(chunk_size)
-                        if not chunk:
-                            break
-
-                        start_byte = bytes_uploaded
-                        end_byte = start_byte + len(chunk) - 1
-                        chunk_index += 1
-
-                        upload_headers = {
-                            "Content-Type": "video/mp4",
-                            "Content-Length": str(len(chunk)),
-                            "Content-Range": f"bytes {start_byte}-{end_byte}/{video_size}",
-                        }
-
-                        print(
-                            f"DEBUG: Uploading chunk {chunk_index}/{upload_chunk_count} "
-                            f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
-                        )
-                        upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
-                        print(f"DEBUG: Chunk upload status code: {upload_resp.status_code}")
-
-                        if upload_resp.text.strip():
-                            try:
-                                print("DEBUG: Chunk upload response:", upload_resp.json())
-                            except ValueError:
-                                print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
-
-                        if upload_resp.status_code not in (200, 201, 202, 204, 206):
-                            raise RuntimeError(f"Upload failed ({strategy_name}): {upload_resp.status_code} - {upload_resp.text}")
-
-                        bytes_uploaded += len(chunk)
-
-                if upload_resp is None or bytes_uploaded != video_size:
-                    raise RuntimeError(
-                        f"Upload failed ({strategy_name}): sent {bytes_uploaded} bytes, expected {video_size} bytes."
+                if resp.status_code != 200:
+                    print("Status check failed:", init_data)
+                    last_error = RuntimeError(
+                        f"TikTok init failed ({strategy_name}, {init_mode}): {resp.status_code} - {init_data}"
                     )
+                    continue
 
-                # Successful upload for this strategy.
+                print("Status response:", init_data)
+                upload_url = str(init_data.get("data", {}).get("upload_url") or "")
+                publish_id = init_data.get("data", {}).get("publish_id")
+                if not upload_url or not publish_id:
+                    last_error = RuntimeError(
+                        f"TikTok init missing upload_url/publish_id ({strategy_name}, {init_mode}): {init_data}"
+                    )
+                    continue
+
+                try:
+                    upload_resp = None
+                    bytes_uploaded = 0
+                    with open(video_path, "rb") as f:
+                        chunk_index = 0
+                        while bytes_uploaded < video_size:
+                            f.seek(bytes_uploaded)
+                            chunk = f.read(min(chunk_size, video_size - bytes_uploaded))
+                            if not chunk:
+                                break
+
+                            start_byte = bytes_uploaded
+                            end_byte = start_byte + len(chunk) - 1
+                            chunk_index += 1
+                            upload_headers = {
+                                "Content-Type": "video/mp4",
+                                "Content-Length": str(len(chunk)),
+                                "Content-Range": f"bytes {start_byte}-{end_byte}/{video_size}",
+                            }
+
+                            print(
+                                f"DEBUG: Uploading chunk {chunk_index}/{upload_chunk_count} "
+                                f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
+                            )
+                            upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
+                            print(f"DEBUG: Chunk upload status code: {upload_resp.status_code}")
+
+                            if upload_resp.text.strip():
+                                try:
+                                    print("DEBUG: Chunk upload response:", upload_resp.json())
+                                except ValueError:
+                                    print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
+
+                            server_uploaded_end = _extract_uploaded_end_from_headers(upload_resp)
+                            if upload_resp.status_code == 416:
+                                if server_uploaded_end is not None and server_uploaded_end + 1 > bytes_uploaded:
+                                    bytes_uploaded = min(video_size, server_uploaded_end + 1)
+                                    print(
+                                        f"DEBUG: Recovered from HTTP 416 using server range; continuing at offset {bytes_uploaded}."
+                                    )
+                                    continue
+                                raise RuntimeError(
+                                    f"Upload failed ({strategy_name}, {init_mode}): {upload_resp.status_code} - {upload_resp.text}"
+                                )
+
+                            if upload_resp.status_code not in (200, 201, 202, 204, 206):
+                                raise RuntimeError(
+                                    f"Upload failed ({strategy_name}, {init_mode}): {upload_resp.status_code} - {upload_resp.text}"
+                                )
+
+                            next_offset = start_byte + len(chunk)
+                            if server_uploaded_end is not None:
+                                next_offset = max(next_offset, server_uploaded_end + 1)
+                            bytes_uploaded = min(video_size, next_offset)
+
+                    if upload_resp is None or bytes_uploaded < video_size:
+                        raise RuntimeError(
+                            f"Upload failed ({strategy_name}, {init_mode}): sent {bytes_uploaded} bytes, expected {video_size} bytes."
+                        )
+
+                    upload_succeeded = True
+                    break
+                except RuntimeError as upload_error:
+                    last_error = upload_error
+                    print(
+                        f"DEBUG: strategy {strategy_name} mode={init_mode} failed, retrying with next init/strategy. error={upload_error}"
+                    )
+                    continue
+
+            if upload_succeeded:
                 break
-            except RuntimeError as upload_error:
-                last_error = upload_error
-                print(f"DEBUG: strategy {strategy_name} failed, retrying with next strategy. error={upload_error}")
-                continue
-        else:
+
+        if not upload_succeeded:
             if last_error:
-                raise last_error
+                raise RuntimeError(str(last_error))
             raise RuntimeError("TikTok upload failed: no chunking strategy succeeded.")
 
+        if not publish_id:
+            raise RuntimeError("TikTok upload succeeded but publish_id was not returned.")
+
         self.check_tiktok_status(access_token, publish_id)
-        self._append_log(f"TikTok Upload complete")
-        # Success! Video is in user's TikTok inbox/drafts.
-        # Optionally: poll status with publish_id
+        self._append_log("TikTok Upload complete")
         return
 
     def check_tiktok_status(self, access_token, publish_id):
@@ -9086,10 +9163,21 @@ class MainWindow(QMainWindow):
         video_file = Path(str(video_path))
         encoded_video = ""
         if video_file.exists() and video_file.is_file():
-            try:
-                encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
-            except Exception:
-                encoded_video = ""
+            # Avoid embedding very large TikTok blobs into in-page JS payloads.
+            # Large base64 payloads can freeze the browser process before upload starts.
+            tiktok_inline_limit_bytes = 200 * 1024 * 1024
+            should_inline_video = (
+                platform_name != "TikTok"
+                or video_file.stat().st_size <= tiktok_inline_limit_bytes
+            )
+            if should_inline_video:
+                try:
+                    encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+                except Exception:
+                    encoded_video = ""
+            else:
+                # Keep a tiny payload available for lightweight synthetic input probes.
+                encoded_video = "AA=="
 
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
@@ -9485,6 +9573,7 @@ class MainWindow(QMainWindow):
                         }
                     };
                     let fileDialogTriggered = false;
+                    let fakeProbeInjected = false;
                     if (fileInput && (platform !== "facebook" || captionReady)) {
                         if (requestedVideoPath) {
                             try { fileInput.setAttribute("data-codex-video-path", requestedVideoPath); } catch (_) {}
@@ -9496,7 +9585,8 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        if (!alreadyHasFile && !alreadyStaged && videoBase64) {
+                        const shouldInjectDirectly = platform !== "tiktok" || videoBase64 !== "AA==";
+                        if (!alreadyHasFile && !alreadyStaged && videoBase64 && shouldInjectDirectly) {
                             try {
                                 const binary = atob(videoBase64);
                                 const bytes = new Uint8Array(binary.length);
@@ -9510,6 +9600,80 @@ class MainWindow(QMainWindow):
                                     fileDialogTriggered = true;
                                     if (platform === "facebook") {
                                         facebookState.fileStaged = true;
+                                    }
+                                }
+                            } catch (_) {}
+                        }
+
+                        if (platform === "tiktok" && videoBase64 === "AA==") {
+                            try {
+                                const binary = atob(videoBase64);
+                                const bytes = new Uint8Array(binary.length);
+                                for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                                const probeFile = new File([bytes], "codex-probe.bin", { type: "application/octet-stream" });
+                                const existingProbe = document.getElementById("codex-fake-upload-probe");
+                                if (existingProbe && existingProbe.parentElement) existingProbe.parentElement.removeChild(existingProbe);
+                                const probeInput = document.createElement("input");
+                                probeInput.type = "file";
+                                probeInput.id = "codex-fake-upload-probe";
+                                probeInput.style.display = "none";
+                                document.body.appendChild(probeInput);
+                                const probeDt = new DataTransfer();
+                                probeDt.items.add(probeFile);
+                                fakeProbeInjected = setInputFiles(probeInput, probeDt.files);
+
+                                const promptId = "codex-tiktok-user-interaction-required";
+                                const tiktokOverlayState = uploadState.tiktok = uploadState.tiktok || {};
+                                const shouldShowUserPrompt = !Boolean(tiktokOverlayState.userInteractionConfirmed);
+                                const existingPrompt = document.getElementById(promptId);
+                                if (!shouldShowUserPrompt) {
+                                    if (existingPrompt && existingPrompt.parentElement) existingPrompt.parentElement.removeChild(existingPrompt);
+                                } else if (!existingPrompt) {
+                                    const userPrompt = document.createElement("div");
+                                    userPrompt.id = promptId;
+                                    userPrompt.setAttribute("role", "button");
+                                    userPrompt.tabIndex = 0;
+                                    userPrompt.style.display = "inline-block";
+                                    userPrompt.style.marginLeft = "12px";
+                                    userPrompt.style.verticalAlign = "middle";
+                                    userPrompt.style.maxWidth = "min(520px, 70vw)";
+                                    userPrompt.style.padding = "10px 14px";
+                                    userPrompt.style.fontSize = "16px";
+                                    userPrompt.style.fontWeight = "700";
+                                    userPrompt.style.lineHeight = "1.35";
+                                    userPrompt.style.textAlign = "left";
+                                    userPrompt.style.cursor = "pointer";
+                                    userPrompt.style.textDecoration = "none";
+                                    userPrompt.style.border = "2px solid #ff4d4f";
+                                    userPrompt.style.borderRadius = "8px";
+                                    userPrompt.style.boxShadow = "0 4px 10px rgba(0, 0, 0, 0.18)";
+                                    userPrompt.style.background = "rgba(255, 255, 255, 0.98)";
+                                    userPrompt.style.color = "#b00020";
+                                    userPrompt.textContent = "User Interaction Required, Click here to continue!";
+                                    const activateFileInput = () => {
+                                        try {
+                                            const tiktokUploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
+                                            const tiktokPhaseState = tiktokUploadState.tiktok = tiktokUploadState.tiktok || {};
+                                            tiktokPhaseState.userInteractionConfirmed = true;
+                                            tiktokPhaseState.awaitingDraftAfterUserGesture = true;
+                                            tiktokPhaseState.lastActionAtMs = Date.now();
+                                        } catch (_) {}
+                                        try { userPrompt.style.display = "none"; } catch (_) {}
+                                        try { userPrompt.remove(); } catch (_) {}
+                                        try { fileInput.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                                        try { fileInput.click(); } catch (_) {}
+                                    };
+                                    userPrompt.addEventListener("click", activateFileInput);
+                                    userPrompt.addEventListener("keydown", (ev) => {
+                                        if (ev.key === "Enter" || ev.key === " ") {
+                                            ev.preventDefault();
+                                            activateFileInput();
+                                        }
+                                    });
+                                    if (fileInput.parentElement) {
+                                        try { fileInput.insertAdjacentElement("afterend", userPrompt); } catch (_) { fileInput.parentElement.appendChild(userPrompt); }
+                                    } else {
+                                        document.body.appendChild(userPrompt);
                                     }
                                 }
                             } catch (_) {}
@@ -9622,6 +9786,8 @@ class MainWindow(QMainWindow):
                             tiktokState.lastActionAtMs = 0;
                             tiktokState.captionSetAtMs = 0;
                             tiktokState.submitClicked = false;
+                            tiktokState.userInteractionConfirmed = false;
+                            tiktokState.awaitingDraftAfterUserGesture = false;
                         }
                         const nowMs = Date.now();
                         const minTikTokActionGapMs = 900;
@@ -9747,13 +9913,17 @@ class MainWindow(QMainWindow):
                             const dataDisabled = String(tiktokPostButton.getAttribute("data-disabled") || "").toLowerCase();
                             const nativeDisabled = Boolean(tiktokPostButton.disabled);
                             tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
-                            if (!tiktokState.submitClicked && captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed) {
+                            const waitingForDraftAfterGesture = Boolean(tiktokState.awaitingDraftAfterUserGesture);
+                            const canSubmitNormally = captionReady && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
+                            const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled;
+                            if (!tiktokState.submitClicked && tiktokPostEnabled && (canSubmitNormally || canSubmitAfterGesture)) {
                                 submitClicked = clickNodeSingle(tiktokPostButton) || submitClicked;
                                 if (submitClicked) {
                                     const clickedAtMs = Date.now();
                                     tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
                                     tiktokState.lastActionAtMs = clickedAtMs;
                                     tiktokState.submitClicked = true;
+                                    tiktokState.awaitingDraftAfterUserGesture = false;
                                 }
                             }
                         }
@@ -10001,6 +10171,7 @@ class MainWindow(QMainWindow):
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
+                        fakeProbeInjected,
                     };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
