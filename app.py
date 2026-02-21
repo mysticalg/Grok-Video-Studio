@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 
 import requests
 from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
+from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -109,6 +109,21 @@ DEFAULT_MANUAL_PROMPT_TEXT = (
     "abstract surreal artistic photorealistic strange random dream like scifi fast moving camera, "
     "fast moving fractals morphing and intersecting, highly detailed"
 )
+
+_session_download_counter_lock = threading.Lock()
+_session_download_counter = 0
+
+
+def _next_session_download_count() -> int:
+    global _session_download_counter
+    with _session_download_counter_lock:
+        _session_download_counter += 1
+        return _session_download_counter
+
+
+def _slugify_filename_part(value: str, fallback: str = "na") -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return cleaned or fallback
 
 
 def _parse_query_preserving_plus(query: str) -> dict[str, str]:
@@ -599,6 +614,13 @@ class GenerateWorker(QThread):
         self._openai_last_generated_video_path: Path | None = None
         self._openai_last_generated_reference_id: str = ""
 
+    def _compose_output_filename(self, prefix: str, variant: int, extension: str = "mp4") -> str:
+        provider = _slugify_filename_part(self.prompt_config.video_provider or "video")
+        resolution = _slugify_filename_part(self.prompt_config.video_resolution or "auto")
+        aspect = _slugify_filename_part(self.prompt_config.video_aspect_ratio or "na")
+        session_index = _next_session_download_count()
+        return f"{prefix}_{provider}_{resolution}_{aspect}_v{variant:02d}_d{session_index:03d}.{extension}"
+
     def request_stop(self) -> None:
         self.stop_requested = True
         self.requestInterruption()
@@ -1029,7 +1051,8 @@ class GenerateWorker(QThread):
                 )
 
             self.download_dir.mkdir(parents=True, exist_ok=True)
-            file_path = self.download_dir / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
+            variant_index = int(re.sub(r"[^0-9]", "", str(suffix)) or "0")
+            file_path = self.download_dir / self._compose_output_filename("video", variant_index, "mp4")
             file_path.write_bytes(response.content)
             if file_path.stat().st_size <= 0:
                 raise RuntimeError("OpenAI Sora content endpoint returned an empty file.")
@@ -1210,7 +1233,8 @@ class GenerateWorker(QThread):
     def download_video(self, video_url: str, suffix: str) -> Path:
         self._ensure_not_stopped()
         self.download_dir.mkdir(parents=True, exist_ok=True)
-        file_path = self.download_dir / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
+        variant_index = int(re.sub(r"[^0-9]", "", str(suffix)) or "0")
+        file_path = self.download_dir / self._compose_output_filename("video", variant_index, "mp4")
         with requests.get(video_url, stream=True, timeout=240) as response:
             response.raise_for_status()
             with open(file_path, "wb") as handle:
@@ -1338,6 +1362,9 @@ class StitchWorker(QThread):
         self.music_volume = music_volume
         self.audio_fade_duration = audio_fade_duration
 
+    def request_stop(self) -> None:
+        self.requestInterruption()
+
     def run(self) -> None:
         enhancement_enabled = self.interpolate_enabled or self.upscale_enabled
         try:
@@ -1412,7 +1439,11 @@ class StitchWorker(QThread):
         except subprocess.CalledProcessError as exc:
             self.failed.emit("Stitch Failed", exc.stderr[-800:] or "ffmpeg failed.")
         except RuntimeError as exc:
-            self.failed.emit("Stitch Failed", str(exc))
+            message = str(exc)
+            if "stopped by user" in message.lower():
+                self.failed.emit("Stitch Stopped", message)
+            else:
+                self.failed.emit("Stitch Failed", message)
         finally:
             if self.stitched_base_file.exists():
                 self.stitched_base_file.unlink()
@@ -1603,6 +1634,7 @@ class MainWindow(QMainWindow):
         self.preview_fullscreen_overlay_btn: QPushButton | None = None
         self.preview_fullscreen_progress_bar: QProgressBar | None = None
         self.stop_all_requested = False
+        self._active_ffmpeg_process: subprocess.Popen[str] | None = None
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
         self.pending_manual_variant_for_download: int | None = None
@@ -1776,6 +1808,11 @@ class MainWindow(QMainWindow):
         self.browser_home_btn.setToolTip("Open grok.com/imagine in the embedded browser tab.")
         self.browser_home_btn.setCheckable(True)
         self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
+
+        self.generate_image_btn.setMaximumWidth(170)
+        self.continue_frame_btn.setMaximumWidth(170)
+        self.continue_image_btn.setMaximumWidth(170)
+        self.browser_home_btn.setMaximumWidth(170)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
@@ -2047,8 +2084,8 @@ class MainWindow(QMainWindow):
         grok_browser_controls = QGridLayout()
         grok_browser_controls.addWidget(self.generate_image_btn, 0, 0)
         grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
-        grok_browser_controls.addWidget(self.continue_image_btn, 1, 0)
-        grok_browser_controls.addWidget(self.browser_home_btn, 1, 1)
+        grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
+        grok_browser_controls.addWidget(self.browser_home_btn, 0, 3)
 
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
@@ -2143,6 +2180,7 @@ class MainWindow(QMainWindow):
         self._populate_top_settings_menus()
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
+        self._refresh_status_bar_visibility()
 
     def _build_social_upload_tab(self, platform_name: str, upload_url: str) -> QWidget:
         tab = QWidget()
@@ -2857,6 +2895,37 @@ class MainWindow(QMainWindow):
             close_btn.clicked.connect(self.model_api_settings_dialog.close)
         dialog_layout.addWidget(button_box)
 
+    def _toolbar_tinted_standard_icon(self, standard_pixmap: QStyle.StandardPixmap, color_hex: str = "#1e88e5") -> QIcon:
+        base_icon = self.style().standardIcon(standard_pixmap)
+        pixmap = base_icon.pixmap(20, 20)
+        if pixmap.isNull():
+            return base_icon
+
+        tinted = QPixmap(pixmap.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), QColor(color_hex))
+        painter.end()
+        return QIcon(tinted)
+
+    def _status_bar_has_active_content(self) -> bool:
+        tracked_widgets = [
+            getattr(self, "upload_progress_label", None),
+            getattr(self, "upload_progress_bar", None),
+            getattr(self, "stitch_progress_label", None),
+            getattr(self, "stitch_progress_bar", None),
+        ]
+        return any(widget is not None and widget.isVisible() for widget in tracked_widgets)
+
+    def _refresh_status_bar_visibility(self) -> None:
+        status_bar = self.statusBar()
+        should_show = self._status_bar_has_active_content()
+        status_bar.setVisible(should_show)
+        status_bar.setMaximumHeight(16777215 if should_show else 0)
+
     def _build_menu_bar(self) -> None:
         menu_bar = self.menuBar()
 
@@ -2939,6 +3008,27 @@ class MainWindow(QMainWindow):
         homepage_action.setToolTip("Open grok.com/imagine in the embedded browser.")
         homepage_action.triggered.connect(self.show_browser_page)
         self.quick_actions_toolbar.addAction(homepage_action)
+
+        self.quick_actions_toolbar.addSeparator()
+        auto_youtube_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate YouTube Upload", self)
+        auto_youtube_upload_action.setToolTip("Run browser automation for YouTube upload in the YouTube tab.")
+        auto_youtube_upload_action.triggered.connect(self.start_youtube_browser_upload)
+        self.quick_actions_toolbar.addAction(auto_youtube_upload_action)
+
+        auto_facebook_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate Facebook Upload", self)
+        auto_facebook_upload_action.setToolTip("Run browser automation for Facebook upload in the Facebook tab.")
+        auto_facebook_upload_action.triggered.connect(self.start_facebook_browser_upload)
+        self.quick_actions_toolbar.addAction(auto_facebook_upload_action)
+
+        auto_instagram_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate Instagram Upload", self)
+        auto_instagram_upload_action.setToolTip("Run browser automation for Instagram upload in the Instagram tab.")
+        auto_instagram_upload_action.triggered.connect(self.start_instagram_browser_upload)
+        self.quick_actions_toolbar.addAction(auto_instagram_upload_action)
+
+        auto_tiktok_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate TikTok Upload", self)
+        auto_tiktok_upload_action.setToolTip("Run browser automation for TikTok upload in the TikTok tab.")
+        auto_tiktok_upload_action.triggered.connect(self.start_tiktok_browser_upload)
+        self.quick_actions_toolbar.addAction(auto_tiktok_upload_action)
 
         self.quick_actions_toolbar.addSeparator()
         youtube_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to YouTube", self)
@@ -6172,7 +6262,7 @@ class MainWindow(QMainWindow):
 
         download_type = self.pending_manual_download_type or "video"
         extension = self._resolve_download_extension(download, download_type)
-        filename = f"{download_type}_{int(time.time() * 1000)}_manual_v{variant}.{extension}"
+        filename = self._build_session_download_filename(download_type, variant, extension)
         download.setDownloadDirectory(str(self.download_dir))
         download.setDownloadFileName(filename)
         self.manual_download_click_sent = True
@@ -6357,6 +6447,12 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             self.worker.request_stop()
             self._append_log("Stop requested: API generation worker will stop after the current request completes.")
+        if self.stitch_worker and self.stitch_worker.isRunning():
+            self.stitch_worker.request_stop()
+            self._append_log("Stop requested: stitching/encoding worker is being interrupted.")
+        if self._active_ffmpeg_process is not None and self._active_ffmpeg_process.poll() is None:
+            self._active_ffmpeg_process.terminate()
+            self._append_log("Stop requested: active ffmpeg stitch/encode process terminated.")
         self._append_log("Stop all requested: cleared queued manual image/video jobs and halted polling timers.")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
@@ -6384,6 +6480,16 @@ class MainWindow(QMainWindow):
         title = str(video.get("title") or "Video")
         resolution = str(video.get("resolution") or "unknown")
         return f"{title} ({resolution})"
+
+    def _build_session_download_filename(self, download_type: str, variant: int | None, extension: str) -> str:
+        provider = _slugify_filename_part(str(self.video_provider.currentData() or "grok") if hasattr(self, "video_provider") else "grok")
+        resolution = _slugify_filename_part(self.video_resolution.currentData() if hasattr(self, "video_resolution") else "auto")
+        aspect = _slugify_filename_part(self.video_aspect_ratio.currentData() if hasattr(self, "video_aspect_ratio") else "na")
+        item_variant = int(variant or 0)
+        session_index = _next_session_download_count()
+        normalized_type = _slugify_filename_part(download_type or "download")
+        normalized_ext = _slugify_filename_part(extension or "mp4")
+        return f"{normalized_type}_{provider}_{resolution}_{aspect}_v{item_variant:02d}_d{session_index:03d}.{normalized_ext}"
 
     def _thumbnail_for_video(self, video_path: str) -> QIcon:
         source_path = Path(video_path)
@@ -7336,6 +7442,7 @@ class MainWindow(QMainWindow):
         started_at = time.time()
         self.stitch_progress_label.setVisible(True)
         self.stitch_progress_bar.setVisible(True)
+        self._refresh_status_bar_visibility()
 
         def update_progress(value: int, stage: str) -> None:
             bounded_value = max(0, min(100, int(value)))
@@ -7354,6 +7461,7 @@ class MainWindow(QMainWindow):
             self.stitch_progress_label.setText(f"Upload progress: failed ({message[:120]})")
             self.stitch_progress_bar.setVisible(False)
             self.stitch_progress_label.setVisible(False)
+            self._refresh_status_bar_visibility()
             QMessageBox.critical(self, title, message)
 
         def on_stitch_finished(stitched_video: dict) -> None:
@@ -7362,6 +7470,7 @@ class MainWindow(QMainWindow):
             self.stitch_progress_bar.setValue(100)
             self.stitch_progress_bar.setVisible(False)
             self.stitch_progress_label.setVisible(False)
+            self._refresh_status_bar_visibility()
             self.on_video_finished(stitched_video)
 
         def on_stitch_complete() -> None:
@@ -7554,36 +7663,45 @@ class MainWindow(QMainWindow):
             text=True,
             bufsize=1,
         )
+        self._active_ffmpeg_process = process
 
         if progress_callback is not None:
             progress_callback(0.0)
 
         out_time_ms = 0
         output_lines: list[str] = []
-        if process.stdout is not None:
-            for raw_line in process.stdout:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                output_lines.append(line)
-                if len(output_lines) > 200:
-                    output_lines = output_lines[-200:]
-                if line.startswith("out_time_ms="):
-                    try:
-                        out_time_ms = int(line.split("=", 1)[1])
-                    except ValueError:
+        try:
+            if process.stdout is not None:
+                for raw_line in process.stdout:
+                    if self.stop_all_requested:
+                        process.terminate()
+                    line = raw_line.strip()
+                    if not line:
                         continue
-                    if total_duration > 0 and progress_callback is not None:
-                        progress = (out_time_ms / 1_000_000.0) / total_duration
-                        progress_callback(max(0.0, min(1.0, progress)))
+                    output_lines.append(line)
+                    if len(output_lines) > 200:
+                        output_lines = output_lines[-200:]
+                    if line.startswith("out_time_ms="):
+                        try:
+                            out_time_ms = int(line.split("=", 1)[1])
+                        except ValueError:
+                            continue
+                        if total_duration > 0 and progress_callback is not None:
+                            progress = (out_time_ms / 1_000_000.0) / total_duration
+                            progress_callback(max(0.0, min(1.0, progress)))
 
-        return_code = process.wait()
-        if return_code != 0:
-            stderr_text = "\n".join(output_lines[-80:])
-            raise subprocess.CalledProcessError(return_code, command, stderr=stderr_text)
+            return_code = process.wait()
+            if self.stop_all_requested:
+                stderr_text = "\n".join(output_lines[-80:])
+                raise RuntimeError(f"Stitch/encode stopped by user. {stderr_text}".strip())
+            if return_code != 0:
+                stderr_text = "\n".join(output_lines[-80:])
+                raise subprocess.CalledProcessError(return_code, command, stderr=stderr_text)
 
-        if progress_callback is not None:
-            progress_callback(1.0)
+            if progress_callback is not None:
+                progress_callback(1.0)
+        finally:
+            self._active_ffmpeg_process = None
 
     def _stitch_videos_with_crossfade(
         self,
@@ -9226,6 +9344,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setVisible(True)
         self.upload_progress_bar.setValue(0)
         self.upload_progress_bar.setVisible(True)
+        self._refresh_status_bar_visibility()
         self._append_log(f"Starting {platform_name} upload...")
 
         self.upload_worker = UploadWorker(platform_name=platform_name, upload_fn=upload_fn, upload_kwargs=upload_kwargs)
@@ -9245,6 +9364,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setVisible(bounded_value > 0)
         self.upload_progress_bar.setVisible(bounded_value > 0)
         self.upload_progress_bar.setValue(bounded_value)
+        self._refresh_status_bar_visibility()
 
     def _format_upload_progress_message(self, message: str, max_length: int = 180) -> str:
         text = " ".join(str(message or "").split())
@@ -9257,6 +9377,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setValue(100)
         self.upload_progress_bar.setVisible(False)
         self.upload_progress_label.setVisible(False)
+        self._refresh_status_bar_visibility()
         self._append_log(f"{platform_name} upload complete. ID: {upload_id}")
         QMessageBox.information(self, dialog_title, f"{success_prefix} {upload_id}")
 
@@ -9264,6 +9385,7 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setText(f"Upload progress: failed ({error_message[:120]})")
         self.upload_progress_bar.setVisible(False)
         self.upload_progress_label.setVisible(False)
+        self._refresh_status_bar_visibility()
         self._append_log(f"ERROR: {platform_name} upload failed: {error_message}")
         QMessageBox.critical(self, f"{platform_name} Upload Failed", error_message)
 
