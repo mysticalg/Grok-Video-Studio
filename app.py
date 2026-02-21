@@ -8958,7 +8958,10 @@ class MainWindow(QMainWindow):
             even_chunk = max(MIN_CHUNK, math.ceil(video_size / ceil_count))
             strategy_candidates.extend([
                 (even_chunk, ceil_count, "even_ceil_count"),
-                (MAX_CHUNK, ceil_count, "fixed_64mb_ceil_count"),
+                (64 * 1024 * 1024, math.ceil(video_size / (64 * 1024 * 1024)), "fixed_64mb"),
+                (32 * 1024 * 1024, math.ceil(video_size / (32 * 1024 * 1024)), "fixed_32mb"),
+                (16 * 1024 * 1024, math.ceil(video_size / (16 * 1024 * 1024)), "fixed_16mb"),
+                (8 * 1024 * 1024, math.ceil(video_size / (8 * 1024 * 1024)), "fixed_8mb"),
             ])
 
         # Normalize + deduplicate candidates so we never send invalid chunk metadata.
@@ -9013,11 +9016,28 @@ class MainWindow(QMainWindow):
 
             upload_resp = None
             bytes_uploaded = 0
+
+            def _extract_uploaded_end_from_headers(response: requests.Response) -> int | None:
+                header_value = str(response.headers.get("Range") or response.headers.get("Content-Range") or "").strip()
+                if not header_value:
+                    return None
+                match = re.search(r"(\d+)-(\d+)", header_value)
+                if not match:
+                    return None
+                try:
+                    end_value = int(match.group(2))
+                except (TypeError, ValueError):
+                    return None
+                if end_value < 0:
+                    return None
+                return end_value
+
             try:
                 with open(video_path, "rb") as f:
                     chunk_index = 0
                     while bytes_uploaded < video_size:
-                        chunk = f.read(chunk_size)
+                        f.seek(bytes_uploaded)
+                        chunk = f.read(min(chunk_size, video_size - bytes_uploaded))
                         if not chunk:
                             break
 
@@ -9044,12 +9064,26 @@ class MainWindow(QMainWindow):
                             except ValueError:
                                 print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
 
+                        server_uploaded_end = _extract_uploaded_end_from_headers(upload_resp)
+
+                        if upload_resp.status_code == 416:
+                            if server_uploaded_end is not None and server_uploaded_end + 1 > bytes_uploaded:
+                                bytes_uploaded = min(video_size, server_uploaded_end + 1)
+                                print(
+                                    f"DEBUG: Recovered from HTTP 416 using server range; continuing at offset {bytes_uploaded}."
+                                )
+                                continue
+                            raise RuntimeError(f"Upload failed ({strategy_name}): {upload_resp.status_code} - {upload_resp.text}")
+
                         if upload_resp.status_code not in (200, 201, 202, 204, 206):
                             raise RuntimeError(f"Upload failed ({strategy_name}): {upload_resp.status_code} - {upload_resp.text}")
 
-                        bytes_uploaded += len(chunk)
+                        next_offset = start_byte + len(chunk)
+                        if server_uploaded_end is not None:
+                            next_offset = max(next_offset, server_uploaded_end + 1)
+                        bytes_uploaded = min(video_size, next_offset)
 
-                if upload_resp is None or bytes_uploaded != video_size:
+                if upload_resp is None or bytes_uploaded < video_size:
                     raise RuntimeError(
                         f"Upload failed ({strategy_name}): sent {bytes_uploaded} bytes, expected {video_size} bytes."
                     )
