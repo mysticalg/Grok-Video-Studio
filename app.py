@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 
 import requests
 from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
+from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -2894,6 +2894,22 @@ class MainWindow(QMainWindow):
             close_btn.clicked.connect(self.model_api_settings_dialog.close)
         dialog_layout.addWidget(button_box)
 
+    def _toolbar_tinted_standard_icon(self, standard_pixmap: QStyle.StandardPixmap, color_hex: str = "#1e88e5") -> QIcon:
+        base_icon = self.style().standardIcon(standard_pixmap)
+        pixmap = base_icon.pixmap(20, 20)
+        if pixmap.isNull():
+            return base_icon
+
+        tinted = QPixmap(pixmap.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), QColor(color_hex))
+        painter.end()
+        return QIcon(tinted)
+
     def _build_menu_bar(self) -> None:
         menu_bar = self.menuBar()
 
@@ -2978,22 +2994,22 @@ class MainWindow(QMainWindow):
         self.quick_actions_toolbar.addAction(homepage_action)
 
         self.quick_actions_toolbar.addSeparator()
-        auto_youtube_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Automate YouTube Upload", self)
+        auto_youtube_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate YouTube Upload", self)
         auto_youtube_upload_action.setToolTip("Run browser automation for YouTube upload in the YouTube tab.")
         auto_youtube_upload_action.triggered.connect(self.start_youtube_browser_upload)
         self.quick_actions_toolbar.addAction(auto_youtube_upload_action)
 
-        auto_facebook_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Automate Facebook Upload", self)
+        auto_facebook_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate Facebook Upload", self)
         auto_facebook_upload_action.setToolTip("Run browser automation for Facebook upload in the Facebook tab.")
         auto_facebook_upload_action.triggered.connect(self.start_facebook_browser_upload)
         self.quick_actions_toolbar.addAction(auto_facebook_upload_action)
 
-        auto_instagram_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Automate Instagram Upload", self)
+        auto_instagram_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate Instagram Upload", self)
         auto_instagram_upload_action.setToolTip("Run browser automation for Instagram upload in the Instagram tab.")
         auto_instagram_upload_action.triggered.connect(self.start_instagram_browser_upload)
         self.quick_actions_toolbar.addAction(auto_instagram_upload_action)
 
-        auto_tiktok_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Automate TikTok Upload", self)
+        auto_tiktok_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate TikTok Upload", self)
         auto_tiktok_upload_action.setToolTip("Run browser automation for TikTok upload in the TikTok tab.")
         auto_tiktok_upload_action.triggered.connect(self.start_tiktok_browser_upload)
         self.quick_actions_toolbar.addAction(auto_tiktok_upload_action)
