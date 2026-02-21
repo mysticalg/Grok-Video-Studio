@@ -5175,7 +5175,7 @@ class MainWindow(QMainWindow):
                     const hasSelectedByText = (patterns, root = document) => selectedTextElements(root)
                         .some((el) => matchesAny(textOf(el), patterns));
 
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
                     const composer = (promptInput && (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section"))) || document;
 
                     const aspectPatterns = {
@@ -5276,7 +5276,7 @@ class MainWindow(QMainWindow):
                         return true;
                     };
 
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
                     const submitSelectors = [
                         "button[type='submit'][aria-label='Submit']",
                         "button[aria-label='Submit'][type='submit']",
@@ -6017,7 +6017,7 @@ class MainWindow(QMainWindow):
                     const isOptionsMenu = (el) => {
                         if (!el || !isVisible(el)) return false;
                         const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                        return /video\s*duration|resolution|aspect\s*ratio|\borientation\b|\bduration\b|\bvideos\b|\bimage\b|\bvideo\b/i.test(txt);
                     };
 
                     const findOpenMenu = () => {
@@ -6060,7 +6060,7 @@ class MainWindow(QMainWindow):
         verify_prompt_script = r"""
             (() => {
                 try {
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
                     if (!promptInput) return { ok: false, error: "Prompt input not found during verification" };
                     const value = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                     return { ok: !!value.trim(), filledLength: value.length };
@@ -6089,24 +6089,129 @@ class MainWindow(QMainWindow):
                     const desiredAspect = "{selected_aspect_ratio}";
                     const desiredDuration = "{selected_duration_label}";
                     const fallbackQuality = desiredQuality === "720p" ? "480p" : desiredQuality;
+                    const cleanText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
-                    const isOptionsMenu = (el) => {
-                        if (!el || !isVisible(el)) return false;
-                        const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
-                    };
                     const menuCandidates = [
                         ...document.querySelectorAll("[role='menu'][data-state='open']"),
                         ...document.querySelectorAll("[data-radix-menu-content][data-state='open']"),
                         ...document.querySelectorAll("[role='menu'], [data-radix-menu-content]")
                     ];
+                    const hasSoraItems = (el) => /\borientation\b|\bduration\b|\bvideos\b/i.test(cleanText(el?.textContent || ""));
+                    const soraMenu = menuCandidates.find((el) => isVisible(el) && hasSoraItems(el)) || null;
+
+                    if (soraMenu) {
+                        const optionsRequested = [];
+                        const optionsApplied = [];
+
+                        const menuItems = (root) => [...root.querySelectorAll("[role='menuitem']")].filter((el) => isVisible(el));
+                        const radioItems = (root) => [...root.querySelectorAll("[role='menuitemradio']")].filter((el) => isVisible(el));
+                        const currentlyOpenMenus = () => [
+                            ...document.querySelectorAll("[role='menu'][data-state='open']"),
+                            ...document.querySelectorAll("[data-radix-menu-content][data-state='open']")
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+
+                        const findMenuItem = (labelPatterns) => {
+                            const rows = menuItems(soraMenu);
+                            return rows.find((el) => labelPatterns.some((pattern) => pattern.test(cleanText(el.textContent))));
+                        };
+
+                        const openSubmenu = (label, patterns) => {
+                            const row = findMenuItem(patterns);
+                            if (!row) return false;
+                            const expanded = row.getAttribute("aria-expanded") === "true";
+                            if (!expanded) {
+                                if (!emulateClick(row)) return false;
+                                optionsRequested.push(label);
+                            }
+                            optionsApplied.push(`${label}-menu-open`);
+                            return true;
+                        };
+
+                        const pickRadioOption = (menuLabel, optionLabel, optionPatterns) => {
+                            const openMenus = currentlyOpenMenus();
+                            const radios = openMenus.flatMap((m) => radioItems(m));
+                            const candidate = radios.find((el) => optionPatterns.some((pattern) => pattern.test(cleanText(el.textContent))));
+                            if (!candidate) return false;
+                            const checked = candidate.getAttribute("aria-checked") === "true" || (candidate.getAttribute("data-state") || "").toLowerCase() === "checked";
+                            if (!checked) {
+                                if (!emulateClick(candidate)) return false;
+                                optionsRequested.push(`${menuLabel}:${optionLabel}`);
+                            }
+                            optionsApplied.push(`${menuLabel}:${optionLabel}`);
+                            return true;
+                        };
+
+                        const desiredOrientation = ({
+                            "9:16": "Portrait",
+                            "2:3": "Portrait",
+                            "16:9": "Landscape",
+                            "3:2": "Landscape",
+                            "1:1": "Square",
+                        })[desiredAspect] || "Landscape";
+
+                        const orientationPatterns = {
+                            Portrait: [/^portrait$/i],
+                            Landscape: [/^landscape$/i],
+                            Square: [/^square$/i, /^1\s*:\s*1$/i],
+                        };
+                        const durationPatterns = {
+                            "5s": [/^5\s*s(ec(onds?)?)?$/i],
+                            "6s": [/^6\s*s(ec(onds?)?)?$/i],
+                            "10s": [/^10\s*s(ec(onds?)?)?$/i],
+                            "15s": [/^15\s*s(ec(onds?)?)?$/i],
+                        };
+                        const videoCountPatterns = {
+                            "1 video": [/^1\s*video(s)?$/i],
+                            "2 videos": [/^2\s*video(s)?$/i],
+                        };
+
+                        const desiredVideoCount = "1 video";
+
+                        const orientationOpened = openSubmenu("orientation", [/\borientation\b/i]);
+                        const orientationApplied = orientationOpened && pickRadioOption("orientation", desiredOrientation, orientationPatterns[desiredOrientation] || orientationPatterns.Landscape);
+
+                        const durationOpened = openSubmenu("duration", [/\bduration\b/i]);
+                        const durationApplied = durationOpened && (
+                            pickRadioOption("duration", desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"]) ||
+                            pickRadioOption("duration", "10s", durationPatterns["10s"]) ||
+                            pickRadioOption("duration", "15s", durationPatterns["15s"]) ||
+                            pickRadioOption("duration", "5s", durationPatterns["5s"])
+                        );
+
+                        const videosOpened = openSubmenu("videos", [/\bvideos\b/i]);
+                        const videosApplied = videosOpened && pickRadioOption("videos", desiredVideoCount, videoCountPatterns[desiredVideoCount]);
+
+                        const requiredOptions = ["video", desiredDuration, desiredAspect, desiredVideoCount];
+                        const missingOptions = [];
+                        if (!orientationApplied) missingOptions.push(desiredAspect);
+                        if (!durationApplied) missingOptions.push(desiredDuration);
+                        if (!videosApplied) missingOptions.push(desiredVideoCount);
+
+                        return {
+                            ok: true,
+                            requiredOptions,
+                            effectiveRequiredOptions: requiredOptions,
+                            optionsRequested,
+                            optionsApplied,
+                            missingOptions,
+                            selectedQuality: "sora-default",
+                            fallbackUsed: false,
+                            soraMode: true,
+                        };
+                    }
+
+                    const isOptionsMenu = (el) => {
+                        if (!el || !isVisible(el)) return false;
+                        const txt = cleanText(el.textContent || "");
+                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                    };
                     const menu = menuCandidates.find((el) => isOptionsMenu(el)) || null;
                     if (!menu) return { ok: false, error: "Options menu not visible" };
 
                     const optionNodes = [...menu.querySelectorAll("button, [role='menuitemradio'], [role='radio'], [role='button']")]
                         .filter((el) => isVisible(el));
 
-                    const nodeText = (el) => (el.getAttribute("aria-label") || el.textContent || "").trim();
+                    const nodeText = (el) => cleanText(el.getAttribute("aria-label") || el.textContent || "");
                     const isSelected = (el) => {
                         if (!el) return false;
                         const ariaChecked = el.getAttribute("aria-checked") === "true";
@@ -6206,6 +6311,7 @@ class MainWindow(QMainWindow):
                         missingOptions,
                         selectedQuality: effectiveQuality,
                         fallbackUsed: effectiveQuality !== desiredQuality,
+                        soraMode: false,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -6234,7 +6340,7 @@ class MainWindow(QMainWindow):
                     const isOptionsMenu = (el) => {
                         if (!el || !isVisible(el)) return false;
                         const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                        return /video\s*duration|resolution|aspect\s*ratio|\borientation\b|\bduration\b|\bvideos\b|\bimage\b|\bvideo\b/i.test(txt);
                     };
                     const hasOpenMenu = () => {
                         const candidates = [
@@ -6273,7 +6379,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
 
                     const submitSelectors = [
                         "button[type='submit'][aria-label='Submit']",
