@@ -9086,10 +9086,16 @@ class MainWindow(QMainWindow):
         video_file = Path(str(video_path))
         encoded_video = ""
         if video_file.exists() and video_file.is_file():
-            try:
-                encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
-            except Exception:
-                encoded_video = ""
+            # Avoid embedding large video blobs into in-page JS payloads for TikTok.
+            # Large base64 payloads can freeze the browser process before upload starts.
+            if platform_name != "TikTok":
+                try:
+                    encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
+                except Exception:
+                    encoded_video = ""
+            else:
+                # Keep a tiny payload available for lightweight synthetic input probes.
+                encoded_video = "AA=="
 
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
@@ -9485,6 +9491,7 @@ class MainWindow(QMainWindow):
                         }
                     };
                     let fileDialogTriggered = false;
+                    let fakeProbeInjected = false;
                     if (fileInput && (platform !== "facebook" || captionReady)) {
                         if (requestedVideoPath) {
                             try { fileInput.setAttribute("data-codex-video-path", requestedVideoPath); } catch (_) {}
@@ -9496,7 +9503,8 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        if (!alreadyHasFile && !alreadyStaged && videoBase64) {
+                        const shouldInjectDirectly = platform !== "tiktok";
+                        if (!alreadyHasFile && !alreadyStaged && videoBase64 && shouldInjectDirectly) {
                             try {
                                 const binary = atob(videoBase64);
                                 const bytes = new Uint8Array(binary.length);
@@ -9512,6 +9520,25 @@ class MainWindow(QMainWindow):
                                         facebookState.fileStaged = true;
                                     }
                                 }
+                            } catch (_) {}
+                        }
+
+                        if (platform === "tiktok" && videoBase64) {
+                            try {
+                                const binary = atob(videoBase64);
+                                const bytes = new Uint8Array(binary.length);
+                                for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                                const probeFile = new File([bytes], "codex-probe.bin", { type: "application/octet-stream" });
+                                const existingProbe = document.getElementById("codex-fake-upload-probe");
+                                if (existingProbe && existingProbe.parentElement) existingProbe.parentElement.removeChild(existingProbe);
+                                const probeInput = document.createElement("input");
+                                probeInput.type = "file";
+                                probeInput.id = "codex-fake-upload-probe";
+                                probeInput.style.display = "none";
+                                document.body.appendChild(probeInput);
+                                const probeDt = new DataTransfer();
+                                probeDt.items.add(probeFile);
+                                fakeProbeInjected = setInputFiles(probeInput, probeDt.files);
                             } catch (_) {}
                         }
                     }
@@ -10001,6 +10028,7 @@ class MainWindow(QMainWindow):
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
+                        fakeProbeInjected,
                     };
                 } catch (err) {
                     return { error: String(err && err.stack ? err.stack : err) };
