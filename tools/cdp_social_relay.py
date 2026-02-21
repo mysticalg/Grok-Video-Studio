@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -281,11 +282,15 @@ class RelayHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         raw = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(raw)))
-        self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.error) as exc:
+            # Client disconnected before reading response; treat as non-fatal.
+            self.log_message("client disconnected before response flush: %s", exc)
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path.rstrip("/") != "/social-upload-step":

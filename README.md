@@ -135,6 +135,7 @@ What this relay does now:
 - Returns `handled: false` automatically when CDP attach fails, so app fallback still works.
 
 If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.
+- On Windows, if a client drops the HTTP connection mid-response, the relay now treats it as non-fatal and continues serving subsequent requests.
 
 ## Configure credentials
 
