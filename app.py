@@ -1607,16 +1607,16 @@ class VideoOverlayWorker(QThread):
                 response = self.ai_callback(frame_path, timestamp_seconds)
         except Exception as exc:
             self.progress.emit(
-                f"AI caption request failed at {timestamp_seconds:.1f}s ({exc}); using fallback caption."
+                f"AI caption request failed at {timestamp_seconds:.1f}s ({exc}); skipping subtitle at this timestamp."
             )
-            return f"Scene at {timestamp_seconds:.1f}s"
+            return ""
 
         first_line = re.split(r"[\r\n]+", (response or "").strip(), maxsplit=1)[0].strip()
         if not first_line:
             self.progress.emit(
-                f"AI returned empty caption at {timestamp_seconds:.1f}s; using fallback caption."
+                f"AI returned empty caption at {timestamp_seconds:.1f}s; skipping subtitle at this timestamp."
             )
-            return f"Scene at {timestamp_seconds:.1f}s"
+            return ""
         return first_line
 
     def run(self) -> None:
@@ -1635,6 +1635,7 @@ class VideoOverlayWorker(QThread):
                 frame_points = [0.0]
 
             srt_lines: list[str] = []
+            caption_idx = 1
             for idx, point in enumerate(frame_points, start=1):
                 self.progress.emit(f"Generating overlay text for {point:.1f}s...")
                 frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}.png"
@@ -1654,18 +1655,25 @@ class VideoOverlayWorker(QThread):
                         )
 
                 subtitle_text = _escape_srt_text(self._build_overlay_text(frame_path, point))
+                if not subtitle_text.strip():
+                    continue
+
                 start_time = point
                 end_time = min(duration, point + self.subtitle_duration_seconds)
                 if end_time <= start_time:
                     end_time = min(duration, start_time + 0.8)
                 srt_lines.extend(
                     [
-                        str(idx),
+                        str(caption_idx),
                         f"{_seconds_to_srt_time(start_time)} --> {_seconds_to_srt_time(end_time)}",
                         subtitle_text,
                         "",
                     ]
                 )
+                caption_idx += 1
+
+            if not srt_lines:
+                raise RuntimeError("No AI captions were generated. Try adjusting your prompt or provider settings.")
 
             srt_path = self.output_video.parent / f"overlay_{self.output_video.stem}.srt"
             srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
