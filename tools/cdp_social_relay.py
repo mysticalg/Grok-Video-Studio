@@ -28,6 +28,14 @@ _CDP_CONNECT_LOCK = threading.Lock()
 _CDP_ACTION_LOCK = threading.Lock()
 
 
+def _is_context_mgmt_unsupported_error(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    return (
+        "browser.setdownloadbehavior" in message
+        and "browser context management is not supported" in message
+    )
+
+
 def _close_cdp_runtime() -> None:
     global _PLAYWRIGHT_INSTANCE
     with _CDP_CONNECT_LOCK:
@@ -517,6 +525,17 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                 [payload, script],
             )
     except Exception as exc:
+        if _is_context_mgmt_unsupported_error(exc):
+            return {
+                "handled": False,
+                "done": False,
+                "status": (
+                    "CDP unavailable: embedded browser does not support Browser.setDownloadBehavior "
+                    "during connect_over_cdp; falling back to non-CDP upload flow."
+                ),
+                "log": str(exc),
+                "retry_ms": 5000,
+            }
         return {
             "handled": False,
             "done": False,
