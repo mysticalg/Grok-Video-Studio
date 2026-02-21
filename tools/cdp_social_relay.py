@@ -115,6 +115,27 @@ def _upload_trigger_selectors_for_platform(platform: str) -> list[str]:
     return ['button:has-text("Upload")', '[role="button"]:has-text("Upload")']
 
 
+def _prime_upload_surface(page, platform: str) -> str:
+    selectors = _upload_trigger_selectors_for_platform(platform)
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            count = locator.count()
+        except Exception:
+            continue
+        for idx in range(min(count, 3)):
+            try:
+                locator.nth(idx).click(timeout=700)
+                try:
+                    page.wait_for_timeout(250)
+                except Exception:
+                    pass
+                return f"clicked upload trigger '{selector}'"
+            except Exception:
+                continue
+    return "no upload trigger clicked"
+
+
 def _stage_file_upload_via_file_chooser(page, platform: str, video_path: str) -> tuple[bool, str]:
     selectors = _upload_trigger_selectors_for_platform(platform)
     for selector in selectors:
@@ -133,7 +154,17 @@ def _stage_file_upload_via_file_chooser(page, platform: str, video_path: str) ->
     return False, "no file chooser trigger matched"
 
 
-def _simulate_drag_drop_affordance(page, platform: str) -> str:
+def _simulate_drag_drop_affordance(
+    page,
+    platform: str,
+    *,
+    video_base64: str,
+    video_name: str,
+    video_mime: str,
+) -> str:
+    if not video_base64:
+        return "drag/drop skipped: no video_base64 payload"
+
     if platform == "tiktok":
         selectors = [
             '[data-e2e*="upload"]',
@@ -145,7 +176,7 @@ def _simulate_drag_drop_affordance(page, platform: str) -> str:
         selectors = ['[class*="drop"]', '[data-testid*="upload"]', 'main']
 
     script = """
-        (selectors) => {
+        ({selectors, fileB64, fileName, fileMime}) => {
             const isVisible = (el) => {
                 if (!el) return false;
                 const style = window.getComputedStyle(el);
@@ -153,6 +184,17 @@ def _simulate_drag_drop_affordance(page, platform: str) -> str:
                 const rect = el.getBoundingClientRect();
                 return rect.width > 4 && rect.height > 4;
             };
+            const b64ToUint8 = (b64) => {
+                const bin = atob(b64);
+                const arr = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i += 1) arr[i] = bin.charCodeAt(i);
+                return arr;
+            };
+            const fileData = b64ToUint8(String(fileB64 || ""));
+            const file = new File([fileData], String(fileName || 'upload.mp4'), { type: String(fileMime || 'video/mp4') });
+            const dt = new DataTransfer();
+            dt.items.add(file);
+
             for (const selector of selectors) {
                 const nodes = Array.from(document.querySelectorAll(selector));
                 for (const node of nodes) {
@@ -160,29 +202,47 @@ def _simulate_drag_drop_affordance(page, platform: str) -> str:
                     const evts = ['dragenter', 'dragover', 'drop'];
                     for (const evt of evts) {
                         try {
-                            node.dispatchEvent(new DragEvent(evt, { bubbles: true, cancelable: true }));
+                            node.dispatchEvent(new DragEvent(evt, { bubbles: true, cancelable: true, dataTransfer: dt }));
                         } catch (_) {
                             node.dispatchEvent(new Event(evt, { bubbles: true, cancelable: true }));
                         }
                     }
-                    return `simulated drag/drop events on ${selector}`;
+                    return `simulated file drag/drop on ${selector}`;
                 }
             }
             return 'no visible drop target found';
         }
     """
     try:
-        result = page.evaluate(script, selectors)
+        result = page.evaluate(
+            script,
+            {
+                "selectors": selectors,
+                "fileB64": video_base64,
+                "fileName": video_name or "upload.mp4",
+                "fileMime": video_mime or "video/mp4",
+            },
+        )
         return str(result or "drag/drop simulation attempted")
     except Exception as exc:
         return f"drag/drop simulation failed: {exc}"
 
 
-def _stage_file_upload(page, platform: str, video_path: str) -> tuple[bool, str]:
+def _stage_file_upload(
+    page,
+    platform: str,
+    video_path: str,
+    *,
+    video_base64: str,
+    video_name: str,
+    video_mime: str,
+) -> tuple[bool, str]:
     if not video_path:
         return False, "video_path missing"
     if not os.path.isfile(video_path):
         return False, f"video file not found: {video_path}"
+
+    prime_detail = _prime_upload_surface(page, platform)
 
     selectors = _upload_selectors_for_platform(platform)
     for selector in selectors:
@@ -200,8 +260,14 @@ def _stage_file_upload(page, platform: str, video_path: str) -> tuple[bool, str]
     if chooser_staged:
         return True, chooser_detail
 
-    dnd_detail = _simulate_drag_drop_affordance(page, platform)
-    return False, f"no writable file input found; {chooser_detail}; {dnd_detail}"
+    dnd_detail = _simulate_drag_drop_affordance(
+        page,
+        platform,
+        video_base64=video_base64,
+        video_name=video_name,
+        video_mime=video_mime,
+    )
+    return False, f"no writable file input found; {prime_detail}; {chooser_detail}; {dnd_detail}"
 
 def _script_for_platform(platform: str) -> str:
     common = r'''
@@ -386,7 +452,14 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                     "retry_ms": 1500,
                 }
 
-            file_staged, file_stage_detail = _stage_file_upload(page, platform, str(payload.get("video_path") or ""))
+            file_staged, file_stage_detail = _stage_file_upload(
+                page,
+                platform,
+                str(payload.get("video_path") or ""),
+                video_base64=str(payload.get("video_base64") or ""),
+                video_name=str(payload.get("video_name") or "upload.mp4"),
+                video_mime=str(payload.get("video_mime") or "video/mp4"),
+            )
 
             script = _script_for_platform(platform)
             result = page.evaluate(
@@ -511,6 +584,11 @@ class RelayHandler(BaseHTTPRequestHandler):
         )
 
         response = _handle_with_cdp_bounded(payload)
+        print(
+            "relay result: "
+            f"handled={bool(response.get('handled'))} done={bool(response.get('done'))} "
+            f"status={str(response.get('status') or '')[:160]}"
+        )
         self._send_json(200, response)
 
 
