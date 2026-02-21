@@ -177,67 +177,56 @@ def _upload_trigger_selectors_for_platform(platform: str) -> list[str]:
 
 def _prime_upload_surface(page, platform: str) -> str:
     if platform == "youtube":
-        try:
-            opened = page.evaluate(
-                """
-                () => {
-                    const click = (node) => {
-                        if (!node) return false;
-                        try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
-                        try { node.click(); return true; } catch (_) { return false; }
-                    };
+        create_selectors = [
+            'button[aria-label*="create" i]',
+            'ytcp-button#create-icon button',
+            'ytcp-button[id="create-icon"] button',
+            'ytcp-button[aria-label*="create" i] button',
+            'tp-yt-paper-icon-button[aria-label*="create" i]',
+        ]
+        upload_menu_selectors = [
+            'tp-yt-paper-item[test-id="upload"]',
+            'tp-yt-paper-item#text-item-0[test-id="upload"]',
+            'tp-yt-paper-item:has-text("Upload videos")',
+            '[role="menuitem"][test-id="upload"]',
+        ]
 
-                    const createTriggers = [
-                        'button[aria-label*="create" i]',
-                        'ytcp-button#create-icon button',
-                        'ytcp-button[id="create-icon"] button',
-                        'ytcp-button[aria-label*="create" i] button',
-                        'yt-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response',
-                    ];
-                    let createClicked = false;
-                    for (const selector of createTriggers) {
-                        const node = document.querySelector(selector);
-                        if (!node) continue;
-                        const target = node.closest('button, tp-yt-paper-icon-button, ytcp-button') || node;
-                        if (click(target) || click(node)) {
-                            createClicked = true;
-                            break;
-                        }
-                    }
+        create_clicked = False
+        for selector in create_selectors:
+            try:
+                node = page.locator(selector).first
+                if node.count() < 1:
+                    continue
+                node.click(timeout=900)
+                create_clicked = True
+                break
+            except Exception:
+                continue
 
-                    const uploadItems = [
-                        'tp-yt-paper-item[test-id="upload"]',
-                        'tp-yt-paper-item#text-item-0[test-id="upload"]',
-                        'tp-yt-paper-item:has(yt-formatted-string)',
-                    ];
-                    let uploadClicked = false;
-                    for (const selector of uploadItems) {
-                        const candidates = Array.from(document.querySelectorAll(selector));
-                        for (const node of candidates) {
-                            const text = String(node.textContent || '').toLowerCase();
-                            const isUpload = selector.includes('test-id="upload"') || text.includes('upload videos');
-                            if (!isUpload) continue;
-                            if (click(node)) {
-                                uploadClicked = true;
-                                break;
-                            }
-                        }
-                        if (uploadClicked) break;
-                    }
-                    return { createClicked, uploadClicked };
-                }
-                """
-            )
-            if opened and (opened.get("createClicked") or opened.get("uploadClicked")):
+        if create_clicked:
+            try:
+                page.wait_for_timeout(250)
+            except Exception:
+                pass
+
+        for selector in upload_menu_selectors:
+            try:
+                node = page.locator(selector).first
+                if node.count() < 1:
+                    continue
+                node.click(timeout=1200)
                 try:
                     page.wait_for_timeout(300)
                 except Exception:
                     pass
-                if opened.get("uploadClicked"):
+                if create_clicked:
                     return "clicked YouTube create + upload videos menu"
-                return "clicked YouTube create trigger"
-        except Exception:
-            pass
+                return "clicked YouTube upload videos menu"
+            except Exception:
+                continue
+
+        if create_clicked:
+            return "clicked YouTube create trigger"
 
     selectors = _upload_trigger_selectors_for_platform(platform)
     for selector in selectors:
