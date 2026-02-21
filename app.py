@@ -9217,11 +9217,15 @@ class MainWindow(QMainWindow):
         if not self.cdp_social_upload_relay_enabled.isChecked():
             return False
         if self._cdp_relay_temporarily_disabled:
-            return False
+            status_label.setText("Status: CDP relay paused for this session. Toggle CDP Relay Mode off/on to retry.")
+            timer.start(1500)
+            return True
 
         relay_url = self.cdp_social_upload_relay_url.text().strip()
         if not relay_url:
-            return False
+            status_label.setText("Status: CDP relay enabled but URL is empty. Set CDP Relay URL in App Preferences.")
+            timer.start(1500)
+            return True
 
         payload = {
             "platform": platform_name.lower(),
@@ -9241,23 +9245,28 @@ class MainWindow(QMainWindow):
                 raise RuntimeError(f"HTTP {response.status_code}: {str(relay_data)[:300]}")
         except Exception as exc:
             self._cdp_relay_temporarily_disabled = True
+            status_label.setText("Status: CDP relay unavailable; retry paused for this session.")
             if not pending.get("cdp_relay_error_logged"):
                 self._append_log(
-                    f"WARNING: {platform_name} CDP relay unavailable ({exc}); falling back to in-app DOM automation "
-                    "and pausing relay attempts for this session."
+                    f"WARNING: {platform_name} CDP relay unavailable ({exc}); CDP relay mode is active, so DOM fallback is disabled "
+                    "for this upload and relay attempts are paused for this session."
                 )
                 self._append_log(
                     "TIP: Start your CDP relay service and toggle CDP Relay Mode off/on (or restart app) to retry relay mode."
                 )
                 pending["cdp_relay_error_logged"] = True
-            return False
+            timer.start(1500)
+            return True
 
         if not isinstance(relay_data, dict):
             relay_data = {}
 
         handled = bool(relay_data.get("handled", True))
         if not handled:
-            return False
+            status_label.setText(str(relay_data.get("status") or f"Status: CDP relay step {attempts} not handled yet."))
+            retry_ms = int(relay_data.get("retry_ms", 1500) or 1500)
+            timer.start(max(400, retry_ms))
+            return True
 
         progress = int(relay_data.get("progress", min(95, 20 + attempts * 6)) or 0)
         progress_bar.setVisible(True)

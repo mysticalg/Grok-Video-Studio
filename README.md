@@ -111,7 +111,7 @@ You can also enable this in **Model/API Settings → App Preferences**:
 For existing browser automations (TikTok/YouTube/Facebook/Instagram), you can optionally route each upload step through a local CDP relay in **Model/API Settings → App Preferences**:
 - Enable **Use CDP relay for social browser automation**
 - Set **CDP Relay URL** (default: `http://127.0.0.1:8765/social-upload-step`)
-- If the relay is unavailable, the app automatically falls back to built-in DOM automation and pauses relay attempts for the current session (toggle relay mode off/on or restart to retry).
+- CDP Relay Mode is now CDP-first/relay-only for social browser automation attempts. If relay is unavailable, the upload step stays in relay mode (no DOM fallback), and relay retries pause for the current session until you toggle relay mode off/on or restart.
 
 
 ### Quickstart: run a local relay (no connection-refused errors)
@@ -132,7 +132,7 @@ What this relay does now:
 - Connects to QtWebEngine via CDP (`QTWEBENGINE_REMOTE_DEBUGGING` port).
 - Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (caption/title/publish/share clicks).
 - Returns `handled: true` when CDP step execution succeeds, with progress + status details.
-- Returns `handled: false` automatically when CDP attach fails, so app fallback still works.
+- Returns `handled: false` when CDP attach fails; app remains in relay-only mode for that upload attempt and schedules retry/status updates.
 
 If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.
 - On Windows, if a client drops the HTTP connection mid-response, the relay now treats it as non-fatal and continues serving subsequent requests.

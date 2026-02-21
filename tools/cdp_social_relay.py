@@ -54,6 +54,51 @@ def _pick_page(browser, current_url: str, platform: str):
     return pages[0] if pages else None
 
 
+
+def _upload_selectors_for_platform(platform: str) -> list[str]:
+    if platform == "tiktok":
+        return [
+            'input[type="file"]',
+            'input[type="file"][accept*="video"]',
+        ]
+    if platform == "youtube":
+        return [
+            'input[type="file"][name="Filedata"]',
+            'input[type="file"]',
+        ]
+    if platform == "facebook":
+        return [
+            'input[type="file"][accept*="video"]',
+            'input[type="file"]',
+        ]
+    if platform == "instagram":
+        return [
+            'input[type="file"][accept*="video"]',
+            'input[type="file"]',
+        ]
+    return ['input[type="file"]']
+
+
+def _stage_file_upload(page, platform: str, video_path: str) -> tuple[bool, str]:
+    if not video_path:
+        return False, "video_path missing"
+    if not os.path.isfile(video_path):
+        return False, f"video file not found: {video_path}"
+
+    selectors = _upload_selectors_for_platform(platform)
+    for selector in selectors:
+        locator = page.locator(selector)
+        count = locator.count()
+        for idx in range(count):
+            node = locator.nth(idx)
+            try:
+                node.set_input_files(video_path, timeout=2000)
+                return True, f"staged via selector '{selector}'"
+            except Exception:
+                continue
+
+    return False, "no writable file input found"
+
 def _script_for_platform(platform: str) -> str:
     common = r'''
         const titleText = String(payload.title || "").trim();
@@ -237,6 +282,8 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                     "retry_ms": 1500,
                 }
 
+            file_staged, file_stage_detail = _stage_file_upload(page, platform, str(payload.get("video_path") or ""))
+
             script = _script_for_platform(platform)
             result = page.evaluate(
                 """([payload, script]) => {
@@ -263,13 +310,19 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
 
     done = bool(result.get("done"))
     status = str(result.get("status") or f"{platform}: CDP step executed")
+    if not done and file_staged:
+        status = f"{status} File staged via CDP."
     return {
         "handled": True,
         "done": done,
         "status": status,
         "progress": 100 if done else 70,
         "retry_ms": 1200,
-        "log": json.dumps(result, ensure_ascii=False)[:500],
+        "log": json.dumps({
+            "result": result,
+            "file_staged": file_staged,
+            "file_stage_detail": file_stage_detail,
+        }, ensure_ascii=False)[:700],
     }
 
 
