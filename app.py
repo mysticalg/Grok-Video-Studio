@@ -4569,7 +4569,14 @@ class MainWindow(QMainWindow):
             if not upload_response.ok:
                 raise RuntimeError(f"OpenAI file upload failed: {upload_response.status_code} {upload_response.text[:400]}")
 
-            file_id = str(upload_response.json().get("id") or "").strip()
+            try:
+                upload_payload = upload_response.json() if upload_response.content else {}
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"OpenAI file upload returned non-JSON response ({exc}): {upload_response.text[:300]}"
+                ) from exc
+
+            file_id = str((upload_payload or {}).get("id") or "").strip()
             if not file_id:
                 raise RuntimeError("OpenAI file upload did not return a file id.")
 
@@ -4597,9 +4604,22 @@ class MainWindow(QMainWindow):
                 )
                 if not response.ok:
                     raise RuntimeError(f"OpenAI vision request failed: {response.status_code} {response.text[:400]}")
-                text = _extract_text_from_responses_body(response.json())
+
+                streamed_text = _extract_text_from_responses_sse(response.text)
+                if streamed_text:
+                    return streamed_text.strip()
+
+                try:
+                    response_payload = response.json() if response.content else {}
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"OpenAI vision returned non-JSON response ({exc}): {response.text[:300]}"
+                    ) from exc
+
+                text = _extract_text_from_responses_body(response_payload)
                 if text:
                     return text.strip()
+
                 raise RuntimeError("OpenAI vision response did not include text output.")
             finally:
                 try:
