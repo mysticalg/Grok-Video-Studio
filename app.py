@@ -9552,11 +9552,27 @@ class MainWindow(QMainWindow):
                                 userPrompt.id = promptId;
                                 userPrompt.setAttribute("role", "button");
                                 userPrompt.tabIndex = 0;
-                                userPrompt.style.fontSize = "25px";
-                                userPrompt.style.marginTop = "10px";
+                                userPrompt.style.position = "fixed";
+                                userPrompt.style.zIndex = "2147483647";
+                                userPrompt.style.top = "24px";
+                                userPrompt.style.left = "50%";
+                                userPrompt.style.transform = "translateX(-50%)";
+                                userPrompt.style.maxWidth = "92vw";
+                                userPrompt.style.width = "min(1100px, 92vw)";
+                                userPrompt.style.padding = "28px 32px";
+                                userPrompt.style.fontSize = "42px";
+                                userPrompt.style.fontWeight = "900";
+                                userPrompt.style.lineHeight = "1.2";
+                                userPrompt.style.textAlign = "center";
                                 userPrompt.style.cursor = "pointer";
-                                userPrompt.style.textDecoration = "underline";
-                                userPrompt.style.color = "#ff4d4f";
+                                userPrompt.style.textDecoration = "none";
+                                userPrompt.style.border = "5px solid #ff4d4f";
+                                userPrompt.style.borderRadius = "18px";
+                                userPrompt.style.boxShadow = "0 16px 42px rgba(0, 0, 0, 0.42), 0 0 0 4px rgba(255, 77, 79, 0.25)";
+                                userPrompt.style.background = "rgba(255, 255, 255, 0.97)";
+                                userPrompt.style.color = "#b00020";
+                                userPrompt.style.backdropFilter = "blur(4px)";
+                                userPrompt.style.webkitBackdropFilter = "blur(4px)";
                                 userPrompt.textContent = "User Interaction Required, Click here to continue!";
                                 const activateFileInput = () => {
                                     try { fileInput.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
@@ -9569,11 +9585,7 @@ class MainWindow(QMainWindow):
                                         activateFileInput();
                                     }
                                 });
-                                if (fileInput.parentElement) {
-                                    try { fileInput.insertAdjacentElement("afterend", userPrompt); } catch (_) { fileInput.parentElement.appendChild(userPrompt); }
-                                } else {
-                                    document.body.appendChild(userPrompt);
-                                }
+                                document.body.appendChild(userPrompt);
                             } catch (_) {}
                         }
                     }
