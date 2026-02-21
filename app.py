@@ -8937,7 +8937,8 @@ class MainWindow(QMainWindow):
             return
 
         print(f"DEBUG: video_size={video_size} bytes (~{video_size / (1024*1024):.2f} MB)")
-        print(f"DEBUG: access token={access_token}")
+        masked_token = f"{access_token[:10]}...{access_token[-6:]}" if len(access_token) > 20 else access_token
+        print(f"DEBUG: access token={masked_token}")
         headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8"
@@ -8947,18 +8948,34 @@ class MainWindow(QMainWindow):
         # Start with inbox — safer for testing
         init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 
-        # TikTok metadata validation can vary. Try a few valid chunking strategies
+        # TikTok metadata validation can vary. Build only API-valid chunking strategies
         # and use the first one that both initializes and uploads successfully.
-        if video_size < MIN_CHUNK or video_size <= MAX_CHUNK:
-            strategy_candidates = [(video_size, 1, "single_chunk")]
+        strategy_candidates: list[tuple[int, int, str]] = []
+        if video_size <= MAX_CHUNK:
+            strategy_candidates.append((video_size, 1, "single_chunk"))
         else:
             ceil_count = max(1, math.ceil(video_size / MAX_CHUNK))
-            floor_count = max(1, video_size // MAX_CHUNK)
-            strategy_candidates = [
+            even_chunk = max(MIN_CHUNK, math.ceil(video_size / ceil_count))
+            strategy_candidates.extend([
+                (even_chunk, ceil_count, "even_ceil_count"),
                 (MAX_CHUNK, ceil_count, "fixed_64mb_ceil_count"),
-                (math.ceil(video_size / ceil_count), ceil_count, "even_ceil_count"),
-                (MAX_CHUNK, floor_count, "fixed_64mb_floor_count"),
-            ]
+            ])
+
+        # Normalize + deduplicate candidates so we never send invalid chunk metadata.
+        normalized_candidates: list[tuple[int, int, str]] = []
+        seen_candidates: set[tuple[int, int]] = set()
+        for raw_chunk_size, raw_total_count, strategy_name in strategy_candidates:
+            chunk_size = max(1, int(raw_chunk_size))
+            if video_size > MAX_CHUNK:
+                chunk_size = min(MAX_CHUNK, max(MIN_CHUNK, chunk_size))
+            total_chunk_count = max(1, math.ceil(video_size / chunk_size))
+            key = (chunk_size, total_chunk_count)
+            if key in seen_candidates:
+                continue
+            seen_candidates.add(key)
+            normalized_candidates.append((chunk_size, total_chunk_count, strategy_name))
+
+        strategy_candidates = normalized_candidates
 
         last_error = None
         for chunk_size, total_chunk_count, strategy_name in strategy_candidates:
