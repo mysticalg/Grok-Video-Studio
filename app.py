@@ -1512,6 +1512,28 @@ class VideoOverlayWorker(QThread):
         cleaned = cleaned.replace(",", " ").replace(":", " ").replace("'", "")
         return cleaned or "Arial"
 
+    def _ffmpeg_filter_escape(self, value: str) -> str:
+        escaped = (value or "").replace("\\", "/")
+        escaped = escaped.replace("'", r"\'")
+        escaped = escaped.replace(":", r"\:")
+        escaped = escaped.replace(",", r"\,")
+        return escaped
+
+    def _build_subtitles_filter(self, srt_path: Path) -> str:
+        escaped_path = self._ffmpeg_filter_escape(str(srt_path))
+        style = (
+            "Alignment=2,"
+            f"FontName={self.font_name},"
+            "FontSize=22,"
+            "PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00202020,"
+            "BorderStyle=1,"
+            "Outline=2,"
+            "Shadow=0,"
+            "MarginV=24"
+        )
+        return f"subtitles=filename='{escaped_path}':force_style='{style}'"
+
     def _build_overlay_text(self, frame_path: Path, timestamp_seconds: float) -> str:
         if self.overlay_mode == "manual":
             return self.manual_text
@@ -1595,7 +1617,7 @@ class VideoOverlayWorker(QThread):
                     "-i",
                     str(self.input_video),
                     "-vf",
-                    f"subtitles={str(srt_path).replace(':', '\\:')}:force_style='Alignment=2,FontName={self.font_name},FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00202020,BorderStyle=1,Outline=2,Shadow=0,MarginV=24'",
+                    self._build_subtitles_filter(srt_path),
                     "-c:a",
                     "copy",
                     str(self.output_video),
