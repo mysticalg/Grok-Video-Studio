@@ -1,2 +1,4 @@
-# Keep WebView interfaces and app classes
--keep class com.grokvideostudio.app.** { *; }
+# Keep WebView Javascript interfaces if added in future.
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
