@@ -473,9 +473,6 @@ def _build_last_frame_extraction_cmds(video_path: str | Path, seek_args: list[st
             *seek_args,
             "-i",
             path_str,
-            "-vf",
-            "format=uyvy422,scale=in_range=full:out_range=full:"
-            "in_color_matrix=bt709:out_color_matrix=bt709,format=rgb48le",
             "-frames:v",
             "1",
             frame_str,
