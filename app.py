@@ -9575,6 +9575,8 @@ class MainWindow(QMainWindow):
                                 userPrompt.style.webkitBackdropFilter = "blur(4px)";
                                 userPrompt.textContent = "User Interaction Required, Click here to continue!";
                                 const activateFileInput = () => {
+                                    try { userPrompt.style.display = "none"; } catch (_) {}
+                                    try { userPrompt.remove(); } catch (_) {}
                                     try { fileInput.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
                                     try { fileInput.click(); } catch (_) {}
                                 };
