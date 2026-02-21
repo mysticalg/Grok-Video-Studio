@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlencode, urlparse
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QEventLoop, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -61,6 +61,7 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtTest import QTest
 
 from social_uploaders import upload_video_to_facebook_page, upload_video_to_instagram_reels, upload_video_to_tiktok
 from youtube_uploader import upload_video_to_youtube
@@ -585,11 +586,12 @@ def _configure_qtwebengine_runtime() -> None:
     CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE = _resolve_qtwebengine_cache_dir()
 
     default_flags = [
-        "--enable-gpu-rasterization",
-        "--enable-zero-copy",
-        "--ignore-gpu-blocklist",
+        "--disable-gpu",
+        "--disable-gpu-compositing",
+        "--disable-software-rasterizer",
         "--disable-renderer-backgrounding",
         "--autoplay-policy=no-user-gesture-required",
+        f"--js-flags=--max-old-space-size={_env_int('GROK_BROWSER_JS_HEAP_MB', 4096)}",
         f"--media-cache-size={_env_int('GROK_BROWSER_MEDIA_CACHE_BYTES', 268435456)}",
         f"--disk-cache-size={_env_int('GROK_BROWSER_DISK_CACHE_BYTES', 536870912)}",
     ]
@@ -2576,6 +2578,9 @@ class MainWindow(QMainWindow):
             browser.settings().setAttribute(developer_extras_attr, True)
         browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
+        browser.renderProcessTerminated.connect(
+            lambda status, code, p=platform_name: self._on_webengine_render_terminated(f"{p} Upload", status, code)
+        )
         layout.addWidget(browser, 1)
 
         self.social_upload_browsers[platform_name] = browser
@@ -2606,6 +2611,55 @@ class MainWindow(QMainWindow):
             return
         browser.setUrl(QUrl(upload_url))
         self._append_log(f"Opened {platform_name} upload page in dedicated tab.")
+
+    def _on_webengine_render_terminated(self, scope: str, status: object, exit_code: int) -> None:
+        status_name = getattr(status, "name", str(status))
+        message = f"{scope}: WebEngine renderer terminated (status={status_name}, exit_code={exit_code})."
+        self._append_log(f"WARNING: {message}")
+
+    def _trigger_native_social_file_input_click(self, platform_name: str) -> bool:
+        browser = self.social_upload_browsers.get(platform_name)
+        if browser is None:
+            return False
+
+        result: dict[str, object] = {}
+        loop = QEventLoop()
+
+        script = """
+            (() => {
+                const nodes = Array.from(document.querySelectorAll('input[type="file"]'));
+                const visible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
+                const node = nodes.find((n) => visible(n)) || nodes[0] || null;
+                if (!node) return null;
+                try { node.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                const rect = node.getBoundingClientRect();
+                return {
+                    x: Math.max(1, Math.floor(rect.left + Math.min(rect.width / 2, Math.max(6, rect.width - 6)))),
+                    y: Math.max(1, Math.floor(rect.top + Math.min(rect.height / 2, Math.max(6, rect.height - 6)))),
+                };
+            })();
+        """
+
+        def _after(js_result):
+            if isinstance(js_result, dict):
+                result.update(js_result)
+            loop.quit()
+
+        browser.page().runJavaScript(script, _after)
+        QTimer.singleShot(300, loop.quit)
+        loop.exec()
+
+        try:
+            x = int(result.get("x", 0))
+            y = int(result.get("y", 0))
+        except Exception:
+            return False
+        if x <= 0 or y <= 0:
+            return False
+
+        browser.setFocus(Qt.FocusReason.OtherFocusReason)
+        QTest.mouseClick(browser, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, y), 10)
+        return True
 
     def _on_social_browser_load_finished(self, platform_name: str, ok: bool) -> None:
         if not ok:
@@ -9083,14 +9137,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Social Upload", f"{platform_name} upload tab is not initialized.")
             return
 
-        video_file = Path(str(video_path))
-        encoded_video = ""
-        if video_file.exists() and video_file.is_file():
-            try:
-                encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
-            except Exception:
-                encoded_video = ""
-
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
             "video_path": str(video_path),
@@ -9098,9 +9144,7 @@ class MainWindow(QMainWindow):
             "title": str(title or ""),
             "attempts": 0,
             "allow_file_dialog": True,
-            "video_base64": encoded_video,
-            "video_name": video_file.name or "upload.mp4",
-            "video_mime": "video/mp4",
+            "native_file_click_attempts": 0,
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
         self._append_log(
@@ -9154,9 +9198,6 @@ class MainWindow(QMainWindow):
                 "title": str(pending.get("title") or ""),
                 "platform": platform_name.lower(),
                 "video_path": str(pending.get("video_path") or ""),
-                "video_base64": str(pending.get("video_base64") or ""),
-                "video_name": str(pending.get("video_name") or "upload.mp4"),
-                "video_mime": str(pending.get("video_mime") or "video/mp4"),
                 "allow_file_dialog": bool(pending.get("allow_file_dialog", False)),
                 "youtube_options": pending.get("youtube_options") or {},
             },
@@ -9293,9 +9334,6 @@ class MainWindow(QMainWindow):
 
                     let openUploadClicked = false;
                     const requestedVideoPath = String(payload.video_path || payload.videoPath || "");
-                    const videoBase64 = String(payload.video_base64 || "");
-                    const videoName = String(payload.video_name || "upload.mp4");
-                    const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const titleText = String(payload.title || "").trim();
                     const captionText = String(payload.caption || "").trim();
@@ -9469,21 +9507,6 @@ class MainWindow(QMainWindow):
                         return pick(fileInputs);
                     };
                     const fileInput = pickVideoInput();
-                    const setInputFiles = (input, files) => {
-                        try {
-                            const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
-                            if (descriptor && typeof descriptor.set === "function") {
-                                descriptor.set.call(input, files);
-                                return true;
-                            }
-                        } catch (_) {}
-                        try {
-                            Object.defineProperty(input, "files", { value: files, configurable: true });
-                            return true;
-                        } catch (_) {
-                            return false;
-                        }
-                    };
                     let fileDialogTriggered = false;
                     if (fileInput && (platform !== "facebook" || captionReady)) {
                         if (requestedVideoPath) {
@@ -9493,26 +9516,10 @@ class MainWindow(QMainWindow):
                         fileInput.style.visibility = "visible";
                         fileInput.removeAttribute("hidden");
                         try { fileInput.removeAttribute("disabled"); } catch (_) {}
-
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        if (!alreadyHasFile && !alreadyStaged && videoBase64) {
-                            try {
-                                const binary = atob(videoBase64);
-                                const bytes = new Uint8Array(binary.length);
-                                for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-                                const file = new File([bytes], videoName, { type: videoMime });
-                                const dt = new DataTransfer();
-                                dt.items.add(file);
-                                if (setInputFiles(fileInput, dt.files)) {
-                                    fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                                    fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                    fileDialogTriggered = true;
-                                    if (platform === "facebook") {
-                                        facebookState.fileStaged = true;
-                                    }
-                                }
-                            } catch (_) {}
+                        if (!alreadyHasFile && !alreadyStaged && allowFileDialog) {
+                            fileDialogTriggered = clickNodeSingle(fileInput) || fileDialogTriggered;
                         }
                     }
 
@@ -10031,6 +10038,20 @@ class MainWindow(QMainWindow):
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
 
+            if (
+                platform_name == "TikTok"
+                and allow_file_dialog
+                and file_found
+                and not file_ready_signal
+                and video_path_exists
+            ):
+                native_clicked = self._trigger_native_social_file_input_click(platform_name)
+                pending["native_file_click_attempts"] = int(pending.get("native_file_click_attempts", 0)) + 1
+                if native_clicked:
+                    self._append_log(
+                        f"{platform_name}: triggered native file-input click attempt #{pending['native_file_click_attempts']} to satisfy user-activation gating."
+                    )
+
             progress_bar.setVisible(True)
             progress_bar.setValue(min(95, 20 + attempts * 6))
             status_label.setText(
@@ -10045,9 +10066,13 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
-            pending["allow_file_dialog"] = False
-
             is_tiktok = platform_name == "TikTok"
+            if is_tiktok and not file_ready_signal:
+                # Keep trying file-input clicks on TikTok retries until a file is staged.
+                pending["allow_file_dialog"] = True
+            else:
+                pending["allow_file_dialog"] = False
+
             is_youtube = platform_name == "YouTube"
             tiktok_upload_assumed = is_tiktok and attempts >= 3
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists) or tiktok_upload_assumed
