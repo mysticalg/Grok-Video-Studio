@@ -9575,6 +9575,13 @@ class MainWindow(QMainWindow):
                                 userPrompt.style.webkitBackdropFilter = "blur(4px)";
                                 userPrompt.textContent = "User Interaction Required, Click here to continue!";
                                 const activateFileInput = () => {
+                                    try {
+                                        const tiktokUploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
+                                        const tiktokPhaseState = tiktokUploadState.tiktok = tiktokUploadState.tiktok || {};
+                                        tiktokPhaseState.userInteractionConfirmed = true;
+                                        tiktokPhaseState.awaitingDraftAfterUserGesture = true;
+                                        tiktokPhaseState.lastActionAtMs = Date.now();
+                                    } catch (_) {}
                                     try { userPrompt.style.display = "none"; } catch (_) {}
                                     try { userPrompt.remove(); } catch (_) {}
                                     try { fileInput.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
@@ -9698,6 +9705,8 @@ class MainWindow(QMainWindow):
                             tiktokState.lastActionAtMs = 0;
                             tiktokState.captionSetAtMs = 0;
                             tiktokState.submitClicked = false;
+                            tiktokState.userInteractionConfirmed = false;
+                            tiktokState.awaitingDraftAfterUserGesture = false;
                         }
                         const nowMs = Date.now();
                         const minTikTokActionGapMs = 900;
@@ -9823,13 +9832,17 @@ class MainWindow(QMainWindow):
                             const dataDisabled = String(tiktokPostButton.getAttribute("data-disabled") || "").toLowerCase();
                             const nativeDisabled = Boolean(tiktokPostButton.disabled);
                             tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
-                            if (!tiktokState.submitClicked && captionReady && tiktokPostEnabled && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed) {
+                            const waitingForDraftAfterGesture = Boolean(tiktokState.awaitingDraftAfterUserGesture);
+                            const canSubmitNormally = captionReady && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
+                            const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled;
+                            if (!tiktokState.submitClicked && tiktokPostEnabled && (canSubmitNormally || canSubmitAfterGesture)) {
                                 submitClicked = clickNodeSingle(tiktokPostButton) || submitClicked;
                                 if (submitClicked) {
                                     const clickedAtMs = Date.now();
                                     tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
                                     tiktokState.lastActionAtMs = clickedAtMs;
                                     tiktokState.submitClicked = true;
+                                    tiktokState.awaitingDraftAfterUserGesture = false;
                                 }
                             }
                         }
