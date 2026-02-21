@@ -9354,6 +9354,7 @@ class MainWindow(QMainWindow):
             "title": str(pending.get("title") or ""),
             "youtube_options": pending.get("youtube_options") or {},
             "qtwebengine_remote_debugging": os.getenv("QTWEBENGINE_REMOTE_DEBUGGING", "").strip(),
+            "use_ai_relay_actions": os.getenv("GROK_CDP_RELAY_ENABLE_AI_ACTIONS", "0").strip().lower() in {"1", "true", "yes", "on"},
         }
 
         relay_future = pending.get("cdp_relay_future")

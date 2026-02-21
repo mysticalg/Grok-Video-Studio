@@ -12,6 +12,8 @@ import atexit
 import json
 import os
 import socket
+
+import requests
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -27,6 +29,15 @@ RELAY_NETWORK_REPLAY_ENABLED = os.getenv("GROK_CDP_RELAY_ENABLE_NETWORK_REPLAY",
     "yes",
     "on",
 }
+RELAY_AI_ACTIONS_ENABLED = os.getenv("GROK_CDP_RELAY_ENABLE_AI_ACTIONS", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+RELAY_AI_MODEL = os.getenv("GROK_CDP_RELAY_AI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini"
+RELAY_AI_BASE_URL = os.getenv("GROK_CDP_RELAY_AI_BASE_URL", "https://api.openai.com/v1").strip().rstrip("/")
+RELAY_AI_TIMEOUT_SECONDS = max(5.0, float(os.getenv("GROK_CDP_RELAY_AI_TIMEOUT_SECONDS", "20")))
 
 _PLAYWRIGHT_INSTANCE = None
 _CDP_BROWSERS_BY_ENDPOINT: dict[str, Any] = {}
@@ -241,6 +252,155 @@ def _replay_network_candidates(page, payload: dict[str, Any], candidates: list[d
         if len(replay_results) >= int(payload.get("max_network_replays") or 3):
             break
     return replay_results
+
+
+def _wants_ai_actions(payload: dict[str, Any]) -> bool:
+    candidate = payload.get("use_ai_relay_actions")
+    if candidate is None:
+        return RELAY_AI_ACTIONS_ENABLED
+    if isinstance(candidate, bool):
+        return candidate
+    return str(candidate).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _relay_ai_api_key() -> str:
+    return (
+        os.getenv("OPENAI_API_KEY", "").strip()
+        or os.getenv("GROK_API_KEY", "").strip()
+        or os.getenv("XAI_API_KEY", "").strip()
+    )
+
+
+def _build_ai_dom_snapshot(page) -> dict[str, Any]:
+    return page.evaluate(
+        """() => {
+            const take = (nodes, limit = 40) => Array.from(nodes || []).slice(0, limit);
+            const toText = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+            const buttons = take(document.querySelectorAll('button, [role="button"], tp-yt-paper-item')).map((node) => ({
+                text: toText(node.textContent).slice(0, 120),
+                aria: toText(node.getAttribute('aria-label')).slice(0, 120),
+                id: toText(node.id).slice(0, 80),
+                className: toText(node.className).slice(0, 120),
+                disabled: !!node.disabled,
+            }));
+            const inputs = take(document.querySelectorAll('input, textarea, [contenteditable="true"]')).map((node) => ({
+                tag: String(node.tagName || '').toLowerCase(),
+                type: String(node.getAttribute?.('type') || ''),
+                name: String(node.getAttribute?.('name') || ''),
+                aria: toText(node.getAttribute?.('aria-label')).slice(0, 120),
+                placeholder: toText(node.getAttribute?.('placeholder')).slice(0, 120),
+                editable: !!node.isContentEditable,
+            }));
+            return {
+                url: String(location.href || ''),
+                title: String(document.title || ''),
+                buttons,
+                inputs,
+            };
+        }"""
+    )
+
+
+def _request_ai_action_script(payload: dict[str, Any], dom_snapshot: dict[str, Any]) -> dict[str, Any]:
+    api_key = _relay_ai_api_key()
+    if not api_key:
+        return {"ok": False, "error": "AI relay actions enabled, but OPENAI_API_KEY/GROK_API_KEY is not set."}
+
+    instruction = {
+        "platform": str(payload.get("platform") or ""),
+        "title": str(payload.get("title") or "")[:200],
+        "caption": str(payload.get("caption") or "")[:400],
+        "goal": "Complete the next safe step in upload/posting flow (fill metadata and click Next/Post/Publish/Share if visible).",
+        "rules": [
+            "Return strict JSON only.",
+            "Provide JS expression body for function(payload){...} without markdown fences.",
+            "No loops waiting forever; no navigation to external sites; no credential extraction.",
+            "Set done=true only if publish/share/post click was attempted.",
+        ],
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a browser automation planner. Output JSON: {status:string, done:boolean, script:string}.",
+        },
+        {
+            "role": "user",
+            "content": json.dumps({"instruction": instruction, "dom": dom_snapshot}, ensure_ascii=False),
+        },
+    ]
+
+    body = {
+        "model": RELAY_AI_MODEL,
+        "messages": messages,
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        response = requests.post(
+            f"{RELAY_AI_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=RELAY_AI_TIMEOUT_SECONDS,
+        )
+        data = response.json() if response.content else {}
+        if not response.ok:
+            return {"ok": False, "error": f"AI request failed HTTP {response.status_code}"}
+        content = (
+            (((data.get("choices") or [{}])[0]).get("message") or {}).get("content")
+            if isinstance(data, dict)
+            else ""
+        )
+        parsed = json.loads(content) if content else {}
+        script = str(parsed.get("script") or "").strip()
+        if not script:
+            return {"ok": False, "error": "AI response did not include script."}
+        return {
+            "ok": True,
+            "status": str(parsed.get("status") or "AI action planned."),
+            "done": bool(parsed.get("done")),
+            "script": script[:6000],
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _run_ai_relay_actions(page, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        snapshot = _build_ai_dom_snapshot(page)
+    except Exception as exc:
+        return {"enabled": True, "ok": False, "error": f"snapshot failed: {exc}"}
+
+    ai_plan = _request_ai_action_script(payload, snapshot)
+    if not ai_plan.get("ok"):
+        return {"enabled": True, "ok": False, "error": str(ai_plan.get("error") or "unknown ai error")}
+
+    try:
+        ai_result = page.evaluate(
+            """([payload, script]) => {
+                try {
+                    const out = (new Function('payload', script))(payload);
+                    if (out && typeof out === 'object') return out;
+                    return { done: false, status: 'AI script ran without structured output.' };
+                } catch (err) {
+                    return { done: false, status: 'AI script execution failed', error: String(err) };
+                }
+            }""",
+            [payload, str(ai_plan.get("script") or "")],
+        )
+    except Exception as exc:
+        return {"enabled": True, "ok": False, "error": f"evaluate failed: {exc}"}
+
+    return {
+        "enabled": True,
+        "ok": True,
+        "planned_status": str(ai_plan.get("status") or "AI action planned."),
+        "planned_done": bool(ai_plan.get("done")),
+        "result": ai_result if isinstance(ai_result, dict) else {},
+    }
 
 
 def _parse_debug_port(payload: dict[str, Any]) -> int:
@@ -753,6 +913,33 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                     "results": replay_results,
                 }
 
+            ai_action_detail = {
+                "enabled": False,
+                "ok": False,
+                "status": "",
+                "done": False,
+                "error": "",
+                "result": {},
+            }
+            if _wants_ai_actions(payload):
+                ai_exec = _run_ai_relay_actions(page, payload)
+                ai_result = ai_exec.get("result") if isinstance(ai_exec, dict) else {}
+                ai_action_detail = {
+                    "enabled": True,
+                    "ok": bool(ai_exec.get("ok")) if isinstance(ai_exec, dict) else False,
+                    "status": str(
+                        (ai_exec.get("planned_status") if isinstance(ai_exec, dict) else "")
+                        or (ai_result.get("status") if isinstance(ai_result, dict) else "")
+                        or ""
+                    ),
+                    "done": bool(
+                        (ai_result.get("done") if isinstance(ai_result, dict) else False)
+                        or (ai_exec.get("planned_done") if isinstance(ai_exec, dict) else False)
+                    ),
+                    "error": str((ai_exec.get("error") if isinstance(ai_exec, dict) else "") or ""),
+                    "result": ai_result if isinstance(ai_result, dict) else {},
+                }
+
             script = _script_for_platform(platform)
             result = page.evaluate(
                 """([payload, script]) => {
@@ -789,6 +976,13 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
 
     done = bool(result.get("done"))
     status = str(result.get("status") or f"{platform}: CDP step executed")
+    if ai_action_detail.get("enabled"):
+        if ai_action_detail.get("ok"):
+            done = done or bool(ai_action_detail.get("done"))
+            ai_status = str(ai_action_detail.get("status") or "AI-assisted relay action executed.").strip()
+            status = f"{status} {ai_status}".strip()
+        else:
+            status = f"{status} AI relay unavailable ({str(ai_action_detail.get('error') or 'unknown error')[:120]})."
     if network_capture_detail.get("enabled"):
         status = (
             f"{status} Network replay captured={network_capture_detail.get('captured', 0)} "
@@ -807,6 +1001,7 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
             "file_staged": file_staged,
             "file_stage_detail": file_stage_detail,
             "network_replay": network_capture_detail,
+            "ai_actions": ai_action_detail,
         }, ensure_ascii=False)[:700],
     }
 
