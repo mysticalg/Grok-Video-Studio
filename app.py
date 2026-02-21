@@ -6951,6 +6951,9 @@ class MainWindow(QMainWindow):
 
         manual_text = QLineEdit(dialog)
         manual_text.setPlaceholderText("Optional: manual subtitle text, or AI prompt context when in AI mode")
+        concept_default = self.concept.toPlainText().strip() if hasattr(self, "concept") else ""
+        if concept_default:
+            manual_text.setText(concept_default)
 
 
         layout.addRow("Mode", mode_combo)
