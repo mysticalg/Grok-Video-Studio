@@ -9086,9 +9086,14 @@ class MainWindow(QMainWindow):
         video_file = Path(str(video_path))
         encoded_video = ""
         if video_file.exists() and video_file.is_file():
-            # Avoid embedding large video blobs into in-page JS payloads for TikTok.
+            # Avoid embedding very large TikTok blobs into in-page JS payloads.
             # Large base64 payloads can freeze the browser process before upload starts.
-            if platform_name != "TikTok":
+            tiktok_inline_limit_bytes = 100 * 1024 * 1024
+            should_inline_video = (
+                platform_name != "TikTok"
+                or video_file.stat().st_size <= tiktok_inline_limit_bytes
+            )
+            if should_inline_video:
                 try:
                     encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
                 except Exception:
@@ -9503,7 +9508,7 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        const shouldInjectDirectly = platform !== "tiktok";
+                        const shouldInjectDirectly = platform !== "tiktok" || videoBase64 !== "AA==";
                         if (!alreadyHasFile && !alreadyStaged && videoBase64 && shouldInjectDirectly) {
                             try {
                                 const binary = atob(videoBase64);
@@ -9523,7 +9528,7 @@ class MainWindow(QMainWindow):
                             } catch (_) {}
                         }
 
-                        if (platform === "tiktok" && videoBase64) {
+                        if (platform === "tiktok" && videoBase64 === "AA==") {
                             try {
                                 const binary = atob(videoBase64);
                                 const bytes = new Uint8Array(binary.length);
