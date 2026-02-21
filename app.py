@@ -1600,9 +1600,21 @@ class VideoOverlayWorker(QThread):
             "If uncertain, provide a neutral literal scene description.\n\n"
             f"Frame image (data URL): {data_url}"
         )
-        response = self.ai_callback(system, user)
-        first_line = re.split(r"[\r\n]+", response.strip(), maxsplit=1)[0].strip()
-        return first_line or f"Scene at {timestamp_seconds:.1f}s"
+        try:
+            response = self.ai_callback(system, user)
+        except Exception as exc:
+            self.progress.emit(
+                f"AI caption request failed at {timestamp_seconds:.1f}s ({exc}); using fallback caption."
+            )
+            return f"Scene at {timestamp_seconds:.1f}s"
+
+        first_line = re.split(r"[\r\n]+", (response or "").strip(), maxsplit=1)[0].strip()
+        if not first_line:
+            self.progress.emit(
+                f"AI returned empty caption at {timestamp_seconds:.1f}s; using fallback caption."
+            )
+            return f"Scene at {timestamp_seconds:.1f}s"
+        return first_line
 
     def run(self) -> None:
         temp_files: list[Path] = []
