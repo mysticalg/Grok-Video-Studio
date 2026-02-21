@@ -8923,11 +8923,11 @@ class MainWindow(QMainWindow):
             return
 
         video_size = os.path.getsize(video_path)  # MUST be exact bytes!
-        MIN_CHUNK = 5 * 1024 * 1024     # 5242880
-        MAX_CHUNK = 64 * 1024 * 1024    # 67108864
+        MIN_CHUNK = 5 * 1024 * 1024
+        MAX_CHUNK = 64 * 1024 * 1024
 
         raw_token = self.tiktok_access_token.text().strip()
-        if isinstance(raw_token, tuple) or isinstance(raw_token, list):
+        if isinstance(raw_token, (tuple, list)):
             access_token = raw_token[0] if raw_token else ""
         else:
             access_token = raw_token
@@ -8939,19 +8939,15 @@ class MainWindow(QMainWindow):
         print(f"DEBUG: video_size={video_size} bytes (~{video_size / (1024*1024):.2f} MB)")
         masked_token = f"{access_token[:10]}...{access_token[-6:]}" if len(access_token) > 20 else access_token
         print(f"DEBUG: access token={masked_token}")
+
         headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json; charset=UTF-8"
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json; charset=UTF-8",
         }
 
-        # Try draft inbox init first, then fallback to direct post init.
-        init_url_candidates = [
-            ("inbox_draft", "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"),
-            ("direct_post", "https://open.tiktokapis.com/v2/post/publish/video/init/"),
-        ]
+        init_url_direct = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+        init_url_inbox = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 
-        # TikTok metadata validation can vary. Build only API-valid chunking strategies
-        # and use the first one that both initializes and uploads successfully.
         strategy_candidates: list[tuple[int, int, str]] = []
         if video_size <= MAX_CHUNK:
             strategy_candidates.append((video_size, 1, "single_chunk"))
@@ -8966,10 +8962,9 @@ class MainWindow(QMainWindow):
                 (8 * 1024 * 1024, math.ceil(video_size / (8 * 1024 * 1024)), "fixed_8mb"),
             ])
 
-        # Normalize + deduplicate candidates so we never send invalid chunk metadata.
         normalized_candidates: list[tuple[int, int, str]] = []
         seen_candidates: set[tuple[int, int]] = set()
-        for raw_chunk_size, raw_total_count, strategy_name in strategy_candidates:
+        for raw_chunk_size, _raw_total_count, strategy_name in strategy_candidates:
             chunk_size = max(1, int(raw_chunk_size))
             if video_size > MAX_CHUNK:
                 chunk_size = min(MAX_CHUNK, max(MIN_CHUNK, chunk_size))
@@ -8993,17 +8988,18 @@ class MainWindow(QMainWindow):
                 end_value = int(match.group(2))
             except (TypeError, ValueError):
                 return None
-            if end_value < 0:
-                return None
-            return end_value
+            return end_value if end_value >= 0 else None
 
-        last_error = None
-        publish_id = None
+        last_error: Exception | None = None
+        publish_id: str | None = None
         upload_succeeded = False
 
         for chunk_size, total_chunk_count, strategy_name in strategy_candidates:
             upload_chunk_count = max(1, math.ceil(video_size / chunk_size))
-            print(f"DEBUG: strategy={strategy_name} chunk_size={chunk_size} total_chunk_count={total_chunk_count} upload_chunk_count={upload_chunk_count}")
+            print(
+                f"DEBUG: strategy={strategy_name} chunk_size={chunk_size} "
+                f"total_chunk_count={total_chunk_count} upload_chunk_count={upload_chunk_count}"
+            )
 
             source_info = {
                 "source": "FILE_UPLOAD",
@@ -9011,7 +9007,6 @@ class MainWindow(QMainWindow):
                 "chunk_size": chunk_size,
                 "total_chunk_count": total_chunk_count,
             }
-
             payload = {
                 "source_info": source_info,
                 "post_info": {
@@ -9023,29 +9018,38 @@ class MainWindow(QMainWindow):
                 },
             }
 
-            for init_mode, init_url in init_url_candidates:
+            # Direct post init is generally more permissive for chunk metadata.
+            init_modes: list[tuple[str, str]] = [("direct_post", init_url_direct)]
+            if total_chunk_count == 1:
+                init_modes.append(("inbox_draft", init_url_inbox))
+
+            for init_mode, init_url in init_modes:
                 print(f"DEBUG: init_mode={init_mode} init_url={init_url}")
                 resp = requests.post(init_url, headers=headers, json=payload)
                 try:
-                    data = resp.json()
+                    init_data = resp.json()
                 except ValueError:
-                    data = {"raw": resp.text[:500]}
+                    init_data = {"raw": resp.text[:500]}
 
                 if resp.status_code != 200:
-                    print("Status check failed:", data)
+                    print("Status check failed:", init_data)
                     last_error = RuntimeError(
-                        f"TikTok init failed ({strategy_name}, {init_mode}): {resp.status_code} - {data}"
+                        f"TikTok init failed ({strategy_name}, {init_mode}): {resp.status_code} - {init_data}"
                     )
                     continue
 
-                print("Status response:", data)
-                upload_url = data["data"]["upload_url"]
-                publish_id = data["data"].get("publish_id")
-
-                upload_resp = None
-                bytes_uploaded = 0
+                print("Status response:", init_data)
+                upload_url = str(init_data.get("data", {}).get("upload_url") or "")
+                publish_id = init_data.get("data", {}).get("publish_id")
+                if not upload_url or not publish_id:
+                    last_error = RuntimeError(
+                        f"TikTok init missing upload_url/publish_id ({strategy_name}, {init_mode}): {init_data}"
+                    )
+                    continue
 
                 try:
+                    upload_resp = None
+                    bytes_uploaded = 0
                     with open(video_path, "rb") as f:
                         chunk_index = 0
                         while bytes_uploaded < video_size:
@@ -9057,7 +9061,6 @@ class MainWindow(QMainWindow):
                             start_byte = bytes_uploaded
                             end_byte = start_byte + len(chunk) - 1
                             chunk_index += 1
-
                             upload_headers = {
                                 "Content-Type": "video/mp4",
                                 "Content-Length": str(len(chunk)),
@@ -9078,7 +9081,6 @@ class MainWindow(QMainWindow):
                                     print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
 
                             server_uploaded_end = _extract_uploaded_end_from_headers(upload_resp)
-
                             if upload_resp.status_code == 416:
                                 if server_uploaded_end is not None and server_uploaded_end + 1 > bytes_uploaded:
                                     bytes_uploaded = min(video_size, server_uploaded_end + 1)
@@ -9119,16 +9121,14 @@ class MainWindow(QMainWindow):
 
         if not upload_succeeded:
             if last_error:
-                raise last_error
+                raise RuntimeError(str(last_error))
             raise RuntimeError("TikTok upload failed: no chunking strategy succeeded.")
 
         if not publish_id:
             raise RuntimeError("TikTok upload succeeded but publish_id was not returned.")
 
         self.check_tiktok_status(access_token, publish_id)
-        self._append_log(f"TikTok Upload complete")
-        # Success! Video is in user's TikTok inbox/drafts.
-        # Optionally: poll status with publish_id
+        self._append_log("TikTok Upload complete")
         return
 
     def check_tiktok_status(self, access_token, publish_id):
