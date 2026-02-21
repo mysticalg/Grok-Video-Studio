@@ -2089,7 +2089,7 @@ class MainWindow(QMainWindow):
         self.sora_generate_image_btn.setToolTip("Build and paste a video prompt into the Sora browser tab.")
         self.sora_generate_image_btn.setCheckable(True)
         self.sora_generate_image_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.sora_generate_image_btn, self.start_image_generation)
+            lambda: self._run_with_button_feedback(self.sora_generate_image_btn, self.start_sora_video_generation)
         )
 
         self.sora_continue_frame_btn = QPushButton("🟨 Continue Last Video")
@@ -4934,6 +4934,21 @@ class MainWindow(QMainWindow):
         
         self._start_manual_browser_image_generation(manual_prompt, self.count.value())
 
+    def start_sora_video_generation(self) -> None:
+        self.stop_all_requested = False
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            return
+
+        if hasattr(self, "sora_browser_tab_index"):
+            self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
+            self.browser = self.sora_browser
+
+        self._append_log("Starting Sora video prompt run (video-only mode, no image-mode toggles).")
+        self._start_manual_browser_generation(manual_prompt, self.count.value())
+
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
         self.manual_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._append_log(
@@ -5920,6 +5935,8 @@ class MainWindow(QMainWindow):
                 try {{
                     const prompt = {escaped_prompt};
                     const promptSelectors = [
+                        "textarea[placeholder*='Describe your video' i]",
+                        "textarea[aria-label*='Describe your video' i]",
                         "textarea[placeholder*='Type to imagine' i]",
                         "input[placeholder*='Type to imagine' i]",
                         "textarea[placeholder*='Type to customize this video' i]",
@@ -5948,6 +5965,12 @@ class MainWindow(QMainWindow):
                     const input = inputCandidates.find((el) => isVisible(el));
                     if (!input) return {{ ok: false, error: "Prompt input not found" }};
 
+                    const common = {{ bubbles: true, cancelable: true, composed: true }};
+                    try {{ input.dispatchEvent(new PointerEvent("pointerdown", common)); }} catch (_) {{}}
+                    input.dispatchEvent(new MouseEvent("mousedown", common));
+                    try {{ input.dispatchEvent(new PointerEvent("pointerup", common)); }} catch (_) {{}}
+                    input.dispatchEvent(new MouseEvent("mouseup", common));
+                    input.dispatchEvent(new MouseEvent("click", common));
                     input.focus();
                     if (input.isContentEditable) {{
                         // Only populate the field; do not synthesize Enter/submit key events.
