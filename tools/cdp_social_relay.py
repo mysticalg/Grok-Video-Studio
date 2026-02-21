@@ -147,6 +147,14 @@ def _upload_trigger_selectors_for_platform(platform: str) -> list[str]:
         ]
     if platform == "youtube":
         return [
+            'button[aria-label*="create" i]',
+            'ytcp-button#create-icon button',
+            'ytcp-button[id="create-icon"] button',
+            'ytcp-button[aria-label*="create" i] button',
+            'yt-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response',
+            'tp-yt-paper-item[test-id="upload"]',
+            'tp-yt-paper-item#text-item-0[test-id="upload"]',
+            'tp-yt-paper-item:has-text("Upload videos")',
             'input[type="file"][name="Filedata"] + *',
             'button[aria-label*="select files" i]',
             'ytcp-button[id*="upload"] button',
@@ -168,6 +176,69 @@ def _upload_trigger_selectors_for_platform(platform: str) -> list[str]:
 
 
 def _prime_upload_surface(page, platform: str) -> str:
+    if platform == "youtube":
+        try:
+            opened = page.evaluate(
+                """
+                () => {
+                    const click = (node) => {
+                        if (!node) return false;
+                        try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+                        try { node.click(); return true; } catch (_) { return false; }
+                    };
+
+                    const createTriggers = [
+                        'button[aria-label*="create" i]',
+                        'ytcp-button#create-icon button',
+                        'ytcp-button[id="create-icon"] button',
+                        'ytcp-button[aria-label*="create" i] button',
+                        'yt-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response',
+                    ];
+                    let createClicked = false;
+                    for (const selector of createTriggers) {
+                        const node = document.querySelector(selector);
+                        if (!node) continue;
+                        const target = node.closest('button, tp-yt-paper-icon-button, ytcp-button') || node;
+                        if (click(target) || click(node)) {
+                            createClicked = true;
+                            break;
+                        }
+                    }
+
+                    const uploadItems = [
+                        'tp-yt-paper-item[test-id="upload"]',
+                        'tp-yt-paper-item#text-item-0[test-id="upload"]',
+                        'tp-yt-paper-item:has(yt-formatted-string)',
+                    ];
+                    let uploadClicked = false;
+                    for (const selector of uploadItems) {
+                        const candidates = Array.from(document.querySelectorAll(selector));
+                        for (const node of candidates) {
+                            const text = String(node.textContent || '').toLowerCase();
+                            const isUpload = selector.includes('test-id="upload"') || text.includes('upload videos');
+                            if (!isUpload) continue;
+                            if (click(node)) {
+                                uploadClicked = true;
+                                break;
+                            }
+                        }
+                        if (uploadClicked) break;
+                    }
+                    return { createClicked, uploadClicked };
+                }
+                """
+            )
+            if opened and (opened.get("createClicked") or opened.get("uploadClicked")):
+                try:
+                    page.wait_for_timeout(300)
+                except Exception:
+                    pass
+                if opened.get("uploadClicked"):
+                    return "clicked YouTube create + upload videos menu"
+                return "clicked YouTube create trigger"
+        except Exception:
+            pass
+
     selectors = _upload_trigger_selectors_for_platform(platform)
     for selector in selectors:
         try:
