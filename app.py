@@ -2085,10 +2085,42 @@ class MainWindow(QMainWindow):
         self.browser_home_btn.setCheckable(True)
         self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
 
+        self.sora_generate_image_btn = QPushButton("🎬 Create New Video")
+        self.sora_generate_image_btn.setToolTip("Build and paste a video prompt into the Sora browser tab.")
+        self.sora_generate_image_btn.setCheckable(True)
+        self.sora_generate_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_generate_image_btn, self.start_sora_video_generation)
+        )
+
+        self.sora_continue_frame_btn = QPushButton("🟨 Continue Last Video")
+        self.sora_continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
+        self.sora_continue_frame_btn.setCheckable(True)
+        self.sora_continue_frame_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_continue_frame_btn, self.continue_from_last_frame)
+        )
+
+        self.sora_continue_image_btn = QPushButton("🖼️ Create From Image")
+        self.sora_continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
+        self.sora_continue_image_btn.setCheckable(True)
+        self.sora_continue_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_continue_image_btn, self.continue_from_local_image)
+        )
+
+        self.sora_browser_home_btn = QPushButton("🏠 Homepage")
+        self.sora_browser_home_btn.setToolTip("Open sora.chatgpt.com/profile in the embedded Sora browser tab.")
+        self.sora_browser_home_btn.setCheckable(True)
+        self.sora_browser_home_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_browser_home_btn, self.show_sora_browser_page)
+        )
+
         self.generate_image_btn.setMaximumWidth(170)
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
         self.browser_home_btn.setMaximumWidth(170)
+        self.sora_generate_image_btn.setMaximumWidth(170)
+        self.sora_continue_frame_btn.setMaximumWidth(170)
+        self.sora_continue_image_btn.setMaximumWidth(170)
+        self.sora_browser_home_btn.setMaximumWidth(170)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
@@ -2234,14 +2266,17 @@ class MainWindow(QMainWindow):
         self.preview.installEventFilter(self)
         self.player.setVideoOutput(self.preview)
 
-        self.browser = QWebEngineView()
+        self.grok_browser_view = QWebEngineView()
+        self.sora_browser = QWebEngineView()
+        self.browser = self.grok_browser_view
         if QTWEBENGINE_USE_DISK_CACHE:
             self.browser_profile = QWebEngineProfile("grok-video-desktop-profile", self)
         else:
             # Off-the-record profile avoids startup cache/quota errors on locked folders (common on synced drives).
             self.browser_profile = QWebEngineProfile(self)
 
-        self.browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.browser))
+        self.grok_browser_view.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.grok_browser_view))
+        self.sora_browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.sora_browser))
         browser_profile = self.browser_profile
         if QTWEBENGINE_USE_DISK_CACHE:
             (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
@@ -2255,17 +2290,20 @@ class MainWindow(QMainWindow):
             browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
 
-        browser_settings = self.browser.settings()
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
-        if developer_extras_attr is not None:
-            browser_settings.setAttribute(developer_extras_attr, True)
+        for embedded_browser in (self.grok_browser_view, self.sora_browser):
+            browser_settings = embedded_browser.settings()
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+            developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
+            if developer_extras_attr is not None:
+                browser_settings.setAttribute(developer_extras_attr, True)
 
-        self.browser.setUrl(QUrl("https://grok.com/imagine"))
-        self.browser.loadFinished.connect(self._on_browser_load_finished)
+        self.grok_browser_view.setUrl(QUrl("https://grok.com/imagine"))
+        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/profile"))
+        self.grok_browser_view.loadFinished.connect(self._on_browser_load_finished)
+        self.sora_browser.loadFinished.connect(self._on_browser_load_finished)
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
 
         log_group = QGroupBox("📡 Activity Log")
@@ -2368,6 +2406,14 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
         grok_browser_controls.addWidget(self.browser_home_btn, 0, 3)
 
+        self.sora_browser_tab = QWidget()
+        sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
+        sora_browser_controls = QGridLayout()
+        sora_browser_controls.addWidget(self.sora_generate_image_btn, 0, 0)
+        sora_browser_controls.addWidget(self.sora_continue_frame_btn, 0, 1)
+        sora_browser_controls.addWidget(self.sora_continue_image_btn, 0, 2)
+        sora_browser_controls.addWidget(self.sora_browser_home_btn, 0, 3)
+
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
         self.video_resolution.addItem("720p (1280x720)", "1280x720")
@@ -2384,10 +2430,14 @@ class MainWindow(QMainWindow):
         self.video_aspect_ratio.addItem("16:9", "16:9")
         self.video_aspect_ratio.setCurrentIndex(4)
         grok_browser_layout.addLayout(grok_browser_controls)
-        grok_browser_layout.addWidget(self.browser)
+        grok_browser_layout.addWidget(self.grok_browser_view)
+
+        sora_browser_layout.addLayout(sora_browser_controls)
+        sora_browser_layout.addWidget(self.sora_browser)
 
         self.browser_tabs = QTabWidget()
-        self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
+        self.grok_browser_tab_index = self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
+        self.sora_browser_tab_index = self.browser_tabs.addTab(self.sora_browser_tab, "Sora Browser")
         self.social_upload_tab_indices["Facebook"] = self.browser_tabs.addTab(
             self._build_social_upload_tab("Facebook", self._facebook_upload_home_url()),
             "Facebook Upload",
@@ -2403,6 +2453,7 @@ class MainWindow(QMainWindow):
         self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
         self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
         self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
+        self.browser_tabs.currentChanged.connect(self._on_browser_tab_changed)
 
         right_splitter = QSplitter(Qt.Vertical)
         right_splitter.setOpaqueResize(True)
@@ -4883,6 +4934,21 @@ class MainWindow(QMainWindow):
         
         self._start_manual_browser_image_generation(manual_prompt, self.count.value())
 
+    def start_sora_video_generation(self) -> None:
+        self.stop_all_requested = False
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            return
+
+        if hasattr(self, "sora_browser_tab_index"):
+            self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
+            self.browser = self.sora_browser
+
+        self._append_log("Starting Sora video prompt run (video-only mode, no image-mode toggles).")
+        self._start_manual_browser_generation(manual_prompt, self.count.value())
+
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
         self.manual_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._append_log(
@@ -5109,7 +5175,7 @@ class MainWindow(QMainWindow):
                     const hasSelectedByText = (patterns, root = document) => selectedTextElements(root)
                         .some((el) => matchesAny(textOf(el), patterns));
 
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
                     const composer = (promptInput && (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section"))) || document;
 
                     const aspectPatterns = {
@@ -5210,7 +5276,7 @@ class MainWindow(QMainWindow):
                         return true;
                     };
 
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
                     const submitSelectors = [
                         "button[type='submit'][aria-label='Submit']",
                         "button[aria-label='Submit'][type='submit']",
@@ -5869,6 +5935,8 @@ class MainWindow(QMainWindow):
                 try {{
                     const prompt = {escaped_prompt};
                     const promptSelectors = [
+                        "textarea[placeholder*='Describe your video' i]",
+                        "textarea[aria-label*='Describe your video' i]",
                         "textarea[placeholder*='Type to imagine' i]",
                         "input[placeholder*='Type to imagine' i]",
                         "textarea[placeholder*='Type to customize this video' i]",
@@ -5897,6 +5965,12 @@ class MainWindow(QMainWindow):
                     const input = inputCandidates.find((el) => isVisible(el));
                     if (!input) return {{ ok: false, error: "Prompt input not found" }};
 
+                    const common = {{ bubbles: true, cancelable: true, composed: true }};
+                    try {{ input.dispatchEvent(new PointerEvent("pointerdown", common)); }} catch (_) {{}}
+                    input.dispatchEvent(new MouseEvent("mousedown", common));
+                    try {{ input.dispatchEvent(new PointerEvent("pointerup", common)); }} catch (_) {{}}
+                    input.dispatchEvent(new MouseEvent("mouseup", common));
+                    input.dispatchEvent(new MouseEvent("click", common));
                     input.focus();
                     if (input.isContentEditable) {{
                         // Only populate the field; do not synthesize Enter/submit key events.
@@ -5943,7 +6017,7 @@ class MainWindow(QMainWindow):
                     const isOptionsMenu = (el) => {
                         if (!el || !isVisible(el)) return false;
                         const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                        return /video\s*duration|resolution|aspect\s*ratio|\borientation\b|\bduration\b|\bvideos\b|\bimage\b|\bvideo\b/i.test(txt);
                     };
 
                     const findOpenMenu = () => {
@@ -5967,7 +6041,8 @@ class MainWindow(QMainWindow):
                     }
 
                     const wasExpanded = settingsButton.getAttribute("aria-expanded") === "true";
-                    const opened = wasExpanded || emulateClick(settingsButton);
+                    const menuBefore = findOpenMenu();
+                    const opened = menuBefore ? true : emulateClick(settingsButton);
                     const menu = findOpenMenu();
                     return {
                         ok: opened || !!menu,
@@ -5986,7 +6061,7 @@ class MainWindow(QMainWindow):
         verify_prompt_script = r"""
             (() => {
                 try {
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
                     if (!promptInput) return { ok: false, error: "Prompt input not found during verification" };
                     const value = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                     return { ok: !!value.trim(), filledLength: value.length };
@@ -6015,24 +6090,129 @@ class MainWindow(QMainWindow):
                     const desiredAspect = "{selected_aspect_ratio}";
                     const desiredDuration = "{selected_duration_label}";
                     const fallbackQuality = desiredQuality === "720p" ? "480p" : desiredQuality;
+                    const cleanText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
-                    const isOptionsMenu = (el) => {
-                        if (!el || !isVisible(el)) return false;
-                        const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
-                    };
                     const menuCandidates = [
                         ...document.querySelectorAll("[role='menu'][data-state='open']"),
                         ...document.querySelectorAll("[data-radix-menu-content][data-state='open']"),
                         ...document.querySelectorAll("[role='menu'], [data-radix-menu-content]")
                     ];
+                    const hasSoraItems = (el) => /\borientation\b|\bduration\b|\bvideos\b/i.test(cleanText(el?.textContent || ""));
+                    const soraMenu = menuCandidates.find((el) => isVisible(el) && hasSoraItems(el)) || null;
+
+                    if (soraMenu) {
+                        const optionsRequested = [];
+                        const optionsApplied = [];
+
+                        const menuItems = (root) => [...root.querySelectorAll("[role='menuitem']")].filter((el) => isVisible(el));
+                        const radioItems = (root) => [...root.querySelectorAll("[role='menuitemradio']")].filter((el) => isVisible(el));
+                        const currentlyOpenMenus = () => [
+                            ...document.querySelectorAll("[role='menu'][data-state='open']"),
+                            ...document.querySelectorAll("[data-radix-menu-content][data-state='open']")
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+
+                        const findMenuItem = (labelPatterns) => {
+                            const rows = menuItems(soraMenu);
+                            return rows.find((el) => labelPatterns.some((pattern) => pattern.test(cleanText(el.textContent))));
+                        };
+
+                        const openSubmenu = (label, patterns) => {
+                            const row = findMenuItem(patterns);
+                            if (!row) return false;
+                            const expanded = row.getAttribute("aria-expanded") === "true";
+                            if (!expanded) {
+                                if (!emulateClick(row)) return false;
+                                optionsRequested.push(label);
+                            }
+                            optionsApplied.push(`${label}-menu-open`);
+                            return true;
+                        };
+
+                        const pickRadioOption = (menuLabel, optionLabel, optionPatterns) => {
+                            const openMenus = currentlyOpenMenus();
+                            const radios = openMenus.flatMap((m) => radioItems(m));
+                            const candidate = radios.find((el) => optionPatterns.some((pattern) => pattern.test(cleanText(el.textContent))));
+                            if (!candidate) return false;
+                            const checked = candidate.getAttribute("aria-checked") === "true" || (candidate.getAttribute("data-state") || "").toLowerCase() === "checked";
+                            if (!checked) {
+                                if (!emulateClick(candidate)) return false;
+                                optionsRequested.push(`${menuLabel}:${optionLabel}`);
+                            }
+                            optionsApplied.push(`${menuLabel}:${optionLabel}`);
+                            return true;
+                        };
+
+                        const desiredOrientation = ({
+                            "9:16": "Portrait",
+                            "2:3": "Portrait",
+                            "16:9": "Landscape",
+                            "3:2": "Landscape",
+                            "1:1": "Square",
+                        })[desiredAspect] || "Landscape";
+
+                        const orientationPatterns = {
+                            Portrait: [/^portrait$/i],
+                            Landscape: [/^landscape$/i],
+                            Square: [/^square$/i, /^1\s*:\s*1$/i],
+                        };
+                        const durationPatterns = {
+                            "5s": [/^5\s*s(ec(onds?)?)?$/i],
+                            "6s": [/^6\s*s(ec(onds?)?)?$/i],
+                            "10s": [/^10\s*s(ec(onds?)?)?$/i],
+                            "15s": [/^15\s*s(ec(onds?)?)?$/i],
+                        };
+                        const videoCountPatterns = {
+                            "1 video": [/^1\s*video(s)?$/i],
+                            "2 videos": [/^2\s*video(s)?$/i],
+                        };
+
+                        const desiredVideoCount = "1 video";
+
+                        const orientationOpened = openSubmenu("orientation", [/\borientation\b/i]);
+                        const orientationApplied = orientationOpened && pickRadioOption("orientation", desiredOrientation, orientationPatterns[desiredOrientation] || orientationPatterns.Landscape);
+
+                        const durationOpened = openSubmenu("duration", [/\bduration\b/i]);
+                        const durationApplied = durationOpened && (
+                            pickRadioOption("duration", desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"]) ||
+                            pickRadioOption("duration", "10s", durationPatterns["10s"]) ||
+                            pickRadioOption("duration", "15s", durationPatterns["15s"]) ||
+                            pickRadioOption("duration", "5s", durationPatterns["5s"])
+                        );
+
+                        const videosOpened = openSubmenu("videos", [/\bvideos\b/i]);
+                        const videosApplied = videosOpened && pickRadioOption("videos", desiredVideoCount, videoCountPatterns[desiredVideoCount]);
+
+                        const requiredOptions = ["video", desiredDuration, desiredAspect, desiredVideoCount];
+                        const missingOptions = [];
+                        if (!orientationApplied) missingOptions.push(desiredAspect);
+                        if (!durationApplied) missingOptions.push(desiredDuration);
+                        if (!videosApplied) missingOptions.push(desiredVideoCount);
+
+                        return {
+                            ok: true,
+                            requiredOptions,
+                            effectiveRequiredOptions: requiredOptions,
+                            optionsRequested,
+                            optionsApplied,
+                            missingOptions,
+                            selectedQuality: "sora-default",
+                            fallbackUsed: false,
+                            soraMode: true,
+                        };
+                    }
+
+                    const isOptionsMenu = (el) => {
+                        if (!el || !isVisible(el)) return false;
+                        const txt = cleanText(el.textContent || "");
+                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                    };
                     const menu = menuCandidates.find((el) => isOptionsMenu(el)) || null;
                     if (!menu) return { ok: false, error: "Options menu not visible" };
 
                     const optionNodes = [...menu.querySelectorAll("button, [role='menuitemradio'], [role='radio'], [role='button']")]
                         .filter((el) => isVisible(el));
 
-                    const nodeText = (el) => (el.getAttribute("aria-label") || el.textContent || "").trim();
+                    const nodeText = (el) => cleanText(el.getAttribute("aria-label") || el.textContent || "");
                     const isSelected = (el) => {
                         if (!el) return false;
                         const ariaChecked = el.getAttribute("aria-checked") === "true";
@@ -6132,6 +6312,7 @@ class MainWindow(QMainWindow):
                         missingOptions,
                         selectedQuality: effectiveQuality,
                         fallbackUsed: effectiveQuality !== desiredQuality,
+                        soraMode: false,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -6160,7 +6341,7 @@ class MainWindow(QMainWindow):
                     const isOptionsMenu = (el) => {
                         if (!el || !isVisible(el)) return false;
                         const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                        return /video\s*duration|resolution|aspect\s*ratio|\borientation\b|\bduration\b|\bvideos\b|\bimage\b|\bvideo\b/i.test(txt);
                     };
                     const hasOpenMenu = () => {
                         const candidates = [
@@ -6199,13 +6380,16 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
 
                     const submitSelectors = [
                         "button[type='submit'][aria-label='Submit']",
                         "button[aria-label='Submit'][type='submit']",
                         "button[type='submit']",
-                        "button[aria-label='Submit']"
+                        "button[aria-label='Submit']",
+                        "button[aria-label='Create video']",
+                        "button[aria-label*='Create video' i]",
+                        "button[data-disabled='false']"
                     ];
 
                     const submitCandidates = [];
@@ -6249,24 +6433,35 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                     };
 
+                    const allButtons = [...document.querySelectorAll("button")].filter((el) => isVisible(el));
+                    const createVideoButton = allButtons.find((btn) => {
+                        const label = (btn.getAttribute("aria-label") || "").trim();
+                        const txt = (btn.textContent || "").trim();
+                        const srOnly = (btn.querySelector(".sr-only")?.textContent || "").trim();
+                        return /create\s*video/i.test(label) || /create\s*video/i.test(txt) || /create\s*video/i.test(srOnly);
+                    }) || submitButton;
+
                     let clicked = false;
-                    
+                    if (createVideoButton) {
+                        emulateClick(createVideoButton);
+                        clicked = true;
+                    }
 
                     let formSubmitted = false;
-                    if (form) {
+                    if (!clicked && form) {
                         const ev = new Event("submit", { bubbles: true, cancelable: true });
-                        formSubmitted = form.dispatchEvent(ev); // lets React handlers run
+                        form.dispatchEvent(ev); // lets React handlers run
                         formSubmitted = true;
                     }
 
                     return {
-                        ok: true,
+                        ok: clicked || formSubmitted,
                         submitted: clicked || formSubmitted,
-                        doubleClicked: !!submitButton,
+                        doubleClicked: !!createVideoButton,
                         formSubmitted,
-                        forceEnabled: !!submitButton,
-                        buttonText: submitButton ? (submitButton.textContent || "").trim() : "",
-                        buttonAriaLabel: submitButton ? (submitButton.getAttribute("aria-label") || "") : ""
+                        forceEnabled: !!createVideoButton,
+                        buttonText: createVideoButton ? (createVideoButton.textContent || "").trim() : "",
+                        buttonAriaLabel: createVideoButton ? (createVideoButton.getAttribute("aria-label") || "") : ""
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -7836,7 +8031,7 @@ class MainWindow(QMainWindow):
             self._set_training_button_states()
 
             start_url = self.training_start_url.text().strip() or "https://grok.com/imagine"
-            self.browser_tabs.setCurrentIndex(0)
+            self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
             current_url = self.browser.url().toString().strip()
             if current_url != start_url:
                 self.browser.setUrl(QUrl(start_url))
@@ -7939,10 +8134,23 @@ class MainWindow(QMainWindow):
             },
         )
 
+    def _on_browser_tab_changed(self, index: int) -> None:
+        if index == getattr(self, "grok_browser_tab_index", -1):
+            self.browser = self.grok_browser_view
+        elif index == getattr(self, "sora_browser_tab_index", -1):
+            self.browser = self.sora_browser
+
     def show_browser_page(self) -> None:
-        self.browser_tabs.setCurrentIndex(0)
-        self.browser.setUrl(QUrl("https://grok.com/imagine"))
+        self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
+        self.browser = self.grok_browser_view
+        self.grok_browser_view.setUrl(QUrl("https://grok.com/imagine"))
         self._append_log("Navigated embedded browser to grok.com/imagine.")
+
+    def show_sora_browser_page(self) -> None:
+        self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
+        self.browser = self.sora_browser
+        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/profile"))
+        self._append_log("Navigated embedded browser to sora.chatgpt.com/profile.")
 
     def stitch_all_videos(self) -> None:
         if self.stitch_worker and self.stitch_worker.isRunning():
