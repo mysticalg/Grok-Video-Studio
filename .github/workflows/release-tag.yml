@@ -58,3 +58,4 @@ jobs:
         with:
           tag_name: v${{ steps.bump.outputs.next_version }}
           generate_release_notes: true
+          make_latest: true

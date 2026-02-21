@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 
 import requests
 from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPixmap
+from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -29,9 +29,11 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QLayout,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFontComboBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -44,13 +46,19 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QSlider,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
+    QStatusBar,
+    QStyle,
     QScrollArea,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
+    QMenu,
+    QToolBar,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -102,6 +110,21 @@ DEFAULT_MANUAL_PROMPT_TEXT = (
     "abstract surreal artistic photorealistic strange random dream like scifi fast moving camera, "
     "fast moving fractals morphing and intersecting, highly detailed"
 )
+
+_session_download_counter_lock = threading.Lock()
+_session_download_counter = 0
+
+
+def _next_session_download_count() -> int:
+    global _session_download_counter
+    with _session_download_counter_lock:
+        _session_download_counter += 1
+        return _session_download_counter
+
+
+def _slugify_filename_part(value: str, fallback: str = "na") -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return cleaned or fallback
 
 
 def _parse_query_preserving_plus(query: str) -> dict[str, str]:
@@ -228,6 +251,13 @@ def _openai_chat_target(credential: str) -> tuple[str, dict[str, str], bool]:
         return f"{OPENAI_CHATGPT_API_BASE}/responses", headers, True
 
     return f"{OPENAI_API_BASE}/chat/completions", headers, False
+
+
+def _openai_is_likely_api_key(credential: str) -> bool:
+    value = credential.strip()
+    if not value:
+        return False
+    return value.startswith("sk-") or value.startswith("rk-")
 
 
 
@@ -401,6 +431,155 @@ def _resolve_qtwebengine_cache_dir() -> tuple[Path, bool]:
     return fallback, False
 
 
+
+
+def _probe_video_color_properties(video_path: str | Path) -> dict[str, str]:
+    path_str = str(video_path)
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=color_range,color_space,color_transfer,color_primaries,pix_fmt,width,height",
+        "-of",
+        "json",
+        path_str,
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except Exception:
+        return {}
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+    streams = payload.get("streams")
+    if not isinstance(streams, list) or not streams:
+        return {}
+
+    stream = streams[0] if isinstance(streams[0], dict) else {}
+    normalized: dict[str, str] = {}
+    for key in ("color_range", "color_space", "color_transfer", "color_primaries", "pix_fmt"):
+        value = str(stream.get(key) or "").strip().lower()
+        if value and value not in {"unknown", "unspecified", "n/a"}:
+            normalized[key] = value
+
+    width = stream.get("width")
+    height = stream.get("height")
+    if isinstance(width, int):
+        normalized["width"] = str(width)
+    if isinstance(height, int):
+        normalized["height"] = str(height)
+    return normalized
+
+
+def _probe_video_duration_seconds(video_path: str | Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return max(0.0, float((result.stdout or "0").strip() or "0"))
+
+
+def _seconds_to_srt_time(value: float) -> str:
+    clamped_ms = max(0, int(round(value * 1000)))
+    hours, rem = divmod(clamped_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def _escape_srt_text(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    return cleaned.replace("-->", "→")
+
+
+
+def _build_last_frame_extraction_cmds(video_path: str | Path, seek_args: list[str], frame_path: Path) -> list[list[str]]:
+    color_meta = _probe_video_color_properties(video_path)
+    matrix = "bt709"
+    range_raw = color_meta.get("color_range", "")
+    in_range = "full" if range_raw in {"pc", "jpeg", "full"} else "limited"
+
+    color_filter = (
+        f"scale=in_range={in_range}:out_range=full:"
+        f"in_color_matrix={matrix}:out_color_matrix={matrix},format=rgb48le"
+    )
+
+    path_str = str(video_path)
+    frame_str = str(frame_path)
+    return [
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-frames:v",
+            "1",
+            frame_str,
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-vf",
+            color_filter,
+            "-frames:v",
+            "1",
+            frame_str,
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "rgb48be",
+            "-sws_flags",
+            "accurate_rnd+full_chroma_int",
+            frame_str,
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "rgba",
+            frame_str,
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            *seek_args,
+            "-i",
+            path_str,
+            "-frames:v",
+            "1",
+            frame_str,
+        ],
+    ]
+
 def _configure_qtwebengine_runtime() -> None:
     global CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE
     CACHE_DIR, QTWEBENGINE_USE_DISK_CACHE = _resolve_qtwebengine_cache_dir()
@@ -471,6 +650,13 @@ class GenerateWorker(QThread):
         self._openai_uploaded_reference_cache: dict[str, str] = {}
         self._openai_last_generated_video_path: Path | None = None
         self._openai_last_generated_reference_id: str = ""
+
+    def _compose_output_filename(self, prefix: str, variant: int, extension: str = "mp4") -> str:
+        provider = _slugify_filename_part(self.prompt_config.video_provider or "video")
+        resolution = _slugify_filename_part(self.prompt_config.video_resolution or "auto")
+        aspect = _slugify_filename_part(self.prompt_config.video_aspect_ratio or "na")
+        session_index = _next_session_download_count()
+        return f"{prefix}_{provider}_{resolution}_{aspect}_v{variant:02d}_d{session_index:03d}.{extension}"
 
     def request_stop(self) -> None:
         self.stop_requested = True
@@ -656,30 +842,30 @@ class GenerateWorker(QThread):
 
         for attempt_index, seek_args in enumerate(extraction_attempts):
             frame_path = self.download_dir / f"sora_last_frame_{int(time.time() * 1000)}_{attempt_index}.png"
-            cmd = [
-                "ffmpeg",
-                "-y",
-                *seek_args,
-                "-i",
+            extraction_cmds = _build_last_frame_extraction_cmds(
                 str(video_path),
-                "-frames:v",
-                "1",
-                str(frame_path),
-            ]
-            try:
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            except FileNotFoundError as exc:
-                raise RuntimeError(
-                    "ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH."
-                ) from exc
-            except subprocess.CalledProcessError as exc:
-                failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
-                continue
+                list(seek_args),
+                frame_path,
+            )
+
+            result = None
+            for cmd in extraction_cmds:
+                try:
+                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    break
+                except FileNotFoundError as exc:
+                    raise RuntimeError(
+                        "ffmpeg is required for OpenAI Sora last-frame continuity but was not found in PATH."
+                    ) from exc
+                except subprocess.CalledProcessError as exc:
+                    failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
+                    result = None
 
             if frame_path.exists() and frame_path.stat().st_size > 0:
                 return frame_path
 
-            failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
+            if result is not None:
+                failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
 
         raise RuntimeError(
             "Sora continuity frame extraction produced an empty image. "
@@ -902,7 +1088,8 @@ class GenerateWorker(QThread):
                 )
 
             self.download_dir.mkdir(parents=True, exist_ok=True)
-            file_path = self.download_dir / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
+            variant_index = int(re.sub(r"[^0-9]", "", str(suffix)) or "0")
+            file_path = self.download_dir / self._compose_output_filename("video", variant_index, "mp4")
             file_path.write_bytes(response.content)
             if file_path.stat().st_size <= 0:
                 raise RuntimeError("OpenAI Sora content endpoint returned an empty file.")
@@ -1083,7 +1270,8 @@ class GenerateWorker(QThread):
     def download_video(self, video_url: str, suffix: str) -> Path:
         self._ensure_not_stopped()
         self.download_dir.mkdir(parents=True, exist_ok=True)
-        file_path = self.download_dir / f"video_{int(time.time() * 1000)}_{suffix}.mp4"
+        variant_index = int(re.sub(r"[^0-9]", "", str(suffix)) or "0")
+        file_path = self.download_dir / self._compose_output_filename("video", variant_index, "mp4")
         with requests.get(video_url, stream=True, timeout=240) as response:
             response.raise_for_status()
             with open(file_path, "wb") as handle:
@@ -1211,6 +1399,9 @@ class StitchWorker(QThread):
         self.music_volume = music_volume
         self.audio_fade_duration = audio_fade_duration
 
+    def request_stop(self) -> None:
+        self.requestInterruption()
+
     def run(self) -> None:
         enhancement_enabled = self.interpolate_enabled or self.upscale_enabled
         try:
@@ -1285,7 +1476,11 @@ class StitchWorker(QThread):
         except subprocess.CalledProcessError as exc:
             self.failed.emit("Stitch Failed", exc.stderr[-800:] or "ffmpeg failed.")
         except RuntimeError as exc:
-            self.failed.emit("Stitch Failed", str(exc))
+            message = str(exc)
+            if "stopped by user" in message.lower():
+                self.failed.emit("Stitch Stopped", message)
+            else:
+                self.failed.emit("Stitch Failed", message)
         finally:
             if self.stitched_base_file.exists():
                 self.stitched_base_file.unlink()
@@ -1320,6 +1515,245 @@ class UploadWorker(QThread):
             self.finished_upload.emit(self.platform_name, str(result_id))
         except Exception as exc:
             self.failed.emit(self.platform_name, str(exc))
+
+
+class VideoOverlayWorker(QThread):
+    progress = Signal(str)
+    finished_overlay = Signal(dict)
+    failed = Signal(str, str)
+
+    def __init__(
+        self,
+        input_video: Path,
+        output_video: Path,
+        interval_seconds: int,
+        subtitle_duration_seconds: float,
+        overlay_mode: str,
+        manual_text: str,
+        font_name: str,
+        font_size: int,
+        text_position: str,
+        ai_callback: Callable[[Path, float], str],
+        ai_prompt_callback: Callable[[str, float], str],
+        ai_source: str,
+    ):
+        super().__init__()
+        self.input_video = input_video
+        self.output_video = output_video
+        self.interval_seconds = max(1, int(interval_seconds))
+        self.subtitle_duration_seconds = max(0.8, float(subtitle_duration_seconds))
+        self.overlay_mode = overlay_mode
+        self.manual_text = manual_text.strip()
+        self.font_name = self._sanitize_font_name(font_name)
+        self.font_size = max(8, min(120, int(font_size)))
+        self.ass_alignment = self._position_to_ass_alignment(text_position)
+        self.ai_callback = ai_callback
+        self.ai_prompt_callback = ai_prompt_callback
+        self.ai_source = ai_source
+
+
+    def _sanitize_font_name(self, value: str) -> str:
+        cleaned = re.sub(r"[\r\n]+", " ", value or "").strip()
+        cleaned = cleaned.replace(",", " ").replace(":", " ").replace("'", "")
+        return cleaned or "Arial"
+
+    def _position_to_ass_alignment(self, value: str) -> int:
+        normalized = str(value or "bottom").strip().lower()
+        if normalized == "top":
+            return 8
+        if normalized in {"middle", "center"}:
+            return 5
+        return 2
+
+    def _ffmpeg_filter_escape(self, value: str) -> str:
+        escaped = (value or "").replace("\\", "/")
+        escaped = escaped.replace("'", r"\'")
+        escaped = escaped.replace(":", r"\:")
+        escaped = escaped.replace(",", r"\,")
+        return escaped
+
+    def _build_subtitles_filter(self, srt_path: Path) -> str:
+        escaped_path = self._ffmpeg_filter_escape(str(srt_path))
+        style = (
+            f"Alignment={self.ass_alignment},"
+            f"FontName={self.font_name},"
+            f"FontSize={self.font_size},"
+            "PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00202020,"
+            "BorderStyle=1,"
+            "Outline=2,"
+            "Shadow=0,"
+            "MarginV=24"
+        )
+        return f"subtitles=filename='{escaped_path}':force_style='{style}'"
+
+    def _extract_frame_image(self, timestamp_seconds: float, frame_path: Path) -> None:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{timestamp_seconds:.3f}",
+                "-i",
+                str(self.input_video),
+                "-map",
+                "0:v:0",
+                "-frames:v",
+                "1",
+                "-an",
+                "-sn",
+                "-dn",
+                "-c:v",
+                "png",
+                str(frame_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def _estimate_frame_brightness(self, frame_path: Path) -> float:
+        image = QImage(str(frame_path))
+        if image.isNull():
+            return 255.0
+        sample_w = max(1, image.width() // 48)
+        sample_h = max(1, image.height() // 48)
+        total = 0.0
+        count = 0
+        for y in range(0, image.height(), sample_h):
+            for x in range(0, image.width(), sample_w):
+                color = image.pixelColor(x, y)
+                total += (0.2126 * color.red()) + (0.7152 * color.green()) + (0.0722 * color.blue())
+                count += 1
+        return (total / max(1, count)) if count else 255.0
+
+    def _build_overlay_text(self, frame_path: Path, timestamp_seconds: float) -> str:
+        if self.overlay_mode == "manual":
+            return self.manual_text
+
+        try:
+            if self.manual_text:
+                response = self.ai_prompt_callback(self.manual_text, timestamp_seconds)
+            else:
+                response = self.ai_callback(frame_path, timestamp_seconds)
+        except Exception as exc:
+            self.progress.emit(
+                f"AI caption request failed at {timestamp_seconds:.1f}s ({exc}); skipping subtitle at this timestamp."
+            )
+            return ""
+
+        first_line = re.split(r"[\r\n]+", (response or "").strip(), maxsplit=1)[0].strip()
+        if not first_line:
+            self.progress.emit(
+                f"AI returned empty caption at {timestamp_seconds:.1f}s; skipping subtitle at this timestamp."
+            )
+            return ""
+        return first_line
+
+    def run(self) -> None:
+        temp_files: list[Path] = []
+        try:
+            duration = _probe_video_duration_seconds(self.input_video)
+            if duration <= 0.0:
+                raise RuntimeError("Could not read video duration.")
+
+            frame_points: list[float] = []
+            current = 0.0
+            while current < duration:
+                frame_points.append(round(current, 3))
+                current += self.interval_seconds
+            if not frame_points:
+                frame_points = [0.0]
+
+            srt_lines: list[str] = []
+            caption_idx = 1
+            for idx, point in enumerate(frame_points, start=1):
+                self.progress.emit(f"Generating overlay text for {point:.1f}s...")
+                frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}.png"
+                temp_files.append(frame_path)
+                self._extract_frame_image(point, frame_path)
+
+                brightness = self._estimate_frame_brightness(frame_path)
+                if brightness < 20.0 and (point + 1.0) < duration:
+                    alternate_frame_path = self.output_video.parent / f"overlay_frame_{self.output_video.stem}_{idx}_alt.png"
+                    temp_files.append(alternate_frame_path)
+                    self._extract_frame_image(point + 1.0, alternate_frame_path)
+                    alternate_brightness = self._estimate_frame_brightness(alternate_frame_path)
+                    if alternate_brightness > brightness:
+                        frame_path = alternate_frame_path
+                        self.progress.emit(
+                            f"Frame at {point:.1f}s was very dark; used {point + 1.0:.1f}s alternative for AI captioning."
+                        )
+
+                subtitle_text = _escape_srt_text(self._build_overlay_text(frame_path, point))
+                if not subtitle_text.strip():
+                    continue
+
+                start_time = point
+                end_time = min(duration, point + self.subtitle_duration_seconds)
+                if end_time <= start_time:
+                    end_time = min(duration, start_time + 0.8)
+                srt_lines.extend(
+                    [
+                        str(caption_idx),
+                        f"{_seconds_to_srt_time(start_time)} --> {_seconds_to_srt_time(end_time)}",
+                        subtitle_text,
+                        "",
+                    ]
+                )
+                caption_idx += 1
+
+            if not srt_lines:
+                raise RuntimeError("No AI captions were generated. Try adjusting your prompt or provider settings.")
+
+            srt_path = self.output_video.parent / f"overlay_{self.output_video.stem}.srt"
+            srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
+            temp_files.append(srt_path)
+
+            self.progress.emit("Rendering video with text overlay...")
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(self.input_video),
+                    "-vf",
+                    self._build_subtitles_filter(srt_path),
+                    "-c:a",
+                    "copy",
+                    str(self.output_video),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            self.finished_overlay.emit(
+                {
+                    "title": f"Overlay: {self.input_video.stem}",
+                    "prompt": f"overlay-{self.overlay_mode}",
+                    "resolution": "same",
+                    "video_file_path": str(self.output_video),
+                    "source_url": "local-overlay",
+                    "overlay_mode": self.overlay_mode,
+                    "ai_source": self.ai_source,
+                }
+            )
+        except FileNotFoundError:
+            self.failed.emit("ffmpeg Missing", "ffmpeg is required for text overlays but was not found in PATH.")
+        except subprocess.CalledProcessError as exc:
+            self.failed.emit("Overlay Failed", exc.stderr[-1000:] or "ffmpeg failed.")
+        except Exception as exc:
+            self.failed.emit("Overlay Failed", str(exc))
+        finally:
+            for temp_file in temp_files:
+                try:
+                    if temp_file.exists():
+                        temp_file.unlink()
+                except Exception:
+                    pass
 
 
 class BrowserTrainingWorker(QThread):
@@ -1463,6 +1897,7 @@ class MainWindow(QMainWindow):
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
         self.browser_training_worker: BrowserTrainingWorker | None = None
+        self.overlay_worker: VideoOverlayWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -1474,7 +1909,9 @@ class MainWindow(QMainWindow):
         self._ffmpeg_nvenc_checked = False
         self._ffmpeg_nvenc_available = False
         self.preview_fullscreen_overlay_btn: QPushButton | None = None
+        self.preview_fullscreen_progress_bar: QProgressBar | None = None
         self.stop_all_requested = False
+        self._active_ffmpeg_process: subprocess.Popen[str] | None = None
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
         self.pending_manual_variant_for_download: int | None = None
@@ -1534,6 +1971,11 @@ class MainWindow(QMainWindow):
         self._apply_default_theme()
 
     def eventFilter(self, watched, event):
+        if watched is getattr(self, "preview", None) and event.type() in (QEvent.Type.Resize, QEvent.Type.Move):
+            if self.preview.isFullScreen():
+                self._position_preview_fullscreen_overlay()
+                self._position_preview_fullscreen_progress_bar()
+
         if (
             self.stop_all_requested
             and isinstance(watched, QPushButton)
@@ -1579,9 +2021,12 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
 
         self._build_model_api_settings_dialog()
+        self._build_menu_bar()
 
         prompt_group = QGroupBox("✨ Prompt Inputs")
+        prompt_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         prompt_group_layout = QVBoxLayout(prompt_group)
+        prompt_group_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         prompt_group_layout.addWidget(QLabel("Concept"))
         self.concept = QPlainTextEdit()
@@ -1603,132 +2048,103 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Count"))
         self.count = QSpinBox()
         self.count.setRange(1, 10)
         self.count.setValue(1)
-        row.addWidget(self.count)
-
-        row.addWidget(QLabel("Resolution"))
-        self.video_resolution = QComboBox()
-        self.video_resolution.addItem("480p (854x480)", "854x480")
-        self.video_resolution.addItem("720p (1280x720)", "1280x720")
-        self.video_resolution.setCurrentIndex(1)
-        row.addWidget(self.video_resolution)
-
-        row.addWidget(QLabel("Duration"))
-        self.video_duration = QComboBox()
-        self.video_duration.addItem("6s", 6)
-        self.video_duration.addItem("10s", 10)
-        self.video_duration.setCurrentIndex(1)
-        row.addWidget(self.video_duration)
-
-        row.addWidget(QLabel("Aspect"))
-        self.video_aspect_ratio = QComboBox()
-        self.video_aspect_ratio.addItem("2:3", "2:3")
-        self.video_aspect_ratio.addItem("3:2", "3:2")
-        self.video_aspect_ratio.addItem("1:1", "1:1")
-        self.video_aspect_ratio.addItem("9:16", "9:16")
-        self.video_aspect_ratio.addItem("16:9", "16:9")
-        self.video_aspect_ratio.setCurrentIndex(4)
-        row.addWidget(self.video_aspect_ratio)
-        prompt_group_layout.addLayout(row)
 
         left_layout.addWidget(prompt_group)
 
-        actions_group = QGroupBox("🚀 Actions")
-        actions_layout = QGridLayout(actions_group)
-
-        self.populate_video_btn = QPushButton("📝 Populate Video Prompt")
-        self.populate_video_btn.setToolTip("Populate the browser prompt box and generate manually in the current Grok tab.")
-        self.populate_video_btn.setStyleSheet(
-            "background-color: #1e88e5; color: white; font-weight: 700;"
-            "border: 1px solid #1565c0; border-radius: 6px; padding: 8px;"
-        )
-        self.populate_video_btn.clicked.connect(self.populate_video_prompt)
-
-        self.generate_image_btn = QPushButton("🖼️ Populate Image Prompt")
+        self.generate_image_btn = QPushButton("🎬 Create New Video")
         self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
-        self.generate_image_btn.setStyleSheet(
-            "background-color: #43a047; color: white; font-weight: 700;"
-            "border: 1px solid #2e7d32; border-radius: 6px; padding: 8px;"
+        self.generate_image_btn.setCheckable(True)
+        self.generate_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.generate_image_btn, self.start_image_generation)
         )
-        self.generate_image_btn.clicked.connect(self.start_image_generation)
-
-        self.generate_btn = QPushButton("🎬 API Generate Video")
-        self.generate_btn.setToolTip("Generate and download video via the selected API provider.")
-        self.generate_btn.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: 700;"
-            "border: 1px solid #1b5e20; border-radius: 6px; padding: 8px;"
-        )
-        self.generate_btn.clicked.connect(self.start_generation)
-        actions_layout.addWidget(self.generate_btn, 1, 0)
 
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
-        self.stop_all_btn.setStyleSheet(
-            "background-color: #8b0000; color: white; font-weight: 700;"
-            "border: 1px solid #5c0000; border-radius: 6px; padding: 8px;"
-        )
-        self.stop_all_btn.clicked.connect(self.stop_all_jobs)
-        actions_layout.addWidget(self.stop_all_btn, 1, 1)
+        self.stop_all_btn.setCheckable(True)
+        self.stop_all_btn.clicked.connect(lambda: self._run_with_button_feedback(self.stop_all_btn, self.stop_all_jobs))
+        self.stop_all_btn.setMaximumWidth(140)
 
-        self.continue_frame_btn = QPushButton("🟨 Continue from Last Frame (paste + generate)")
+        self.continue_frame_btn = QPushButton("🟨 Continue Last Video")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
-        self.continue_frame_btn.setStyleSheet(
-            "background-color: #fdd835; color: #222; font-weight: 700;"
-            "border: 1px solid #f9a825; border-radius: 6px; padding: 8px;"
+        self.continue_frame_btn.setCheckable(True)
+        self.continue_frame_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.continue_frame_btn, self.continue_from_last_frame)
         )
-        self.continue_frame_btn.clicked.connect(self.continue_from_last_frame)
 
-        self.continue_image_btn = QPushButton("🖼️ Continue from Local Image (paste + generate)")
+        self.continue_image_btn = QPushButton("🖼️ Create From Image")
         self.continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
-        self.continue_image_btn.setStyleSheet(
-            "background-color: #fff176; color: #222; font-weight: 700;"
-            "border: 1px solid #fbc02d; border-radius: 6px; padding: 8px;"
+        self.continue_image_btn.setCheckable(True)
+        self.continue_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.continue_image_btn, self.continue_from_local_image)
         )
-        self.continue_image_btn.clicked.connect(self.continue_from_local_image)
 
         self.browser_home_btn = QPushButton("🏠 Homepage")
         self.browser_home_btn.setToolTip("Open grok.com/imagine in the embedded browser tab.")
-        self.browser_home_btn.setStyleSheet(
-            "background-color: #ffffff; color: #222; font-weight: 700;"
-            "border: 1px solid #cfcfcf; border-radius: 6px; padding: 8px;"
+        self.browser_home_btn.setCheckable(True)
+        self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
+
+        self.sora_generate_image_btn = QPushButton("🎬 Create New Video")
+        self.sora_generate_image_btn.setToolTip("Build and paste a video prompt into the Sora browser tab.")
+        self.sora_generate_image_btn.setCheckable(True)
+        self.sora_generate_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_generate_image_btn, self.start_sora_video_generation)
         )
-        self.browser_home_btn.clicked.connect(self.show_browser_page)
+
+        self.sora_continue_frame_btn = QPushButton("🟨 Continue Last Video")
+        self.sora_continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
+        self.sora_continue_frame_btn.setCheckable(True)
+        self.sora_continue_frame_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_continue_frame_btn, self.continue_from_last_frame)
+        )
+
+        self.sora_continue_image_btn = QPushButton("🖼️ Create From Image")
+        self.sora_continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
+        self.sora_continue_image_btn.setCheckable(True)
+        self.sora_continue_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_continue_image_btn, self.continue_from_local_image)
+        )
+
+        self.sora_browser_home_btn = QPushButton("🏠 Homepage")
+        self.sora_browser_home_btn.setToolTip("Open sora.chatgpt.com/profile in the embedded Sora browser tab.")
+        self.sora_browser_home_btn.setCheckable(True)
+        self.sora_browser_home_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_browser_home_btn, self.show_sora_browser_page)
+        )
+
+        self.generate_image_btn.setMaximumWidth(170)
+        self.continue_frame_btn.setMaximumWidth(170)
+        self.continue_image_btn.setMaximumWidth(170)
+        self.browser_home_btn.setMaximumWidth(170)
+        self.sora_generate_image_btn.setMaximumWidth(170)
+        self.sora_continue_frame_btn.setMaximumWidth(170)
+        self.sora_continue_image_btn.setMaximumWidth(170)
+        self.sora_browser_home_btn.setMaximumWidth(170)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
-        self.stitch_btn.setStyleSheet(
-            "background-color: #81d4fa; color: #0d47a1; font-weight: 700;"
-            "border: 1px solid #4fc3f7; border-radius: 6px; padding: 8px;"
-        )
         self.stitch_btn.clicked.connect(self.stitch_all_videos)
-        actions_layout.addWidget(self.stitch_btn, 3, 1)
 
         self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
-        actions_layout.addWidget(self.stitch_crossfade_checkbox, 4, 0, 1, 1)
 
         self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation")
         self.stitch_interpolation_checkbox.setToolTip(
             "After stitching, use ffmpeg minterpolate to smooth motion by generating in-between frames."
         )
-        actions_layout.addWidget(self.stitch_interpolation_checkbox, 5, 0, 1, 1)
 
         self.stitch_interpolation_fps = QComboBox()
         self.stitch_interpolation_fps.addItem("48 fps", 48)
         self.stitch_interpolation_fps.addItem("60 fps", 60)
         self.stitch_interpolation_fps.setCurrentIndex(0)
         self.stitch_interpolation_fps.setToolTip("Target frame rate used when frame interpolation is enabled.")
-        actions_layout.addWidget(self.stitch_interpolation_fps, 5, 1, 1, 1)
 
         self.stitch_upscale_checkbox = QCheckBox("Enable AI-style upscaling")
         self.stitch_upscale_checkbox.setToolTip(
             "After stitching, upscale output to a selected target resolution using high-quality Lanczos scaling."
         )
-        actions_layout.addWidget(self.stitch_upscale_checkbox, 6, 0, 1, 1)
 
         self.stitch_upscale_target = QComboBox()
         self.stitch_upscale_target.addItem("2x (max 4K)", "2x")
@@ -1737,13 +2153,11 @@ class MainWindow(QMainWindow):
         self.stitch_upscale_target.addItem("4K (3840x2160)", "4k")
         self.stitch_upscale_target.setCurrentIndex(0)
         self.stitch_upscale_target.setToolTip("Choose output upscale target resolution.")
-        actions_layout.addWidget(self.stitch_upscale_target, 6, 1, 1, 1)
 
         self.stitch_gpu_checkbox = QCheckBox("Use GPU encoding for stitching (NVENC)")
         self.stitch_gpu_checkbox.setToolTip("Use NVIDIA NVENC encoder when available to reduce CPU load.")
         self.stitch_gpu_checkbox.setChecked(True)
         self.stitch_gpu_checkbox.toggled.connect(lambda _: self._sync_video_options_label())
-        actions_layout.addWidget(self.stitch_gpu_checkbox, 7, 0, 1, 2)
 
         self.video_options_dropdown = QComboBox()
         self.video_options_dropdown.addItem("0.2s", 0.2)
@@ -1756,12 +2170,10 @@ class MainWindow(QMainWindow):
         self.video_options_dropdown.setMaximumWidth(140)
         self.video_options_dropdown.setToolTip("Crossfade duration for stitching.")
         self.video_options_dropdown.currentIndexChanged.connect(self._on_video_options_selected)
-        actions_layout.addWidget(self.video_options_dropdown, 4, 1, 1, 1, alignment=Qt.AlignRight)
 
         self.music_file_label = QLabel("Music: none selected")
         self.music_file_label.setStyleSheet("color: #9fb3c8;")
         self.music_file_label.setWordWrap(True)
-        actions_layout.addWidget(self.music_file_label, 8, 0, 1, 2)
 
         music_actions_layout = QHBoxLayout()
         self.choose_music_btn = QPushButton("🎵 Choose Music (wav/mp3)")
@@ -1773,11 +2185,10 @@ class MainWindow(QMainWindow):
         self.clear_music_btn.setToolTip("Remove any selected custom background music file.")
         self.clear_music_btn.clicked.connect(self._clear_custom_music_file)
         music_actions_layout.addWidget(self.clear_music_btn)
-        actions_layout.addLayout(music_actions_layout, 9, 0, 1, 2)
+        self.music_actions_row = music_actions_layout
 
         self.stitch_mute_original_checkbox = QCheckBox("Mute original video audio when music is used")
         self.stitch_mute_original_checkbox.setToolTip("If enabled, only the selected music is audible in the stitched output.")
-        actions_layout.addWidget(self.stitch_mute_original_checkbox, 10, 0, 1, 2)
 
         self.stitch_original_audio_volume = QSpinBox()
         self.stitch_original_audio_volume.setRange(0, 200)
@@ -1785,7 +2196,6 @@ class MainWindow(QMainWindow):
         self.stitch_original_audio_volume.setPrefix("Original audio: ")
         self.stitch_original_audio_volume.setSuffix("%")
         self.stitch_original_audio_volume.setToolTip("Original video audio level used during custom music mixing.")
-        actions_layout.addWidget(self.stitch_original_audio_volume, 11, 0)
 
         self.stitch_music_volume = QSpinBox()
         self.stitch_music_volume.setRange(0, 200)
@@ -1793,7 +2203,6 @@ class MainWindow(QMainWindow):
         self.stitch_music_volume.setPrefix("Music audio: ")
         self.stitch_music_volume.setSuffix("%")
         self.stitch_music_volume.setToolTip("Custom music level used during stitched output mixing.")
-        actions_layout.addWidget(self.stitch_music_volume, 11, 1)
 
         self.stitch_audio_fade_duration = QDoubleSpinBox()
         self.stitch_audio_fade_duration.setRange(0.0, 10.0)
@@ -1802,26 +2211,24 @@ class MainWindow(QMainWindow):
         self.stitch_audio_fade_duration.setValue(0.5)
         self.stitch_audio_fade_duration.setSuffix(" s")
         self.stitch_audio_fade_duration.setToolTip("Fade-in and fade-out duration applied to stitched output audio mix.")
-        actions_layout.addWidget(self.stitch_audio_fade_duration, 12, 0)
 
         self.stitch_audio_fade_label = QLabel("Audio fade in/out")
         self.stitch_audio_fade_label.setStyleSheet("color: #9fb3c8;")
-        actions_layout.addWidget(self.stitch_audio_fade_label, 12, 1)
 
         self.buy_coffee_btn = QPushButton("☕ Buy Me a Coffee")
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
-        self.buy_coffee_btn.setStyleSheet(
-            "font-size: 12px; font-weight: 700; padding: 4px 8px;"
-            "background-color: #ffdd00; color: #222; border-radius: 6px;"
-        )
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
-        left_layout.addWidget(actions_group)
-
         left_layout.addWidget(QLabel("Generated Videos"))
+        left_layout.addWidget(self.stitch_btn)
+        left_layout.addWidget(self.music_file_label)
+        left_layout.addLayout(self.music_actions_row)
+
         self.video_picker = QComboBox()
         self.video_picker.setIconSize(QPixmap(180, 102).size())
-        self.video_picker.setMinimumHeight(82)
+        self.video_picker.setMinimumHeight(118)
+        self.video_picker.setMaxVisibleItems(3)
+        self.video_picker.view().setMinimumHeight(330)
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
         left_layout.addWidget(self.video_picker)
 
@@ -1846,22 +2253,31 @@ class MainWindow(QMainWindow):
         self.video_remove_btn.clicked.connect(self.remove_selected_video)
         video_list_controls.addWidget(self.video_remove_btn)
 
+        self.video_overlay_btn = QPushButton("📝 Overlay Text")
+        self.video_overlay_btn.setToolTip("Create subtitle-style text overlays on the selected video.")
+        self.video_overlay_btn.clicked.connect(lambda: self._run_with_button_feedback(self.video_overlay_btn, self.add_overlay_to_selected_video))
+        video_list_controls.addWidget(self.video_overlay_btn)
+
         left_layout.addLayout(video_list_controls)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
         self.preview = QVideoWidget()
+        self.preview.installEventFilter(self)
         self.player.setVideoOutput(self.preview)
 
-        self.browser = QWebEngineView()
+        self.grok_browser_view = QWebEngineView()
+        self.sora_browser = QWebEngineView()
+        self.browser = self.grok_browser_view
         if QTWEBENGINE_USE_DISK_CACHE:
             self.browser_profile = QWebEngineProfile("grok-video-desktop-profile", self)
         else:
             # Off-the-record profile avoids startup cache/quota errors on locked folders (common on synced drives).
             self.browser_profile = QWebEngineProfile(self)
 
-        self.browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.browser))
+        self.grok_browser_view.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.grok_browser_view))
+        self.sora_browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.sora_browser))
         browser_profile = self.browser_profile
         if QTWEBENGINE_USE_DISK_CACHE:
             (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
@@ -1875,52 +2291,45 @@ class MainWindow(QMainWindow):
             browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
 
-        browser_settings = self.browser.settings()
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
-        browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
-        if developer_extras_attr is not None:
-            browser_settings.setAttribute(developer_extras_attr, True)
+        for embedded_browser in (self.grok_browser_view, self.sora_browser):
+            browser_settings = embedded_browser.settings()
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+            developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
+            if developer_extras_attr is not None:
+                browser_settings.setAttribute(developer_extras_attr, True)
 
-        self.browser.setUrl(QUrl("https://grok.com/imagine"))
-        self.browser.loadFinished.connect(self._on_browser_load_finished)
-        self.browser.renderProcessTerminated.connect(
-            lambda status, code, scope="Main Browser": self._on_webengine_render_terminated(scope, status, code)
-        )
+        self.grok_browser_view.setUrl(QUrl("https://grok.com/imagine"))
+        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/profile"))
+        self.grok_browser_view.loadFinished.connect(self._on_browser_load_finished)
+        self.sora_browser.loadFinished.connect(self._on_browser_load_finished)
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
 
         log_group = QGroupBox("📡 Activity Log")
         log_layout = QVBoxLayout(log_group)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(260)
+        self.log.setMinimumHeight(120)
         log_layout.addWidget(self.log)
 
-        self.stitch_progress_label = QLabel("Stitch progress: idle")
-        self.stitch_progress_label.setStyleSheet("color: #9fb3c8;")
-        log_layout.addWidget(self.stitch_progress_label)
+        log_actions_layout = QHBoxLayout()
+        log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
 
-        self.stitch_progress_bar = QProgressBar()
-        self.stitch_progress_bar.setRange(0, 100)
-        self.stitch_progress_bar.setValue(0)
-        self.stitch_progress_bar.setVisible(False)
-        log_layout.addWidget(self.stitch_progress_bar)
+        self.clear_log_btn = QPushButton("🧹 Clear Log")
+        self.clear_log_btn.setToolTip("Clear all activity log entries.")
+        self.clear_log_btn.clicked.connect(self.clear_activity_log)
+        log_actions_layout.addWidget(self.clear_log_btn, alignment=Qt.AlignLeft)
 
-        self.upload_progress_label = QLabel("Upload progress: idle")
-        self.upload_progress_label.setStyleSheet("color: #9fb3c8;")
-        self.upload_progress_label.setWordWrap(True)
-        self.upload_progress_label.setMaximumWidth(560)
-        self.upload_progress_label.setToolTip("Upload progress details")
-        log_layout.addWidget(self.upload_progress_label)
+        self.jump_to_bottom_btn = QPushButton("⤓ Jump to Bottom")
+        self.jump_to_bottom_btn.setToolTip("Jump to the latest activity log entry.")
+        self.jump_to_bottom_btn.clicked.connect(self.jump_activity_log_to_bottom)
+        log_actions_layout.addWidget(self.jump_to_bottom_btn, alignment=Qt.AlignLeft)
 
-        self.upload_progress_bar = QProgressBar()
-        self.upload_progress_bar.setRange(0, 100)
-        self.upload_progress_bar.setValue(0)
-        self.upload_progress_bar.setVisible(False)
-        log_layout.addWidget(self.upload_progress_bar)
-        log_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignLeft)
+        log_actions_layout.addStretch(1)
+        log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
+        log_layout.addLayout(log_actions_layout)
 
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
@@ -1934,34 +2343,34 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(self.preview)
 
         preview_controls = QHBoxLayout()
-        self.preview_play_btn = QPushButton("▶️ Play")
+        self.preview_play_btn = QPushButton("▶️")
         self.preview_play_btn.setToolTip("Play the selected video in the preview pane.")
         self.preview_play_btn.clicked.connect(self.play_preview)
         preview_controls.addWidget(self.preview_play_btn)
-        self.preview_stop_btn = QPushButton("⏹️ Stop")
+        self.preview_stop_btn = QPushButton("⏹️")
         self.preview_stop_btn.setToolTip("Stop playback in the preview pane.")
-        self.preview_stop_btn.setStyleSheet(
-            "background-color: #8b0000; color: white; font-weight: 700;"
-            "border: 1px solid #5c0000; border-radius: 6px; padding: 6px 10px;"
-        )
         self.preview_stop_btn.clicked.connect(self.stop_preview)
         preview_controls.addWidget(self.preview_stop_btn)
 
-        self.preview_mute_checkbox = QCheckBox("Mute")
+        self.preview_mute_checkbox = QCheckBox("🔇")
+        self.preview_mute_checkbox.setToolTip("Mute/unmute preview audio.")
         self.preview_mute_checkbox.toggled.connect(self._set_preview_muted)
         preview_controls.addWidget(self.preview_mute_checkbox)
 
-        self.preview_volume_label = QLabel("Volume")
+        self.preview_volume_label = QLabel("🔊")
         preview_controls.addWidget(self.preview_volume_label)
 
         self.preview_volume_slider = QSpinBox()
         self.preview_volume_slider.setRange(0, 100)
         self.preview_volume_slider.setValue(self.preview_volume)
         self.preview_volume_slider.setSuffix("%")
+        self.preview_volume_slider.setButtonSymbols(QSpinBox.NoButtons)
+        self.preview_volume_slider.setFixedWidth(58)
+        self.preview_volume_slider.setStyleSheet("font-size: 11px;")
         self.preview_volume_slider.valueChanged.connect(self._set_preview_volume)
         preview_controls.addWidget(self.preview_volume_slider)
 
-        self.preview_fullscreen_btn = QPushButton("⛶ Fullscreen")
+        self.preview_fullscreen_btn = QPushButton("⛶")
         self.preview_fullscreen_btn.setToolTip("Toggle fullscreen preview.")
         self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
@@ -1984,6 +2393,8 @@ class MainWindow(QMainWindow):
         self.player.durationChanged.connect(self._on_preview_duration_changed)
 
         bottom_splitter = QSplitter()
+        bottom_splitter.setOpaqueResize(True)
+        bottom_splitter.setChildrenCollapsible(False)
         bottom_splitter.addWidget(preview_group)
         bottom_splitter.addWidget(log_group)
         bottom_splitter.setSizes([500, 800])
@@ -1991,16 +2402,43 @@ class MainWindow(QMainWindow):
         self.grok_browser_tab = QWidget()
         grok_browser_layout = QVBoxLayout(self.grok_browser_tab)
         grok_browser_controls = QGridLayout()
-        grok_browser_controls.addWidget(self.populate_video_btn, 0, 0)
-        grok_browser_controls.addWidget(self.generate_image_btn, 0, 1)
-        grok_browser_controls.addWidget(self.continue_frame_btn, 1, 0)
-        grok_browser_controls.addWidget(self.continue_image_btn, 1, 1)
-        grok_browser_controls.addWidget(self.browser_home_btn, 2, 0, 1, 2)
+        grok_browser_controls.addWidget(self.generate_image_btn, 0, 0)
+        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
+        grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
+        grok_browser_controls.addWidget(self.browser_home_btn, 0, 3)
+
+        self.sora_browser_tab = QWidget()
+        sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
+        sora_browser_controls = QGridLayout()
+        sora_browser_controls.addWidget(self.sora_generate_image_btn, 0, 0)
+        sora_browser_controls.addWidget(self.sora_continue_frame_btn, 0, 1)
+        sora_browser_controls.addWidget(self.sora_continue_image_btn, 0, 2)
+        sora_browser_controls.addWidget(self.sora_browser_home_btn, 0, 3)
+
+        self.video_resolution = QComboBox()
+        self.video_resolution.addItem("480p (854x480)", "854x480")
+        self.video_resolution.addItem("720p (1280x720)", "1280x720")
+        self.video_resolution.setCurrentIndex(1)
+        self.video_duration = QComboBox()
+        self.video_duration.addItem("6s", 6)
+        self.video_duration.addItem("10s", 10)
+        self.video_duration.setCurrentIndex(1)
+        self.video_aspect_ratio = QComboBox()
+        self.video_aspect_ratio.addItem("2:3", "2:3")
+        self.video_aspect_ratio.addItem("3:2", "3:2")
+        self.video_aspect_ratio.addItem("1:1", "1:1")
+        self.video_aspect_ratio.addItem("9:16", "9:16")
+        self.video_aspect_ratio.addItem("16:9", "16:9")
+        self.video_aspect_ratio.setCurrentIndex(4)
         grok_browser_layout.addLayout(grok_browser_controls)
-        grok_browser_layout.addWidget(self.browser)
+        grok_browser_layout.addWidget(self.grok_browser_view)
+
+        sora_browser_layout.addLayout(sora_browser_controls)
+        sora_browser_layout.addWidget(self.sora_browser)
 
         self.browser_tabs = QTabWidget()
-        self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
+        self.grok_browser_tab_index = self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
+        self.sora_browser_tab_index = self.browser_tabs.addTab(self.sora_browser_tab, "Sora Browser")
         self.social_upload_tab_indices["Facebook"] = self.browser_tabs.addTab(
             self._build_social_upload_tab("Facebook", self._facebook_upload_home_url()),
             "Facebook Upload",
@@ -2016,10 +2454,15 @@ class MainWindow(QMainWindow):
         self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
         self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
         self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
+        self.browser_tabs.currentChanged.connect(self._on_browser_tab_changed)
 
         right_splitter = QSplitter(Qt.Vertical)
+        right_splitter.setOpaqueResize(True)
+        right_splitter.setChildrenCollapsible(False)
         right_splitter.addWidget(self.browser_tabs)
         right_splitter.addWidget(bottom_splitter)
+        right_splitter.setStretchFactor(0, 3)
+        right_splitter.setStretchFactor(1, 2)
         right_splitter.setSizes([620, 280])
 
         left_scroll = QScrollArea()
@@ -2039,9 +2482,38 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter)
         self.setCentralWidget(container)
 
-        self._build_menu_bar()
+        status_bar = QStatusBar(self)
+        status_bar.setSizeGripEnabled(False)
+        self.setStatusBar(status_bar)
+
+        self.upload_progress_label = QLabel("Upload progress: idle")
+        self.upload_progress_label.setToolTip("Upload progress details")
+        self.upload_progress_label.setVisible(False)
+        status_bar.addWidget(self.upload_progress_label, 1)
+
+        self.upload_progress_bar = QProgressBar()
+        self.upload_progress_bar.setRange(0, 100)
+        self.upload_progress_bar.setValue(0)
+        self.upload_progress_bar.setVisible(False)
+        self.upload_progress_bar.setFixedWidth(260)
+        status_bar.addPermanentWidget(self.upload_progress_bar)
+
+        self.stitch_progress_label = QLabel("Stitch all video progress: idle")
+        self.stitch_progress_label.setStyleSheet("color: #9fb3c8;")
+        self.stitch_progress_label.setVisible(False)
+        status_bar.addWidget(self.stitch_progress_label, 1)
+
+        self.stitch_progress_bar = QProgressBar()
+        self.stitch_progress_bar.setRange(0, 100)
+        self.stitch_progress_bar.setValue(0)
+        self.stitch_progress_bar.setVisible(False)
+        self.stitch_progress_bar.setFixedWidth(260)
+        status_bar.addPermanentWidget(self.stitch_progress_bar)
+
+        self._populate_top_settings_menus()
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
+        self._refresh_status_bar_visibility()
 
     def _build_social_upload_tab(self, platform_name: str, upload_url: str) -> QWidget:
         tab = QWidget()
@@ -2279,6 +2751,12 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #9fb3c8;")
         layout.addWidget(hint)
+
+        self.sora_generate_btn = QPushButton("🎬 API Generate Video")
+        self.sora_generate_btn.setToolTip("Generate and download video via the selected API provider.")
+        self.sora_generate_btn.clicked.connect(self.start_generation)
+        layout.addWidget(self.sora_generate_btn)
+
         layout.addStretch(1)
         return tab
 
@@ -2426,6 +2904,12 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #9fb3c8;")
         layout.addWidget(hint)
+
+        self.seedance_generate_btn = QPushButton("🎬 API Generate Video")
+        self.seedance_generate_btn.setToolTip("Generate and download video via the selected API provider.")
+        self.seedance_generate_btn.clicked.connect(self.start_generation)
+        layout.addWidget(self.seedance_generate_btn)
+
         layout.addStretch(1)
         return tab
 
@@ -2517,19 +3001,11 @@ class MainWindow(QMainWindow):
 
         run_actions = QHBoxLayout()
         self.training_start_btn = QPushButton("Start Training")
-        self.training_start_btn.setStyleSheet(
-            "background-color: #1976d2; color: white; font-weight: 700;"
-            "border: 1px solid #0d47a1; border-radius: 6px; padding: 6px 10px;"
-        )
         self.training_start_btn.clicked.connect(self.start_browser_training)
         run_actions.addWidget(self.training_start_btn)
 
         self.training_stop_btn = QPushButton("Stop Training")
         self.training_stop_btn.setToolTip("Stop embedded training capture and save raw_training_trace.json.")
-        self.training_stop_btn.setStyleSheet(
-            "background-color: #8b0000; color: white; font-weight: 700;"
-            "border: 1px solid #5c0000; border-radius: 6px; padding: 6px 10px;"
-        )
         self.training_stop_btn.setEnabled(False)
         self.training_stop_btn.clicked.connect(self.stop_browser_training)
         run_actions.addWidget(self.training_stop_btn)
@@ -2760,6 +3236,37 @@ class MainWindow(QMainWindow):
             close_btn.clicked.connect(self.model_api_settings_dialog.close)
         dialog_layout.addWidget(button_box)
 
+    def _toolbar_tinted_standard_icon(self, standard_pixmap: QStyle.StandardPixmap, color_hex: str = "#1e88e5") -> QIcon:
+        base_icon = self.style().standardIcon(standard_pixmap)
+        pixmap = base_icon.pixmap(20, 20)
+        if pixmap.isNull():
+            return base_icon
+
+        tinted = QPixmap(pixmap.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), QColor(color_hex))
+        painter.end()
+        return QIcon(tinted)
+
+    def _status_bar_has_active_content(self) -> bool:
+        tracked_widgets = [
+            getattr(self, "upload_progress_label", None),
+            getattr(self, "upload_progress_bar", None),
+            getattr(self, "stitch_progress_label", None),
+            getattr(self, "stitch_progress_bar", None),
+        ]
+        return any(widget is not None and widget.isVisible() for widget in tracked_widgets)
+
+    def _refresh_status_bar_visibility(self) -> None:
+        status_bar = self.statusBar()
+        should_show = self._status_bar_has_active_content()
+        status_bar.setVisible(should_show)
+        status_bar.setMaximumHeight(16777215 if should_show else 0)
+
     def _build_menu_bar(self) -> None:
         menu_bar = self.menuBar()
 
@@ -2786,6 +3293,15 @@ class MainWindow(QMainWindow):
         open_settings_action.triggered.connect(self.show_model_api_settings)
         settings_menu.addAction(open_settings_action)
 
+        video_menu = menu_bar.addMenu("Video")
+        self.video_settings_menu = video_menu.addMenu("Settings")
+        self.video_grok_settings_menu = video_menu.addMenu("Grok Settings")
+
+        audio_menu = menu_bar.addMenu("Audio")
+        self.audio_settings_menu = audio_menu.addMenu("Settings")
+
+        self.automation_menu = menu_bar.addMenu("Automation")
+
         help_menu = menu_bar.addMenu("Help")
         info_action = QAction("Info", self)
         info_action.triggered.connect(self.show_app_info)
@@ -2802,6 +3318,143 @@ class MainWindow(QMainWindow):
         actions_action = QAction("Build Artifacts", self)
         actions_action.triggered.connect(self.open_github_actions_runs_page)
         help_menu.addAction(actions_action)
+
+        self.quick_actions_toolbar = QToolBar("Quick Actions", self)
+        self.quick_actions_toolbar.setMovable(False)
+        self.quick_actions_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.quick_actions_toolbar)
+
+        stop_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop), "Stop All Jobs", self)
+        stop_action.setToolTip("Stop all active generation jobs.")
+        stop_action.triggered.connect(self.stop_all_jobs)
+        self.quick_actions_toolbar.addAction(stop_action)
+
+        create_video_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "Create New Video", self)
+        create_video_action.setToolTip("Create a new video from the current prompt in Grok.")
+        create_video_action.triggered.connect(self.start_image_generation)
+        self.quick_actions_toolbar.addAction(create_video_action)
+
+        continue_last_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward), "Continue Last Video", self)
+        continue_last_action.setToolTip("Continue from the last generated video's final frame.")
+        continue_last_action.triggered.connect(self.continue_from_last_frame)
+        self.quick_actions_toolbar.addAction(continue_last_action)
+
+        continue_image_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton), "Create From Image", self)
+        continue_image_action.setToolTip("Choose a local image and generate a new continuation video.")
+        continue_image_action.triggered.connect(self.continue_from_local_image)
+        self.quick_actions_toolbar.addAction(continue_image_action)
+
+        self.quick_actions_toolbar.addSeparator()
+        homepage_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon), "Open Grok Homepage", self)
+        homepage_action.setToolTip("Open grok.com/imagine in the embedded browser.")
+        homepage_action.triggered.connect(self.show_browser_page)
+        self.quick_actions_toolbar.addAction(homepage_action)
+
+        self.quick_actions_toolbar.addSeparator()
+        auto_youtube_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate YouTube Upload", self)
+        auto_youtube_upload_action.setToolTip("Run browser automation for YouTube upload in the YouTube tab.")
+        auto_youtube_upload_action.triggered.connect(self.start_youtube_browser_upload)
+        self.quick_actions_toolbar.addAction(auto_youtube_upload_action)
+
+        auto_facebook_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate Facebook Upload", self)
+        auto_facebook_upload_action.setToolTip("Run browser automation for Facebook upload in the Facebook tab.")
+        auto_facebook_upload_action.triggered.connect(self.start_facebook_browser_upload)
+        self.quick_actions_toolbar.addAction(auto_facebook_upload_action)
+
+        auto_instagram_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate Instagram Upload", self)
+        auto_instagram_upload_action.setToolTip("Run browser automation for Instagram upload in the Instagram tab.")
+        auto_instagram_upload_action.triggered.connect(self.start_instagram_browser_upload)
+        self.quick_actions_toolbar.addAction(auto_instagram_upload_action)
+
+        auto_tiktok_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate TikTok Upload", self)
+        auto_tiktok_upload_action.setToolTip("Run browser automation for TikTok upload in the TikTok tab.")
+        auto_tiktok_upload_action.triggered.connect(self.start_tiktok_browser_upload)
+        self.quick_actions_toolbar.addAction(auto_tiktok_upload_action)
+
+        self.quick_actions_toolbar.addSeparator()
+        youtube_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to YouTube", self)
+        youtube_upload_action.setToolTip("Upload selected video to YouTube.")
+        youtube_upload_action.triggered.connect(self.upload_selected_to_youtube)
+        self.quick_actions_toolbar.addAction(youtube_upload_action)
+
+        facebook_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to Facebook", self)
+        facebook_upload_action.setToolTip("Upload selected video to Facebook.")
+        facebook_upload_action.triggered.connect(self.upload_selected_to_facebook)
+        self.quick_actions_toolbar.addAction(facebook_upload_action)
+
+        instagram_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to Instagram", self)
+        instagram_upload_action.setToolTip("Upload selected video to Instagram.")
+        instagram_upload_action.triggered.connect(self.upload_selected_to_instagram)
+        self.quick_actions_toolbar.addAction(instagram_upload_action)
+
+        tiktok_upload_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp), "Upload to TikTok", self)
+        tiktok_upload_action.setToolTip("Upload selected video to TikTok.")
+        tiktok_upload_action.triggered.connect(self.upload_selected_to_tiktok)
+        self.quick_actions_toolbar.addAction(tiktok_upload_action)
+
+    def _run_with_button_feedback(self, button: QPushButton, callback: Callable[[], None]) -> None:
+        if button is not None and button.isCheckable():
+            button.setChecked(True)
+            QTimer.singleShot(220, lambda: button.setChecked(False))
+        callback()
+
+    def _add_widget_to_menu(self, menu: QMenu, widget: QWidget) -> None:
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(widget)
+        menu.addAction(action)
+
+    def _populate_top_settings_menus(self) -> None:
+        self.video_settings_menu.clear()
+        self.video_grok_settings_menu.clear()
+        self.audio_settings_menu.clear()
+        self.automation_menu.clear()
+
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
+        self._add_widget_to_menu(self.video_settings_menu, self.video_options_dropdown)
+        self.video_settings_menu.addSeparator()
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_interpolation_checkbox)
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_interpolation_fps)
+        self.video_settings_menu.addSeparator()
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_upscale_checkbox)
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_upscale_target)
+        self.video_settings_menu.addSeparator()
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_gpu_checkbox)
+
+        grok_resolution_widget = QWidget(self)
+        grok_resolution_layout = QHBoxLayout(grok_resolution_widget)
+        grok_resolution_layout.setContentsMargins(8, 4, 8, 4)
+        grok_resolution_layout.addWidget(QLabel("Resolution"))
+        grok_resolution_layout.addWidget(self.video_resolution)
+        self._add_widget_to_menu(self.video_grok_settings_menu, grok_resolution_widget)
+
+        grok_duration_widget = QWidget(self)
+        grok_duration_layout = QHBoxLayout(grok_duration_widget)
+        grok_duration_layout.setContentsMargins(8, 4, 8, 4)
+        grok_duration_layout.addWidget(QLabel("Duration"))
+        grok_duration_layout.addWidget(self.video_duration)
+        self._add_widget_to_menu(self.video_grok_settings_menu, grok_duration_widget)
+
+        grok_aspect_widget = QWidget(self)
+        grok_aspect_layout = QHBoxLayout(grok_aspect_widget)
+        grok_aspect_layout.setContentsMargins(8, 4, 8, 4)
+        grok_aspect_layout.addWidget(QLabel("Aspect"))
+        grok_aspect_layout.addWidget(self.video_aspect_ratio)
+        self._add_widget_to_menu(self.video_grok_settings_menu, grok_aspect_widget)
+
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_mute_original_checkbox)
+        self.audio_settings_menu.addSeparator()
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_original_audio_volume)
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_music_volume)
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_audio_fade_duration)
+        self._add_widget_to_menu(self.audio_settings_menu, self.stitch_audio_fade_label)
+
+        automation_widget = QWidget(self)
+        automation_layout = QHBoxLayout(automation_widget)
+        automation_layout.setContentsMargins(8, 4, 8, 4)
+        automation_layout.addWidget(QLabel("Count"))
+        automation_layout.addWidget(self.count)
+        automation_layout.addStretch(1)
+        self._add_widget_to_menu(self.automation_menu, automation_widget)
 
     def show_app_info(self) -> None:
         dialog = QDialog(self)
@@ -3315,6 +3968,13 @@ class MainWindow(QMainWindow):
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log.appendPlainText(f"[{timestamp}] {text}")
+
+    def clear_activity_log(self) -> None:
+        self.log.clear()
+        self._append_log("Activity log cleared.")
+
+    def jump_activity_log_to_bottom(self) -> None:
+        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
     def _on_browser_load_finished(self, ok: bool) -> None:
         if ok:
@@ -4047,6 +4707,139 @@ class MainWindow(QMainWindow):
         self.browser.setUrl(QUrl("https://grok.com/"))
         self._append_log("Opened Grok in browser for sign-in.")
 
+    def _describe_overlay_frame_with_selected_ai(self, frame_path: Path, timestamp_seconds: float) -> str:
+        source = self.prompt_source.currentData()
+        instruction = (
+            "Analyze this frame image and return one short subtitle line (max 12 words, no hashtags, no quotes). "
+            f"Timestamp in source video: {timestamp_seconds:.2f}s. "
+            "If uncertain, provide a neutral literal scene description."
+        )
+
+        if source == "openai":
+            openai_credential = self.openai_api_key.text().strip() or self.openai_access_token.text().strip()
+            if not openai_credential:
+                raise RuntimeError("OpenAI API key or access token is required.")
+
+            model = self.openai_chat_model.text().strip() or "gpt-5.1-codex"
+            image_bytes = frame_path.read_bytes()
+            data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+            file_id = ""
+            use_uploaded_file = _openai_is_likely_api_key(openai_credential)
+            if use_uploaded_file:
+                upload_headers = _openai_headers_from_credential(openai_credential)
+                upload_headers.pop("Content-Type", None)
+                with frame_path.open("rb") as image_handle:
+                    files_payload = {
+                        "file": (frame_path.name, image_handle, "image/png"),
+                    }
+                    upload_response = requests.post(
+                        f"{OPENAI_API_BASE}/files",
+                        headers=upload_headers,
+                        data={"purpose": "vision"},
+                        files=files_payload,
+                        timeout=120,
+                    )
+                if not upload_response.ok:
+                    if upload_response.status_code == 401 and "must be made with a secret key" in upload_response.text:
+                        use_uploaded_file = False
+                    else:
+                        raise RuntimeError(
+                            f"OpenAI file upload failed: {upload_response.status_code} {upload_response.text[:400]}"
+                        )
+
+                if use_uploaded_file:
+                    try:
+                        upload_payload = upload_response.json() if upload_response.content else {}
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError(
+                            f"OpenAI file upload returned non-JSON response ({exc}): {upload_response.text[:300]}"
+                        ) from exc
+
+                    file_id = str((upload_payload or {}).get("id") or "").strip()
+                    if not file_id:
+                        raise RuntimeError("OpenAI file upload did not return a file id.")
+
+            try:
+                response_headers = _openai_headers_from_credential(openai_credential)
+                image_part: dict[str, str]
+                if use_uploaded_file and file_id:
+                    image_part = {"type": "input_image", "file_id": file_id}
+                else:
+                    image_part = {"type": "input_image", "image_url": data_url}
+
+                payload = {
+                    "model": model,
+                    "instructions": "You describe video frames with concise subtitle-style captions.",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": instruction},
+                                image_part,
+                            ],
+                        }
+                    ],
+                    "store": False,
+                }
+                response = requests.post(
+                    f"{OPENAI_API_BASE}/responses",
+                    headers=response_headers,
+                    json=payload,
+                    timeout=120,
+                )
+                if not response.ok:
+                    raise RuntimeError(f"OpenAI vision request failed: {response.status_code} {response.text[:400]}")
+
+                streamed_text = _extract_text_from_responses_sse(response.text)
+                if streamed_text:
+                    return streamed_text.strip()
+
+                try:
+                    response_payload = response.json() if response.content else {}
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"OpenAI vision returned non-JSON response ({exc}): {response.text[:300]}"
+                    ) from exc
+
+                text = _extract_text_from_responses_body(response_payload)
+                if text:
+                    return text.strip()
+
+                raise RuntimeError("OpenAI vision response did not include text output.")
+            finally:
+                if file_id:
+                    try:
+                        requests.delete(
+                            f"{OPENAI_API_BASE}/files/{file_id}",
+                            headers=_openai_headers_from_credential(openai_credential),
+                            timeout=30,
+                        )
+                    except Exception:
+                        pass
+
+        image_bytes = frame_path.read_bytes()
+        data_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        return self._call_selected_ai(
+            "You describe video frames with concise subtitle-style captions.",
+            f"{instruction}\n\nFrame image (data URL): {data_url}",
+        )
+
+    def _describe_overlay_prompt_with_selected_ai(self, prompt_text: str, timestamp_seconds: float) -> str:
+        cleaned_prompt = (prompt_text or "").strip()
+        if not cleaned_prompt:
+            raise RuntimeError("Prompt text is required for prompt-only AI captioning.")
+
+        return self._call_selected_ai(
+            "You write concise subtitle lines for videos.",
+            (
+                "Generate one short subtitle line (max 12 words, no hashtags, no quotes) based on the prompt context. "
+                f"Timestamp in source video: {timestamp_seconds:.2f}s. "
+                "Vary phrasing naturally across timestamps while staying consistent with the prompt context.\n\n"
+                f"Prompt context: {cleaned_prompt}"
+            ),
+        )
+
     def _call_selected_ai(self, system: str, user: str) -> str:
         source = self.prompt_source.currentData()
         headers = {"Content-Type": "application/json"}
@@ -4149,6 +4942,21 @@ class MainWindow(QMainWindow):
             return
         
         self._start_manual_browser_image_generation(manual_prompt, self.count.value())
+
+    def start_sora_video_generation(self) -> None:
+        self.stop_all_requested = False
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            return
+
+        if hasattr(self, "sora_browser_tab_index"):
+            self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
+            self.browser = self.sora_browser
+
+        self._append_log("Starting Sora video prompt run (video-only mode, no image-mode toggles).")
+        self._start_manual_browser_generation(manual_prompt, self.count.value())
 
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
         self.manual_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
@@ -4376,7 +5184,7 @@ class MainWindow(QMainWindow):
                     const hasSelectedByText = (patterns, root = document) => selectedTextElements(root)
                         .some((el) => matchesAny(textOf(el), patterns));
 
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
                     const composer = (promptInput && (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section"))) || document;
 
                     const aspectPatterns = {
@@ -4477,7 +5285,7 @@ class MainWindow(QMainWindow):
                         return true;
                     };
 
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
                     const submitSelectors = [
                         "button[type='submit'][aria-label='Submit']",
                         "button[aria-label='Submit'][type='submit']",
@@ -5136,6 +5944,8 @@ class MainWindow(QMainWindow):
                 try {{
                     const prompt = {escaped_prompt};
                     const promptSelectors = [
+                        "textarea[placeholder*='Describe your video' i]",
+                        "textarea[aria-label*='Describe your video' i]",
                         "textarea[placeholder*='Type to imagine' i]",
                         "input[placeholder*='Type to imagine' i]",
                         "textarea[placeholder*='Type to customize this video' i]",
@@ -5164,6 +5974,12 @@ class MainWindow(QMainWindow):
                     const input = inputCandidates.find((el) => isVisible(el));
                     if (!input) return {{ ok: false, error: "Prompt input not found" }};
 
+                    const common = {{ bubbles: true, cancelable: true, composed: true }};
+                    try {{ input.dispatchEvent(new PointerEvent("pointerdown", common)); }} catch (_) {{}}
+                    input.dispatchEvent(new MouseEvent("mousedown", common));
+                    try {{ input.dispatchEvent(new PointerEvent("pointerup", common)); }} catch (_) {{}}
+                    input.dispatchEvent(new MouseEvent("mouseup", common));
+                    input.dispatchEvent(new MouseEvent("click", common));
                     input.focus();
                     if (input.isContentEditable) {{
                         // Only populate the field; do not synthesize Enter/submit key events.
@@ -5210,7 +6026,7 @@ class MainWindow(QMainWindow):
                     const isOptionsMenu = (el) => {
                         if (!el || !isVisible(el)) return false;
                         const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                        return /video\s*duration|resolution|aspect\s*ratio|\borientation\b|\bduration\b|\bvideos\b|\bimage\b|\bvideo\b/i.test(txt);
                     };
 
                     const findOpenMenu = () => {
@@ -5223,9 +6039,9 @@ class MainWindow(QMainWindow):
                     };
 
                     const settingsCandidates = [
-                        ...document.querySelectorAll("button[aria-label='Settings']"),
-                        ...document.querySelectorAll("button[aria-haspopup='menu'][aria-label='Settings']"),
-                        ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings']")
+                        ...document.querySelectorAll("button[aria-label='Settings'][id='radix-:rg:']"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu'][aria-label='Settings'][id='radix-:rg:']"),
+                        ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings'][id='radix-:rg:']")
                     ].filter((el, index, arr) => arr.indexOf(el) === index);
                     const settingsButton = settingsCandidates.find((el) => isVisible(el) && !el.disabled) || null;
 
@@ -5234,7 +6050,8 @@ class MainWindow(QMainWindow):
                     }
 
                     const wasExpanded = settingsButton.getAttribute("aria-expanded") === "true";
-                    const opened = wasExpanded || emulateClick(settingsButton);
+                    const menuBefore = findOpenMenu();
+                    const opened = menuBefore ? true : emulateClick(settingsButton);
                     const menu = findOpenMenu();
                     return {
                         ok: opened || !!menu,
@@ -5253,7 +6070,7 @@ class MainWindow(QMainWindow):
         verify_prompt_script = r"""
             (() => {
                 try {
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
                     if (!promptInput) return { ok: false, error: "Prompt input not found during verification" };
                     const value = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                     return { ok: !!value.trim(), filledLength: value.length };
@@ -5282,24 +6099,129 @@ class MainWindow(QMainWindow):
                     const desiredAspect = "{selected_aspect_ratio}";
                     const desiredDuration = "{selected_duration_label}";
                     const fallbackQuality = desiredQuality === "720p" ? "480p" : desiredQuality;
+                    const cleanText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
-                    const isOptionsMenu = (el) => {
-                        if (!el || !isVisible(el)) return false;
-                        const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
-                    };
                     const menuCandidates = [
                         ...document.querySelectorAll("[role='menu'][data-state='open']"),
                         ...document.querySelectorAll("[data-radix-menu-content][data-state='open']"),
                         ...document.querySelectorAll("[role='menu'], [data-radix-menu-content]")
                     ];
+                    const hasSoraItems = (el) => /\borientation\b|\bduration\b|\bvideos\b/i.test(cleanText(el?.textContent || ""));
+                    const soraMenu = menuCandidates.find((el) => isVisible(el) && hasSoraItems(el)) || null;
+
+                    if (soraMenu) {
+                        const optionsRequested = [];
+                        const optionsApplied = [];
+
+                        const menuItems = (root) => [...root.querySelectorAll("[role='menuitem']")].filter((el) => isVisible(el));
+                        const radioItems = (root) => [...root.querySelectorAll("[role='menuitemradio']")].filter((el) => isVisible(el));
+                        const currentlyOpenMenus = () => [
+                            ...document.querySelectorAll("[role='menu'][data-state='open']"),
+                            ...document.querySelectorAll("[data-radix-menu-content][data-state='open']")
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+
+                        const findMenuItem = (labelPatterns) => {
+                            const rows = menuItems(soraMenu);
+                            return rows.find((el) => labelPatterns.some((pattern) => pattern.test(cleanText(el.textContent))));
+                        };
+
+                        const openSubmenu = (label, patterns) => {
+                            const row = findMenuItem(patterns);
+                            if (!row) return false;
+                            const expanded = row.getAttribute("aria-expanded") === "true";
+                            if (!expanded) {
+                                if (!emulateClick(row)) return false;
+                                optionsRequested.push(label);
+                            }
+                            optionsApplied.push(`${label}-menu-open`);
+                            return true;
+                        };
+
+                        const pickRadioOption = (menuLabel, optionLabel, optionPatterns) => {
+                            const openMenus = currentlyOpenMenus();
+                            const radios = openMenus.flatMap((m) => radioItems(m));
+                            const candidate = radios.find((el) => optionPatterns.some((pattern) => pattern.test(cleanText(el.textContent))));
+                            if (!candidate) return false;
+                            const checked = candidate.getAttribute("aria-checked") === "true" || (candidate.getAttribute("data-state") || "").toLowerCase() === "checked";
+                            if (!checked) {
+                                if (!emulateClick(candidate)) return false;
+                                optionsRequested.push(`${menuLabel}:${optionLabel}`);
+                            }
+                            optionsApplied.push(`${menuLabel}:${optionLabel}`);
+                            return true;
+                        };
+
+                        const desiredOrientation = ({
+                            "9:16": "Portrait",
+                            "2:3": "Portrait",
+                            "16:9": "Landscape",
+                            "3:2": "Landscape",
+                            "1:1": "Square",
+                        })[desiredAspect] || "Landscape";
+
+                        const orientationPatterns = {
+                            Portrait: [/^portrait$/i],
+                            Landscape: [/^landscape$/i],
+                            Square: [/^square$/i, /^1\s*:\s*1$/i],
+                        };
+                        const durationPatterns = {
+                            "5s": [/^5\s*s(ec(onds?)?)?$/i],
+                            "6s": [/^6\s*s(ec(onds?)?)?$/i],
+                            "10s": [/^10\s*s(ec(onds?)?)?$/i],
+                            "15s": [/^15\s*s(ec(onds?)?)?$/i],
+                        };
+                        const videoCountPatterns = {
+                            "1 video": [/^1\s*video(s)?$/i],
+                            "2 videos": [/^2\s*video(s)?$/i],
+                        };
+
+                        const desiredVideoCount = "1 video";
+
+                        const orientationOpened = openSubmenu("orientation", [/\borientation\b/i]);
+                        const orientationApplied = orientationOpened && pickRadioOption("orientation", desiredOrientation, orientationPatterns[desiredOrientation] || orientationPatterns.Landscape);
+
+                        const durationOpened = openSubmenu("duration", [/\bduration\b/i]);
+                        const durationApplied = durationOpened && (
+                            pickRadioOption("duration", desiredDuration, durationPatterns[desiredDuration] || durationPatterns["10s"]) ||
+                            pickRadioOption("duration", "10s", durationPatterns["10s"]) ||
+                            pickRadioOption("duration", "15s", durationPatterns["15s"]) ||
+                            pickRadioOption("duration", "5s", durationPatterns["5s"])
+                        );
+
+                        const videosOpened = openSubmenu("videos", [/\bvideos\b/i]);
+                        const videosApplied = videosOpened && pickRadioOption("videos", desiredVideoCount, videoCountPatterns[desiredVideoCount]);
+
+                        const requiredOptions = ["video", desiredDuration, desiredAspect, desiredVideoCount];
+                        const missingOptions = [];
+                        if (!orientationApplied) missingOptions.push(desiredAspect);
+                        if (!durationApplied) missingOptions.push(desiredDuration);
+                        if (!videosApplied) missingOptions.push(desiredVideoCount);
+
+                        return {
+                            ok: true,
+                            requiredOptions,
+                            effectiveRequiredOptions: requiredOptions,
+                            optionsRequested,
+                            optionsApplied,
+                            missingOptions,
+                            selectedQuality: "sora-default",
+                            fallbackUsed: false,
+                            soraMode: true,
+                        };
+                    }
+
+                    const isOptionsMenu = (el) => {
+                        if (!el || !isVisible(el)) return false;
+                        const txt = cleanText(el.textContent || "");
+                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                    };
                     const menu = menuCandidates.find((el) => isOptionsMenu(el)) || null;
                     if (!menu) return { ok: false, error: "Options menu not visible" };
 
                     const optionNodes = [...menu.querySelectorAll("button, [role='menuitemradio'], [role='radio'], [role='button']")]
                         .filter((el) => isVisible(el));
 
-                    const nodeText = (el) => (el.getAttribute("aria-label") || el.textContent || "").trim();
+                    const nodeText = (el) => cleanText(el.getAttribute("aria-label") || el.textContent || "");
                     const isSelected = (el) => {
                         if (!el) return false;
                         const ariaChecked = el.getAttribute("aria-checked") === "true";
@@ -5399,6 +6321,7 @@ class MainWindow(QMainWindow):
                         missingOptions,
                         selectedQuality: effectiveQuality,
                         fallbackUsed: effectiveQuality !== desiredQuality,
+                        soraMode: false,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -5427,7 +6350,7 @@ class MainWindow(QMainWindow):
                     const isOptionsMenu = (el) => {
                         if (!el || !isVisible(el)) return false;
                         const txt = (el.textContent || "").trim();
-                        return /video\s*duration|resolution|aspect\s*ratio|\bimage\b|\bvideo\b/i.test(txt);
+                        return /video\s*duration|resolution|aspect\s*ratio|\borientation\b|\bduration\b|\bvideos\b|\bimage\b|\bvideo\b/i.test(txt);
                     };
                     const hasOpenMenu = () => {
                         const candidates = [
@@ -5439,7 +6362,7 @@ class MainWindow(QMainWindow):
                     };
 
                     let closed = false;
-                    const settingsButton = [...document.querySelectorAll("button[aria-label='Settings']")]
+                    const settingsButton = [...document.querySelectorAll("button[aria-label='Settings']")[1]]
                         .find((el) => isVisible(el) && !el.disabled);
                     if (settingsButton) closed = emulateClick(settingsButton);
 
@@ -5466,13 +6389,16 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const promptInput = document.querySelector("textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
 
                     const submitSelectors = [
                         "button[type='submit'][aria-label='Submit']",
                         "button[aria-label='Submit'][type='submit']",
                         "button[type='submit']",
-                        "button[aria-label='Submit']"
+                        "button[aria-label='Submit']",
+                        "button[aria-label='Create video']",
+                        "button[aria-label*='Create video' i]",
+                        "button[data-disabled='false']"
                     ];
 
                     const submitCandidates = [];
@@ -5516,24 +6442,35 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                     };
 
+                    const allButtons = [...document.querySelectorAll("button")].filter((el) => isVisible(el));
+                    const createVideoButton = allButtons.find((btn) => {
+                        const label = (btn.getAttribute("aria-label") || "").trim();
+                        const txt = (btn.textContent || "").trim();
+                        const srOnly = (btn.querySelector(".sr-only")?.textContent || "").trim();
+                        return /create\s*video/i.test(label) || /create\s*video/i.test(txt) || /create\s*video/i.test(srOnly);
+                    }) || submitButton;
+
                     let clicked = false;
-                    
+                    if (createVideoButton) {
+                        emulateClick(createVideoButton);
+                        clicked = true;
+                    }
 
                     let formSubmitted = false;
-                    if (form) {
+                    if (!clicked && form) {
                         const ev = new Event("submit", { bubbles: true, cancelable: true });
-                        formSubmitted = form.dispatchEvent(ev); // lets React handlers run
+                        form.dispatchEvent(ev); // lets React handlers run
                         formSubmitted = true;
                     }
 
                     return {
-                        ok: true,
+                        ok: clicked || formSubmitted,
                         submitted: clicked || formSubmitted,
-                        doubleClicked: !!submitButton,
+                        doubleClicked: !!createVideoButton,
                         formSubmitted,
-                        forceEnabled: !!submitButton,
-                        buttonText: submitButton ? (submitButton.textContent || "").trim() : "",
-                        buttonAriaLabel: submitButton ? (submitButton.getAttribute("aria-label") || "") : ""
+                        forceEnabled: !!createVideoButton,
+                        buttonText: createVideoButton ? (createVideoButton.textContent || "").trim() : "",
+                        buttonAriaLabel: createVideoButton ? (createVideoButton.getAttribute("aria-label") || "") : ""
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -5943,7 +6880,7 @@ class MainWindow(QMainWindow):
 
         download_type = self.pending_manual_download_type or "video"
         extension = self._resolve_download_extension(download, download_type)
-        filename = f"{download_type}_{int(time.time() * 1000)}_manual_v{variant}.{extension}"
+        filename = self._build_session_download_filename(download_type, variant, extension)
         download.setDownloadDirectory(str(self.download_dir))
         download.setDownloadFileName(filename)
         self.manual_download_click_sent = True
@@ -6128,6 +7065,12 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             self.worker.request_stop()
             self._append_log("Stop requested: API generation worker will stop after the current request completes.")
+        if self.stitch_worker and self.stitch_worker.isRunning():
+            self.stitch_worker.request_stop()
+            self._append_log("Stop requested: stitching/encoding worker is being interrupted.")
+        if self._active_ffmpeg_process is not None and self._active_ffmpeg_process.poll() is None:
+            self._active_ffmpeg_process.terminate()
+            self._append_log("Stop requested: active ffmpeg stitch/encode process terminated.")
         self._append_log("Stop all requested: cleared queued manual image/video jobs and halted polling timers.")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
@@ -6137,6 +7080,7 @@ class MainWindow(QMainWindow):
             ("stitch", self.stitch_worker),
             ("upload", self.upload_worker),
             ("browser-training", self.browser_training_worker),
+            ("overlay", self.overlay_worker),
         ]
         for worker_name, worker in workers:
             if worker is None or not worker.isRunning():
@@ -6155,6 +7099,16 @@ class MainWindow(QMainWindow):
         title = str(video.get("title") or "Video")
         resolution = str(video.get("resolution") or "unknown")
         return f"{title} ({resolution})"
+
+    def _build_session_download_filename(self, download_type: str, variant: int | None, extension: str) -> str:
+        provider = _slugify_filename_part(str(self.video_provider.currentData() or "grok") if hasattr(self, "video_provider") else "grok")
+        resolution = _slugify_filename_part(self.video_resolution.currentData() if hasattr(self, "video_resolution") else "auto")
+        aspect = _slugify_filename_part(self.video_aspect_ratio.currentData() if hasattr(self, "video_aspect_ratio") else "na")
+        item_variant = int(variant or 0)
+        session_index = _next_session_download_count()
+        normalized_type = _slugify_filename_part(download_type or "download")
+        normalized_ext = _slugify_filename_part(extension or "mp4")
+        return f"{normalized_type}_{provider}_{resolution}_{aspect}_v{item_variant:02d}_d{session_index:03d}.{normalized_ext}"
 
     def _thumbnail_for_video(self, video_path: str) -> QIcon:
         source_path = Path(video_path)
@@ -6272,6 +7226,133 @@ class MainWindow(QMainWindow):
 
         self._append_log(f"Removed video from list: {removed.get('video_file_path', 'unknown')}")
 
+    def _show_overlay_options_dialog(self) -> tuple[dict[str, object] | None, bool]:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Text Overlay Options")
+        layout = QFormLayout(dialog)
+
+        mode_combo = QComboBox(dialog)
+        mode_combo.addItem("AI generated from sampled frames", "ai")
+        mode_combo.addItem("Manual text", "manual")
+
+        interval_spin = QSpinBox(dialog)
+        interval_spin.setRange(1, 60)
+        interval_spin.setValue(5)
+        interval_spin.setSuffix(" s")
+
+        subtitle_duration_spin = QDoubleSpinBox(dialog)
+        subtitle_duration_spin.setRange(0.8, 30.0)
+        subtitle_duration_spin.setDecimals(1)
+        subtitle_duration_spin.setSingleStep(0.5)
+        subtitle_duration_spin.setValue(4.5)
+        subtitle_duration_spin.setSuffix(" s")
+
+        text_size_spin = QSpinBox(dialog)
+        text_size_spin.setRange(8, 120)
+        text_size_spin.setValue(22)
+
+        text_position_combo = QComboBox(dialog)
+        text_position_combo.addItem("Bottom", "bottom")
+        text_position_combo.addItem("Middle", "middle")
+        text_position_combo.addItem("Top", "top")
+
+        font_combo = QFontComboBox(dialog)
+        font_combo.setCurrentFont(self.font())
+
+        manual_text = QLineEdit(dialog)
+        manual_text.setPlaceholderText("Optional: manual subtitle text, or AI prompt context when in AI mode")
+        concept_default = self.concept.toPlainText().strip() if hasattr(self, "concept") else ""
+        if concept_default:
+            manual_text.setText(concept_default)
+
+
+        layout.addRow("Mode", mode_combo)
+        layout.addRow("Sample interval", interval_spin)
+        layout.addRow("Subtitle duration", subtitle_duration_spin)
+        layout.addRow("Text size", text_size_spin)
+        layout.addRow("Text position", text_position_combo)
+        layout.addRow("Font", font_combo)
+        layout.addRow("Manual text / AI prompt", manual_text)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addRow(button_box)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None, False
+
+        selected_mode = str(mode_combo.currentData() or "ai")
+        manual_value = manual_text.text().strip()
+        if selected_mode == "manual" and not manual_value:
+            QMessageBox.warning(self, "Manual Text Required", "Enter manual text or choose AI mode.")
+            return None, False
+
+        return {
+            "mode": selected_mode,
+            "interval_seconds": int(interval_spin.value()),
+            "subtitle_duration_seconds": float(subtitle_duration_spin.value()),
+            "manual_text": manual_value,
+            "font_name": font_combo.currentFont().family(),
+            "font_size": int(text_size_spin.value()),
+            "text_position": str(text_position_combo.currentData() or "bottom"),
+        }, True
+
+    def add_overlay_to_selected_video(self) -> None:
+        index = self.video_picker.currentIndex()
+        if index < 0 or index >= len(self.videos):
+            QMessageBox.warning(self, "No Video Selected", "Select a video first.")
+            return
+        if self.overlay_worker is not None and self.overlay_worker.isRunning():
+            QMessageBox.information(self, "Overlay In Progress", "Please wait for the current text overlay job to finish.")
+            return
+
+        selected_video = self.videos[index]
+        input_video = Path(str(selected_video.get("video_file_path") or "")).expanduser()
+        if not input_video.exists():
+            QMessageBox.warning(self, "Missing Video", "The selected video file no longer exists.")
+            return
+
+        options, accepted = self._show_overlay_options_dialog()
+        if not accepted or options is None:
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_video = input_video.with_name(f"{input_video.stem}_overlay_{timestamp}.mp4")
+
+        self.overlay_worker = VideoOverlayWorker(
+            input_video=input_video,
+            output_video=output_video,
+            interval_seconds=int(options["interval_seconds"]),
+            subtitle_duration_seconds=float(options["subtitle_duration_seconds"]),
+            overlay_mode=str(options["mode"]),
+            manual_text=str(options["manual_text"]),
+            font_name=str(options.get("font_name") or self.font().family()),
+            font_size=int(options.get("font_size") or 22),
+            text_position=str(options.get("text_position") or "bottom"),
+            ai_callback=self._describe_overlay_frame_with_selected_ai,
+            ai_prompt_callback=self._describe_overlay_prompt_with_selected_ai,
+            ai_source=str(self.prompt_source.currentData() or "grok"),
+        )
+        self.overlay_worker.progress.connect(self._append_log)
+        self.overlay_worker.finished_overlay.connect(self._on_overlay_finished)
+        self.overlay_worker.failed.connect(self._on_overlay_failed)
+        self.overlay_worker.start()
+        self._append_log(
+            f"Started text overlay on '{input_video.name}' (mode={options['mode']}, interval={options['interval_seconds']}s)."
+        )
+
+    def _on_overlay_finished(self, video: dict) -> None:
+        self.on_video_finished(video)
+        self._append_log(f"Text overlay complete: {video.get('video_file_path', '')}")
+        QMessageBox.information(self, "Overlay Complete", "Text overlay video created and added to the Generated Videos list.")
+        self.overlay_worker = None
+
+    def _on_overlay_failed(self, title: str, message: str) -> None:
+        self._append_log(f"ERROR: Text overlay failed: {title}: {message}")
+        QMessageBox.critical(self, title, message)
+        self.overlay_worker = None
+
     def _format_time_ms(self, ms: int) -> str:
         total_seconds = max(0, int(ms // 1000))
         hours, remainder = divmod(total_seconds, 3600)
@@ -6287,6 +7368,7 @@ class MainWindow(QMainWindow):
         self.preview_position_label.setText(
             f"{self._format_time_ms(position)} / {self._format_time_ms(self.player.duration())}"
         )
+        self._sync_preview_fullscreen_progress()
 
     def _on_preview_duration_changed(self, duration: int) -> None:
         self.preview_seek_slider.blockSignals(True)
@@ -6295,6 +7377,7 @@ class MainWindow(QMainWindow):
         self.preview_position_label.setText(
             f"{self._format_time_ms(self.player.position())} / {self._format_time_ms(duration)}"
         )
+        self._sync_preview_fullscreen_progress()
 
     def seek_preview(self, position: int) -> None:
         self.player.setPosition(max(0, int(position)))
@@ -6303,16 +7386,28 @@ class MainWindow(QMainWindow):
         if self.preview_fullscreen_overlay_btn is not None:
             return
 
-        overlay_btn = QPushButton("🗗 Exit Fullscreen")
+        overlay_btn = QPushButton("🗗")
         overlay_btn.setToolTip("Exit fullscreen preview")
-        overlay_btn.setStyleSheet(
-            "background-color: rgba(15, 24, 40, 0.85); color: white; font-weight: 700;"
-            "border: 1px solid #4fc3f7; border-radius: 8px; padding: 8px 12px;"
-        )
         overlay_btn.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         overlay_btn.setWindowFlag(Qt.FramelessWindowHint, True)
         overlay_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview_fullscreen_overlay_btn = overlay_btn
+
+    def _ensure_preview_fullscreen_progress_bar(self) -> None:
+        if self.preview_fullscreen_progress_bar is not None:
+            return
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 1000)
+        progress_bar.setTextVisible(False)
+        progress_bar.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        progress_bar.setWindowFlag(Qt.FramelessWindowHint, True)
+        progress_bar.setFixedHeight(12)
+        progress_bar.setStyleSheet(
+            "QProgressBar { background: rgba(10,10,10,0.65); border: 1px solid rgba(220,220,220,0.35); border-radius: 5px; }"
+            "QProgressBar::chunk { background-color: #4da3ff; border-radius: 5px; }"
+        )
+        self.preview_fullscreen_progress_bar = progress_bar
 
     def _position_preview_fullscreen_overlay(self) -> None:
         if self.preview_fullscreen_overlay_btn is None:
@@ -6324,8 +7419,31 @@ class MainWindow(QMainWindow):
         y = preview_frame.top() + 20
         self.preview_fullscreen_overlay_btn.move(max(10, x), max(10, y))
 
+    def _position_preview_fullscreen_progress_bar(self) -> None:
+        if self.preview_fullscreen_progress_bar is None:
+            return
+
+        preview_frame = self.preview.frameGeometry()
+        width = max(220, preview_frame.width() - 80)
+        x = preview_frame.left() + (preview_frame.width() - width) // 2
+        y = preview_frame.bottom() - self.preview_fullscreen_progress_bar.height() - 20
+        self.preview_fullscreen_progress_bar.setFixedWidth(width)
+        self.preview_fullscreen_progress_bar.move(max(10, x), max(10, y))
+
+    def _sync_preview_fullscreen_progress(self) -> None:
+        if self.preview_fullscreen_progress_bar is None:
+            return
+
+        duration = max(0, int(self.player.duration()))
+        position = max(0, int(self.player.position()))
+        if duration <= 0:
+            self.preview_fullscreen_progress_bar.setValue(0)
+            return
+        ratio = min(1.0, position / duration)
+        self.preview_fullscreen_progress_bar.setValue(int(ratio * 1000))
+
     def _on_preview_fullscreen_changed(self, fullscreen: bool) -> None:
-        self.preview_fullscreen_btn.setText("🗗 Exit Fullscreen" if fullscreen else "⛶ Fullscreen")
+        self.preview_fullscreen_btn.setText("🗗" if fullscreen else "⛶")
 
         if fullscreen:
             self._ensure_preview_fullscreen_overlay()
@@ -6333,11 +7451,20 @@ class MainWindow(QMainWindow):
             if self.preview_fullscreen_overlay_btn is not None:
                 self.preview_fullscreen_overlay_btn.show()
                 self.preview_fullscreen_overlay_btn.raise_()
+
+            self._ensure_preview_fullscreen_progress_bar()
+            self._position_preview_fullscreen_progress_bar()
+            self._sync_preview_fullscreen_progress()
+            if self.preview_fullscreen_progress_bar is not None:
+                self.preview_fullscreen_progress_bar.show()
+                self.preview_fullscreen_progress_bar.raise_()
             self._append_log("Preview entered fullscreen mode.")
             return
 
         if self.preview_fullscreen_overlay_btn is not None:
             self.preview_fullscreen_overlay_btn.hide()
+        if self.preview_fullscreen_progress_bar is not None:
+            self.preview_fullscreen_progress_bar.hide()
         self._append_log("Preview exited fullscreen mode.")
 
     def toggle_preview_fullscreen(self) -> None:
@@ -6392,10 +7519,10 @@ class MainWindow(QMainWindow):
         self.seedance_api_key.setEnabled(uses_seedance)
         self.seedance_oauth_token.setEnabled(uses_seedance)
         self.chat_model.setEnabled(uses_grok)
-        self.generate_btn.setText("🎬 API Generate Video")
-        self.generate_image_btn.setText("🖼️ Populate Image Prompt")
+        self.sora_generate_btn.setText("🎬 API Generate Video")
+        self.seedance_generate_btn.setText("🎬 API Generate Video")
+        self.generate_image_btn.setText("🎬 Create New Video")
         self.generate_image_btn.setEnabled(True)
-        self.populate_video_btn.setEnabled(True)
 
     def _resolve_download_extension(self, download, download_type: str) -> str:
         suggested = ""
@@ -6418,36 +7545,50 @@ class MainWindow(QMainWindow):
         return "png" if download_type == "image" else "mp4"
 
     def _extract_last_frame(self, video_path: str) -> Path | None:
-        frame_path = self.download_dir / f"last_frame_{int(time.time() * 1000)}.png"
         self._append_log(f"Starting ffmpeg last-frame extraction from: {video_path}")
+        extraction_attempts = ["-0", "-0.05", "-0.5", "-1.0"]
+        failure_messages: list[str] = []
 
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-sseof",
-                    "-0.1",
-                    "-i",
-                    video_path,
-                    "-frames:v",
-                    "1",
-                    str(frame_path),
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+        for attempt_index, offset in enumerate(extraction_attempts):
+            frame_path = self.download_dir / f"last_frame_{int(time.time() * 1000)}_{attempt_index}.png"
+            extraction_cmds = _build_last_frame_extraction_cmds(
+                video_path,
+                ["-sseof", offset],
+                frame_path,
             )
-        except FileNotFoundError:
-            QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
-            return None
-        except subprocess.CalledProcessError as exc:
-            QMessageBox.critical(self, "Frame Extraction Failed", exc.stderr[-800:] or "ffmpeg failed.")
-            return None
 
-        self._append_log(f"Completed ffmpeg last-frame extraction: {frame_path}")
-        return frame_path
+            result = None
+            for cmd in extraction_cmds:
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    break
+                except FileNotFoundError:
+                    QMessageBox.critical(self, "ffmpeg Missing", "ffmpeg is required for frame extraction but was not found in PATH.")
+                    return None
+                except subprocess.CalledProcessError as exc:
+                    failure_messages.append(exc.stderr[-500:] or "ffmpeg failed")
+                    result = None
+
+            if frame_path.exists() and frame_path.stat().st_size > 0:
+                self._append_log(f"Completed ffmpeg last-frame extraction: {frame_path}")
+                return frame_path
+
+            if result is not None:
+                failure_messages.append(result.stderr[-500:] or "ffmpeg produced an empty frame output")
+
+        QMessageBox.critical(
+            self,
+            "Frame Extraction Failed",
+            "Could not extract the final frame. "
+            f"Attempts failed with: {' | '.join(msg.strip() for msg in failure_messages if msg.strip())[:800]}",
+        )
+        return None
 
     def _copy_image_to_clipboard(self, frame_path: Path) -> bool:
         self._append_log(f"Copying extracted frame to clipboard: {frame_path}")
@@ -6468,11 +7609,29 @@ class MainWindow(QMainWindow):
         import base64
 
         self._append_log(f"Starting browser-side image paste for frame: {frame_path.name}")
-        frame_base64 = base64.b64encode(frame_path.read_bytes()).decode("ascii")
+
+        upload_file_path = frame_path
+        upload_file_name = frame_path.name
+        suffix = frame_path.suffix.lower().lstrip(".")
+        mime_by_ext = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "webp": "image/webp",
+            "bmp": "image/bmp",
+            "gif": "image/gif",
+        }
+        upload_mime = mime_by_ext.get(suffix, "image/png")
+        self._append_log(
+            f"Continue-from-last-frame: using extracted frame in native format ({upload_file_name}, {upload_mime}) for best color/profile fidelity."
+        )
+
+        frame_base64 = base64.b64encode(upload_file_path.read_bytes()).decode("ascii")
         upload_script = r"""
             (() => {
                 const base64Data = __FRAME_BASE64__;
                 const fileName = __FRAME_NAME__;
+                const mimeType = __FRAME_MIME__;
                 const selectors = [
                     "textarea[placeholder*='Type to imagine' i]",
                     "input[placeholder*='Type to imagine' i]",
@@ -6537,7 +7696,7 @@ class MainWindow(QMainWindow):
                         const binary = atob(base64Data);
                         const bytes = new Uint8Array(binary.length);
                         for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-                        const file = new File([bytes], fileName, { type: "image/png" });
+                        const file = new File([bytes], fileName, { type: mimeType });
 
                         const dt = new DataTransfer();
                         dt.items.add(file);
@@ -6577,7 +7736,11 @@ class MainWindow(QMainWindow):
             })()
         """
 
-        upload_script = upload_script.replace("__FRAME_BASE64__", repr(frame_base64)).replace("__FRAME_NAME__", repr(frame_path.name))
+        upload_script = (
+            upload_script.replace("__FRAME_BASE64__", repr(frame_base64))
+            .replace("__FRAME_NAME__", repr(upload_file_name))
+            .replace("__FRAME_MIME__", repr(upload_mime))
+        )
 
         def after_focus(_result):
             if callable(on_uploaded):
@@ -6877,7 +8040,7 @@ class MainWindow(QMainWindow):
             self._set_training_button_states()
 
             start_url = self.training_start_url.text().strip() or "https://grok.com/imagine"
-            self.browser_tabs.setCurrentIndex(0)
+            self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
             current_url = self.browser.url().toString().strip()
             if current_url != start_url:
                 self.browser.setUrl(QUrl(start_url))
@@ -6980,10 +8143,23 @@ class MainWindow(QMainWindow):
             },
         )
 
+    def _on_browser_tab_changed(self, index: int) -> None:
+        if index == getattr(self, "grok_browser_tab_index", -1):
+            self.browser = self.grok_browser_view
+        elif index == getattr(self, "sora_browser_tab_index", -1):
+            self.browser = self.sora_browser
+
     def show_browser_page(self) -> None:
-        self.browser_tabs.setCurrentIndex(0)
-        self.browser.setUrl(QUrl("https://grok.com/imagine"))
+        self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
+        self.browser = self.grok_browser_view
+        self.grok_browser_view.setUrl(QUrl("https://grok.com/imagine"))
         self._append_log("Navigated embedded browser to grok.com/imagine.")
+
+    def show_sora_browser_page(self) -> None:
+        self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
+        self.browser = self.sora_browser
+        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/profile"))
+        self._append_log("Navigated embedded browser to sora.chatgpt.com/profile.")
 
     def stitch_all_videos(self) -> None:
         if self.stitch_worker and self.stitch_worker.isRunning():
@@ -7023,7 +8199,9 @@ class MainWindow(QMainWindow):
         )
 
         started_at = time.time()
+        self.stitch_progress_label.setVisible(True)
         self.stitch_progress_bar.setVisible(True)
+        self._refresh_status_bar_visibility()
 
         def update_progress(value: int, stage: str) -> None:
             bounded_value = max(0, min(100, int(value)))
@@ -7035,19 +8213,23 @@ class MainWindow(QMainWindow):
 
             self.stitch_progress_bar.setValue(bounded_value)
             self.stitch_progress_label.setText(
-                f"{stage} | {bounded_value}% | Elapsed: {elapsed:.1f}s | ETA: {eta_label} | {settings_summary}"
+                f"Upload progress: {stage} | {bounded_value}% | Elapsed: {elapsed:.1f}s | ETA: {eta_label} | {settings_summary}"
             )
 
         def on_stitch_failed(title: str, message: str) -> None:
-            self.stitch_progress_label.setText(f"Stitch progress: failed ({message[:120]})")
+            self.stitch_progress_label.setText(f"Upload progress: failed ({message[:120]})")
             self.stitch_progress_bar.setVisible(False)
+            self.stitch_progress_label.setVisible(False)
+            self._refresh_status_bar_visibility()
             QMessageBox.critical(self, title, message)
 
         def on_stitch_finished(stitched_video: dict) -> None:
             self._append_log(f"Stitched video created: {stitched_video['video_file_path']}")
-            self.stitch_progress_label.setText("Stitch progress: complete")
+            self.stitch_progress_label.setText("Upload progress: complete")
             self.stitch_progress_bar.setValue(100)
             self.stitch_progress_bar.setVisible(False)
+            self.stitch_progress_label.setVisible(False)
+            self._refresh_status_bar_visibility()
             self.on_video_finished(stitched_video)
 
         def on_stitch_complete() -> None:
@@ -7108,6 +8290,7 @@ class MainWindow(QMainWindow):
                     "-i",
                     str(list_file),
                     *self._video_encoder_args(use_gpu_encoding),
+                    *self._mp4_compatibility_args(),
                     "-c:a",
                     "aac",
                     str(output_file),
@@ -7220,6 +8403,11 @@ class MainWindow(QMainWindow):
             return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(max(18, min(30, crf + 1))), "-b:v", "0"]
         return ["-c:v", "libx264", "-preset", "fast", "-crf", str(crf)]
 
+    def _mp4_compatibility_args(self) -> list[str]:
+        # Keep stitched output broadly compatible with Windows thumbnails, Android playback,
+        # and social upload transcoders.
+        return ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+
     def _run_ffmpeg_with_progress(
         self,
         ffmpeg_cmd: list[str],
@@ -7234,36 +8422,45 @@ class MainWindow(QMainWindow):
             text=True,
             bufsize=1,
         )
+        self._active_ffmpeg_process = process
 
         if progress_callback is not None:
             progress_callback(0.0)
 
         out_time_ms = 0
         output_lines: list[str] = []
-        if process.stdout is not None:
-            for raw_line in process.stdout:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                output_lines.append(line)
-                if len(output_lines) > 200:
-                    output_lines = output_lines[-200:]
-                if line.startswith("out_time_ms="):
-                    try:
-                        out_time_ms = int(line.split("=", 1)[1])
-                    except ValueError:
+        try:
+            if process.stdout is not None:
+                for raw_line in process.stdout:
+                    if self.stop_all_requested:
+                        process.terminate()
+                    line = raw_line.strip()
+                    if not line:
                         continue
-                    if total_duration > 0 and progress_callback is not None:
-                        progress = (out_time_ms / 1_000_000.0) / total_duration
-                        progress_callback(max(0.0, min(1.0, progress)))
+                    output_lines.append(line)
+                    if len(output_lines) > 200:
+                        output_lines = output_lines[-200:]
+                    if line.startswith("out_time_ms="):
+                        try:
+                            out_time_ms = int(line.split("=", 1)[1])
+                        except ValueError:
+                            continue
+                        if total_duration > 0 and progress_callback is not None:
+                            progress = (out_time_ms / 1_000_000.0) / total_duration
+                            progress_callback(max(0.0, min(1.0, progress)))
 
-        return_code = process.wait()
-        if return_code != 0:
-            stderr_text = "\n".join(output_lines[-80:])
-            raise subprocess.CalledProcessError(return_code, command, stderr=stderr_text)
+            return_code = process.wait()
+            if self.stop_all_requested:
+                stderr_text = "\n".join(output_lines[-80:])
+                raise RuntimeError(f"Stitch/encode stopped by user. {stderr_text}".strip())
+            if return_code != 0:
+                stderr_text = "\n".join(output_lines[-80:])
+                raise subprocess.CalledProcessError(return_code, command, stderr=stderr_text)
 
-        if progress_callback is not None:
-            progress_callback(1.0)
+            if progress_callback is not None:
+                progress_callback(1.0)
+        finally:
+            self._active_ffmpeg_process = None
 
     def _stitch_videos_with_crossfade(
         self,
@@ -7329,6 +8526,7 @@ class MainWindow(QMainWindow):
                 "-map",
                 f"[{video_prev}]",
                 *self._video_encoder_args(use_gpu_encoding),
+                *self._mp4_compatibility_args(),
                 str(output_file),
             ]
         )
@@ -7388,6 +8586,7 @@ class MainWindow(QMainWindow):
             "-vf",
             ",".join(vf_filters),
             *self._video_encoder_args(use_gpu_encoding, crf=18),
+            *self._mp4_compatibility_args(),
             "-c:a",
             "copy",
             str(output_file),
@@ -7465,6 +8664,7 @@ class MainWindow(QMainWindow):
             "-map",
             f"[{audio_output_label}]",
             *self._video_encoder_args(use_gpu_encoding),
+            *self._mp4_compatibility_args(),
             "-c:a",
             "aac",
             "-shortest",
@@ -7734,23 +8934,7 @@ class MainWindow(QMainWindow):
         video_size = os.path.getsize(video_path)  # MUST be exact bytes!
         MIN_CHUNK = 5 * 1024 * 1024     # 5242880
         MAX_CHUNK = 64 * 1024 * 1024    # 67108864
-        
-        if video_size <= MAX_CHUNK:
-            # Single chunk is simplest/safest for ≤64 MB
-            chunk_size = video_size
-            total_chunk_count = 1
-        else:
-            # For >64 MB: pick a safe chunk size (e.g. 20-64 MB)
-            chunk_size = MAX_CHUNK  # or e.g. 20*1024*1024 for smaller chunks
-            total_chunk_count = math.floor(video_size / chunk_size)
-            if total_chunk_count < 1:
-                total_chunk_count = 1
-        
-        # Optional: if video_size < MIN_CHUNK, force single chunk
-        if video_size < MIN_CHUNK:
-            chunk_size = video_size
-            total_chunk_count = 1
-        
+
         raw_token = self.tiktok_access_token.text().strip()
         if isinstance(raw_token, tuple) or isinstance(raw_token, list):
             access_token = raw_token[0] if raw_token else ""
@@ -7762,8 +8946,6 @@ class MainWindow(QMainWindow):
             return
 
         print(f"DEBUG: video_size={video_size} bytes (~{video_size / (1024*1024):.2f} MB)")
-        print(f"DEBUG: chunk_size={chunk_size} bytes")
-        print(f"DEBUG: total_chunk_count={total_chunk_count}")
         print(f"DEBUG: access token={access_token}")
         headers = {
         "Authorization": f"Bearer {access_token}",
@@ -7774,66 +8956,108 @@ class MainWindow(QMainWindow):
         # Start with inbox — safer for testing
         init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 
-        source_info = {
-            "source": "FILE_UPLOAD",
-            "video_size": video_size,
-            "chunk_size": chunk_size,
-            "total_chunk_count": total_chunk_count
-        }
-
-        payload = {
-            "source_info": source_info,
-            "post_info": {
-                "title": self._compose_social_text(caption, hashtags), # or separate title if you have one
-                "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
-                "disable_comment": False,       # adjust as needed
-                "disable_duet": False,
-                "disable_stitch": False,
-                # add video_cover_timestamp_ms, etc. if desired
-            }
-        }
-
-
-        resp = requests.post(init_url, headers=headers, json=payload)
-        #resp.raise_for_status()
-
-        data = resp.json()
-        if resp.status_code == 200:
-            print("Status response:", data)
-            # Look for data['data']['status'] — possible values:
-            # "PROCESSING_UPLOAD", "UPLOAD_SUCCESS", "POSTED", "FAILED", etc.
-            
+        # TikTok metadata validation can vary. Try a few valid chunking strategies
+        # and use the first one that both initializes and uploads successfully.
+        if video_size < MIN_CHUNK or video_size <= MAX_CHUNK:
+            strategy_candidates = [(video_size, 1, "single_chunk")]
         else:
-            print("Status check failed:", data)
-            return
-        print(f"DEBUG: access token={data}")
-        upload_url = data['data']['upload_url']  # or check exact key in response
-        publish_id = data['data'].get('publish_id')  # save for status check later
+            ceil_count = max(1, math.ceil(video_size / MAX_CHUNK))
+            floor_count = max(1, video_size // MAX_CHUNK)
+            strategy_candidates = [
+                (MAX_CHUNK, ceil_count, "fixed_64mb_ceil_count"),
+                (math.ceil(video_size / ceil_count), ceil_count, "even_ceil_count"),
+                (MAX_CHUNK, floor_count, "fixed_64mb_floor_count"),
+            ]
 
-        # ── SINGLE-CHUNK UPLOAD (your case) ───────────────────────────────────
-        video_size = os.path.getsize(video_path)
-        last_byte = video_size - 1
+        last_error = None
+        for chunk_size, total_chunk_count, strategy_name in strategy_candidates:
+            upload_chunk_count = max(1, math.ceil(video_size / chunk_size))
+            print(f"DEBUG: strategy={strategy_name} chunk_size={chunk_size} total_chunk_count={total_chunk_count} upload_chunk_count={upload_chunk_count}")
 
-        upload_headers = {
-            "Content-Type": "video/mp4",  # change if MOV/WebM/etc.
-            "Content-Length": str(video_size),
-            "Content-Range": f"bytes 0-{last_byte}/{video_size}"
-        }
+            source_info = {
+                "source": "FILE_UPLOAD",
+                "video_size": video_size,
+                "chunk_size": chunk_size,
+                "total_chunk_count": total_chunk_count
+            }
 
-        with open(video_path, "rb") as f:
-            video_bytes = f.read()  # safe since small file
+            payload = {
+                "source_info": source_info,
+                "post_info": {
+                    "title": self._compose_social_text(caption, hashtags), # or separate title if you have one
+                    "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
+                    "disable_comment": False,
+                    "disable_duet": False,
+                    "disable_stitch": False,
+                }
+            }
 
-        print(f"DEBUG: Uploading {video_size} bytes with range: bytes 0-{last_byte}/{video_size}")
+            resp = requests.post(init_url, headers=headers, json=payload)
+            data = resp.json()
+            if resp.status_code != 200:
+                print("Status check failed:", data)
+                last_error = RuntimeError(f"TikTok init failed ({strategy_name}): {resp.status_code} - {data}")
+                continue
 
-        upload_resp = requests.put(upload_url, headers=upload_headers, data=video_bytes)
-        data = upload_resp.json()
-        print("Status response:", data)
-        print(f"DEBUG: Upload status code: {upload_resp.status_code}")
-        print(f"DEBUG: Upload response: {upload_resp}")
+            print("Status response:", data)
+            upload_url = data['data']['upload_url']
+            publish_id = data['data'].get('publish_id')
+
+            upload_resp = None
+            bytes_uploaded = 0
+            try:
+                with open(video_path, "rb") as f:
+                    chunk_index = 0
+                    while bytes_uploaded < video_size:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+
+                        start_byte = bytes_uploaded
+                        end_byte = start_byte + len(chunk) - 1
+                        chunk_index += 1
+
+                        upload_headers = {
+                            "Content-Type": "video/mp4",
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range": f"bytes {start_byte}-{end_byte}/{video_size}",
+                        }
+
+                        print(
+                            f"DEBUG: Uploading chunk {chunk_index}/{upload_chunk_count} "
+                            f"({len(chunk)} bytes) range: bytes {start_byte}-{end_byte}/{video_size}"
+                        )
+                        upload_resp = requests.put(upload_url, headers=upload_headers, data=chunk)
+                        print(f"DEBUG: Chunk upload status code: {upload_resp.status_code}")
+
+                        if upload_resp.text.strip():
+                            try:
+                                print("DEBUG: Chunk upload response:", upload_resp.json())
+                            except ValueError:
+                                print("DEBUG: Chunk upload response is not JSON:", upload_resp.text[:500])
+
+                        if upload_resp.status_code not in (200, 201, 202, 204, 206):
+                            raise RuntimeError(f"Upload failed ({strategy_name}): {upload_resp.status_code} - {upload_resp.text}")
+
+                        bytes_uploaded += len(chunk)
+
+                if upload_resp is None or bytes_uploaded != video_size:
+                    raise RuntimeError(
+                        f"Upload failed ({strategy_name}): sent {bytes_uploaded} bytes, expected {video_size} bytes."
+                    )
+
+                # Successful upload for this strategy.
+                break
+            except RuntimeError as upload_error:
+                last_error = upload_error
+                print(f"DEBUG: strategy {strategy_name} failed, retrying with next strategy. error={upload_error}")
+                continue
+        else:
+            if last_error:
+                raise last_error
+            raise RuntimeError("TikTok upload failed: no chunking strategy succeeded.")
+
         self.check_tiktok_status(access_token, publish_id)
-        
-        if upload_resp.status_code != 201:
-            raise RuntimeError(f"Upload failed: {upload_resp.status_code} - {upload_resp.text}")
         self._append_log(f"TikTok Upload complete")
         # Success! Video is in user's TikTok inbox/drafts.
         # Optionally: poll status with publish_id
@@ -8848,8 +10072,10 @@ class MainWindow(QMainWindow):
         self.upload_youtube_btn.setEnabled(False)
 
         self.upload_progress_label.setText(f"Upload progress: starting {platform_name} upload...")
+        self.upload_progress_label.setVisible(True)
         self.upload_progress_bar.setValue(0)
         self.upload_progress_bar.setVisible(True)
+        self._refresh_status_bar_visibility()
         self._append_log(f"Starting {platform_name} upload...")
 
         self.upload_worker = UploadWorker(platform_name=platform_name, upload_fn=upload_fn, upload_kwargs=upload_kwargs)
@@ -8866,8 +10092,10 @@ class MainWindow(QMainWindow):
         formatted_message = self._format_upload_progress_message(message)
         self.upload_progress_label.setText(f"Upload progress: {formatted_message}")
         self.upload_progress_label.setToolTip(str(message or ""))
-        self.upload_progress_bar.setVisible(True)
+        self.upload_progress_label.setVisible(bounded_value > 0)
+        self.upload_progress_bar.setVisible(bounded_value > 0)
         self.upload_progress_bar.setValue(bounded_value)
+        self._refresh_status_bar_visibility()
 
     def _format_upload_progress_message(self, message: str, max_length: int = 180) -> str:
         text = " ".join(str(message or "").split())
@@ -8878,12 +10106,17 @@ class MainWindow(QMainWindow):
     def _on_upload_finished(self, platform_name: str, upload_id: str, dialog_title: str, success_prefix: str) -> None:
         self.upload_progress_label.setText("Upload progress: complete")
         self.upload_progress_bar.setValue(100)
+        self.upload_progress_bar.setVisible(False)
+        self.upload_progress_label.setVisible(False)
+        self._refresh_status_bar_visibility()
         self._append_log(f"{platform_name} upload complete. ID: {upload_id}")
         QMessageBox.information(self, dialog_title, f"{success_prefix} {upload_id}")
 
     def _on_upload_failed(self, platform_name: str, error_message: str) -> None:
         self.upload_progress_label.setText(f"Upload progress: failed ({error_message[:120]})")
         self.upload_progress_bar.setVisible(False)
+        self.upload_progress_label.setVisible(False)
+        self._refresh_status_bar_visibility()
         self._append_log(f"ERROR: {platform_name} upload failed: {error_message}")
         QMessageBox.critical(self, f"{platform_name} Upload Failed", error_message)
 
