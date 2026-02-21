@@ -28,6 +28,14 @@ _CDP_CONNECT_LOCK = threading.Lock()
 _CDP_ACTION_LOCK = threading.Lock()
 
 
+def _is_context_mgmt_unsupported_error(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    return (
+        "browser.setdownloadbehavior" in message
+        and "browser context management is not supported" in message
+    )
+
+
 def _close_cdp_runtime() -> None:
     global _PLAYWRIGHT_INSTANCE
     with _CDP_CONNECT_LOCK:
@@ -147,6 +155,14 @@ def _upload_trigger_selectors_for_platform(platform: str) -> list[str]:
         ]
     if platform == "youtube":
         return [
+            'button[aria-label*="create" i]',
+            'ytcp-button#create-icon button',
+            'ytcp-button[id="create-icon"] button',
+            'ytcp-button[aria-label*="create" i] button',
+            'yt-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response',
+            'tp-yt-paper-item[test-id="upload"]',
+            'tp-yt-paper-item#text-item-0[test-id="upload"]',
+            'tp-yt-paper-item:has-text("Upload videos")',
             'input[type="file"][name="Filedata"] + *',
             'button[aria-label*="select files" i]',
             'ytcp-button[id*="upload"] button',
@@ -168,6 +184,115 @@ def _upload_trigger_selectors_for_platform(platform: str) -> list[str]:
 
 
 def _prime_upload_surface(page, platform: str) -> str:
+    if platform == "youtube":
+        try:
+            create_result = page.evaluate(
+                """
+                () => {
+                    const selectors = [
+                        'button[aria-label*="create" i]',
+                        'ytcp-button#create-icon button',
+                        'ytcp-button[id="create-icon"] button',
+                        'ytcp-button[aria-label*="create" i] button',
+                        'tp-yt-paper-icon-button[aria-label*="create" i]',
+                        'yt-touch-feedback-shape.yt-spec-touch-feedback-shape--touch-response',
+                    ];
+                    const fireClick = (node) => {
+                        if (!node) return false;
+                        try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+                        const target = node.closest('button, [role="button"], tp-yt-paper-item, ytcp-button') || node;
+                        const events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+                        try {
+                            target.focus?.();
+                            for (const name of events) {
+                                target.dispatchEvent(new MouseEvent(name, { bubbles: true, cancelable: true, composed: true, view: window }));
+                            }
+                            target.click?.();
+                            return true;
+                        } catch (_) {
+                            try { target.click(); return true; } catch (_) { return false; }
+                        }
+                    };
+
+                    for (const selector of selectors) {
+                        const node = document.querySelector(selector);
+                        if (!node) continue;
+                        if (fireClick(node)) {
+                            return { clicked: true, selector };
+                        }
+                    }
+                    return { clicked: false, selector: '' };
+                }
+                """
+            )
+        except Exception:
+            create_result = {"clicked": False, "selector": ""}
+
+        create_clicked = bool((create_result or {}).get("clicked"))
+        if create_clicked:
+            try:
+                page.wait_for_timeout(350)
+            except Exception:
+                pass
+
+        try:
+            upload_result = page.evaluate(
+                """
+                () => {
+                    const candidates = Array.from(document.querySelectorAll('tp-yt-paper-item, [role="menuitem"], ytcp-ve'));
+                    const fireClick = (node) => {
+                        if (!node) return false;
+                        try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+                        const target = node.closest('tp-yt-paper-item, [role="menuitem"], button, [role="button"]') || node;
+                        const events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+                        try {
+                            target.focus?.();
+                            for (const name of events) {
+                                target.dispatchEvent(new MouseEvent(name, { bubbles: true, cancelable: true, composed: true, view: window }));
+                            }
+                            target.click?.();
+                            return true;
+                        } catch (_) {
+                            try { target.click(); return true; } catch (_) { return false; }
+                        }
+                    };
+
+                    const selectorMatches = [
+                        'tp-yt-paper-item[test-id="upload"]',
+                        'tp-yt-paper-item#text-item-0[test-id="upload"]',
+                        '[role="menuitem"][test-id="upload"]',
+                    ];
+                    for (const selector of selectorMatches) {
+                        const node = document.querySelector(selector);
+                        if (!node) continue;
+                        if (fireClick(node)) return { clicked: true, via: selector };
+                    }
+
+                    for (const node of candidates) {
+                        const text = String(node.textContent || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+                        if (!text.includes('upload videos')) continue;
+                        if (fireClick(node)) return { clicked: true, via: 'text:upload videos' };
+                    }
+
+                    return { clicked: false, via: '' };
+                }
+                """
+            )
+        except Exception:
+            upload_result = {"clicked": False, "via": ""}
+
+        if bool((upload_result or {}).get("clicked")):
+            try:
+                page.wait_for_timeout(350)
+            except Exception:
+                pass
+            if create_clicked:
+                return "clicked YouTube create + upload videos menu"
+            return "clicked YouTube upload videos menu"
+
+        if create_clicked:
+            return "clicked YouTube create trigger"
+
     selectors = _upload_trigger_selectors_for_platform(platform)
     for selector in selectors:
         try:
@@ -457,6 +582,17 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                 [payload, script],
             )
     except Exception as exc:
+        if _is_context_mgmt_unsupported_error(exc):
+            return {
+                "handled": False,
+                "done": False,
+                "status": (
+                    "CDP unavailable: embedded browser does not support Browser.setDownloadBehavior "
+                    "during connect_over_cdp; falling back to non-CDP upload flow."
+                ),
+                "log": str(exc),
+                "retry_ms": 5000,
+            }
         return {
             "handled": False,
             "done": False,

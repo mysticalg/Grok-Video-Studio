@@ -9415,7 +9415,19 @@ class MainWindow(QMainWindow):
 
         handled = bool(relay_data.get("handled", True))
         if not handled:
-            status_label.setText(str(relay_data.get("status") or f"Status: CDP relay step {attempts} not handled yet."))
+            relay_status = str(relay_data.get("status") or "").strip()
+            status_label.setText(relay_status or f"Status: CDP relay step {attempts} not handled yet.")
+
+            if "cdp unavailable" in relay_status.lower() or "browser.setdownloadbehavior" in relay_status.lower():
+                self._cdp_relay_temporarily_disabled = True
+                if not pending.get("cdp_relay_fallback_logged"):
+                    self._append_log(
+                        f"WARNING: {platform_name} CDP relay reported unsupported target ({relay_status or 'unavailable'}); "
+                        "disabling relay for this session and continuing with built-in DOM upload automation."
+                    )
+                    pending["cdp_relay_fallback_logged"] = True
+                return False
+
             retry_ms = int(relay_data.get("retry_ms", 1500) or 1500)
             timer.start(max(400, retry_ms))
             return True
