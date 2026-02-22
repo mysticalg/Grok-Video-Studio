@@ -9359,6 +9359,8 @@ class MainWindow(QMainWindow):
             "qtwebengine_remote_debugging": os.getenv("QTWEBENGINE_REMOTE_DEBUGGING", "").strip(),
             "use_ai_relay_actions": os.getenv("GROK_CDP_RELAY_ENABLE_AI_ACTIONS", "0").strip().lower() in {"1", "true", "yes", "on"},
             "openai_access_token": self.openai_access_token.text().strip(),
+            "cdp_browser_endpoint": os.getenv("GROK_CDP_RELAY_BROWSER_ENDPOINT", "").strip(),
+            "cdp_target_ws_url": os.getenv("GROK_CDP_RELAY_TARGET_WS_URL", "").strip(),
         }
 
         relay_future = pending.get("cdp_relay_future")

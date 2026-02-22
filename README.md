@@ -111,6 +111,8 @@ You can also enable this in **Model/API Settings → App Preferences**:
 For existing browser automations (TikTok/YouTube/Facebook/Instagram), you can optionally route each upload step through a local CDP relay in **Model/API Settings → App Preferences**:
 - Enable **Use CDP relay for social browser automation**
 - Set **CDP Relay URL** (default: `http://127.0.0.1:8765/social-upload-step`)
+- Optional: set `GROK_CDP_RELAY_BROWSER_ENDPOINT` to point the relay at an external CDP browser (instead of QtWebEngine), e.g. `http://127.0.0.1:9222`.
+- Optional: set `GROK_CDP_RELAY_TARGET_WS_URL` to pin a specific page target, e.g. `ws://127.0.0.1:9222/devtools/page/<targetId>`.
 - CDP Relay Mode is CDP-only. If relay is unavailable, automation halts for inspection (no DOM fallback). Unsupported-target responses are ignored and retried in CDP mode.
 
 

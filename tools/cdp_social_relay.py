@@ -508,6 +508,28 @@ def _run_ai_relay_actions(page, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+
+def _resolve_cdp_browser_endpoint(payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("cdp_browser_endpoint") or "").strip()
+    if explicit:
+        return explicit
+    env_explicit = os.getenv("GROK_CDP_RELAY_BROWSER_ENDPOINT", "").strip()
+    if env_explicit:
+        return env_explicit
+    port = _parse_debug_port(payload)
+    return f"http://127.0.0.1:{port}"
+
+
+def _extract_target_id_from_ws(payload: dict[str, Any]) -> str:
+    candidate = str(payload.get("cdp_target_ws_url") or payload.get("cdp_target_id") or "").strip()
+    if not candidate:
+        candidate = os.getenv("GROK_CDP_RELAY_TARGET_WS_URL", "").strip()
+    if not candidate:
+        return ""
+    if "/devtools/page/" in candidate:
+        return candidate.rsplit("/devtools/page/", 1)[-1].strip()
+    return candidate
 def _parse_debug_port(payload: dict[str, Any]) -> int:
     candidate = str(payload.get("qtwebengine_remote_debugging") or "").strip()
     if not candidate:
@@ -519,12 +541,22 @@ def _parse_debug_port(payload: dict[str, Any]) -> int:
     return port if port > 0 else 9222
 
 
-def _pick_page(browser, current_url: str, platform: str):
+def _pick_page(browser, current_url: str, platform: str, target_id: str = ""):
     pages = []
     for context in browser.contexts:
         pages.extend(context.pages)
 
     current_url = (current_url or "").strip().lower()
+    target_id = (target_id or "").strip().lower()
+    if target_id:
+        for page in pages:
+            try:
+                guid = str(getattr(page, "guid", "") or "").lower()
+            except Exception:
+                guid = ""
+            page_url = str(getattr(page, "url", "") or "").lower()
+            if target_id in guid or target_id in page_url:
+                return page
     platform_hints = {
         "tiktok": ["tiktok.com/upload", "tiktokstudio"],
         "youtube": ["studio.youtube.com", "youtube.com/upload", "youtube.com"],
@@ -970,13 +1002,13 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
     if not platform:
         return {"handled": False, "done": False, "status": "Missing platform."}
 
-    port = _parse_debug_port(payload)
-    endpoint = f"http://127.0.0.1:{port}"
+    endpoint = _resolve_cdp_browser_endpoint(payload)
+    target_id = _extract_target_id_from_ws(payload)
 
     try:
         browser = _get_cdp_browser(endpoint)
         with _CDP_ACTION_LOCK:
-            page = _pick_page(browser, str(payload.get("current_url") or ""), platform)
+            page = _pick_page(browser, str(payload.get("current_url") or ""), platform, target_id=target_id)
             if page is None:
                 return {
                     "handled": False,
@@ -1062,7 +1094,7 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                 "handled": False,
                 "done": False,
                 "status": (
-                    "CDP unavailable: embedded browser does not support Browser.setDownloadBehavior "
+                    "CDP unavailable: target browser does not support Browser.setDownloadBehavior "
                     "during connect_over_cdp; falling back to non-CDP upload flow."
                 ),
                 "log": str(exc),
@@ -1148,6 +1180,7 @@ class RelayHandler(BaseHTTPRequestHandler):
         attempt = int(payload.get("attempt") or 0)
         current_url = str(payload.get("current_url") or "")
         debug_port = _parse_debug_port(payload)
+        endpoint = _resolve_cdp_browser_endpoint(payload)
         print(
             f"relay step: platform={platform} attempt={attempt} "
             f"debug_port={debug_port} url={current_url}",
@@ -1157,6 +1190,8 @@ class RelayHandler(BaseHTTPRequestHandler):
             "platform": platform,
             "attempt": attempt,
             "debug_port": debug_port,
+            "cdp_endpoint": endpoint if 'endpoint' in locals() else '',
+            "cdp_target": str(payload.get("cdp_target_ws_url") or payload.get("cdp_target_id") or ""),
             "current_url": current_url,
             "payload": _redact_payload(payload),
         })
