@@ -3911,6 +3911,8 @@ class MainWindow(QMainWindow):
             "training_use_embedded_browser": self.training_use_embedded_browser.isChecked(),
             "training_trace_path": self.training_trace_path.text(),
             "training_process_path": self.training_process_path.text(),
+            "generated_videos": self._serialize_video_list_for_preferences(),
+            "selected_generated_video_index": self.video_picker.currentIndex(),
             "ai_social_metadata": {
                 "title": self.ai_social_metadata.title,
                 "medium_title": self.ai_social_metadata.medium_title,
@@ -4186,6 +4188,12 @@ class MainWindow(QMainWindow):
             self.training_trace_path.setText(str(preferences["training_trace_path"]))
         if "training_process_path" in preferences:
             self.training_process_path.setText(str(preferences["training_process_path"]))
+
+        if "generated_videos" in preferences:
+            self._restore_video_list_from_preferences(
+                preferences.get("generated_videos"),
+                selected_index=preferences.get("selected_generated_video_index"),
+            )
 
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
@@ -7517,6 +7525,76 @@ class MainWindow(QMainWindow):
         title = str(video.get("title") or "Video")
         resolution = str(video.get("resolution") or "unknown")
         return f"{title} ({resolution})"
+
+    def _serialize_video_list_for_preferences(self) -> list[dict[str, str]]:
+        serialized: list[dict[str, str]] = []
+        for video in self.videos:
+            if not isinstance(video, dict):
+                continue
+            video_path = str(video.get("video_file_path") or "").strip()
+            if not video_path:
+                continue
+            serialized.append(
+                {
+                    "title": str(video.get("title") or "Video"),
+                    "prompt": str(video.get("prompt") or ""),
+                    "resolution": str(video.get("resolution") or "unknown"),
+                    "video_file_path": video_path,
+                    "source_url": str(video.get("source_url") or ""),
+                }
+            )
+        return serialized
+
+    def _restore_video_list_from_preferences(self, saved_videos: object, *, selected_index: object = None) -> None:
+        restored_videos: list[dict] = []
+        missing_paths: list[str] = []
+
+        if isinstance(saved_videos, list):
+            for item in saved_videos:
+                if not isinstance(item, dict):
+                    continue
+                raw_path = str(item.get("video_file_path") or "").strip()
+                if not raw_path:
+                    continue
+
+                video_path = Path(raw_path).expanduser()
+                if not video_path.is_absolute():
+                    video_path = (BASE_DIR / video_path).resolve()
+                if not video_path.exists():
+                    missing_paths.append(str(video_path))
+                    continue
+
+                restored_videos.append(
+                    {
+                        "title": str(item.get("title") or video_path.stem),
+                        "prompt": str(item.get("prompt") or ""),
+                        "resolution": str(item.get("resolution") or "unknown"),
+                        "video_file_path": str(video_path),
+                        "source_url": str(item.get("source_url") or "preferences"),
+                    }
+                )
+
+        self.videos = restored_videos
+        if not self.videos:
+            self._refresh_video_picker(selected_index=-1)
+            return
+
+        target_index = len(self.videos) - 1
+        try:
+            selected = int(selected_index)
+            if 0 <= selected < len(self.videos):
+                target_index = selected
+        except (TypeError, ValueError):
+            pass
+
+        self._refresh_video_picker(selected_index=target_index)
+
+        if missing_paths:
+            self._append_log(
+                "Skipped missing saved videos while loading preferences: "
+                + ", ".join(missing_paths[:5])
+                + (" ..." if len(missing_paths) > 5 else "")
+            )
 
     def _build_session_download_filename(self, download_type: str, variant: int | None, extension: str) -> str:
         provider = _slugify_filename_part(str(self.video_provider.currentData() or "grok") if hasattr(self, "video_provider") else "grok")
