@@ -7453,12 +7453,43 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_timer.start(3000)
                 return
 
-            if status == "direct-url-ready" and src:
-                self._append_log(f"Variant {current_variant} ready; downloading from detected OpenAI video URL ({result.get('sourceType') or 'video-link'}).")
             min_wait_elapsed = self.manual_download_started_at is not None and (time.time() - self.manual_download_started_at) >= 8
             if status not in ("video-src-ready", "direct-url-ready") or not src or not min_wait_elapsed:
                 self.manual_download_poll_timer.start(3000)
                 return
+
+            if status == "direct-url-ready":
+                if self.manual_download_click_sent:
+                    self.manual_download_poll_timer.start(3000)
+                    return
+                source_type = result.get("sourceType") or "video-link"
+                self._append_log(f"Variant {current_variant} ready; downloading directly from detected video URL ({source_type}).")
+                try:
+                    self.download_dir.mkdir(parents=True, exist_ok=True)
+                    filename = self._build_session_download_filename("video", current_variant, "mp4")
+                    video_path = self.download_dir / filename
+                    with requests.get(src, stream=True, timeout=240) as response:
+                        response.raise_for_status()
+                        with open(video_path, "wb") as handle:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    handle.write(chunk)
+                    video_size = video_path.stat().st_size if video_path.exists() else 0
+                    if video_size < MIN_VALID_VIDEO_BYTES:
+                        self._append_log(
+                            f"WARNING: Direct URL download for variant {current_variant} is only {video_size} bytes (< 1MB); retrying browser download flow."
+                        )
+                        if video_path.exists():
+                            video_path.unlink(missing_ok=True)
+                        self.manual_download_poll_timer.start(2000)
+                        return
+                    self.manual_download_click_sent = True
+                    self._complete_manual_video_download(video_path, current_variant)
+                    return
+                except Exception as exc:
+                    self._append_log(f"WARNING: Direct URL download failed for variant {current_variant}: {exc}")
+                    self.manual_download_poll_timer.start(3000)
+                    return
 
             trigger_download_script = f"""
                 (() => {{
@@ -7481,6 +7512,50 @@ class MainWindow(QMainWindow):
             self.manual_download_poll_timer.start(3000)
 
         self.browser.page().runJavaScript(script, after_poll)
+
+    def _complete_manual_video_download(self, video_path: Path, variant: int) -> None:
+        self.on_video_finished(
+            {
+                "title": f"Manual Browser Video {variant}",
+                "prompt": self.manual_prompt.toPlainText().strip(),
+                "resolution": "web",
+                "video_file_path": str(video_path),
+                "source_url": "browser-session",
+            }
+        )
+        self._return_embedded_browser_after_download()
+        self.pending_manual_variant_for_download = None
+        self.pending_manual_download_type = None
+        self.pending_manual_image_prompt = None
+        self.pending_manual_redirect_target = "grok"
+        self.manual_image_pick_clicked = False
+        self.manual_image_video_mode_selected = False
+        self.manual_image_video_submit_sent = False
+        self.manual_image_pick_retry_count = 0
+        self.manual_image_video_mode_retry_count = 0
+        self.manual_image_submit_retry_count = 0
+        self.manual_download_click_sent = False
+        self.manual_download_request_pending = False
+        self.manual_video_start_click_sent = False
+        self.manual_video_make_click_fallback_used = False
+        self.manual_video_allow_make_click = True
+        self.manual_download_in_progress = False
+        self.manual_download_started_at = None
+        self.manual_download_deadline = None
+        if self.continue_from_frame_active:
+            self.continue_from_frame_completed += 1
+            if self.continue_from_frame_completed < self.continue_from_frame_target_count:
+                QTimer.singleShot(800, self._start_continue_iteration)
+            else:
+                self._append_log("Continue workflow complete.")
+                self.continue_from_frame_active = False
+                self.continue_from_frame_target_count = 0
+                self.continue_from_frame_completed = 0
+                self.continue_from_frame_prompt = ""
+                self.continue_from_frame_current_source_video = ""
+                self.continue_from_frame_seed_image_path = None
+        else:
+            self._submit_next_manual_variant()
 
     def _on_browser_download_requested(self, download) -> None:
         variant = self.pending_manual_variant_for_download
@@ -7578,48 +7653,7 @@ class MainWindow(QMainWindow):
                         )
                     return
 
-                self.on_video_finished(
-                    {
-                        "title": f"Manual Browser Video {variant}",
-                        "prompt": self.manual_prompt.toPlainText().strip(),
-                        "resolution": "web",
-                        "video_file_path": str(video_path),
-                        "source_url": "browser-session",
-                    }
-                )
-                self._return_embedded_browser_after_download()
-                self.pending_manual_variant_for_download = None
-                self.pending_manual_download_type = None
-                self.pending_manual_image_prompt = None
-                self.pending_manual_redirect_target = "grok"
-                self.manual_image_pick_clicked = False
-                self.manual_image_video_mode_selected = False
-                self.manual_image_video_submit_sent = False
-                self.manual_image_pick_retry_count = 0
-                self.manual_image_video_mode_retry_count = 0
-                self.manual_image_submit_retry_count = 0
-                self.manual_download_click_sent = False
-                self.manual_download_request_pending = False
-                self.manual_video_start_click_sent = False
-                self.manual_video_make_click_fallback_used = False
-                self.manual_video_allow_make_click = True
-                self.manual_download_in_progress = False
-                self.manual_download_started_at = None
-                self.manual_download_deadline = None
-                if self.continue_from_frame_active:
-                    self.continue_from_frame_completed += 1
-                    if self.continue_from_frame_completed < self.continue_from_frame_target_count:
-                        QTimer.singleShot(800, self._start_continue_iteration)
-                    else:
-                        self._append_log("Continue workflow complete.")
-                        self.continue_from_frame_active = False
-                        self.continue_from_frame_target_count = 0
-                        self.continue_from_frame_completed = 0
-                        self.continue_from_frame_prompt = ""
-                        self.continue_from_frame_current_source_video = ""
-                        self.continue_from_frame_seed_image_path = None
-                else:
-                    self._submit_next_manual_variant()
+                self._complete_manual_video_download(video_path, variant)
             elif state == download.DownloadState.DownloadInterrupted:
                 self._append_log(f"ERROR: Download interrupted for manual variant {variant}.")
                 self.pending_manual_variant_for_download = None
