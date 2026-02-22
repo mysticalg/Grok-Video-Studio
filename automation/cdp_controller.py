@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 
 class CDPController:
-    def __init__(self, browser: Browser, playwright_instance):
+    def __init__(self, browser: Browser | None, playwright_instance, context: BrowserContext | None = None):
         self.browser = browser
+        self.context = context
         self._playwright = playwright_instance
 
     @classmethod
@@ -18,21 +19,69 @@ class CDPController:
         except Exception:
             await pw.stop()
             raise
-        return cls(browser=browser, playwright_instance=pw)
+        return cls(browser=browser, context=None, playwright_instance=pw)
+
+    @classmethod
+    async def launch_persistent(
+        cls,
+        *,
+        user_data_dir: str,
+        extension_dir: str,
+        executable_path: str | None = None,
+        headless: bool = False,
+    ) -> "CDPController":
+        pw = await async_playwright().start()
+        args = [
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-popup-blocking",
+            "--disable-features=Translate",
+            f"--load-extension={extension_dir}",
+        ]
+        try:
+            context = await pw.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                headless=headless,
+                executable_path=executable_path,
+                args=args,
+            )
+        except Exception:
+            await pw.stop()
+            raise
+        return cls(browser=context.browser, context=context, playwright_instance=pw)
 
     async def close(self) -> None:
-        await self.browser.close()
+        if self.context is not None:
+            try:
+                await self.context.close()
+            except Exception:
+                pass
+            self.context = None
+        elif self.browser is not None:
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+        self.browser = None
         await self._playwright.stop()
 
+    def _iter_contexts(self) -> list[BrowserContext]:
+        if self.context is not None:
+            return [self.context]
+        if self.browser is None:
+            return []
+        return list(self.browser.contexts)
+
     async def find_page_by_url_contains(self, substr: str) -> Page | None:
-        for context in self.browser.contexts:
+        for context in self._iter_contexts():
             for page in context.pages:
                 if substr in (page.url or ""):
                     return page
         return None
 
     async def get_most_recent_page(self) -> Page | None:
-        for context in self.browser.contexts:
+        contexts = self._iter_contexts()
+        for context in contexts:
             if context.pages:
                 return context.pages[-1]
         return None
@@ -41,7 +90,6 @@ class CDPController:
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         except Exception:
-            # Keep the flow moving; some social pages hold long network connections.
             pass
 
     async def get_or_create_page(self, url: str, reuse_tab: bool = False) -> Page:
@@ -56,7 +104,15 @@ class CDPController:
         if page is not None:
             return page
 
-        context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+        if self.context is not None:
+            context = self.context
+        elif self.browser is not None and self.browser.contexts:
+            context = self.browser.contexts[0]
+        elif self.browser is not None:
+            context = await self.browser.new_context()
+        else:
+            raise RuntimeError("Browser context is not available")
+
         page = await context.new_page()
         await self._goto_best_effort(page, url)
         return page

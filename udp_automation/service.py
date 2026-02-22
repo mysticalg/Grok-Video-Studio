@@ -70,9 +70,16 @@ class UdpAutomationService:
             if name == "platform.open":
                 platform = str(payload.get("platform") or "").lower()
                 url = str(payload.get("url") or PLATFORM_URLS.get(platform) or "https://example.com")
-                self.chrome_instance = self.chrome_manager.launch_or_reuse()
                 if self.cdp is None:
-                    self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
+                    profile_dir = self.chrome_manager._profile_dir()
+                    extension_dir = self.chrome_manager._validate_extension_dir()
+                    executable_path = self.chrome_manager._detect_chrome_path()
+                    self.cdp = await CDPController.launch_persistent(
+                        user_data_dir=str(profile_dir),
+                        extension_dir=str(extension_dir),
+                        executable_path=str(executable_path),
+                        headless=False,
+                    )
                 reuse_tab = bool(payload.get("reuseTab", False))
                 page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
                 await page.bring_to_front()
