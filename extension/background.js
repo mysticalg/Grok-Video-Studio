@@ -170,7 +170,8 @@ async function handleCmd(msg) {
 
     if (msg.name === "dom.type" || msg.name === "form.fill") {
       const platform = String(payload.platform || "").toLowerCase();
-      const result = await executeInTab(async (p, name, currentPlatform) => {
+      const result = await Promise.race([
+        executeInTab(async (p, name, currentPlatform) => {
         const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
         const setDraftEditorValue = (el, value) => {
@@ -184,18 +185,37 @@ async function handleCmd(msg) {
           editable.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
           editable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
 
-          if (textSpan) {
-            textSpan.textContent = text;
-          } else {
-            editable.textContent = text;
+          let applied = false;
+          try {
+            // Simulated paste path for DraftJS-like editors.
+            const data = new DataTransfer();
+            data.setData("text/plain", text);
+            const pasteEvt = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
+            editable.dispatchEvent(pasteEvt);
+            applied = String(editable.textContent || "").trim().length > 0;
+          } catch (_) {}
+
+          if (!applied) {
+            try { document.execCommand("selectAll", false, null); } catch (_) {}
+            try {
+              applied = Boolean(document.execCommand("insertText", false, text));
+            } catch (_) {
+              applied = false;
+            }
           }
 
-          try { document.execCommand("selectAll", false, null); } catch (_) {}
-          try { document.execCommand("insertText", false, text); } catch (_) {}
+          if (!applied || String(editable.textContent || "").trim().length === 0) {
+            if (textSpan) {
+              textSpan.textContent = text;
+            } else {
+              editable.textContent = text;
+            }
+          }
 
-          editable.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
-          editable.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
-          editable.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: " ", code: "Space" }));
+          try { editable.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" })); } catch (_) {}
+          try { editable.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" })); } catch (_) {
+            editable.dispatchEvent(new Event("input", { bubbles: true }));
+          }
           editable.dispatchEvent(new Event("change", { bubbles: true }));
           editable.dispatchEvent(new Event("blur", { bubbles: true }));
           return true;
@@ -308,8 +328,14 @@ async function handleCmd(msg) {
           }
         }
         return out;
-      }, [payload, msg.name, platform], platform);
-      ackCmd(msg, true, result);
+        }, [payload, msg.name, platform], platform),
+        new Promise((resolve) => setTimeout(() => resolve({ timeout: true, typed: false }), 25000)),
+      ]);
+      if (result && result.timeout) {
+        ackCmd(msg, false, {}, "form.fill timed out in extension script");
+      } else {
+        ackCmd(msg, true, result);
+      }
       return;
     }
 
