@@ -902,21 +902,10 @@ def _install_dialog_guards(page) -> None:
     except Exception:
         pass
 
-    def _safe_close_dialog(dialog) -> None:
-        try:
-            dialog.dismiss()
-            return
-        except Exception:
-            pass
-        try:
-            dialog.accept()
-        except Exception:
-            pass
-
-    try:
-        page.on("dialog", _safe_close_dialog)
-    except Exception:
-        pass
+    # Do not actively accept/dismiss dialog events here. Playwright can auto-race
+    # dialog close calls and throw `Page.handleJavaScriptDialog: No dialog is showing`.
+    # The init script above neutralizes alert/confirm/prompt and beforeunload to
+    # prevent most dialogs from opening in the first place.
 
 
 def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
