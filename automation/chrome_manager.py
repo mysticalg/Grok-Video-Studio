@@ -85,7 +85,6 @@ class AutomationChromeManager:
             "--disable-popup-blocking",
             "--disable-features=Translate",
             f"--load-extension={extension_dir}",
-            f"--disable-extensions-except={extension_dir}",
         ]
         self.process = subprocess.Popen(args)
 

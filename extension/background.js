@@ -10,6 +10,23 @@ const platformState = {
   facebook: { state: "ready" }
 };
 
+const POST_SELECTORS = {
+  tiktok: [
+    "button[data-e2e=\"post_video_button\"]",
+    "button[aria-label*=\"Post\"]"
+  ],
+  youtube: ["#done-button", "button[aria-label*=\"Publish\"]"],
+  facebook: ["div[aria-label*=\"Publish\"]", "button[aria-label*=\"Publish\"]"]
+};
+
+const DRAFT_SELECTORS = {
+  tiktok: [
+    "button[data-e2e=\"save_draft_button\"]",
+    "button[aria-label*=\"Draft\"]",
+    "button[class*=\"draft\"]"
+  ]
+};
+
 function makeId() {
   return `msg_${crypto.randomUUID().replace(/-/g, "")}`;
 }
@@ -30,11 +47,29 @@ function ackCmd(msg, ok, payload, error) {
   sendMessage(response);
 }
 
-async function executeInActiveTab(fn, args = []) {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tabs.length || tabs[0].id == null) throw new Error("No active tab available");
-  const tabId = tabs[0].id;
-  const results = await chrome.scripting.executeScript({ target: { tabId }, func: fn, args });
+async function executeInTab(fn, args = [], platform = "") {
+  const normalized = String(platform || "").toLowerCase();
+  const matchByPlatform = {
+    tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
+    youtube: ["studio.youtube.com", "youtube.com"],
+    facebook: ["facebook.com/reels/create", "facebook.com"]
+  };
+
+  const allTabs = await chrome.tabs.query({});
+  const targets = matchByPlatform[normalized] || [];
+  const platformTab = allTabs.find((tab) => tab.id != null && targets.some((host) => String(tab.url || "").includes(host)));
+
+  let activeTab = allTabs.find((tab) => tab.active && tab.lastFocusedWindow && tab.id != null);
+  if (!activeTab) {
+    activeTab = allTabs.find((tab) => tab.active && tab.id != null);
+  }
+
+  const chosen = platformTab || activeTab;
+  if (!chosen || chosen.id == null) {
+    throw new Error(`No suitable tab available for platform=${normalized || "unknown"}`);
+  }
+
+  const results = await chrome.scripting.executeScript({ target: { tabId: chosen.id }, func: fn, args });
   return results[0]?.result;
 }
 
@@ -43,7 +78,7 @@ async function handleCmd(msg) {
     const payload = msg.payload || {};
 
     if (msg.name === "dom.ping") {
-      const result = await executeInActiveTab(() => ({ title: document.title, href: window.location.href }));
+      const result = await executeInTab(() => ({ title: document.title, href: window.location.href }), [], payload.platform || "");
       ackCmd(msg, true, result);
       return;
     }
@@ -54,39 +89,95 @@ async function handleCmd(msg) {
     }
 
     if (msg.name === "dom.query") {
-      const result = await executeInActiveTab((selector) => ({ count: document.querySelectorAll(selector).length }), [payload.selector || "body"]);
+      const result = await executeInTab((selector) => ({ count: document.querySelectorAll(selector).length }), [payload.selector || "body"], payload.platform || "");
       ackCmd(msg, true, result);
       return;
     }
 
     if (msg.name === "dom.click" || msg.name === "post.submit") {
-      const selector = payload.selector || "button";
-      const result = await executeInActiveTab((sel) => {
+      const platform = String(payload.platform || "").toLowerCase();
+      const isDraft = String(payload.mode || payload.publishMode || "").toLowerCase() === "draft";
+      const submitSelectors = isDraft ? (DRAFT_SELECTORS[platform] || []) : (POST_SELECTORS[platform] || []);
+      const candidates = msg.name === "post.submit"
+        ? (submitSelectors.length ? submitSelectors : [payload.selector || "button"])
+        : [payload.selector || "button"];
+      const result = await executeInTab(async (selectors, opts) => {
         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-        const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
-        if (!el) return { clicked: false, reason: "not_found", selector: sel };
-        el.scrollIntoView({ block: "center", inline: "center" });
-        ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
-          el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
-        });
-        return { clicked: true, selector: sel };
-      }, [selector]);
+        const isEnabled = (el) => {
+          if (!el) return false;
+          const attrDisabled = String(el.getAttribute("aria-disabled") || "").toLowerCase() === "true";
+          const dataDisabled = String(el.getAttribute("data-disabled") || "").toLowerCase() === "true";
+          const htmlDisabled = Boolean(el.disabled);
+          const loading = String(el.getAttribute("data-loading") || "").toLowerCase() === "true";
+          return !(attrDisabled || dataDisabled || htmlDisabled || loading);
+        };
+
+        const hasUploadReadySignal = () => {
+          const status = document.querySelector("div.info-status.success");
+          if (!status) return false;
+          const text = (status.textContent || "").toLowerCase();
+          return text.includes("uploaded");
+        };
+
+        const findCandidate = () => {
+          for (const sel of selectors) {
+            const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
+            if (el) return { el, selector: sel };
+          }
+          return null;
+        };
+
+        const timeoutMs = Number(opts.timeoutMs || 30000);
+        const started = Date.now();
+        while (Date.now() - started < timeoutMs) {
+          const found = findCandidate();
+          if (found && isEnabled(found.el) && (!opts.waitForUpload || hasUploadReadySignal())) {
+            found.el.scrollIntoView({ block: "center", inline: "center" });
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+              found.el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+            });
+            return { clicked: true, selector: found.selector, waitedMs: Date.now() - started };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+
+        const found = findCandidate();
+        if (!found) return { clicked: false, reason: "not_found", selectors };
+        if (!isEnabled(found.el)) return { clicked: false, reason: "disabled", selector: found.selector };
+        if (opts.waitForUpload && !hasUploadReadySignal()) return { clicked: false, reason: "upload_not_ready", selector: found.selector };
+        return { clicked: false, reason: "unknown", selector: found.selector };
+      }, [candidates, { waitForUpload: Boolean(payload.waitForUpload), timeoutMs: Number(payload.timeoutMs || 30000) }], platform);
       if (msg.name === "post.submit") {
-        const platform = String(payload.platform || "").toLowerCase();
-        if (platformState[platform]) platformState[platform].state = "posted";
-        sendEvent("state", { platform, state: "post_clicked" });
+        if (platformState[platform]) {
+          if (result?.clicked) {
+            platformState[platform].state = isDraft ? "drafted" : "submitted";
+          } else {
+            platformState[platform].state = isDraft ? "draft_button_not_ready" : "submit_not_found";
+          }
+        }
+        sendEvent("state", {
+          platform,
+          state: result?.clicked
+            ? (isDraft ? "draft_clicked" : "post_clicked")
+            : (isDraft ? "draft_button_not_ready" : "post_button_not_found"),
+          selector: result?.selector,
+          reason: result?.reason,
+        });
       }
       ackCmd(msg, true, result);
       return;
     }
 
     if (msg.name === "dom.type" || msg.name === "form.fill") {
-      const result = await executeInActiveTab((p, name) => {
+      const platform = String(payload.platform || "").toLowerCase();
+      const result = await executeInTab(async (p, name, currentPlatform) => {
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
         const setValue = (el, value) => {
           el.focus();
           if (el.isContentEditable) {
             el.textContent = value;
-            el.dispatchEvent(new InputEvent("input", { bubbles: true }));
+            el.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
             return true;
           }
           const proto = Object.getPrototypeOf(el);
@@ -95,6 +186,45 @@ async function handleCmd(msg) {
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
           return true;
+        };
+
+        const typeToken = async (el, token) => {
+          if (!el) return;
+          el.focus();
+          if (el.isContentEditable) {
+            if (document.execCommand) {
+              document.execCommand("insertText", false, token);
+            } else {
+              el.textContent = `${el.textContent || ""}${token}`;
+              el.dispatchEvent(new InputEvent("input", { bubbles: true, data: token, inputType: "insertText" }));
+            }
+          } else {
+            el.value = `${el.value || ""}${token}`;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          await wait(120);
+        };
+
+        const clickHashtagSuggestion = async () => {
+          const selectors = [
+            "[data-e2e*='hashtag'] li",
+            "[data-e2e*='hashtag'] button",
+            "[role='listbox'] [role='option']",
+            "div[class*='mention'] [role='option']",
+            "div[class*='hashtag'] [role='option']"
+          ];
+          for (const sel of selectors) {
+            const candidate = document.querySelector(sel);
+            if (candidate) {
+              candidate.scrollIntoView({ block: "center", inline: "center" });
+              candidate.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
+              candidate.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
+              candidate.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+              await wait(120);
+              return true;
+            }
+          }
+          return false;
         };
 
         if (name === "dom.type") {
@@ -106,16 +236,46 @@ async function handleCmd(msg) {
         const fields = p.fields || {};
         const selectors = {
           title: ["textarea#title-textarea", "#textbox", "input[name='title']", "textarea[name='title']"],
-          description: ["textarea#description-textarea", "div[contenteditable='true']", "textarea[name='description']"]
+          description: [
+            "div[contenteditable='true'][role='textbox']",
+            "div[contenteditable='true']",
+            "textarea#description-textarea",
+            "textarea[name='description']"
+          ]
         };
         const out = {};
         for (const [key, value] of Object.entries(fields)) {
           const list = selectors[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
-          const el = list.map((s) => document.querySelector(s)).find(Boolean);
-          out[key] = el ? setValue(el, String(value || "")) : false;
+          const el = list.map((sel) => document.querySelector(sel)).find(Boolean);
+          if (!el) {
+            out[key] = false;
+            continue;
+          }
+
+          const text = String(value || "");
+          if (currentPlatform === "tiktok" && key === "description") {
+            if (!setValue(el, "")) {
+              out[key] = false;
+              continue;
+            }
+            const parts = text.split(/(#[\w-]+)/g).filter(Boolean);
+            for (const part of parts) {
+              await typeToken(el, part);
+              if (part.startsWith("#")) {
+                const selected = await clickHashtagSuggestion();
+                if (!selected) {
+                  await typeToken(el, " ");
+                }
+              }
+            }
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            out[key] = true;
+          } else {
+            out[key] = setValue(el, text);
+          }
         }
         return out;
-      }, [payload, msg.name]);
+      }, [payload, msg.name, platform], platform);
       ackCmd(msg, true, result);
       return;
     }
