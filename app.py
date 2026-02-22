@@ -3535,11 +3535,10 @@ class MainWindow(QMainWindow):
         self.browser_tab_enabled[tab_key] = enabled
 
         tab_index = self.browser_tab_indices.get(tab_key) if hasattr(self, "browser_tab_indices") else None
-        tab_widget = self.browser_tab_widgets.get(tab_key) if hasattr(self, "browser_tab_widgets") else None
-        if tab_widget is not None:
-            tab_widget.setVisible(enabled)
         if tab_index is not None:
             self.browser_tabs.setTabVisible(tab_index, enabled)
+            if not enabled and self.browser_tabs.currentIndex() == tab_index:
+                self._refresh_browser_tab_selection()
 
         browser = self.browser_tab_webviews.get(tab_key) if hasattr(self, "browser_tab_webviews") else None
         if browser is not None:
@@ -3548,7 +3547,6 @@ class MainWindow(QMainWindow):
             else:
                 browser.stop()
                 browser.setEnabled(False)
-                browser.setHtml("<html><body style='font-family:sans-serif;padding:16px;'><h3>Tab disabled</h3><p>Re-enable this tab from View → Browser Tabs to reactivate it.</p></body></html>")
 
         action = self.browser_tab_toggle_actions.get(tab_key) if hasattr(self, "browser_tab_toggle_actions") else None
         if action is not None and action.isChecked() != enabled:
