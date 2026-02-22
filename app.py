@@ -2077,6 +2077,7 @@ class MainWindow(QMainWindow):
         self.automation_runtime: AutomationRuntimeWorker | None = None
         self.automation_chrome_instance: ChromeInstance | None = None
         self.udp_workflow_worker: UdpWorkflowWorker | None = None
+        self.udp_workflow_workers: dict[str, UdpWorkflowWorker] = {}
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -4320,29 +4321,48 @@ class MainWindow(QMainWindow):
 
         self._cancel_social_upload_run(platform_name, reason="switching to UDP automation")
         self._ensure_udp_service()
-        if self.udp_workflow_worker is not None and not self.udp_workflow_worker.isRunning():
-            self.udp_workflow_worker = None
 
-        if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
-            self._append_automation_log("Stopping previous UDP workflow before starting a new one.")
+        existing_worker = self.udp_workflow_workers.get(platform_name)
+        if existing_worker is not None and not existing_worker.isRunning():
+            self.udp_workflow_workers.pop(platform_name, None)
+            if self.udp_workflow_worker is existing_worker:
+                self.udp_workflow_worker = None
+            existing_worker = None
+
+        if existing_worker is not None and existing_worker.isRunning():
+            self._append_automation_log(f"Stopping previous UDP workflow for {platform_name} before starting a new one.")
             try:
-                self.udp_workflow_worker.request_stop()
-                if not self.udp_workflow_worker.wait(2000):
-                    self.udp_workflow_worker.requestInterruption()
-                    if not self.udp_workflow_worker.wait(1500):
+                existing_worker.request_stop()
+                if not existing_worker.wait(2000):
+                    existing_worker.requestInterruption()
+                    if not existing_worker.wait(1500):
                         self._append_automation_log(
-                            "WARNING: Previous UDP workflow did not stop in time; forcing thread termination."
+                            f"WARNING: Previous {platform_name} UDP workflow did not stop in time; forcing thread termination."
                         )
-                        self.udp_workflow_worker.terminate()
-                        self.udp_workflow_worker.wait(800)
+                        existing_worker.terminate()
+                        existing_worker.wait(800)
             except Exception as exc:
-                self._append_automation_log(f"WARNING: Failed to stop previous UDP workflow cleanly: {exc}")
+                self._append_automation_log(f"WARNING: Failed to stop previous {platform_name} UDP workflow cleanly: {exc}")
+            finally:
+                self.udp_workflow_workers.pop(platform_name, None)
+                if self.udp_workflow_worker is existing_worker:
+                    self.udp_workflow_worker = None
+
         self._append_automation_log("UDP action log file: logs/udp_automation.log")
         self._append_automation_log(f"Starting UDP workflow for {platform_name}.")
         worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption)
         worker.finished_with_result.connect(lambda result: self._append_automation_log(f"{platform_name} UDP result: {result}"))
         worker.failed.connect(lambda err: self._append_automation_log(f"{platform_name} UDP failed: {err}"))
-        worker.finished.connect(lambda: setattr(self, "udp_workflow_worker", None))
+
+        def _on_worker_finished(pn: str, w: UdpWorkflowWorker) -> None:
+            current = self.udp_workflow_workers.get(pn)
+            if current is w:
+                self.udp_workflow_workers.pop(pn, None)
+            if self.udp_workflow_worker is w:
+                self.udp_workflow_worker = None
+
+        worker.finished.connect(lambda pn=platform_name, w=worker: _on_worker_finished(pn, w))
+        self.udp_workflow_workers[platform_name] = worker
         self.udp_workflow_worker = worker
         worker.start()
 
@@ -7471,20 +7491,25 @@ class MainWindow(QMainWindow):
         if self.stitch_worker and self.stitch_worker.isRunning():
             self.stitch_worker.request_stop()
             self._append_log("Stop requested: stitching/encoding worker is being interrupted.")
-        if self.udp_workflow_worker and self.udp_workflow_worker.isRunning():
+        for active_platform, active_worker in list(self.udp_workflow_workers.items()):
+            if active_worker is None:
+                continue
             try:
-                self.udp_workflow_worker.request_stop()
-                if not self.udp_workflow_worker.wait(2000):
-                    self.udp_workflow_worker.requestInterruption()
-                    if not self.udp_workflow_worker.wait(1500):
-                        self._append_automation_log(
-                            "WARNING: UDP workflow did not stop in time; forcing thread termination."
-                        )
-                        self.udp_workflow_worker.terminate()
-                        self.udp_workflow_worker.wait(800)
+                if active_worker.isRunning():
+                    active_worker.request_stop()
+                    if not active_worker.wait(2000):
+                        active_worker.requestInterruption()
+                        if not active_worker.wait(1500):
+                            self._append_automation_log(
+                                f"WARNING: {active_platform} UDP workflow did not stop in time; forcing thread termination."
+                            )
+                            active_worker.terminate()
+                            active_worker.wait(800)
             except Exception:
                 pass
-            self._append_automation_log("Stop requested: active UDP automation workflow interrupted.")
+        if self.udp_workflow_workers:
+            self._append_automation_log("Stop requested: active UDP automation workflows interrupted.")
+        self.udp_workflow_workers.clear()
         self.udp_workflow_worker = None
 
         # Ensure browser-automation state is fully reset so pressing Automate again can
