@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 import websockets
+from websockets.exceptions import ConnectionClosed
 from websockets.server import WebSocketServerProtocol
 
 from automation.schema import make_id, validate, wrap_cmd
@@ -43,9 +44,12 @@ class ControlBusServer:
         cmd["id"] = msg_id
         future = asyncio.get_running_loop().create_future()
         self._ack_waiters[msg_id] = future
-        await ws.send(json.dumps(cmd))
         try:
+            await asyncio.wait_for(ws.send(json.dumps(cmd)), timeout=min(5.0, timeout_s))
             return await asyncio.wait_for(future, timeout=timeout_s)
+        except (ConnectionClosed, asyncio.TimeoutError) as exc:
+            self.clients.pop(client_id, None)
+            raise RuntimeError(f"Control bus send/ack failed for {client_id}: {exc}") from exc
         finally:
             self._ack_waiters.pop(msg_id, None)
 
@@ -115,6 +119,8 @@ class ControlBusServer:
                 if msg_type == "event":
                     # Events are consumed by the desktop app; no-op here.
                     continue
+        except ConnectionClosed:
+            pass
         finally:
             if client_id:
                 self.clients.pop(client_id, None)

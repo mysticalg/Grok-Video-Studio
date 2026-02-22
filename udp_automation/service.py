@@ -19,6 +19,12 @@ PLATFORM_URLS = {
 }
 
 
+EXTENSION_CMD_TIMEOUTS = {
+    "form.fill": 45.0,
+    "post.submit": 45.0,
+}
+
+
 class UdpAutomationService:
     def __init__(self, extension_dir: Path, host: str = "127.0.0.1", port: int = 18793, bus: ControlBusServer | None = None, start_bus: bool = True):
         self.host = host
@@ -144,7 +150,17 @@ class UdpAutomationService:
         clients = list(self.bus.clients.keys())
         if not clients:
             raise RuntimeError("No extension client connected")
-        return await self.bus.send_cmd(clients[0], wrap_cmd(name, payload))
+
+        timeout_s = float(EXTENSION_CMD_TIMEOUTS.get(name, 15.0))
+        last_error: Exception | None = None
+        for client_id in clients:
+            try:
+                return await self.bus.send_cmd(client_id, wrap_cmd(name, payload), timeout_s=timeout_s)
+            except Exception as exc:
+                last_error = exc
+                self.bus.clients.pop(client_id, None)
+                continue
+        raise RuntimeError(str(last_error) if last_error else "No extension client connected")
 
     async def _emit(self, name: str, payload: dict[str, Any]) -> None:
         if self._transport is None:
