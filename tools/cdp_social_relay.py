@@ -458,7 +458,12 @@ def _script_for_platform(platform: str) -> str:
             }
             return null;
         };
-        const findYoutubeTextbox = (kinds) => {
+        const normText = (value) => String(value || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim();
+        const findYoutubeTextbox = (kinds, scopedSelectors = []) => {
+            for (const scopedSelector of scopedSelectors) {
+                const scopedNode = byVisibleSelectors([scopedSelector]);
+                if (scopedNode) return scopedNode;
+            }
             const nodes = Array.from(document.querySelectorAll('div#textbox[contenteditable="true"], textarea#textbox, [contenteditable="true"][id="textbox"]'));
             for (const node of nodes) {
                 const aria = String(node.getAttribute('aria-label') || '').toLowerCase();
@@ -472,34 +477,68 @@ def _script_for_platform(platform: str) -> str:
         };
         const setYouTubeText = (el, value) => {
             if (!el || !value) return false;
+            const nextText = String(value || '').trim();
+            if (!nextText) return false;
             try {
                 if (el.isContentEditable) {
                     el.focus();
                     try { document.execCommand('selectAll', false, null); } catch (_) {}
-                    try { document.execCommand('insertText', false, value); } catch (_) {}
-                    if (String(el.textContent || '').trim() !== String(value).trim()) {
-                        el.textContent = value;
+                    try { document.execCommand('insertText', false, nextText); } catch (_) {}
+
+                    if (normText(el.textContent) !== normText(nextText)) {
+                        try {
+                            const selection = window.getSelection();
+                            const range = document.createRange();
+                            range.selectNodeContents(el);
+                            range.deleteContents();
+                            const textNode = document.createTextNode(nextText);
+                            el.appendChild(textNode);
+                            if (selection) {
+                                selection.removeAllRanges();
+                                const caret = document.createRange();
+                                caret.setStart(textNode, textNode.length);
+                                caret.collapse(true);
+                                selection.addRange(caret);
+                            }
+                        } catch (_) {
+                            try { el.textContent = nextText; } catch (_) {}
+                        }
                     }
-                    el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: value, inputType: 'insertText' }));
+
+                    try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' })); } catch (_) {}
+                    try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' })); } catch (_) {
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
-                    return String(el.textContent || '').trim() === String(value).trim();
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return normText(el.textContent) === normText(nextText);
                 }
                 if ('value' in el) {
-                    el.value = value;
+                    el.value = nextText;
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
-                    return String(el.value || '').trim() === String(value).trim();
+                    return normText(el.value) === normText(nextText);
                 }
             } catch (_) {}
             return false;
         };
 
-        const titleTarget = findYoutubeTextbox(['title', 'describes your video']) || byVisibleSelectors([
+        const titleTarget = findYoutubeTextbox(['title', 'describes your video'], [
+            '#title-textarea #textbox[contenteditable="true"]',
+            '[aria-label*="add a title" i]#textbox[contenteditable="true"]',
+        ]) || byVisibleSelectors([
             'div#textbox[contenteditable="true"][aria-label*="title" i]',
             'textarea#textbox[aria-label*="title" i]',
         ]);
-        const descTarget = findYoutubeTextbox(['description', 'tell viewers about your video']) || byVisibleSelectors([
+        const descTarget = findYoutubeTextbox(['description', 'tell viewers about your video'], [
+            '#description #textbox[contenteditable="true"]',
+            '[aria-label*="tell viewers about your video" i]#textbox[contenteditable="true"]',
+            '[aria-label*="tell viewers" i][contenteditable="true"]#textbox',
+        ]) || byVisibleSelectors([
+            '#description div#textbox[contenteditable="true"]',
             'div#textbox[contenteditable="true"][aria-label*="description" i]',
+            'div#textbox[contenteditable="true"][aria-label*="tell viewers" i]',
             'textarea#textbox[aria-label*="description" i]',
         ]);
 
