@@ -173,11 +173,49 @@ async function handleCmd(msg) {
       const result = await executeInTab(async (p, name, currentPlatform) => {
         const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+        const setDraftEditorValue = (el, value) => {
+          const text = String(value || "");
+          const root = el.closest(".DraftEditor-root") || el;
+          const editable = root.querySelector(".public-DraftEditor-content[contenteditable='true']") || el;
+          const textSpan = editable.querySelector("span[data-text='true']");
+
+          editable.focus();
+          editable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
+          editable.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
+          editable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+
+          if (textSpan) {
+            textSpan.textContent = text;
+          } else {
+            editable.textContent = text;
+          }
+
+          try { document.execCommand("selectAll", false, null); } catch (_) {}
+          try { document.execCommand("insertText", false, text); } catch (_) {}
+
+          editable.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
+          editable.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" }));
+          editable.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: " ", code: "Space" }));
+          editable.dispatchEvent(new Event("change", { bubbles: true }));
+          editable.dispatchEvent(new Event("blur", { bubbles: true }));
+          return true;
+        };
+
         const setValue = (el, value) => {
           el.focus();
-          if (el.isContentEditable) {
+          const isDraftEditor = (
+            String(el.getAttribute("role") || "").toLowerCase() === "combobox"
+            || String(el.className || "").includes("DraftEditor")
+            || Boolean(el.closest(".DraftEditor-root"))
+          );
+          if (el.isContentEditable || String(el.getAttribute("contenteditable") || "").toLowerCase() === "true") {
+            if (isDraftEditor) {
+              return setDraftEditorValue(el, value);
+            }
             el.textContent = value;
-            el.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
+            el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: value, inputType: "insertText" }));
+            el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: value, inputType: "insertText" }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
             return true;
           }
           const proto = Object.getPrototypeOf(el);
@@ -230,7 +268,7 @@ async function handleCmd(msg) {
         if (name === "dom.type") {
           const el = document.querySelector(p.selector || "");
           if (!el) return { typed: false, selector: p.selector || "" };
-          return { typed: setValue(el, p.text || ""), selector: p.selector || "" };
+          return { typed: setValue(el, p.value ?? p.text ?? ""), selector: p.selector || "" };
         }
 
         const fields = p.fields || {};
