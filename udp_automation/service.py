@@ -71,7 +71,9 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 url = str(payload.get("url") or PLATFORM_URLS.get(platform) or "https://example.com")
                 if self.cdp is None:
-                    profile_dir = self.chrome_manager._profile_dir()
+                    base_profile_dir = self.chrome_manager._profile_dir()
+                    profile_dir = (base_profile_dir / "playwright-persistent").resolve()
+                    profile_dir.mkdir(parents=True, exist_ok=True)
                     extension_dir = self.chrome_manager._validate_extension_dir()
                     executable_path = self.chrome_manager._detect_chrome_path()
                     self.cdp = await CDPController.launch_persistent(

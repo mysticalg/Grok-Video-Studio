@@ -36,6 +36,7 @@ class CDPController:
             "--no-default-browser-check",
             "--disable-popup-blocking",
             "--disable-features=Translate",
+            f"--disable-extensions-except={extension_dir}",
             f"--load-extension={extension_dir}",
         ]
         try:
@@ -44,6 +45,7 @@ class CDPController:
                 headless=headless,
                 executable_path=executable_path,
                 args=args,
+                ignore_default_args=["--disable-extensions"],
             )
         except Exception:
             await pw.stop()
