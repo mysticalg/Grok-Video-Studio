@@ -70,30 +70,9 @@ class UdpAutomationService:
             if name == "platform.open":
                 platform = str(payload.get("platform") or "").lower()
                 url = str(payload.get("url") or PLATFORM_URLS.get(platform) or "https://example.com")
-                needs_launch = self.cdp is None
-                if self.cdp is not None:
-                    try:
-                        needs_launch = not await self.cdp.is_alive()
-                    except Exception:
-                        needs_launch = True
-                if needs_launch:
-                    if self.cdp is not None:
-                        try:
-                            await self.cdp.close()
-                        except Exception:
-                            pass
-                        self.cdp = None
-                    base_profile_dir = self.chrome_manager._profile_dir()
-                    profile_dir = (base_profile_dir / "playwright-persistent").resolve()
-                    profile_dir.mkdir(parents=True, exist_ok=True)
-                    extension_dir = self.chrome_manager._validate_extension_dir()
-                    executable_path = self.chrome_manager._detect_chrome_path()
-                    self.cdp = await CDPController.launch_persistent(
-                        user_data_dir=str(profile_dir),
-                        extension_dir=str(extension_dir),
-                        executable_path=str(executable_path),
-                        headless=False,
-                    )
+                self.chrome_instance = self.chrome_manager.launch_or_reuse()
+                if self.cdp is None:
+                    self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
                 reuse_tab = bool(payload.get("reuseTab", False))
                 page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
                 await page.bring_to_front()
