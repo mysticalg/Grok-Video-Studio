@@ -321,8 +321,8 @@ def _stage_file_upload_via_file_chooser(page, platform: str, video_path: str) ->
         for idx in range(min(count, 4)):
             node = locator.nth(idx)
             try:
-                with page.expect_file_chooser(timeout=1200) as chooser_info:
-                    node.click(timeout=1000)
+                with page.expect_file_chooser(timeout=5000) as chooser_info:
+                    node.click(timeout=3000)
                 chooser = chooser_info.value
                 chooser.set_files(video_path)
                 return True, f"staged via file chooser trigger '{selector}'"
@@ -352,11 +352,16 @@ def _stage_file_upload(
         count = locator.count()
         for idx in range(count):
             node = locator.nth(idx)
-            try:
-                node.set_input_files(video_path, timeout=2000)
-                return True, f"staged via selector '{selector}'"
-            except Exception:
-                continue
+            for timeout_ms in (15000, 30000):
+                try:
+                    node.set_input_files(video_path, timeout=timeout_ms)
+                    return True, f"staged via selector '{selector}' (timeout={timeout_ms}ms)"
+                except Exception:
+                    try:
+                        page.wait_for_timeout(250)
+                    except Exception:
+                        pass
+                    continue
 
     chooser_staged, chooser_detail = _stage_file_upload_via_file_chooser(page, platform, video_path)
     if chooser_staged:
