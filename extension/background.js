@@ -237,6 +237,9 @@ async function handleCmd(msg) {
         const selectors = {
           title: ["textarea#title-textarea", "#textbox", "input[name='title']", "textarea[name='title']"],
           description: [
+            ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
+            "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
+            "div[contenteditable='true'][role='combobox']",
             "div[contenteditable='true'][role='textbox']",
             "div[contenteditable='true']",
             "textarea#description-textarea",
@@ -254,22 +257,14 @@ async function handleCmd(msg) {
 
           const text = String(value || "");
           if (currentPlatform === "tiktok" && key === "description") {
-            if (!setValue(el, "")) {
-              out[key] = false;
-              continue;
-            }
-            const parts = text.split(/(#[\w-]+)/g).filter(Boolean);
-            for (const part of parts) {
-              await typeToken(el, part);
-              if (part.startsWith("#")) {
-                const selected = await clickHashtagSuggestion();
-                if (!selected) {
-                  await typeToken(el, " ");
-                }
-              }
-            }
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-            out[key] = true;
+            const tiktokSelectors = [
+              ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
+              "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
+              "div[contenteditable='true'][role='combobox']",
+              "div[contenteditable='true']",
+            ];
+            const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
+            out[key] = setValue(tiktokEl, text);
           } else {
             out[key] = setValue(el, text);
           }
