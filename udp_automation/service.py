@@ -107,6 +107,20 @@ class UdpAutomationService:
                         PLATFORM_URLS.get(platform.lower(), "https://example.com"),
                         reuse_tab=True,
                     )
+
+                # Ensure file staging runs after initial document load; TikTok studio upload
+                # can ignore or drop early set_input_files calls before DOM is ready.
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
+
+                # Give dynamic upload UIs a brief moment to attach their input controls.
+                try:
+                    await page.wait_for_timeout(300)
+                except Exception:
+                    pass
+
                 input_el = page.locator("input[type='file']").first
                 try:
                     await input_el.wait_for(state="attached", timeout=15000)
