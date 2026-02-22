@@ -50,17 +50,24 @@ function ackCmd(msg, ok, payload, error) {
 async function executeInTab(fn, args = [], platform = "") {
   const normalized = String(platform || "").toLowerCase();
   const matchByPlatform = {
-    tiktok: ["tiktok.com"],
-    youtube: ["youtube.com"],
-    facebook: ["facebook.com"]
+    tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
+    youtube: ["studio.youtube.com", "youtube.com"],
+    facebook: ["facebook.com/reels/create", "facebook.com"]
   };
 
-  const allTabs = await chrome.tabs.query({ currentWindow: true });
+  const allTabs = await chrome.tabs.query({});
   const targets = matchByPlatform[normalized] || [];
   const platformTab = allTabs.find((tab) => tab.id != null && targets.some((host) => String(tab.url || "").includes(host)));
-  const activeTab = allTabs.find((tab) => tab.active && tab.id != null);
+
+  let activeTab = allTabs.find((tab) => tab.active && tab.lastFocusedWindow && tab.id != null);
+  if (!activeTab) {
+    activeTab = allTabs.find((tab) => tab.active && tab.id != null);
+  }
+
   const chosen = platformTab || activeTab;
-  if (!chosen || chosen.id == null) throw new Error("No suitable tab available");
+  if (!chosen || chosen.id == null) {
+    throw new Error(`No suitable tab available for platform=${normalized || "unknown"}`);
+  }
 
   const results = await chrome.scripting.executeScript({ target: { tabId: chosen.id }, func: fn, args });
   return results[0]?.result;
