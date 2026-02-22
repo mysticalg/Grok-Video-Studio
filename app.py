@@ -2157,6 +2157,7 @@ class MainWindow(QMainWindow):
         )
         self._build_ui()
         self._applying_preferences = False
+        self._last_saved_preferences_signature: str | None = None
         self._initialize_preferences_autosave()
         app = QApplication.instance()
         if app is not None:
@@ -3999,7 +4000,11 @@ class MainWindow(QMainWindow):
         self._preferences_autosave_timer.start()
 
     def _autosave_preferences_to_default_file(self) -> None:
-        self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=False)
+        self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=False, only_if_changed=True)
+
+    @staticmethod
+    def _preferences_signature(preferences: dict) -> str:
+        return json.dumps(preferences, sort_keys=True)
 
     def _collect_preferences(self) -> dict:
         return {
@@ -4379,9 +4384,18 @@ class MainWindow(QMainWindow):
         self._sync_video_options_label()
         self._applying_preferences = False
 
-    def _save_preferences_to_path(self, file_path: Path, *, show_feedback: bool = False) -> bool:
+    def _save_preferences_to_path(
+        self,
+        file_path: Path,
+        *,
+        show_feedback: bool = False,
+        only_if_changed: bool = False,
+    ) -> bool:
         try:
             preferences = self._collect_preferences()
+            current_signature = self._preferences_signature(preferences)
+            if only_if_changed and current_signature == self._last_saved_preferences_signature:
+                return False
             file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(file_path, "w", encoding="utf-8") as handle:
                 json.dump(preferences, handle, indent=2)
@@ -4391,6 +4405,7 @@ class MainWindow(QMainWindow):
             self._append_log(f"ERROR: Could not save preferences: {exc}")
             return False
 
+        self._last_saved_preferences_signature = current_signature
         self._append_log(f"Saved preferences to: {file_path}")
         return True
 
@@ -4402,6 +4417,8 @@ class MainWindow(QMainWindow):
             with open(file_path, "r", encoding="utf-8") as handle:
                 preferences = json.load(handle)
             self._apply_preferences(preferences)
+            if isinstance(preferences, dict):
+                self._last_saved_preferences_signature = self._preferences_signature(preferences)
         except Exception as exc:
             if show_feedback:
                 QMessageBox.critical(self, "Load Preferences Failed", str(exc))
