@@ -12,15 +12,6 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str) -> 
         return
 
 
-def _best_effort_type(executor: BaseExecutor, platform: str, selector: str, value: str) -> None:
-    if not str(value or "").strip():
-        return
-    try:
-        executor.run("dom.type", {"platform": platform, "selector": selector, "value": value, "timeoutMs": 10000})
-    except Exception:
-        return
-
-
 def run(executor: BaseExecutor, video_path: str, title: str, description: str) -> dict[str, Any]:
     executor.run("platform.open", {"platform": "youtube", "reuseTab": True})
     executor.run("platform.ensure_logged_in", {"platform": "youtube"})
@@ -32,23 +23,6 @@ def run(executor: BaseExecutor, video_path: str, title: str, description: str) -
     _best_effort_click(executor, "youtube", "tp-yt-paper-item#text-item-0[test-id='upload']")
 
     executor.run("upload.select_file", {"platform": "youtube", "filePath": video_path})
-
-    # Fallback typing path for YouTube Studio's duplicated contenteditable #textbox fields.
-    _best_effort_click(executor, "youtube", "ytcp-form-input-container #outer")
-    _best_effort_type(executor, "youtube", "ytcp-form-input-container #label-text + * #textbox[contenteditable='true']", title)
-    _best_effort_type(executor, "youtube", "#title-textarea #textbox[contenteditable='true']", title)
-    _best_effort_type(executor, "youtube", "#description #textbox[contenteditable='true']", description)
-    _best_effort_type(executor, "youtube", "div#textbox[contenteditable='true'][aria-label*='tell viewers' i]", description)
-
     executor.run("form.fill", {"platform": "youtube", "fields": {"title": title, "description": description}})
-
-    # Advance upload dialog if still on details steps.
-    for selector in (
-        "ytcp-button#next-button button",
-        "ytcp-button[id='next-button'] button",
-        "button[aria-label*='next' i]",
-    ):
-        _best_effort_click(executor, "youtube", selector)
-
     executor.run("post.submit", {"platform": "youtube"})
     return executor.run("post.status", {"platform": "youtube"})
