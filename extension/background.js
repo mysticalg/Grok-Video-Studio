@@ -335,6 +335,26 @@ async function handleCmd(msg) {
           return textbox;
         };
 
+        const findFacebookReelDescriptionField = () => {
+          const selectors = [
+            "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][data-lexical-editor='true']",
+          ];
+          for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (!el) continue;
+            try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            try { el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { el.focus(); } catch (_) {}
+            return el;
+          }
+          return null;
+        };
+
         const findYouTubeContainerField = (key) => {
           const titleCandidates = [
             "#textbox[contenteditable='true'][aria-label*='add a title' i]",
@@ -384,6 +404,9 @@ async function handleCmd(msg) {
             "textarea[name='title']"
           ],
           description: [
+            "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-placeholder*='Describe your reel' i]",
             "#description #textbox[contenteditable='true']",
             "div#textbox[contenteditable='true'][aria-label*='tell viewers' i]",
             "div#textbox[contenteditable='true'][aria-label*='description' i]",
@@ -422,6 +445,9 @@ async function handleCmd(msg) {
             ];
             const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
             out[key] = setValue(tiktokEl, text);
+          } else if (currentPlatform === "facebook" && key === "description") {
+            const facebookEl = findFacebookReelDescriptionField() || el;
+            out[key] = setValue(facebookEl, text);
           } else {
             out[key] = setValue(el, text);
           }
