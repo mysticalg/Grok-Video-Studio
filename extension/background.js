@@ -83,33 +83,67 @@ async function handleCmd(msg) {
       const candidates = msg.name === "post.submit"
         ? (submitSelectors.length ? submitSelectors : [payload.selector || "button"])
         : [payload.selector || "button"];
-      const result = await executeInActiveTab((selectors) => {
+      const result = await executeInActiveTab(async (selectors, opts) => {
         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-        for (const sel of selectors) {
-          const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
-          if (!el) continue;
-          el.scrollIntoView({ block: "center", inline: "center" });
-          ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
-            el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
-          });
-          return { clicked: true, selector: sel };
+        const isEnabled = (el) => {
+          if (!el) return false;
+          const attrDisabled = String(el.getAttribute("aria-disabled") || "").toLowerCase() === "true";
+          const dataDisabled = String(el.getAttribute("data-disabled") || "").toLowerCase() === "true";
+          const htmlDisabled = Boolean(el.disabled);
+          const loading = String(el.getAttribute("data-loading") || "").toLowerCase() === "true";
+          return !(attrDisabled || dataDisabled || htmlDisabled || loading);
+        };
+
+        const hasUploadReadySignal = () => {
+          const status = document.querySelector("div.info-status.success");
+          if (!status) return false;
+          const text = (status.textContent || "").toLowerCase();
+          return text.includes("uploaded");
+        };
+
+        const findCandidate = () => {
+          for (const sel of selectors) {
+            const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
+            if (el) return { el, selector: sel };
+          }
+          return null;
+        };
+
+        const timeoutMs = Number(opts.timeoutMs || 30000);
+        const started = Date.now();
+        while (Date.now() - started < timeoutMs) {
+          const found = findCandidate();
+          if (found && isEnabled(found.el) && (!opts.waitForUpload || hasUploadReadySignal())) {
+            found.el.scrollIntoView({ block: "center", inline: "center" });
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+              found.el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+            });
+            return { clicked: true, selector: found.selector, waitedMs: Date.now() - started };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
         }
-        return { clicked: false, reason: "not_found", selectors };
-      }, [candidates]);
+
+        const found = findCandidate();
+        if (!found) return { clicked: false, reason: "not_found", selectors };
+        if (!isEnabled(found.el)) return { clicked: false, reason: "disabled", selector: found.selector };
+        if (opts.waitForUpload && !hasUploadReadySignal()) return { clicked: false, reason: "upload_not_ready", selector: found.selector };
+        return { clicked: false, reason: "unknown", selector: found.selector };
+      }, [candidates, { waitForUpload: Boolean(payload.waitForUpload), timeoutMs: Number(payload.timeoutMs || 30000) }]);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
           if (result?.clicked) {
             platformState[platform].state = isDraft ? "drafted" : "submitted";
           } else {
-            platformState[platform].state = isDraft ? "draft_button_not_found" : "submit_not_found";
+            platformState[platform].state = isDraft ? "draft_button_not_ready" : "submit_not_found";
           }
         }
         sendEvent("state", {
           platform,
           state: result?.clicked
             ? (isDraft ? "draft_clicked" : "post_clicked")
-            : (isDraft ? "draft_button_not_found" : "post_button_not_found"),
+            : (isDraft ? "draft_button_not_ready" : "post_button_not_found"),
           selector: result?.selector,
+          reason: result?.reason,
         });
       }
       ackCmd(msg, true, result);

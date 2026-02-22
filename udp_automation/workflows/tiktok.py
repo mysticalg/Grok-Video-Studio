@@ -18,7 +18,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str) -> dict[str, Any]
 
     executor.run("form.fill", {"platform": "tiktok", "fields": {"description": caption}})
 
-    submit_result = executor.run("post.submit", {"platform": "tiktok", "mode": "draft"})
+    submit_result = executor.run("post.submit", {"platform": "tiktok", "mode": "draft", "waitForUpload": True, "timeoutMs": 120000})
     submit_payload = submit_result.get("payload") or {}
     if submit_payload and submit_payload.get("clicked") is False:
         raise RuntimeError("TikTok post button was not found/clicked")
