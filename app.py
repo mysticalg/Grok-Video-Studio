@@ -7318,6 +7318,36 @@ class MainWindow(QMainWindow):
                         return /make\\s+video/i.test(label);
                     }});
 
+                const video = document.querySelector("video");
+                const source = document.querySelector("video source");
+                const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
+                const videoAnchor = video ? video.closest("a[href]") : null;
+                const anchorHref = videoAnchor ? (videoAnchor.getAttribute("href") || "").trim() : "";
+                const anchorUrl = (() => {{
+                    if (!anchorHref) return "";
+                    try {{
+                        return new URL(anchorHref, window.location.href).toString();
+                    }} catch (_) {{
+                        return anchorHref;
+                    }}
+                }})();
+
+                const isDirectVideoUrl = (url) => {{
+                    if (!url) return false;
+                    const normalized = String(url || "").trim();
+                    if (!/^https?:[/][/]/i.test(normalized)) return false;
+                    const isOpenAIVideo = /^https:[/][/]videos[.]openai[.]com[/]/i.test(normalized) && /[/]raw(?:$|[?#])/i.test(normalized);
+                    const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized) && /[.]mp4(?:$|[?#])/i.test(normalized);
+                    return isOpenAIVideo || isImaginePublicVideo;
+                }};
+
+                if (isDirectVideoUrl(anchorUrl)) {{
+                    return {{ status: "direct-url-ready", src: anchorUrl, sourceType: "video-anchor" }};
+                }}
+                if (isDirectVideoUrl(src)) {{
+                    return {{ status: "direct-url-ready", src, sourceType: "video-src" }};
+                }}
+
                 const exactDownloadSelector = "button[type='button'][aria-label='Download']";
                 const exactDownloadCandidates = [...document.querySelectorAll(exactDownloadSelector)]
                     .filter((btn) => isVisible(btn) && !btn.disabled);
@@ -7359,29 +7389,6 @@ class MainWindow(QMainWindow):
                     return {{ status: "waiting-for-download" }};
                 }}
 
-                const video = document.querySelector("video");
-                const source = document.querySelector("video source");
-                const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
-                const videoAnchor = video ? video.closest("a[href]") : null;
-                const anchorHref = videoAnchor ? (videoAnchor.getAttribute("href") || "").trim() : "";
-                const anchorUrl = (() => {{
-                    if (!anchorHref) return "";
-                    try {{
-                        return new URL(anchorHref, window.location.href).toString();
-                    }} catch (_) {{
-                        return anchorHref;
-                    }}
-                }})();
-                const isOpenAIVideoUrl = (url) => {{
-                    if (!url) return false;
-                    return /^https:[/][/]videos[.]openai[.]com[/]/i.test(url) && /[/]raw(?:$|[?#])/i.test(url);
-                }};
-                if (isOpenAIVideoUrl(anchorUrl)) {{
-                    return {{ status: "direct-url-ready", src: anchorUrl, sourceType: "video-anchor" }};
-                }}
-                if (isOpenAIVideoUrl(src)) {{
-                    return {{ status: "direct-url-ready", src, sourceType: "video-src" }};
-                }}
                 const enoughData = !!(video && video.readyState >= 3 && Number(video.duration || 0) > 0);
                 return {{
                     status: src ? (enoughData ? "video-src-ready" : "video-buffering") : "waiting",
