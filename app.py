@@ -1851,6 +1851,8 @@ class AutomationRuntimeWorker(QThread):
         self.bus: ControlBusServer | None = None
         self.chrome_instance: ChromeInstance | None = None
         self.cdp_controller: CDPController | None = None
+        self.udp_service: UdpAutomationService | None = None
+        self._udp_started = False
 
     def run(self) -> None:
         self.loop = asyncio.new_event_loop()
@@ -1903,11 +1905,32 @@ class AutomationRuntimeWorker(QThread):
         self.log.emit(f"DOM ping result: {result}")
         return result
 
+
+    def ensure_udp_service(self) -> None:
+        async def _start_udp() -> None:
+            if self.bus is None:
+                raise RuntimeError("Control bus is not running")
+            if self.udp_service is None:
+                self.udp_service = UdpAutomationService(
+                    extension_dir=self.extension_dir,
+                    bus=self.bus,
+                    start_bus=False,
+                )
+            if not self._udp_started:
+                await self.udp_service.start()
+                self._udp_started = True
+
+        self._run_coro(_start_udp())
+        self.log.emit("UDP automation service listening on udp://127.0.0.1:18793")
+
     def stop_runtime(self) -> None:
         if self.loop is None:
             return
 
         async def _shutdown() -> None:
+            if self.udp_service is not None and self._udp_started:
+                await self.udp_service.stop()
+                self._udp_started = False
             if self.cdp_controller is not None:
                 await self.cdp_controller.close()
             if self.bus is not None:
@@ -1921,40 +1944,6 @@ class AutomationRuntimeWorker(QThread):
 
 
 
-class UdpAutomationServiceWorker(QThread):
-    log = Signal(str)
-
-    def __init__(self, extension_dir: Path):
-        super().__init__()
-        self.extension_dir = extension_dir
-        self.loop: asyncio.AbstractEventLoop | None = None
-        self.service: UdpAutomationService | None = None
-
-    def run(self) -> None:
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-
-        async def _start() -> None:
-            self.service = UdpAutomationService(extension_dir=self.extension_dir)
-            await self.service.start()
-            self.log.emit("UDP automation service listening on udp://127.0.0.1:18793")
-
-        self.loop.run_until_complete(_start())
-        self.loop.run_forever()
-
-    def stop_service(self) -> None:
-        if self.loop is None or self.service is None:
-            return
-
-        async def _stop() -> None:
-            assert self.service is not None
-            await self.service.stop()
-
-        try:
-            asyncio.run_coroutine_threadsafe(_stop(), self.loop).result(timeout=10)
-        except Exception:
-            pass
-        self.loop.call_soon_threadsafe(self.loop.stop)
 
 
 class UdpWorkflowWorker(QThread):
@@ -2083,7 +2072,6 @@ class MainWindow(QMainWindow):
         self.overlay_worker: VideoOverlayWorker | None = None
         self.automation_runtime: AutomationRuntimeWorker | None = None
         self.automation_chrome_instance: ChromeInstance | None = None
-        self.udp_service_worker: UdpAutomationServiceWorker | None = None
         self.udp_workflow_worker: UdpWorkflowWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
@@ -4270,14 +4258,9 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._append_automation_log(f"Extension DOM ping failed: {exc}")
 
-    def _ensure_udp_service(self) -> UdpAutomationServiceWorker:
-        if self.udp_service_worker is None:
-            worker = UdpAutomationServiceWorker(BASE_DIR / "extension")
-            worker.log.connect(self._append_automation_log)
-            worker.start()
-            self.udp_service_worker = worker
-            time.sleep(0.2)
-        return self.udp_service_worker
+    def _ensure_udp_service(self) -> None:
+        runtime = self._ensure_automation_runtime()
+        runtime.ensure_udp_service()
 
     def _run_social_upload_via_mode(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded")
@@ -7438,14 +7421,6 @@ class MainWindow(QMainWindow):
             if self.automation_runtime.isRunning():
                 self.automation_runtime.quit()
                 self.automation_runtime.wait(3000)
-        if self.udp_service_worker is not None:
-            try:
-                self.udp_service_worker.stop_service()
-            except Exception:
-                pass
-            if self.udp_service_worker.isRunning():
-                self.udp_service_worker.quit()
-                self.udp_service_worker.wait(3000)
         workers: list[tuple[str, QThread | None]] = [
             ("generation", self.worker),
             ("stitch", self.stitch_worker),

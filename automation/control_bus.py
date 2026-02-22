@@ -21,6 +21,8 @@ class ControlBusServer:
         self._lock = asyncio.Lock()
 
     async def start(self) -> None:
+        if self._server is not None:
+            return
         self._server = await websockets.serve(self._handle_client, self.host, self.port)
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 

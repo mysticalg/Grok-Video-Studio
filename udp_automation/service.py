@@ -20,11 +20,12 @@ PLATFORM_URLS = {
 
 
 class UdpAutomationService:
-    def __init__(self, extension_dir: Path, host: str = "127.0.0.1", port: int = 18793):
+    def __init__(self, extension_dir: Path, host: str = "127.0.0.1", port: int = 18793, bus: ControlBusServer | None = None, start_bus: bool = True):
         self.host = host
         self.port = port
         self.extension_dir = extension_dir
-        self.bus = ControlBusServer()
+        self.bus = bus or ControlBusServer()
+        self._start_bus = start_bus
         self.chrome_manager = AutomationChromeManager(extension_dir=extension_dir)
         self.chrome_instance = None
         self.cdp: CDPController | None = None
@@ -32,7 +33,8 @@ class UdpAutomationService:
         self._clients: set[tuple[str, int]] = set()
 
     async def start(self) -> None:
-        await self.bus.start()
+        if self._start_bus:
+            await self.bus.start()
         loop = asyncio.get_running_loop()
         self._transport, _ = await loop.create_datagram_endpoint(lambda: _UdpProtocol(self), local_addr=(self.host, self.port))
 
@@ -43,7 +45,8 @@ class UdpAutomationService:
         if self._transport is not None:
             self._transport.close()
             self._transport = None
-        await self.bus.stop()
+        if self._start_bus:
+            await self.bus.stop()
 
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
