@@ -457,23 +457,32 @@ async function handleCmd(msg) {
             "textarea[name='description']"
           ]
         };
+        const fieldAlias = {
+          caption: "description",
+          desc: "description",
+          text: "description",
+          body: "description",
+        };
+
         const out = {};
-        for (const [key, value] of Object.entries(fields)) {
-          const list = selectors[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
+        for (const [rawKey, value] of Object.entries(fields)) {
+          const key = String(rawKey || "").toLowerCase();
+          const canonicalKey = fieldAlias[key] || key;
+          const list = selectors[canonicalKey] || selectors[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
           let el = null;
-          if (currentPlatform === "youtube" && (key === "title" || key === "description")) {
-            el = findYouTubeContainerField(key);
+          if (currentPlatform === "youtube" && (canonicalKey === "title" || canonicalKey === "description")) {
+            el = findYouTubeContainerField(canonicalKey);
           }
           if (!el) {
             el = list.map((sel) => document.querySelector(sel)).find(Boolean);
           }
           if (!el) {
-            out[key] = false;
+            out[rawKey] = false;
             continue;
           }
 
           const text = String(value || "");
-          if (currentPlatform === "tiktok" && key === "description") {
+          if (currentPlatform === "tiktok" && canonicalKey === "description") {
             const tiktokSelectors = [
               ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
               "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
@@ -483,12 +492,12 @@ async function handleCmd(msg) {
             const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
             const pasteOk = setValue(tiktokEl, text);
             const matches = getEditableText(tiktokEl).includes(text.trim());
-            out[key] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
-          } else if (currentPlatform === "facebook" && key === "description") {
+            out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
+          } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
-            out[key] = setValue(facebookEl, text);
+            out[rawKey] = setValue(facebookEl, text);
           } else {
-            out[key] = setValue(el, text);
+            out[rawKey] = setValue(el, text);
           }
         }
         return out;
