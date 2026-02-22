@@ -8,6 +8,7 @@ from udp_automation.executors import BaseExecutor
 
 MAX_STEP_ATTEMPTS = 3
 STEP_DELAY_S = 1.0
+RETRY_DELAY_S = 2.0
 
 
 def _run_with_attempts(executor: BaseExecutor, action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -19,7 +20,7 @@ def _run_with_attempts(executor: BaseExecutor, action: str, payload: dict[str, A
         except Exception as exc:
             last_error = exc
             if attempt < MAX_STEP_ATTEMPTS - 1:
-                time.sleep(STEP_DELAY_S)
+                time.sleep(RETRY_DELAY_S)
                 continue
             break
 
