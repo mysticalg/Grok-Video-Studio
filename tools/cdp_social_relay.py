@@ -676,30 +676,45 @@ def _script_for_platform(platform: str) -> str:
             return null;
         };
 
+        const normalizeText = (value) => String(value || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim();
         const setFacebookCaption = (el, value) => {
             if (!el || !value) return false;
             const nextText = String(value || "").trim();
             if (!nextText) return false;
             try {
-                el.focus();
+                el.scrollIntoView({ block: 'center', inline: 'center' });
             } catch (_) {}
             try {
+                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window }));
+                el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window }));
+                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window }));
+            } catch (_) {}
+            try { el.focus(); } catch (_) {}
+            try {
                 if (el.isContentEditable) {
+                    try {
+                        const sel = window.getSelection();
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                        if (sel) {
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        }
+                    } catch (_) {}
+
                     try { document.execCommand('selectAll', false, null); } catch (_) {}
                     try { document.execCommand('insertText', false, nextText); } catch (_) {}
 
-                    if (String(el.textContent || '').trim() !== nextText) {
+                    if (normalizeText(el.textContent) !== normalizeText(nextText)) {
                         try {
-                            const sel = window.getSelection();
-                            const range = document.createRange();
-                            range.selectNodeContents(el);
-                            range.deleteContents();
+                            el.innerHTML = '';
                             const p = document.createElement('p');
                             p.setAttribute('dir', 'auto');
-                            p.className = 'xdj266r x14z9mp xat24cr x1lziwak x16tdsg8';
                             const textNode = document.createTextNode(nextText);
                             p.appendChild(textNode);
                             el.appendChild(p);
+                            const sel = window.getSelection();
                             if (sel) {
                                 sel.removeAllRanges();
                                 const caret = document.createRange();
@@ -715,15 +730,22 @@ def _script_for_platform(platform: str) -> str:
                     try {
                         el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' }));
                     } catch (_) {}
-                    el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' }));
+                    try {
+                        el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' }));
+                    } catch (_) {
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+                    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
-                    return String(el.textContent || '').trim() === nextText;
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return normalizeText(el.textContent) === normalizeText(nextText);
                 }
                 if ('value' in el) {
                     el.value = nextText;
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
-                    return String(el.value || '').trim() === nextText;
+                    return normalizeText(el.value) === normalizeText(nextText);
                 }
             } catch (_) {}
             return false;
