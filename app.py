@@ -10890,13 +10890,26 @@ class MainWindow(QMainWindow):
                             }
 
                             const finalActionHints = visibility === "public" ? ["publish", "save"] : ["save", "done"];
-                            const doneButton = bySelectors([
-                                'button[aria-label="Save"]',
-                                'ytcp-button#done-button button',
-                                'ytcp-button[id="done-button"] button',
-                                visibility === "public" ? 'button[aria-label*="publish" i]' : 'button[aria-label*="save" i]',
-                                'button[aria-label*="done" i]',
-                            ]) || findClickableByHints(finalActionHints);
+                            const finalActionSelectors = visibility === "public"
+                                ? [
+                                    'button[aria-label="Publish"]',
+                                    'button[aria-label*="publish" i]',
+                                    'ytcp-button#done-button button[aria-label*="publish" i]',
+                                    'ytcp-button[id="done-button"] button[aria-label*="publish" i]',
+                                    'ytcp-button#done-button button',
+                                    'ytcp-button[id="done-button"] button',
+                                    'button[aria-label="Save"]',
+                                    'button[aria-label*="save" i]',
+                                    'button[aria-label*="done" i]',
+                                ]
+                                : [
+                                    'button[aria-label="Save"]',
+                                    'button[aria-label*="save" i]',
+                                    'ytcp-button#done-button button',
+                                    'ytcp-button[id="done-button"] button',
+                                    'button[aria-label*="done" i]',
+                                ];
+                            const doneButton = bySelectors(finalActionSelectors, { requireEnabled: true }) || findClickableByHints(finalActionHints);
                             const doneDisabled = Boolean(
                                 doneButton
                                 && (
