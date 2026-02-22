@@ -9336,6 +9336,9 @@ class MainWindow(QMainWindow):
             status_label.setText("Status: CDP relay paused for this session. Toggle CDP Relay Mode off/on to retry.")
             timer.start(1500)
             return True
+        if bool(pending.get("cdp_relay_halted")):
+            status_label.setText("Status: CDP relay halted after failure; inspect logs/target state, then restart or toggle relay mode.")
+            return True
 
         relay_url = self.cdp_social_upload_relay_url.text().strip()
         if not relay_url:
@@ -9386,24 +9389,25 @@ class MainWindow(QMainWindow):
         result_kind = str(relay_result.get("kind") or "error")
         if result_kind == "timeout":
             exc = relay_result.get("error", "timeout")
-            status_label.setText("Status: CDP relay timed out; falling back to built-in DOM automation.")
+            pending["cdp_relay_halted"] = True
+            status_label.setText("Status: CDP relay timed out; automation halted for inspection.")
             if not pending.get("cdp_relay_timeout_logged"):
                 self._append_log(
-                    f"WARNING: {platform_name} CDP relay request timed out ({exc}); continuing with built-in DOM upload automation."
+                    f"ERROR: {platform_name} CDP relay request timed out ({exc}); automation halted (CDP-only mode, no DOM fallback)."
                 )
                 pending["cdp_relay_timeout_logged"] = True
-            return False
+            return True
         if result_kind != "ok":
             exc = relay_result.get("error", "unknown relay error")
             self._cdp_relay_temporarily_disabled = True
-            pending["allow_file_dialog"] = True
-            status_label.setText("Status: CDP relay unavailable; falling back to built-in DOM automation.")
+            pending["cdp_relay_halted"] = True
+            status_label.setText("Status: CDP relay unavailable; automation halted for inspection.")
             if not pending.get("cdp_relay_error_logged"):
                 self._append_log(
-                    f"WARNING: {platform_name} CDP relay unavailable ({exc}); continuing with built-in DOM upload automation."
+                    f"ERROR: {platform_name} CDP relay unavailable ({exc}); automation halted (CDP-only mode, no DOM fallback)."
                 )
                 pending["cdp_relay_error_logged"] = True
-            return False
+            return True
 
         relay_data = relay_result.get("relay_data")
 
@@ -9417,14 +9421,15 @@ class MainWindow(QMainWindow):
 
             if "cdp unavailable" in relay_status.lower() or "browser.setdownloadbehavior" in relay_status.lower():
                 self._cdp_relay_temporarily_disabled = True
-                pending["allow_file_dialog"] = True
+                pending["cdp_relay_halted"] = True
                 if not pending.get("cdp_relay_fallback_logged"):
                     self._append_log(
-                        f"WARNING: {platform_name} CDP relay reported unsupported target ({relay_status or 'unavailable'}); "
-                        "disabling relay for this session and continuing with built-in DOM upload automation."
+                        f"ERROR: {platform_name} CDP relay reported unsupported target ({relay_status or 'unavailable'}); "
+                        "automation halted (CDP-only mode, no DOM fallback)."
                     )
                     pending["cdp_relay_fallback_logged"] = True
-                return False
+                status_label.setText(relay_status or "Status: CDP relay unsupported target; automation halted for inspection.")
+                return True
 
             retry_ms = int(relay_data.get("retry_ms", 1500) or 1500)
             timer.start(max(400, retry_ms))
