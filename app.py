@@ -2134,6 +2134,7 @@ class MainWindow(QMainWindow):
         self.preview_volume = 100
         self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
+        self.cdp_enabled = True
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
             medium_title="AI Generated Video Clip",
@@ -2202,8 +2203,8 @@ class MainWindow(QMainWindow):
         self._build_model_api_settings_dialog()
         self._build_menu_bar()
 
-        automation_group = QGroupBox("🤖 Automation Chrome + CDP")
-        automation_layout = QVBoxLayout(automation_group)
+        self.automation_group = QGroupBox("🤖 Automation Chrome + CDP")
+        automation_layout = QVBoxLayout(self.automation_group)
         automation_buttons = QHBoxLayout()
 
         self.start_automation_chrome_btn = QPushButton("Start Automation Chrome")
@@ -2221,6 +2222,7 @@ class MainWindow(QMainWindow):
         self.automation_mode = QComboBox()
         self.automation_mode.addItem("Embedded", "embedded")
         self.automation_mode.addItem("UDP", "udp")
+        self.automation_mode.setCurrentIndex(1)
         automation_buttons.addWidget(self.automation_mode)
 
         automation_layout.addLayout(automation_buttons)
@@ -2228,7 +2230,7 @@ class MainWindow(QMainWindow):
         self.automation_log.setReadOnly(True)
         self.automation_log.setMinimumHeight(100)
         automation_layout.addWidget(self.automation_log)
-        left_layout.addWidget(automation_group)
+        left_layout.addWidget(self.automation_group)
 
         prompt_group = QGroupBox("✨ Prompt Inputs")
         prompt_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -3527,6 +3529,21 @@ class MainWindow(QMainWindow):
 
         self.automation_menu = menu_bar.addMenu("Automation")
 
+        cdp_settings_menu = menu_bar.addMenu("CDP Settings")
+        cdp_enabled_action = QAction("Enable CDP", self)
+        cdp_enabled_action.triggered.connect(lambda: self._set_cdp_enabled(True))
+        cdp_settings_menu.addAction(cdp_enabled_action)
+
+        cdp_disabled_action = QAction("Disable CDP", self)
+        cdp_disabled_action.triggered.connect(lambda: self._set_cdp_enabled(False))
+        cdp_settings_menu.addAction(cdp_disabled_action)
+
+        self.cdp_menu_actions = {
+            True: cdp_enabled_action,
+            False: cdp_disabled_action,
+        }
+        self._set_cdp_enabled(self.cdp_enabled)
+
         help_menu = menu_bar.addMenu("Help")
         info_action = QAction("Info", self)
         info_action.triggered.connect(self.show_app_info)
@@ -3543,6 +3560,10 @@ class MainWindow(QMainWindow):
         actions_action = QAction("Build Artifacts", self)
         actions_action.triggered.connect(self.open_github_actions_runs_page)
         help_menu.addAction(actions_action)
+
+        extension_dir_action = QAction("Open Chrome Extension Directory", self)
+        extension_dir_action.triggered.connect(self.open_extension_directory)
+        help_menu.addAction(extension_dir_action)
 
         self.quick_actions_toolbar = QToolBar("Quick Actions", self)
         self.quick_actions_toolbar.setMovable(False)
@@ -3729,6 +3750,23 @@ class MainWindow(QMainWindow):
     def open_github_actions_runs_page(self) -> None:
         QDesktopServices.openUrl(QUrl(GITHUB_ACTIONS_RUNS_URL))
 
+    def open_extension_directory(self) -> None:
+        extension_dir = (BASE_DIR / "extension").resolve()
+        QMessageBox.information(
+            self,
+            "Chrome Extension Directory",
+            f"Chrome extension path:\n{extension_dir}",
+        )
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(extension_dir)))
+
+    def _set_cdp_enabled(self, enabled: bool) -> None:
+        self.cdp_enabled = bool(enabled)
+        if hasattr(self, "automation_group"):
+            self.automation_group.setVisible(self.cdp_enabled)
+        if hasattr(self, "cdp_menu_actions"):
+            self.cdp_menu_actions[True].setEnabled(not self.cdp_enabled)
+            self.cdp_menu_actions[False].setEnabled(self.cdp_enabled)
+
     def open_buy_me_a_coffee(self) -> None:
         QDesktopServices.openUrl(QUrl(BUY_ME_A_COFFEE_URL))
 
@@ -3826,6 +3864,8 @@ class MainWindow(QMainWindow):
             "qtwebengine_remote_debug_port": int(self.qtwebengine_remote_debug_port.value()),
             "cdp_social_upload_relay_enabled": self.cdp_social_upload_relay_enabled.isChecked(),
             "cdp_social_upload_relay_url": self.cdp_social_upload_relay_url.text().strip(),
+            "cdp_enabled": self.cdp_enabled,
+            "automation_mode": self.automation_mode.currentData(),
             "count": self.count.value(),
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
@@ -3965,6 +4005,12 @@ class MainWindow(QMainWindow):
             self.cdp_social_upload_relay_enabled.setChecked(bool(preferences["cdp_social_upload_relay_enabled"]))
         if "cdp_social_upload_relay_url" in preferences:
             self.cdp_social_upload_relay_url.setText(str(preferences["cdp_social_upload_relay_url"]))
+        if "cdp_enabled" in preferences:
+            self._set_cdp_enabled(bool(preferences["cdp_enabled"]))
+        if "automation_mode" in preferences:
+            automation_mode_index = self.automation_mode.findData(str(preferences["automation_mode"]))
+            if automation_mode_index >= 0:
+                self.automation_mode.setCurrentIndex(automation_mode_index)
         if "ai_social_metadata" in preferences and isinstance(preferences["ai_social_metadata"], dict):
             metadata = preferences["ai_social_metadata"]
             hashtags = metadata.get("hashtags", self.ai_social_metadata.hashtags)
@@ -4272,6 +4318,7 @@ class MainWindow(QMainWindow):
             self._start_social_browser_upload(platform_name=platform_name, video_path=video_path, caption=caption, title=title)
             return
 
+        self._cancel_social_upload_run(platform_name, reason="switching to UDP automation")
         self._ensure_udp_service()
         if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
             self._append_automation_log("Stopping previous UDP workflow before starting a new one.")
@@ -4279,9 +4326,14 @@ class MainWindow(QMainWindow):
                 self.udp_workflow_worker.request_stop()
                 if not self.udp_workflow_worker.wait(2000):
                     self.udp_workflow_worker.requestInterruption()
-                    self.udp_workflow_worker.wait(1000)
-            except Exception:
-                pass
+                    if not self.udp_workflow_worker.wait(1500):
+                        self._append_automation_log(
+                            "WARNING: Previous UDP workflow did not stop in time; forcing thread termination."
+                        )
+                        self.udp_workflow_worker.terminate()
+                        self.udp_workflow_worker.wait(800)
+            except Exception as exc:
+                self._append_automation_log(f"WARNING: Failed to stop previous UDP workflow cleanly: {exc}")
         self._append_automation_log("UDP action log file: logs/udp_automation.log")
         self._append_automation_log(f"Starting UDP workflow for {platform_name}.")
         worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption)
@@ -9525,7 +9577,31 @@ class MainWindow(QMainWindow):
         else:
             print("Status check failed:", resp.text)
 
+    def _cancel_social_upload_run(self, platform_name: str, reason: str = "") -> None:
+        pending = self.social_upload_pending.pop(platform_name, None)
+        timer = self.social_upload_timers.get(platform_name)
+        if timer is not None:
+            timer.stop()
+
+        if isinstance(pending, dict):
+            relay_future = pending.get("cdp_relay_future")
+            if isinstance(relay_future, concurrent.futures.Future) and not relay_future.done():
+                relay_future.cancel()
+
+        status_label = self.social_upload_status_labels.get(platform_name)
+        progress_bar = self.social_upload_progress_bars.get(platform_name)
+        if status_label is not None:
+            status_suffix = f" ({reason})" if reason else ""
+            status_label.setText(f"Status: restarted automation{status_suffix}.")
+        if progress_bar is not None:
+            progress_bar.setVisible(False)
+            progress_bar.setValue(0)
+
     def _start_social_browser_upload(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
+        if platform_name in self.social_upload_pending:
+            self._append_log(f"{platform_name}: previous automation run detected; canceling and starting fresh.")
+            self._cancel_social_upload_run(platform_name, reason="new run requested")
+
         browser = self.social_upload_browsers.get(platform_name)
         timer = self.social_upload_timers.get(platform_name)
         status_label = self.social_upload_status_labels.get(platform_name)

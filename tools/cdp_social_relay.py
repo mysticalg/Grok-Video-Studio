@@ -321,8 +321,8 @@ def _stage_file_upload_via_file_chooser(page, platform: str, video_path: str) ->
         for idx in range(min(count, 4)):
             node = locator.nth(idx)
             try:
-                with page.expect_file_chooser(timeout=1200) as chooser_info:
-                    node.click(timeout=1000)
+                with page.expect_file_chooser(timeout=5000) as chooser_info:
+                    node.click(timeout=3000)
                 chooser = chooser_info.value
                 chooser.set_files(video_path)
                 return True, f"staged via file chooser trigger '{selector}'"
@@ -352,11 +352,16 @@ def _stage_file_upload(
         count = locator.count()
         for idx in range(count):
             node = locator.nth(idx)
-            try:
-                node.set_input_files(video_path, timeout=2000)
-                return True, f"staged via selector '{selector}'"
-            except Exception:
-                continue
+            for timeout_ms in (15000, 30000):
+                try:
+                    node.set_input_files(video_path, timeout=timeout_ms)
+                    return True, f"staged via selector '{selector}' (timeout={timeout_ms}ms)"
+                except Exception:
+                    try:
+                        page.wait_for_timeout(250)
+                    except Exception:
+                        pass
+                    continue
 
     chooser_staged, chooser_detail = _stage_file_upload_via_file_chooser(page, platform, video_path)
     if chooser_staged:
@@ -407,28 +412,94 @@ def _script_for_platform(platform: str) -> str:
         return (
             common
             + r'''
-        const captionTarget = bySelectors([
+        const isVisible = (node) => {
+            if (!node) return false;
+            try {
+                const style = window.getComputedStyle(node);
+                if (!style || style.display === "none" || style.visibility === "hidden") return false;
+                const rect = node.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            } catch (_) {
+                return true;
+            }
+        };
+        const byVisibleSelectors = (selectors) => {
+            for (const selector of selectors) {
+                try {
+                    const nodes = Array.from(document.querySelectorAll(selector));
+                    const visible = nodes.find((node) => isVisible(node));
+                    if (visible) return visible;
+                    if (nodes[0]) return nodes[0];
+                } catch (_) {}
+            }
+            return null;
+        };
+        const clickNodeOrAncestor = (el) => {
+            if (!el) return false;
+            const target = el.closest('button, [role="button"]') || el;
+            try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+            try {
+                target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.click?.();
+                return true;
+            } catch (_) {
+                try { target.click(); return true; } catch (_) { return false; }
+            }
+        };
+
+        const captionTarget = byVisibleSelectors([
             '[contenteditable="true"][data-e2e*="caption"]',
             '[contenteditable="true"][aria-label*="caption" i]',
+            '[contenteditable="true"][placeholder*="describe" i]',
             '[contenteditable="true"]',
         ]);
         const captionFilled = setText(captionTarget, captionText || titleText);
 
-        const postButton = bySelectors([
-            'button[data-e2e="save_draft_button"]',
+        const postButton = byVisibleSelectors([
             'button[data-e2e*="post"]',
             'button[aria-label*="post" i]',
-            'button:has-text("Post")',
+            'div[role="button"][aria-label*="post" i]',
+            'button[class*="post" i]',
         ]);
-        const submitClicked = click(postButton);
+        const postByText = Array.from(document.querySelectorAll('button, [role="button"], div'))
+            .find((node) => isVisible(node) && String(node.textContent || '').trim().toLowerCase() === 'post');
+        const finalPostButton = postButton || postByText || null;
+
+        const postDisabled = Boolean(
+            finalPostButton
+            && (
+                finalPostButton.disabled
+                || String(finalPostButton.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+                || String(finalPostButton.getAttribute('disabled') || '').toLowerCase() === 'true'
+            )
+        );
+
+        const submitClicked = Boolean(finalPostButton && !postDisabled && clickNodeOrAncestor(finalPostButton));
+        const draftButton = byVisibleSelectors([
+            'button[data-e2e="save_draft_button"]',
+            'button[data-e2e*="draft"]',
+            'button[aria-label*="draft" i]',
+        ]);
+        const draftClicked = !submitClicked ? clickNodeOrAncestor(draftButton) : false;
         const url = String(location.href || "");
 
         return {
             platform: "tiktok",
             captionFilled,
+            postFound: Boolean(finalPostButton),
+            postEnabled: Boolean(finalPostButton && !postDisabled),
             submitClicked,
-            done: Boolean(submitClicked || url.includes("tab=draft")),
-            status: submitClicked ? "TikTok: clicked post/draft button via CDP." : "TikTok: caption step executed.",
+            draftClicked,
+            done: Boolean(submitClicked || draftClicked || url.includes("tab=draft")),
+            status: submitClicked
+                ? "TikTok: clicked Post via CDP."
+                : (draftClicked
+                    ? "TikTok: clicked Save draft via CDP."
+                    : `TikTok: form step executed (captionFilled=${Boolean(captionFilled)}, postFound=${Boolean(finalPostButton)}, postEnabled=${Boolean(finalPostButton && !postDisabled)}).`),
         };
         ''')
 
@@ -436,32 +507,158 @@ def _script_for_platform(platform: str) -> str:
         return (
             common
             + r'''
-        const titleTarget = bySelectors([
-            'textarea#textbox[aria-label*="title" i]',
-            'div#textbox[contenteditable="true"][aria-label*="title" i]',
-            '#textbox[contenteditable="true"]',
-        ]);
-        const descTarget = bySelectors([
-            'textarea#textbox[aria-label*="description" i]',
-            'div#textbox[contenteditable="true"][aria-label*="description" i]',
-        ]);
-        const titleFilled = setText(titleTarget, titleText);
-        const captionFilled = setText(descTarget, captionText);
+        const isVisible = (node) => {
+            if (!node) return false;
+            try {
+                const style = window.getComputedStyle(node);
+                if (!style || style.display === "none" || style.visibility === "hidden") return false;
+                const rect = node.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            } catch (_) {
+                return true;
+            }
+        };
+        const byVisibleSelectors = (selectors) => {
+            for (const selector of selectors) {
+                try {
+                    const nodes = Array.from(document.querySelectorAll(selector));
+                    const visible = nodes.find((node) => isVisible(node));
+                    if (visible) return visible;
+                    if (nodes[0]) return nodes[0];
+                } catch (_) {}
+            }
+            return null;
+        };
+        const normText = (value) => String(value || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim();
+        const findYoutubeTextbox = (kinds, scopedSelectors = []) => {
+            for (const scopedSelector of scopedSelectors) {
+                const scopedNode = byVisibleSelectors([scopedSelector]);
+                if (scopedNode) return scopedNode;
+            }
+            const nodes = Array.from(document.querySelectorAll('div#textbox[contenteditable="true"], textarea#textbox, [contenteditable="true"][id="textbox"]'));
+            for (const node of nodes) {
+                const aria = String(node.getAttribute('aria-label') || '').toLowerCase();
+                if (kinds.some((kind) => aria.includes(kind)) && isVisible(node)) return node;
+            }
+            for (const node of nodes) {
+                const aria = String(node.getAttribute('aria-label') || '').toLowerCase();
+                if (kinds.some((kind) => aria.includes(kind))) return node;
+            }
+            return null;
+        };
+        const setYouTubeText = (el, value) => {
+            if (!el || !value) return false;
+            const nextText = String(value || '').trim();
+            if (!nextText) return false;
+            try {
+                if (el.isContentEditable) {
+                    el.focus();
+                    try { document.execCommand('selectAll', false, null); } catch (_) {}
+                    try { document.execCommand('insertText', false, nextText); } catch (_) {}
 
-        const publishButton = bySelectors([
+                    if (normText(el.textContent) !== normText(nextText)) {
+                        try {
+                            const selection = window.getSelection();
+                            const range = document.createRange();
+                            range.selectNodeContents(el);
+                            range.deleteContents();
+                            const textNode = document.createTextNode(nextText);
+                            el.appendChild(textNode);
+                            if (selection) {
+                                selection.removeAllRanges();
+                                const caret = document.createRange();
+                                caret.setStart(textNode, textNode.length);
+                                caret.collapse(true);
+                                selection.addRange(caret);
+                            }
+                        } catch (_) {
+                            try { el.textContent = nextText; } catch (_) {}
+                        }
+                    }
+
+                    try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' })); } catch (_) {}
+                    try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' })); } catch (_) {
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return normText(el.textContent) === normText(nextText);
+                }
+                if ('value' in el) {
+                    el.value = nextText;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return normText(el.value) === normText(nextText);
+                }
+            } catch (_) {}
+            return false;
+        };
+
+        const activateContainer = (node) => {
+            if (!node) return false;
+            try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+            try {
+                node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window }));
+                node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window }));
+                node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window }));
+                node.click?.();
+            } catch (_) {}
+            return true;
+        };
+        const findYoutubeTextboxByOuterLabel = (hints) => {
+            const containers = Array.from(document.querySelectorAll('ytcp-form-input-container'));
+            for (const container of containers) {
+                const label = String(container.querySelector('#label-text')?.textContent || '').toLowerCase();
+                if (!hints.some((hint) => label.includes(hint))) continue;
+                const outer = container.querySelector('#outer, #child-input, #container-content');
+                if (outer) activateContainer(outer);
+                const textbox = container.querySelector('#textbox[contenteditable="true"], textarea#textbox');
+                if (textbox && isVisible(textbox)) return textbox;
+                if (textbox) return textbox;
+            }
+            return null;
+        };
+
+        const titleTarget = findYoutubeTextboxByOuterLabel(['title']) || findYoutubeTextbox(['title', 'describes your video'], [
+            '#title-textarea #textbox[contenteditable="true"]',
+            '[aria-label*="add a title" i]#textbox[contenteditable="true"]',
+        ]) || byVisibleSelectors([
+            'div#textbox[contenteditable="true"][aria-label*="title" i]',
+            'textarea#textbox[aria-label*="title" i]',
+        ]);
+        const descTarget = findYoutubeTextboxByOuterLabel(['description']) || findYoutubeTextbox(['description', 'tell viewers about your video'], [
+            '#description #textbox[contenteditable="true"]',
+            '[aria-label*="tell viewers about your video" i]#textbox[contenteditable="true"]',
+            '[aria-label*="tell viewers" i][contenteditable="true"]#textbox',
+        ]) || byVisibleSelectors([
+            '#description div#textbox[contenteditable="true"]',
+            'div#textbox[contenteditable="true"][aria-label*="description" i]',
+            'div#textbox[contenteditable="true"][aria-label*="tell viewers" i]',
+            'textarea#textbox[aria-label*="description" i]',
+        ]);
+
+        const titleFilled = setYouTubeText(titleTarget, titleText);
+        const captionFilled = setYouTubeText(descTarget, captionText);
+
+        const canSubmit = Boolean((!titleText || titleFilled) && (!captionText || captionFilled));
+        const publishButton = byVisibleSelectors([
             'button[aria-label*="publish" i]',
             'button[aria-label*="save" i]',
             'ytcp-button[aria-label*="publish" i] button',
         ]);
-        const submitClicked = click(publishButton);
+        const submitClicked = canSubmit ? click(publishButton) : false;
 
         return {
             platform: "youtube",
             titleFilled,
             captionFilled,
+            canSubmit,
             submitClicked,
             done: Boolean(submitClicked),
-            status: submitClicked ? "YouTube: clicked publish/save button via CDP." : "YouTube: metadata step executed.",
+            status: submitClicked
+                ? "YouTube: clicked publish/save button via CDP."
+                : `YouTube: metadata step executed (titleFilled=${Boolean(titleFilled)}, captionFilled=${Boolean(captionFilled)}, canSubmit=${Boolean(canSubmit)}).`,
         };
         ''')
 
@@ -469,24 +666,163 @@ def _script_for_platform(platform: str) -> str:
         return (
             common
             + r'''
-        const captionTarget = bySelectors([
+        const isVisible = (node) => {
+            if (!node) return false;
+            try {
+                const style = window.getComputedStyle(node);
+                if (!style || style.display === "none" || style.visibility === "hidden") return false;
+                const rect = node.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            } catch (_) {
+                return true;
+            }
+        };
+        const byVisibleSelectors = (selectors) => {
+            for (const selector of selectors) {
+                try {
+                    const nodes = Array.from(document.querySelectorAll(selector));
+                    const visible = nodes.find((node) => isVisible(node));
+                    if (visible) return visible;
+                    if (nodes[0]) return nodes[0];
+                } catch (_) {}
+            }
+            return null;
+        };
+        const findFacebookNextButton = () => {
+            const direct = byVisibleSelectors([
+                'div[role="button"][aria-label="Next"]',
+                'div[role="button"][aria-label*="next" i]',
+                'button[aria-label="Next"]',
+                'button[aria-label*="next" i]',
+            ]);
+            if (direct) return direct;
+
+            const textNodes = Array.from(document.querySelectorAll('span, div, button')).filter((node) => {
+                const text = String(node.textContent || "").trim().toLowerCase();
+                return text === "next" && isVisible(node);
+            });
+            for (const textNode of textNodes) {
+                const clickable = textNode.closest('div[role="button"], button');
+                if (clickable && isVisible(clickable)) return clickable;
+            }
+            return null;
+        };
+
+        const normalizeText = (value) => String(value || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim();
+        const setFacebookCaption = (el, value) => {
+            if (!el || !value) return false;
+            const nextText = String(value || "").trim();
+            if (!nextText) return false;
+            try {
+                el.scrollIntoView({ block: 'center', inline: 'center' });
+            } catch (_) {}
+            try {
+                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window }));
+                el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window }));
+                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window }));
+            } catch (_) {}
+            try { el.focus(); } catch (_) {}
+            try {
+                if (el.isContentEditable) {
+                    try {
+                        const sel = window.getSelection();
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                        if (sel) {
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        }
+                    } catch (_) {}
+
+                    try { document.execCommand('selectAll', false, null); } catch (_) {}
+                    try { document.execCommand('insertText', false, nextText); } catch (_) {}
+
+                    if (normalizeText(el.textContent) !== normalizeText(nextText)) {
+                        try {
+                            el.innerHTML = '';
+                            const p = document.createElement('p');
+                            p.setAttribute('dir', 'auto');
+                            const textNode = document.createTextNode(nextText);
+                            p.appendChild(textNode);
+                            el.appendChild(p);
+                            const sel = window.getSelection();
+                            if (sel) {
+                                sel.removeAllRanges();
+                                const caret = document.createRange();
+                                caret.setStart(textNode, textNode.length);
+                                caret.collapse(true);
+                                sel.addRange(caret);
+                            }
+                        } catch (_) {
+                            try { el.textContent = nextText; } catch (_) {}
+                        }
+                    }
+
+                    try {
+                        el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' }));
+                    } catch (_) {}
+                    try {
+                        el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' }));
+                    } catch (_) {
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+                    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return normalizeText(el.textContent) === normalizeText(nextText);
+                }
+                if ('value' in el) {
+                    el.value = nextText;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return normalizeText(el.value) === normalizeText(nextText);
+                }
+            } catch (_) {}
+            return false;
+        };
+
+        const nextButton = findFacebookNextButton();
+        const captionTarget = byVisibleSelectors([
+            '[contenteditable="true"][aria-placeholder*="describe your reel" i]',
+            '[contenteditable="true"][aria-label*="describe your reel" i]',
+            '[contenteditable="true"][data-lexical-editor="true"]',
             '[contenteditable="true"][aria-label*="write" i]',
             '[contenteditable="true"][role="textbox"]',
         ]);
-        const captionFilled = setText(captionTarget, captionText || titleText);
-        const postButton = bySelectors([
+        const desiredCaption = captionText || titleText;
+        const captionFilled = !nextButton ? setFacebookCaption(captionTarget, desiredCaption) : false;
+
+        const postButton = byVisibleSelectors([
             'div[role="button"][aria-label*="post" i]',
             'button[aria-label*="post" i]',
+            'div[role="button"][aria-label*="share" i]',
+            'button[aria-label*="share" i]',
         ]);
-        const submitClicked = click(postButton);
+
+        let nextClicked = false;
+        if (nextButton) {
+            nextClicked = click(nextButton);
+        }
+
+        const captionRequired = Boolean(desiredCaption);
+        const canSubmit = !nextButton && (!captionRequired || captionFilled);
+        const submitClicked = canSubmit ? click(postButton) : false;
         return {
             platform: "facebook",
             captionFilled,
+            nextClicked,
             submitClicked,
             done: Boolean(submitClicked),
-            status: submitClicked ? "Facebook: clicked post button via CDP." : "Facebook: caption step executed.",
+            status: submitClicked
+                ? "Facebook: clicked post button via CDP."
+                : (nextClicked
+                    ? "Facebook: clicked Next via CDP."
+                    : `Facebook: waiting for description/post step (captionFilled=${Boolean(captionFilled)}).`),
         };
         ''')
+
 
     if platform == "instagram":
         return (

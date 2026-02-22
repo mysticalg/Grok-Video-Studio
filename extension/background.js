@@ -3,6 +3,29 @@ const SCHEMA_VERSION = 1;
 const CLIENT_ID = "relay-extension";
 
 let socket = null;
+
+async function findTargetTab(platform = "") {
+  const normalized = String(platform || "").toLowerCase();
+  const matchByPlatform = {
+    tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
+    youtube: ["studio.youtube.com", "youtube.com"],
+    facebook: ["facebook.com/reels/create", "facebook.com"]
+  };
+
+  const allTabs = await chrome.tabs.query({});
+  const targets = matchByPlatform[normalized] || [];
+  const platformTab = allTabs.find((tab) => tab.id != null && targets.some((host) => String(tab.url || "").includes(host)));
+
+  let activeTab = allTabs.find((tab) => tab.active && tab.lastFocusedWindow && tab.id != null);
+  if (!activeTab) activeTab = allTabs.find((tab) => tab.active && tab.id != null);
+
+  const chosen = platformTab || activeTab;
+  if (!chosen || chosen.id == null) {
+    throw new Error(`No suitable tab available for platform=${normalized || "unknown"}`);
+  }
+  return chosen;
+}
+
 let reconnectDelayMs = 1000;
 const platformState = {
   youtube: { state: "ready" },
@@ -48,27 +71,7 @@ function ackCmd(msg, ok, payload, error) {
 }
 
 async function executeInTab(fn, args = [], platform = "") {
-  const normalized = String(platform || "").toLowerCase();
-  const matchByPlatform = {
-    tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
-    youtube: ["studio.youtube.com", "youtube.com"],
-    facebook: ["facebook.com/reels/create", "facebook.com"]
-  };
-
-  const allTabs = await chrome.tabs.query({});
-  const targets = matchByPlatform[normalized] || [];
-  const platformTab = allTabs.find((tab) => tab.id != null && targets.some((host) => String(tab.url || "").includes(host)));
-
-  let activeTab = allTabs.find((tab) => tab.active && tab.lastFocusedWindow && tab.id != null);
-  if (!activeTab) {
-    activeTab = allTabs.find((tab) => tab.active && tab.id != null);
-  }
-
-  const chosen = platformTab || activeTab;
-  if (!chosen || chosen.id == null) {
-    throw new Error(`No suitable tab available for platform=${normalized || "unknown"}`);
-  }
-
+  const chosen = await findTargetTab(platform);
   const results = await chrome.scripting.executeScript({ target: { tabId: chosen.id }, func: fn, args });
   return results[0]?.result;
 }
@@ -127,7 +130,7 @@ async function handleCmd(msg) {
           return null;
         };
 
-        const timeoutMs = Number(opts.timeoutMs || 30000);
+        const timeoutMs = Math.max(1000, Number(opts.timeoutMs || 30000));
         const started = Date.now();
         while (Date.now() - started < timeoutMs) {
           const found = findCandidate();
@@ -146,7 +149,12 @@ async function handleCmd(msg) {
         if (!isEnabled(found.el)) return { clicked: false, reason: "disabled", selector: found.selector };
         if (opts.waitForUpload && !hasUploadReadySignal()) return { clicked: false, reason: "upload_not_ready", selector: found.selector };
         return { clicked: false, reason: "unknown", selector: found.selector };
-      }, [candidates, { waitForUpload: Boolean(payload.waitForUpload), timeoutMs: Number(payload.timeoutMs || 30000) }], platform);
+      }, [candidates, (() => {
+        const requestedTimeoutMs = Number(payload.timeoutMs || 0);
+        const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
+        const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs };
+      })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
           if (result?.clicked) {
@@ -170,15 +178,103 @@ async function handleCmd(msg) {
 
     if (msg.name === "dom.type" || msg.name === "form.fill") {
       const platform = String(payload.platform || "").toLowerCase();
-      const result = await executeInTab(async (p, name, currentPlatform) => {
+      const result = await Promise.race([
+        executeInTab(async (p, name, currentPlatform) => {
         const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        const setDraftEditorValue = (el, value) => {
+          const text = String(value || "");
+          const root = el.closest(".DraftEditor-root") || el;
+          const editable = root.querySelector(".public-DraftEditor-content[contenteditable='true']") || el;
+          const textSpan = editable.querySelector("span[data-text='true']");
+
+          editable.focus();
+          editable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
+          editable.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
+          editable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+
+          let applied = false;
+          try {
+            // Simulated paste path for DraftJS-like editors.
+            const data = new DataTransfer();
+            data.setData("text/plain", text);
+            const pasteEvt = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
+            editable.dispatchEvent(pasteEvt);
+            applied = String(editable.textContent || "").trim().length > 0;
+          } catch (_) {}
+
+          if (!applied) {
+            try { document.execCommand("selectAll", false, null); } catch (_) {}
+            try {
+              applied = Boolean(document.execCommand("insertText", false, text));
+            } catch (_) {
+              applied = false;
+            }
+          }
+
+          if (!applied || String(editable.textContent || "").trim().length === 0) {
+            if (textSpan) {
+              textSpan.textContent = text;
+            } else {
+              editable.textContent = text;
+            }
+          }
+
+          try { editable.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" })); } catch (_) {}
+          try { editable.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" })); } catch (_) {
+            editable.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          editable.dispatchEvent(new Event("change", { bubbles: true }));
+          editable.dispatchEvent(new Event("blur", { bubbles: true }));
+          return true;
+        };
+
+        const setContentEditableByPaste = (el, value) => {
+          const text = String(value || "");
+          el.focus();
+          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
+          el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
+          el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+
+          let applied = false;
+          try {
+            const data = new DataTransfer();
+            data.setData("text/plain", text);
+            const pasteEvt = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
+            el.dispatchEvent(pasteEvt);
+            applied = String(el.textContent || "").trim().length > 0;
+          } catch (_) {}
+
+          if (!applied) {
+            try { document.execCommand("selectAll", false, null); } catch (_) {}
+            try { applied = Boolean(document.execCommand("insertText", false, text)); } catch (_) { applied = false; }
+          }
+
+          if (!applied || String(el.textContent || "").trim().length === 0) {
+            el.textContent = text;
+          }
+
+          try { el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" })); } catch (_) {}
+          try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" })); } catch (_) {
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("blur", { bubbles: true }));
+          return true;
+        };
 
         const setValue = (el, value) => {
           el.focus();
-          if (el.isContentEditable) {
-            el.textContent = value;
-            el.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
-            return true;
+          const isDraftEditor = (
+            String(el.getAttribute("role") || "").toLowerCase() === "combobox"
+            || String(el.className || "").includes("DraftEditor")
+            || Boolean(el.closest(".DraftEditor-root"))
+          );
+          if (el.isContentEditable || String(el.getAttribute("contenteditable") || "").toLowerCase() === "true") {
+            if (isDraftEditor) {
+              return setDraftEditorValue(el, value);
+            }
+            return setContentEditableByPaste(el, value);
           }
           const proto = Object.getPrototypeOf(el);
           const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
@@ -203,6 +299,38 @@ async function handleCmd(msg) {
             el.dispatchEvent(new Event("input", { bubbles: true }));
           }
           await wait(120);
+        };
+
+        const getEditableText = (el) => String(el?.innerText || el?.textContent || "").replace(/\u00a0/g, " ").trim();
+
+        const clearEditable = (el) => {
+          if (!el) return;
+          try { el.focus(); } catch (_) {}
+          try { document.execCommand("selectAll", false, null); } catch (_) {}
+          try { document.execCommand("delete", false, null); } catch (_) {}
+          try { el.textContent = ""; } catch (_) {}
+          try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+        };
+
+        const typeTextIntoEditable = async (el, value) => {
+          if (!el) return false;
+          const text = String(value || "");
+          clearEditable(el);
+          for (const ch of text) {
+            try { el.focus(); } catch (_) {}
+            let inserted = false;
+            try { inserted = Boolean(document.execCommand("insertText", false, ch)); } catch (_) { inserted = false; }
+            if (!inserted) {
+              try { el.textContent = `${el.textContent || ""}${ch}`; } catch (_) {}
+            }
+            try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: ch, inputType: "insertText" })); } catch (_) {
+              try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+            }
+            await wait(8);
+          }
+          try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+          try { el.dispatchEvent(new Event("blur", { bubbles: true })); } catch (_) {}
+          return getEditableText(el).length > 0;
         };
 
         const clickHashtagSuggestion = async () => {
@@ -230,62 +358,198 @@ async function handleCmd(msg) {
         if (name === "dom.type") {
           const el = document.querySelector(p.selector || "");
           if (!el) return { typed: false, selector: p.selector || "" };
-          return { typed: setValue(el, p.text || ""), selector: p.selector || "" };
+          return { typed: setValue(el, p.value ?? p.text ?? ""), selector: p.selector || "" };
         }
 
         const fields = p.fields || {};
+        const focusYouTubeTextbox = (textbox) => {
+          if (!textbox) return null;
+          const outer = textbox.closest("#outer, #child-input, #container-content") || textbox.parentElement;
+          if (outer) {
+            try { outer.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            try { outer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { outer.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { outer.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+          }
+          try { textbox.focus(); } catch (_) {}
+          return textbox;
+        };
+
+        const findFacebookReelDescriptionField = () => {
+          const selectors = [
+            "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][data-lexical-editor='true']",
+          ];
+          for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (!el) continue;
+            try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            try { el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { el.focus(); } catch (_) {}
+            return el;
+          }
+          return null;
+        };
+
+        const findYouTubeContainerField = (key) => {
+          const titleCandidates = [
+            "#textbox[contenteditable='true'][aria-label*='add a title' i]",
+            "#textbox[contenteditable='true'][aria-required='true'][aria-label*='title' i]",
+            "#title-textarea #textbox[contenteditable='true']",
+          ];
+          const descriptionCandidates = [
+            "#textbox[contenteditable='true'][aria-label*='tell viewers about your video' i]",
+            "#description #textbox[contenteditable='true']",
+            "#textbox[contenteditable='true'][aria-label*='description' i]",
+          ];
+
+          if (key === "title") {
+            for (const sel of titleCandidates) {
+              const found = document.querySelector(sel);
+              if (found) return focusYouTubeTextbox(found);
+            }
+          }
+
+          if (key === "description") {
+            for (const sel of descriptionCandidates) {
+              const found = document.querySelector(sel);
+              if (found) return focusYouTubeTextbox(found);
+            }
+          }
+
+          const containers = Array.from(document.querySelectorAll("ytcp-form-input-container#container, ytcp-form-input-container"));
+          for (const container of containers) {
+            const root = container.closest("ytcp-form-input-container") || container;
+            const label = String(root.querySelector("#label-text")?.textContent || "").toLowerCase();
+            if (key === "title" && !label.includes("title")) continue;
+            if (key === "description" && !label.includes("description")) continue;
+            const textbox = root.querySelector("#textbox[contenteditable='true'], textarea#textbox");
+            if (textbox) return focusYouTubeTextbox(textbox);
+          }
+          return null;
+        };
+
         const selectors = {
-          title: ["textarea#title-textarea", "#textbox", "input[name='title']", "textarea[name='title']"],
+          title: [
+            "#title-textarea #textbox[contenteditable='true']",
+            "ytcp-form-input-container #outer #textbox[contenteditable='true']",
+            "div#textbox[contenteditable='true'][aria-label*='title' i]",
+            "textarea#title-textarea",
+            "#textbox",
+            "input[name='title']",
+            "textarea[name='title']"
+          ],
           description: [
+            "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-placeholder*='Describe your reel' i]",
+            "#description #textbox[contenteditable='true']",
+            "div#textbox[contenteditable='true'][aria-label*='tell viewers' i]",
+            "div#textbox[contenteditable='true'][aria-label*='description' i]",
+            "[contenteditable='true'][aria-placeholder*='describe your reel' i]",
+            ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
+            "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
+            "div[contenteditable='true'][role='combobox']",
             "div[contenteditable='true'][role='textbox']",
             "div[contenteditable='true']",
             "textarea#description-textarea",
             "textarea[name='description']"
           ]
         };
+        const fieldAlias = {
+          caption: "description",
+          desc: "description",
+          text: "description",
+          body: "description",
+        };
+
         const out = {};
-        for (const [key, value] of Object.entries(fields)) {
-          const list = selectors[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
-          const el = list.map((sel) => document.querySelector(sel)).find(Boolean);
+        for (const [rawKey, value] of Object.entries(fields)) {
+          const key = String(rawKey || "").toLowerCase();
+          const canonicalKey = fieldAlias[key] || key;
+          const list = selectors[canonicalKey] || selectors[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
+          let el = null;
+          if (currentPlatform === "youtube" && (canonicalKey === "title" || canonicalKey === "description")) {
+            el = findYouTubeContainerField(canonicalKey);
+          }
           if (!el) {
-            out[key] = false;
+            el = list.map((sel) => document.querySelector(sel)).find(Boolean);
+          }
+          if (!el) {
+            out[rawKey] = false;
             continue;
           }
 
           const text = String(value || "");
-          if (currentPlatform === "tiktok" && key === "description") {
-            if (!setValue(el, "")) {
-              out[key] = false;
-              continue;
-            }
-            const parts = text.split(/(#[\w-]+)/g).filter(Boolean);
-            for (const part of parts) {
-              await typeToken(el, part);
-              if (part.startsWith("#")) {
-                const selected = await clickHashtagSuggestion();
-                if (!selected) {
-                  await typeToken(el, " ");
-                }
-              }
-            }
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-            out[key] = true;
+          if (currentPlatform === "tiktok" && canonicalKey === "description") {
+            const tiktokSelectors = [
+              ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
+              "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
+              "div[contenteditable='true'][role='combobox']",
+              "div[contenteditable='true']",
+            ];
+            const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
+            const pasteOk = setValue(tiktokEl, text);
+            const matches = getEditableText(tiktokEl).includes(text.trim());
+            out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
+          } else if (currentPlatform === "facebook" && canonicalKey === "description") {
+            const facebookEl = findFacebookReelDescriptionField() || el;
+            out[rawKey] = setValue(facebookEl, text);
           } else {
-            out[key] = setValue(el, text);
+            out[rawKey] = setValue(el, text);
           }
         }
         return out;
-      }, [payload, msg.name, platform], platform);
-      ackCmd(msg, true, result);
+        }, [payload, msg.name, platform], platform),
+        new Promise((resolve) => setTimeout(() => resolve({ timeout: true, typed: false }), 25000)),
+      ]);
+      if (result && result.timeout) {
+        ackCmd(msg, false, {}, "form.fill timed out in extension script");
+      } else {
+        ackCmd(msg, true, result);
+      }
       return;
     }
 
     if (msg.name === "upload.select_file") {
-      sendEvent("error", {
-        message: "Extension cannot set file path directly without CDP file-input support",
-        diagnostic: { platform: payload.platform || "", selector: "input[type=file]" }
-      });
-      ackCmd(msg, true, { requiresUserAction: true });
+      const platform = String(payload.platform || "").toLowerCase();
+      const filePath = String(payload.filePath || "");
+      if (!filePath) {
+        ackCmd(msg, false, {}, "filePath is required");
+        return;
+      }
+      const tab = await findTargetTab(platform);
+      const debuggee = { tabId: tab.id };
+      const selectorExpr = `(() => { const nodes = Array.from(document.querySelectorAll("input[type=\'file\']")); return nodes.find((n) => (n.offsetWidth || n.offsetHeight || n.getClientRects().length)) || nodes[0] || null; })()`;
+      let attached = false;
+      try {
+        await chrome.debugger.attach(debuggee, "1.3");
+        attached = true;
+        await chrome.debugger.sendCommand(debuggee, "DOM.enable", {});
+        await chrome.debugger.sendCommand(debuggee, "Runtime.enable", {});
+        const evalRes = await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
+          expression: selectorExpr,
+          returnByValue: false,
+        });
+        const objectId = evalRes?.result?.objectId;
+        if (!objectId) throw new Error("file input element not found in target tab");
+        const nodeInfo = await chrome.debugger.sendCommand(debuggee, "DOM.requestNode", { objectId });
+        const nodeId = nodeInfo?.nodeId;
+        if (!nodeId) throw new Error("failed to resolve file input nodeId");
+        await chrome.debugger.sendCommand(debuggee, "DOM.setFileInputFiles", { nodeId, files: [filePath] });
+        sendEvent("state", { state: "upload_selected", platform, filePath, mode: "extension_debugger_set_file_input_files" });
+        ackCmd(msg, true, { mode: "extension_debugger_set_file_input_files" });
+      } catch (err) {
+        ackCmd(msg, false, {}, err?.message || String(err));
+      } finally {
+        if (attached) {
+          try { await chrome.debugger.detach(debuggee); } catch (_) {}
+        }
+      }
       return;
     }
 
