@@ -4328,8 +4328,10 @@ class MainWindow(QMainWindow):
                     self.udp_workflow_worker.requestInterruption()
                     if not self.udp_workflow_worker.wait(1500):
                         self._append_automation_log(
-                            "WARNING: Previous UDP workflow did not stop in time; starting a new run anyway."
+                            "WARNING: Previous UDP workflow did not stop in time; forcing thread termination."
                         )
+                        self.udp_workflow_worker.terminate()
+                        self.udp_workflow_worker.wait(800)
             except Exception as exc:
                 self._append_automation_log(f"WARNING: Failed to stop previous UDP workflow cleanly: {exc}")
         self._append_automation_log("UDP action log file: logs/udp_automation.log")

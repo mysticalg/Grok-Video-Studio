@@ -322,6 +322,26 @@ async function handleCmd(msg) {
         }
 
         const fields = p.fields || {};
+        const findYouTubeContainerField = (key) => {
+          const containers = Array.from(document.querySelectorAll("ytcp-form-input-container#container, ytcp-form-input-container"));
+          for (const container of containers) {
+            const root = container.closest("ytcp-form-input-container") || container;
+            const label = String(root.querySelector("#label-text")?.textContent || "").toLowerCase();
+            if (key === "title" && !label.includes("title")) continue;
+            if (key === "description" && !label.includes("description")) continue;
+            const outer = root.querySelector("#outer, #child-input, #container-content");
+            if (outer) {
+              try { outer.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+              try { outer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+              try { outer.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+              try { outer.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            }
+            const textbox = root.querySelector("#textbox[contenteditable='true'], textarea#textbox");
+            if (textbox) return textbox;
+          }
+          return null;
+        };
+
         const selectors = {
           title: [
             "#title-textarea #textbox[contenteditable='true']",
@@ -349,7 +369,13 @@ async function handleCmd(msg) {
         const out = {};
         for (const [key, value] of Object.entries(fields)) {
           const list = selectors[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
-          const el = list.map((sel) => document.querySelector(sel)).find(Boolean);
+          let el = null;
+          if (currentPlatform === "youtube" && (key === "title" || key === "description")) {
+            el = findYouTubeContainerField(key);
+          }
+          if (!el) {
+            el = list.map((sel) => document.querySelector(sel)).find(Boolean);
+          }
           if (!el) {
             out[key] = false;
             continue;
