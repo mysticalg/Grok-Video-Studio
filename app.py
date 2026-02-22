@@ -10857,7 +10857,16 @@ class MainWindow(QMainWindow):
         safe_slogan = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(slogan_text or "")).strip()
         safe_title = re.sub(r"\s+", " ", safe_title).strip(" .")
         safe_slogan = re.sub(r"\s+", " ", safe_slogan).strip(" .")
-        normalized_tags = [f"#{str(tag).strip().lstrip('#')}" for tag in hashtags if str(tag).strip()]
+        normalized_tags = []
+        for tag in hashtags:
+            raw_tag = str(tag).strip().lstrip('#')
+            if not raw_tag:
+                continue
+            clean_tag = re.sub(r'[\\/:*?"<>|\r\n]+', "", raw_tag)
+            clean_tag = re.sub(r"\s+", "", clean_tag)
+            clean_tag = clean_tag.strip(" .")
+            if clean_tag:
+                normalized_tags.append(f"#{clean_tag}")
 
         parts = [part for part in [safe_title, safe_slogan] if part]
         base = " - ".join(parts).strip()
@@ -10885,6 +10894,10 @@ class MainWindow(QMainWindow):
 
         extension = source_path.suffix or ".mp4"
         max_stem_length = max(1, 255 - len(extension))
+        if os.name == "nt":
+            max_windows_path = 240
+            path_headroom = max_windows_path - len(str(source_path.parent)) - len(extension) - 1
+            max_stem_length = max(16, min(max_stem_length, path_headroom))
         safe_stem = self._build_tiktok_filename_stem(title_text, slogan_text, hashtags, max_stem_length)
         staged_path = source_path.with_name(f"{safe_stem}{extension}")
         if staged_path == source_path:

@@ -29,7 +29,7 @@ class UdpExecutor(BaseExecutor):
         self,
         host: str = "127.0.0.1",
         port: int = 18793,
-        timeout_s: float = 20.0,
+        timeout_s: float = 60.0,
         retries: int = 2,
         stop_event: threading.Event | None = None,
     ):
