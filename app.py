@@ -10450,7 +10450,7 @@ class MainWindow(QMainWindow):
                         if (!submitClicked) {
                             const submitButton = findClickableByHints(["post", "share"]);
                             if (submitButton) {
-                                submitClicked = clickNodeOrAncestor(submitButton) || submitClicked;
+                        const minTikTokActionGapMs = 1000;
                             }
                         }
 
@@ -10594,7 +10594,7 @@ class MainWindow(QMainWindow):
 
                                 const current = readCurrentText();
                                 return current === norm(nextText);
-                            };
+                        const actionSpacingElapsed = !youtubeState.lastActionAtMs || (nowMs - Number(youtubeState.lastActionAtMs)) >= 1000;
 
                             const captionAlreadyPresent = draftEditable
                                 ? normalizedNodeText(draftEditable) === norm(captionText)
