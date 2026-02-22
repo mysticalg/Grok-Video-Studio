@@ -571,16 +571,70 @@ def _script_for_platform(platform: str) -> str:
             return null;
         };
 
+        const setFacebookCaption = (el, value) => {
+            if (!el || !value) return false;
+            const nextText = String(value || "").trim();
+            if (!nextText) return false;
+            try {
+                el.focus();
+            } catch (_) {}
+            try {
+                if (el.isContentEditable) {
+                    try { document.execCommand('selectAll', false, null); } catch (_) {}
+                    try { document.execCommand('insertText', false, nextText); } catch (_) {}
+
+                    if (String(el.textContent || '').trim() !== nextText) {
+                        try {
+                            const sel = window.getSelection();
+                            const range = document.createRange();
+                            range.selectNodeContents(el);
+                            range.deleteContents();
+                            const p = document.createElement('p');
+                            p.setAttribute('dir', 'auto');
+                            p.className = 'xdj266r x14z9mp xat24cr x1lziwak x16tdsg8';
+                            const textNode = document.createTextNode(nextText);
+                            p.appendChild(textNode);
+                            el.appendChild(p);
+                            if (sel) {
+                                sel.removeAllRanges();
+                                const caret = document.createRange();
+                                caret.setStart(textNode, textNode.length);
+                                caret.collapse(true);
+                                sel.addRange(caret);
+                            }
+                        } catch (_) {
+                            try { el.textContent = nextText; } catch (_) {}
+                        }
+                    }
+
+                    try {
+                        el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' }));
+                    } catch (_) {}
+                    el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return String(el.textContent || '').trim() === nextText;
+                }
+                if ('value' in el) {
+                    el.value = nextText;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return String(el.value || '').trim() === nextText;
+                }
+            } catch (_) {}
+            return false;
+        };
+
+        const nextButton = findFacebookNextButton();
         const captionTarget = byVisibleSelectors([
             '[contenteditable="true"][aria-placeholder*="describe your reel" i]',
             '[contenteditable="true"][aria-label*="describe your reel" i]',
+            '[contenteditable="true"][data-lexical-editor="true"]',
             '[contenteditable="true"][aria-label*="write" i]',
             '[contenteditable="true"][role="textbox"]',
         ]);
         const desiredCaption = captionText || titleText;
-        const captionFilled = setText(captionTarget, desiredCaption);
+        const captionFilled = !nextButton ? setFacebookCaption(captionTarget, desiredCaption) : false;
 
-        const nextButton = findFacebookNextButton();
         const postButton = byVisibleSelectors([
             'div[role="button"][aria-label*="post" i]',
             'button[aria-label*="post" i]',
@@ -593,7 +647,9 @@ def _script_for_platform(platform: str) -> str:
             nextClicked = click(nextButton);
         }
 
-        const submitClicked = !nextButton ? click(postButton) : false;
+        const captionRequired = Boolean(desiredCaption);
+        const canSubmit = !nextButton && (!captionRequired || captionFilled);
+        const submitClicked = canSubmit ? click(postButton) : false;
         return {
             platform: "facebook",
             captionFilled,
@@ -602,7 +658,9 @@ def _script_for_platform(platform: str) -> str:
             done: Boolean(submitClicked),
             status: submitClicked
                 ? "Facebook: clicked post button via CDP."
-                : (nextClicked ? "Facebook: clicked Next via CDP." : "Facebook: waiting for Next/description/post step."),
+                : (nextClicked
+                    ? "Facebook: clicked Next via CDP."
+                    : `Facebook: waiting for description/post step (captionFilled=${Boolean(captionFilled)}).`),
         };
         ''')
 
