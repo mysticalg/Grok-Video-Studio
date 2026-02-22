@@ -10731,7 +10731,7 @@ class MainWindow(QMainWindow):
                                 || String(nextButton.getAttribute('disabled') || '').toLowerCase() === 'true'
                             )
                         );
-                        if (nextButton && !nextDisabled && Number(youtubeState.nextClicks || 0) < 4 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
+                        if (nextButton && !nextDisabled && Number(youtubeState.nextClicks || 0) < 3 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
                             const clicked = clickNodeOrAncestor(nextButton);
                             if (clicked) {
                                 youtubeState.nextClicks = Number(youtubeState.nextClicks || 0) + 1;
@@ -10740,9 +10740,16 @@ class MainWindow(QMainWindow):
                             }
                         }
 
-                        if (Number(youtubeState.nextClicks || 0) >= 4) {
-                            const uploadDialog = bySelectors(['ytcp-uploads-dialog', 'tp-yt-paper-dialog'], { contexts: [document] });
-                            const visibilityContexts = [uploadDialog, bySelectors(['ytcp-video-visibility-select'], { contexts: [uploadDialog || document] }), document].filter(Boolean);
+                        const uploadDialog = bySelectors(['ytcp-uploads-dialog', 'tp-yt-paper-dialog'], { contexts: [document] });
+                        const visibilityContexts = [uploadDialog, bySelectors(['ytcp-video-visibility-select'], { contexts: [uploadDialog || document] }), document].filter(Boolean);
+                        const onVisibilityStep = Boolean(bySelectors([
+                            'ytcp-video-visibility-select',
+                            'tp-yt-paper-radio-group#privacy-radios',
+                            'ytcp-button#done-button button',
+                            'button[aria-label="Save"]',
+                        ], { contexts: visibilityContexts }));
+
+                        if (Number(youtubeState.nextClicks || 0) >= 3 || onVisibilityStep) {
                             const visibilityGroup = bySelectors([
                                 'tp-yt-paper-radio-group#privacy-radios',
                                 'ytcp-video-visibility-select tp-yt-paper-radio-group',
