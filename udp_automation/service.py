@@ -19,6 +19,12 @@ PLATFORM_URLS = {
 }
 
 
+EXTENSION_CMD_TIMEOUTS = {
+    "form.fill": 90.0,
+    "post.submit": 150.0,
+}
+
+
 class UdpAutomationService:
     def __init__(self, extension_dir: Path, host: str = "127.0.0.1", port: int = 18793, bus: ControlBusServer | None = None, start_bus: bool = True):
         self.host = host
@@ -52,6 +58,14 @@ class UdpAutomationService:
         self._clients.add(addr)
         name = msg.get("name")
         payload = msg.get("payload") or {}
+
+        def _ack_from_extension(ack: dict[str, Any]) -> dict[str, Any]:
+            response = {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {})}
+            error = ack.get("error")
+            if error:
+                response["error"] = error
+            return response
+
         try:
             if name == "platform.open":
                 platform = str(payload.get("platform") or "").lower()
@@ -59,7 +73,8 @@ class UdpAutomationService:
                 self.chrome_instance = self.chrome_manager.launch_or_reuse()
                 if self.cdp is None:
                     self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
-                page = await self.cdp.get_or_create_page(url)
+                reuse_tab = bool(payload.get("reuseTab", False))
+                page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
                 await page.bring_to_front()
                 await self._emit("state", {"state": "page_opened", "platform": platform, "url": page.url})
                 return {"ok": True, "payload": {"url": page.url}}
@@ -71,22 +86,61 @@ class UdpAutomationService:
                     raise RuntimeError("filePath is required")
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
-                page = await self.cdp.get_or_create_page(PLATFORM_URLS.get(platform.lower(), "https://example.com"))
+                page = await self.cdp.get_most_recent_page()
+                if page is None:
+                    page = await self.cdp.get_or_create_page(
+                        PLATFORM_URLS.get(platform.lower(), "https://example.com"),
+                        reuse_tab=True,
+                    )
                 input_el = page.locator("input[type='file']").first
-                if await input_el.count() > 0:
-                    await input_el.set_input_files(file_path)
-                    await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path})
-                    return {"ok": True, "payload": {"mode": "cdp_set_input_files"}}
+                try:
+                    await input_el.wait_for(state="attached", timeout=15000)
+                except Exception:
+                    input_el = None
+                if input_el is not None and await input_el.count() > 0:
+                    file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+                    try:
+                        await input_el.set_input_files(file_path)
+                        mode = "cdp_set_input_files"
+                    except Exception as exc:
+                        err_text = str(exc)
+                        if "Cannot transfer files larger than 50Mb" in err_text:
+                            used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, "input[type='file']", file_path)
+                            if used_dom_fallback:
+                                mode = "cdp_dom_set_file_input_files"
+                            else:
+                                await self._emit(
+                                    "state",
+                                    {
+                                        "state": "upload_requires_manual_selection",
+                                        "platform": platform,
+                                        "reason": "remote_browser_file_transfer_limit",
+                                        "fileSizeMb": round(file_size_mb, 2),
+                                    },
+                                )
+                                return {
+                                    "ok": True,
+                                    "payload": {
+                                        "requiresUserAction": True,
+                                        "reason": "remote_browser_file_transfer_limit",
+                                        "message": "Automatic upload over remote CDP failed for this file size",
+                                        "fileSizeMb": round(file_size_mb, 2),
+                                    },
+                                }
+                        else:
+                            raise
+                    await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
+                    return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
                 ack = await self._send_extension_cmd("upload.select_file", payload)
-                return {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {}), "error": ack.get("error")}
+                return _ack_from_extension(ack)
 
             if name in {"form.fill", "post.submit", "post.status", "dom.query", "dom.click", "dom.type", "platform.ensure_logged_in"}:
                 ack = await self._send_extension_cmd(name, payload)
-                return {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {}), "error": ack.get("error")}
+                return _ack_from_extension(ack)
 
             if name == "dom.ping":
                 ack = await self._send_extension_cmd("dom.ping", payload)
-                return {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {}), "error": ack.get("error")}
+                return _ack_from_extension(ack)
 
             raise RuntimeError(f"Unsupported command: {name}")
         except Exception as exc:
@@ -96,7 +150,17 @@ class UdpAutomationService:
         clients = list(self.bus.clients.keys())
         if not clients:
             raise RuntimeError("No extension client connected")
-        return await self.bus.send_cmd(clients[0], wrap_cmd(name, payload))
+
+        timeout_s = float(EXTENSION_CMD_TIMEOUTS.get(name, 15.0))
+        last_error: Exception | None = None
+        for client_id in clients:
+            try:
+                return await self.bus.send_cmd(client_id, wrap_cmd(name, payload), timeout_s=timeout_s)
+            except Exception as exc:
+                last_error = exc
+                self.bus.clients.pop(client_id, None)
+                continue
+        raise RuntimeError(str(last_error) if last_error else "No extension client connected")
 
     async def _emit(self, name: str, payload: dict[str, Any]) -> None:
         if self._transport is None:
