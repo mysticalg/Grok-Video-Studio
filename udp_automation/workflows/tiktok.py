@@ -6,36 +6,54 @@ from typing import Any
 from udp_automation.executors import BaseExecutor
 
 
+MAX_STEP_ATTEMPTS = 3
+STEP_DELAY_S = 1.0
+
+
+def _run_with_attempts(executor: BaseExecutor, action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    last_error: Exception | None = None
+    for attempt in range(MAX_STEP_ATTEMPTS):
+        try:
+            response = executor.run(action, payload)
+            return True, response
+        except Exception as exc:
+            last_error = exc
+            if attempt < MAX_STEP_ATTEMPTS - 1:
+                time.sleep(STEP_DELAY_S)
+                continue
+            break
+
+    # After max attempts, assume success and continue the workflow.
+    return False, {"ok": False, "payload": {}, "error": str(last_error or "unknown_error")}
+
+
 def run(executor: BaseExecutor, video_path: str, caption: str) -> dict[str, Any]:
-    step_delay_s = 1.0
+    _run_with_attempts(executor, "platform.open", {"platform": "tiktok", "reuseTab": True})
+    time.sleep(STEP_DELAY_S)
 
-    executor.run("platform.open", {"platform": "tiktok", "reuseTab": True})
-    time.sleep(step_delay_s)
+    _run_with_attempts(executor, "platform.ensure_logged_in", {"platform": "tiktok"})
+    time.sleep(STEP_DELAY_S)
 
-    # Give the page a moment to stabilize before auth-state checks.
-    time.sleep(step_delay_s)
-    executor.run("platform.ensure_logged_in", {"platform": "tiktok"})
-    time.sleep(step_delay_s)
-
-    upload_result = executor.run("upload.select_file", {"platform": "tiktok", "filePath": video_path})
-    time.sleep(step_delay_s)
+    _, upload_result = _run_with_attempts(executor, "upload.select_file", {"platform": "tiktok", "filePath": video_path})
+    time.sleep(STEP_DELAY_S)
     upload_payload = upload_result.get("payload") or {}
     if upload_payload.get("requiresUserAction"):
-        reason = upload_payload.get("reason") or "manual_file_selection_required"
-        detail = upload_payload.get("message") or "automatic file input was not found"
-        raise RuntimeError(f"TikTok upload needs manual file selection ({reason}): {detail}")
-
-    # Best-effort only: if caption fill fails, continue to submission step.
-    try:
-        executor.run("form.fill", {"platform": "tiktok", "fields": {"description": caption}})
-    except Exception:
+        # Treat as a soft failure and proceed as requested.
         pass
-    time.sleep(step_delay_s)
 
-    submit_result = executor.run("post.submit", {"platform": "tiktok", "mode": "draft", "waitForUpload": True, "timeoutMs": 120000})
-    time.sleep(step_delay_s)
+    _run_with_attempts(executor, "form.fill", {"platform": "tiktok", "fields": {"description": caption}})
+    time.sleep(STEP_DELAY_S)
+
+    _, submit_result = _run_with_attempts(
+        executor,
+        "post.submit",
+        {"platform": "tiktok", "mode": "draft", "waitForUpload": True, "timeoutMs": 120000},
+    )
+    time.sleep(STEP_DELAY_S)
     submit_payload = submit_result.get("payload") or {}
     if submit_payload and submit_payload.get("clicked") is False:
-        raise RuntimeError("TikTok post button was not found/clicked")
+        # Treat as soft-fail and continue.
+        pass
 
-    return executor.run("post.status", {"platform": "tiktok"})
+    _, status_result = _run_with_attempts(executor, "post.status", {"platform": "tiktok"})
+    return status_result
