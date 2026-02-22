@@ -8,10 +8,13 @@ currently open QtWebEngine page via Chromium CDP.
 from __future__ import annotations
 
 import argparse
+import base64
 import atexit
 import json
 import os
 import socket
+
+import requests
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -21,6 +24,21 @@ from typing import Any
 
 RELAY_CDP_STEP_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS", "6")))
 RELAY_LOGS_DIR = Path(os.getenv("GROK_CDP_RELAY_LOG_DIR", "logs/cdp-relay")).expanduser()
+RELAY_NETWORK_REPLAY_ENABLED = os.getenv("GROK_CDP_RELAY_ENABLE_NETWORK_REPLAY", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+RELAY_AI_ACTIONS_ENABLED = os.getenv("GROK_CDP_RELAY_ENABLE_AI_ACTIONS", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+RELAY_AI_MODEL = os.getenv("GROK_CDP_RELAY_AI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini"
+RELAY_AI_BASE_URL = os.getenv("GROK_CDP_RELAY_AI_BASE_URL", "https://api.openai.com/v1").strip().rstrip("/")
+RELAY_AI_TIMEOUT_SECONDS = max(5.0, float(os.getenv("GROK_CDP_RELAY_AI_TIMEOUT_SECONDS", "20")))
 
 _PLAYWRIGHT_INSTANCE = None
 _CDP_BROWSERS_BY_ENDPOINT: dict[str, Any] = {}
@@ -80,6 +98,438 @@ def _append_relay_log(event: str, payload: dict[str, Any]) -> None:
         pass
 
 
+def _wants_network_replay(payload: dict[str, Any]) -> bool:
+    candidate = payload.get("use_network_relay_actions")
+    if candidate is None:
+        return RELAY_NETWORK_REPLAY_ENABLED
+    if isinstance(candidate, bool):
+        return candidate
+    return str(candidate).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sanitize_replay_headers(headers: dict[str, Any]) -> dict[str, str]:
+    blocked = {
+        "host",
+        "content-length",
+        "connection",
+        "origin",
+        "referer",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+    }
+    sanitized: dict[str, str] = {}
+    for key, value in (headers or {}).items():
+        if not key:
+            continue
+        lower = str(key).strip().lower()
+        if lower in blocked:
+            continue
+        sanitized[str(key)] = str(value)
+    return sanitized
+
+
+def _capture_network_candidates(page, platform: str, capture_ms: int = 1500) -> list[dict[str, Any]]:
+    try:
+        cdp_session = page.context.new_cdp_session(page)
+    except Exception:
+        return []
+
+    requests: dict[str, dict[str, Any]] = {}
+    captured: list[dict[str, Any]] = []
+
+    platform_hints = {
+        "youtube": ("youtubei/v1", "graphql", "upload"),
+        "tiktok": ("graphql", "api", "post"),
+        "facebook": ("graphql", "api", "composer"),
+        "instagram": ("graphql", "api", "media"),
+    }.get(platform, ("graphql", "api", "upload"))
+
+    def _on_request(params: dict[str, Any]) -> None:
+        request = params.get("request") or {}
+        request_id = str(params.get("requestId") or "")
+        url = str(request.get("url") or "")
+        method = str(request.get("method") or "GET").upper()
+        resource_type = str(params.get("type") or "")
+        lower_url = url.lower()
+        if method not in {"POST", "PUT", "PATCH"}:
+            return
+        if resource_type not in {"XHR", "Fetch", "Other"}:
+            return
+        if not any(hint in lower_url for hint in platform_hints):
+            return
+        requests[request_id] = {
+            "request_id": request_id,
+            "url": url,
+            "method": method,
+            "headers": request.get("headers") or {},
+            "post_data": request.get("postData") or "",
+            "resource_type": resource_type,
+        }
+
+    def _on_response(params: dict[str, Any]) -> None:
+        request_id = str(params.get("requestId") or "")
+        base = requests.get(request_id)
+        if not base:
+            return
+        response = params.get("response") or {}
+        mime_type = str(response.get("mimeType") or "")
+        if not any(token in mime_type.lower() for token in ("json", "graphql", "javascript", "text")):
+            return
+        captured.append(
+            {
+                **base,
+                "status": int(response.get("status") or 0),
+                "response_mime": mime_type,
+            }
+        )
+
+    try:
+        cdp_session.send("Network.enable")
+        cdp_session.on("Network.requestWillBeSent", _on_request)
+        cdp_session.on("Network.responseReceived", _on_response)
+        page.wait_for_timeout(max(250, capture_ms))
+    except Exception:
+        return []
+    finally:
+        try:
+            cdp_session.detach()
+        except Exception:
+            pass
+
+    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in captured:
+        key = (str(item.get("method") or ""), str(item.get("url") or ""), str(item.get("post_data") or "")[:200])
+        deduped[key] = item
+    return list(deduped.values())[:8]
+
+
+def _replay_network_candidates(page, payload: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_results: list[dict[str, Any]] = []
+    for candidate in candidates:
+        url = str(candidate.get("url") or "")
+        method = str(candidate.get("method") or "POST")
+        if not url:
+            continue
+        headers = _sanitize_replay_headers(candidate.get("headers") or {})
+        post_data = str(candidate.get("post_data") or "")
+        try:
+            result = page.evaluate(
+                """async ([url, method, headers, body]) => {
+                    try {
+                        const response = await fetch(url, {
+                            method,
+                            headers,
+                            credentials: 'include',
+                            body: body || undefined,
+                        });
+                        return {
+                            ok: response.ok,
+                            status: response.status,
+                            redirected: response.redirected,
+                            url: response.url || url,
+                        };
+                    } catch (error) {
+                        return { ok: false, status: 0, error: String(error), url };
+                    }
+                }""",
+                [url, method, headers, post_data],
+            )
+        except Exception as exc:
+            result = {"ok": False, "status": 0, "error": str(exc), "url": url}
+
+        replay_results.append(
+            {
+                "url": url,
+                "method": method,
+                "status": int((result or {}).get("status") or 0),
+                "ok": bool((result or {}).get("ok")),
+                "error": str((result or {}).get("error") or "")[:200],
+            }
+        )
+        if len(replay_results) >= int(payload.get("max_network_replays") or 3):
+            break
+    return replay_results
+
+
+def _wants_ai_actions(payload: dict[str, Any]) -> bool:
+    candidate = payload.get("use_ai_relay_actions")
+    if candidate is None:
+        return RELAY_AI_ACTIONS_ENABLED
+    if isinstance(candidate, bool):
+        return candidate
+    return str(candidate).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _decode_openai_access_token(access_token: str) -> dict[str, Any]:
+    try:
+        parts = access_token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8"))
+        return decoded if isinstance(decoded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_claim_string(source: object, keys: tuple[str, ...]) -> str:
+    if not isinstance(source, dict):
+        return ""
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_openai_org_project_ids(access_token: str) -> tuple[str, str]:
+    claims = _decode_openai_access_token(access_token)
+    auth_claim = claims.get("https://api.openai.com/auth")
+
+    org_id = _extract_claim_string(auth_claim, ("organization_id", "org_id", "organization"))
+    project_id = _extract_claim_string(auth_claim, ("project_id", "project"))
+
+    if not org_id:
+        org_id = _extract_claim_string(claims, ("organization_id", "org_id", "organization"))
+    if not project_id:
+        project_id = _extract_claim_string(claims, ("project_id", "project"))
+
+    return org_id, project_id
+
+
+def _relay_ai_credential(payload: dict[str, Any]) -> tuple[str, str]:
+    payload_credential = str(payload.get("openai_credential") or "").strip()
+    if payload_credential:
+        return payload_credential, "payload"
+
+    # Prefer OAuth token when available to match existing in-app authenticated connection.
+    oauth_token = str(payload.get("openai_access_token") or "").strip() or os.getenv("OPENAI_ACCESS_TOKEN", "").strip()
+    if oauth_token:
+        return oauth_token, "oauth"
+
+    api_key = (
+        os.getenv("OPENAI_API_KEY", "").strip()
+        or os.getenv("GROK_API_KEY", "").strip()
+        or os.getenv("XAI_API_KEY", "").strip()
+    )
+    if api_key:
+        return api_key, "api_key"
+
+    return "", "none"
+
+
+def _openai_headers_from_credential(credential: str) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {credential}",
+        "Content-Type": "application/json",
+    }
+    org_id, project_id = _extract_openai_org_project_ids(credential)
+    if org_id:
+        headers["OpenAI-Organization"] = org_id
+    if project_id:
+        headers["OpenAI-Project"] = project_id
+    return headers
+
+
+def _relay_ai_endpoint_and_payload(credential: str, messages: list[dict[str, str]]) -> tuple[str, dict[str, Any], dict[str, str]]:
+    claims = _decode_openai_access_token(credential)
+    issuer = str(claims.get("iss", "")).strip()
+    # OAuth access tokens from auth.openai.com should use ChatGPT responses backend.
+    if RELAY_AI_BASE_URL == "https://api.openai.com/v1" and issuer == "https://auth.openai.com":
+        endpoint = "https://chatgpt.com/backend-api/codex/responses"
+        payload = {
+            "model": RELAY_AI_MODEL,
+            "input": [
+                {
+                    "role": m.get("role", "user"),
+                    "content": [{"type": "input_text", "text": m.get("content", "")}],
+                }
+                for m in messages
+            ],
+            "reasoning": {"effort": "medium"},
+        }
+        auth_claim = claims.get("https://api.openai.com/auth")
+        account_id = _extract_claim_string(auth_claim, ("chatgpt_account_id",))
+        extra_headers: dict[str, str] = {}
+        if account_id:
+            extra_headers["ChatGPT-Account-ID"] = account_id
+        return endpoint, payload, extra_headers
+
+    endpoint = f"{RELAY_AI_BASE_URL}/chat/completions"
+    payload = {
+        "model": RELAY_AI_MODEL,
+        "messages": messages,
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
+    }
+    return endpoint, payload, {}
+
+
+
+def _build_ai_dom_snapshot(page) -> dict[str, Any]:
+    return page.evaluate(
+        """() => {
+            const take = (nodes, limit = 40) => Array.from(nodes || []).slice(0, limit);
+            const toText = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+            const buttons = take(document.querySelectorAll('button, [role="button"], tp-yt-paper-item')).map((node) => ({
+                text: toText(node.textContent).slice(0, 120),
+                aria: toText(node.getAttribute('aria-label')).slice(0, 120),
+                id: toText(node.id).slice(0, 80),
+                className: toText(node.className).slice(0, 120),
+                disabled: !!node.disabled,
+            }));
+            const inputs = take(document.querySelectorAll('input, textarea, [contenteditable="true"]')).map((node) => ({
+                tag: String(node.tagName || '').toLowerCase(),
+                type: String(node.getAttribute?.('type') || ''),
+                name: String(node.getAttribute?.('name') || ''),
+                aria: toText(node.getAttribute?.('aria-label')).slice(0, 120),
+                placeholder: toText(node.getAttribute?.('placeholder')).slice(0, 120),
+                editable: !!node.isContentEditable,
+            }));
+            return {
+                url: String(location.href || ''),
+                title: String(document.title || ''),
+                buttons,
+                inputs,
+            };
+        }"""
+    )
+
+
+def _request_ai_action_script(payload: dict[str, Any], dom_snapshot: dict[str, Any]) -> dict[str, Any]:
+    credential, credential_kind = _relay_ai_credential(payload)
+    if not credential:
+        return {"ok": False, "error": "AI relay actions enabled, but no OAuth token or API key is available."}
+
+    instruction = {
+        "platform": str(payload.get("platform") or ""),
+        "title": str(payload.get("title") or "")[:200],
+        "caption": str(payload.get("caption") or "")[:400],
+        "goal": "Complete the next safe step in upload/posting flow (fill metadata and click Next/Post/Publish/Share if visible).",
+        "rules": [
+            "Return strict JSON only.",
+            "Provide JS expression body for function(payload){...} without markdown fences.",
+            "No loops waiting forever; no navigation to external sites; no credential extraction.",
+            "Set done=true only if publish/share/post click was attempted.",
+        ],
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a browser automation planner. Output JSON: {status:string, done:boolean, script:string}.",
+        },
+        {
+            "role": "user",
+            "content": json.dumps({"instruction": instruction, "dom": dom_snapshot}, ensure_ascii=False),
+        },
+    ]
+
+    endpoint, request_body, extra_headers = _relay_ai_endpoint_and_payload(credential, messages)
+
+    try:
+        headers = _openai_headers_from_credential(credential)
+        headers.update(extra_headers)
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json=request_body,
+            timeout=RELAY_AI_TIMEOUT_SECONDS,
+        )
+        data = response.json() if response.content else {}
+        if not response.ok:
+            return {"ok": False, "error": f"AI request failed HTTP {response.status_code}"}
+        content = ""
+        if isinstance(data, dict):
+            if isinstance(data.get("choices"), list):
+                content = str(((((data.get("choices") or [{}])[0]).get("message") or {}).get("content")) or "")
+            elif isinstance(data.get("output"), list):
+                parts: list[str] = []
+                for item in data.get("output") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    for chunk in item.get("content") or []:
+                        if isinstance(chunk, dict):
+                            txt = str(chunk.get("text") or chunk.get("output_text") or "").strip()
+                            if txt:
+                                parts.append(txt)
+                content = "\n".join(parts)
+        parsed = json.loads(content) if content else {}
+        script = str(parsed.get("script") or "").strip()
+        if not script:
+            return {"ok": False, "error": "AI response did not include script."}
+        return {
+            "ok": True,
+            "status": str(parsed.get("status") or "AI action planned."),
+            "done": bool(parsed.get("done")),
+            "script": script[:6000],
+            "auth": credential_kind,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _run_ai_relay_actions(page, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        snapshot = _build_ai_dom_snapshot(page)
+    except Exception as exc:
+        return {"enabled": True, "ok": False, "error": f"snapshot failed: {exc}"}
+
+    ai_plan = _request_ai_action_script(payload, snapshot)
+    if not ai_plan.get("ok"):
+        return {"enabled": True, "ok": False, "error": str(ai_plan.get("error") or "unknown ai error")}
+
+    try:
+        ai_result = page.evaluate(
+            """([payload, script]) => {
+                try {
+                    const out = (new Function('payload', script))(payload);
+                    if (out && typeof out === 'object') return out;
+                    return { done: false, status: 'AI script ran without structured output.' };
+                } catch (err) {
+                    return { done: false, status: 'AI script execution failed', error: String(err) };
+                }
+            }""",
+            [payload, str(ai_plan.get("script") or "")],
+        )
+    except Exception as exc:
+        return {"enabled": True, "ok": False, "error": f"evaluate failed: {exc}"}
+
+    return {
+        "enabled": True,
+        "ok": True,
+        "planned_status": str(ai_plan.get("status") or "AI action planned."),
+        "planned_done": bool(ai_plan.get("done")),
+        "result": ai_result if isinstance(ai_result, dict) else {},
+    }
+
+
+
+
+def _resolve_cdp_browser_endpoint(payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("cdp_browser_endpoint") or "").strip()
+    if explicit:
+        return explicit
+    env_explicit = os.getenv("GROK_CDP_RELAY_BROWSER_ENDPOINT", "").strip()
+    if env_explicit:
+        return env_explicit
+    port = _parse_debug_port(payload)
+    return f"http://127.0.0.1:{port}"
+
+
+def _extract_target_id_from_ws(payload: dict[str, Any]) -> str:
+    candidate = str(payload.get("cdp_target_ws_url") or payload.get("cdp_target_id") or "").strip()
+    if not candidate:
+        candidate = os.getenv("GROK_CDP_RELAY_TARGET_WS_URL", "").strip()
+    if not candidate:
+        return ""
+    if "/devtools/page/" in candidate:
+        return candidate.rsplit("/devtools/page/", 1)[-1].strip()
+    return candidate
 def _parse_debug_port(payload: dict[str, Any]) -> int:
     candidate = str(payload.get("qtwebengine_remote_debugging") or "").strip()
     if not candidate:
@@ -91,12 +541,22 @@ def _parse_debug_port(payload: dict[str, Any]) -> int:
     return port if port > 0 else 9222
 
 
-def _pick_page(browser, current_url: str, platform: str):
+def _pick_page(browser, current_url: str, platform: str, target_id: str = ""):
     pages = []
     for context in browser.contexts:
         pages.extend(context.pages)
 
     current_url = (current_url or "").strip().lower()
+    target_id = (target_id or "").strip().lower()
+    if target_id:
+        for page in pages:
+            try:
+                guid = str(getattr(page, "guid", "") or "").lower()
+            except Exception:
+                guid = ""
+            page_url = str(getattr(page, "url", "") or "").lower()
+            if target_id in guid or target_id in page_url:
+                return page
     platform_hints = {
         "tiktok": ["tiktok.com/upload", "tiktokstudio"],
         "youtube": ["studio.youtube.com", "youtube.com/upload", "youtube.com"],
@@ -542,13 +1002,13 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
     if not platform:
         return {"handled": False, "done": False, "status": "Missing platform."}
 
-    port = _parse_debug_port(payload)
-    endpoint = f"http://127.0.0.1:{port}"
+    endpoint = _resolve_cdp_browser_endpoint(payload)
+    target_id = _extract_target_id_from_ws(payload)
 
     try:
         browser = _get_cdp_browser(endpoint)
         with _CDP_ACTION_LOCK:
-            page = _pick_page(browser, str(payload.get("current_url") or ""), platform)
+            page = _pick_page(browser, str(payload.get("current_url") or ""), platform, target_id=target_id)
             if page is None:
                 return {
                     "handled": False,
@@ -570,6 +1030,53 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                 video_mime=str(payload.get("video_mime") or "video/mp4"),
             )
 
+            network_capture_detail = {
+                "enabled": False,
+                "captured": 0,
+                "replayed": 0,
+                "results": [],
+            }
+            if _wants_network_replay(payload):
+                captured_candidates = _capture_network_candidates(
+                    page,
+                    platform,
+                    capture_ms=int(payload.get("network_capture_ms") or 1400),
+                )
+                replay_results = _replay_network_candidates(page, payload, captured_candidates)
+                network_capture_detail = {
+                    "enabled": True,
+                    "captured": len(captured_candidates),
+                    "replayed": len(replay_results),
+                    "results": replay_results,
+                }
+
+            ai_action_detail = {
+                "enabled": False,
+                "ok": False,
+                "status": "",
+                "done": False,
+                "error": "",
+                "result": {},
+            }
+            if _wants_ai_actions(payload):
+                ai_exec = _run_ai_relay_actions(page, payload)
+                ai_result = ai_exec.get("result") if isinstance(ai_exec, dict) else {}
+                ai_action_detail = {
+                    "enabled": True,
+                    "ok": bool(ai_exec.get("ok")) if isinstance(ai_exec, dict) else False,
+                    "status": str(
+                        (ai_exec.get("planned_status") if isinstance(ai_exec, dict) else "")
+                        or (ai_result.get("status") if isinstance(ai_result, dict) else "")
+                        or ""
+                    ),
+                    "done": bool(
+                        (ai_result.get("done") if isinstance(ai_result, dict) else False)
+                        or (ai_exec.get("planned_done") if isinstance(ai_exec, dict) else False)
+                    ),
+                    "error": str((ai_exec.get("error") if isinstance(ai_exec, dict) else "") or ""),
+                    "result": ai_result if isinstance(ai_result, dict) else {},
+                }
+
             script = _script_for_platform(platform)
             result = page.evaluate(
                 """([payload, script]) => {
@@ -587,7 +1094,7 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                 "handled": False,
                 "done": False,
                 "status": (
-                    "CDP unavailable: embedded browser does not support Browser.setDownloadBehavior "
+                    "CDP unavailable: target browser does not support Browser.setDownloadBehavior "
                     "during connect_over_cdp; falling back to non-CDP upload flow."
                 ),
                 "log": str(exc),
@@ -606,6 +1113,18 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
 
     done = bool(result.get("done"))
     status = str(result.get("status") or f"{platform}: CDP step executed")
+    if ai_action_detail.get("enabled"):
+        if ai_action_detail.get("ok"):
+            done = done or bool(ai_action_detail.get("done"))
+            ai_status = str(ai_action_detail.get("status") or "AI-assisted relay action executed.").strip()
+            status = f"{status} {ai_status}".strip()
+        else:
+            status = f"{status} AI relay unavailable ({str(ai_action_detail.get('error') or 'unknown error')[:120]})."
+    if network_capture_detail.get("enabled"):
+        status = (
+            f"{status} Network replay captured={network_capture_detail.get('captured', 0)} "
+            f"replayed={network_capture_detail.get('replayed', 0)}."
+        )
     if not done and file_staged:
         status = f"{status} File staged via CDP."
     return {
@@ -618,6 +1137,8 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
             "result": result,
             "file_staged": file_staged,
             "file_stage_detail": file_stage_detail,
+            "network_replay": network_capture_detail,
+            "ai_actions": ai_action_detail,
         }, ensure_ascii=False)[:700],
     }
 
@@ -659,6 +1180,7 @@ class RelayHandler(BaseHTTPRequestHandler):
         attempt = int(payload.get("attempt") or 0)
         current_url = str(payload.get("current_url") or "")
         debug_port = _parse_debug_port(payload)
+        endpoint = _resolve_cdp_browser_endpoint(payload)
         print(
             f"relay step: platform={platform} attempt={attempt} "
             f"debug_port={debug_port} url={current_url}",
@@ -668,6 +1190,8 @@ class RelayHandler(BaseHTTPRequestHandler):
             "platform": platform,
             "attempt": attempt,
             "debug_port": debug_port,
+            "cdp_endpoint": endpoint if 'endpoint' in locals() else '',
+            "cdp_target": str(payload.get("cdp_target_ws_url") or payload.get("cdp_target_id") or ""),
             "current_url": current_url,
             "payload": _redact_payload(payload),
         })

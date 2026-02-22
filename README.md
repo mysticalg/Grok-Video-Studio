@@ -111,7 +111,9 @@ You can also enable this in **Model/API Settings → App Preferences**:
 For existing browser automations (TikTok/YouTube/Facebook/Instagram), you can optionally route each upload step through a local CDP relay in **Model/API Settings → App Preferences**:
 - Enable **Use CDP relay for social browser automation**
 - Set **CDP Relay URL** (default: `http://127.0.0.1:8765/social-upload-step`)
-- CDP Relay Mode is now CDP-first/relay-only for social browser automation attempts. If relay is unavailable, the upload step stays in relay mode (no DOM fallback), and relay retries pause for the current session until you toggle relay mode off/on or restart.
+- Optional: set `GROK_CDP_RELAY_BROWSER_ENDPOINT` to point the relay at an external CDP browser (instead of QtWebEngine), e.g. `http://127.0.0.1:9222`.
+- Optional: set `GROK_CDP_RELAY_TARGET_WS_URL` to pin a specific page target, e.g. `ws://127.0.0.1:9222/devtools/page/<targetId>`.
+- CDP Relay Mode is CDP-only. If relay is unavailable, automation halts for inspection (no DOM fallback). Unsupported-target responses are ignored and retried in CDP mode.
 
 
 ### Quickstart: run a local relay (no connection-refused errors)
@@ -131,6 +133,8 @@ Then in the app:
 What this relay does now:
 - Connects to QtWebEngine via CDP (`QTWEBENGINE_REMOTE_DEBUGGING` port).
 - Selects the active social page target and runs best-effort CDP DOM actions for TikTok/YouTube/Facebook/Instagram (file-input staging, file-chooser trigger staging, caption/title/publish/share clicks).
+- Optional trigger-action network replay mode can observe XHR/fetch traffic, capture candidate GraphQL/JSON write requests, and replay matching requests with in-page `fetch()` while preserving cookies/session context.
+- Optional AI-assisted relay mode can call your connected LLM (OpenAI-compatible Chat Completions) to generate the *next safe browser action script* based on a DOM snapshot, then execute it in-page to continue upload/posting steps.
 - Returns `handled: true` when CDP step execution succeeds, with progress + status details.
 - Relay console now prints per-step `relay result: handled=... done=... status=...` for quick diagnosis.
 - Relay also writes JSONL request/response logs to `logs/cdp-relay/` by default (override with `GROK_CDP_RELAY_LOG_DIR`).
@@ -139,6 +143,8 @@ What this relay does now:
 
 If CDP attach fails, verify remote debugging is enabled in App Preferences and restart the app after changing the debug port.
 If relay steps are slow on your machine, increase `GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS` (default `6`) before launching the relay.
+- To enable network replay mode globally, set `GROK_CDP_RELAY_ENABLE_NETWORK_REPLAY=1` before launching the relay. You can also pass `use_network_relay_actions: true` in relay payloads for per-request control.
+- To enable AI relay actions, set `GROK_CDP_RELAY_ENABLE_AI_ACTIONS=1`; the relay will prefer your existing `OPENAI_ACCESS_TOKEN` OAuth session from app settings (no API key required), and can fall back to `OPENAI_API_KEY`/`GROK_API_KEY`/`XAI_API_KEY`. Optional overrides: `GROK_CDP_RELAY_AI_BASE_URL`, `GROK_CDP_RELAY_AI_MODEL`, and `GROK_CDP_RELAY_AI_TIMEOUT_SECONDS`.
 - On Windows, if a client drops the HTTP connection mid-response, the relay now treats it as non-fatal and continues serving subsequent requests.
 
 
