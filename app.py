@@ -4318,6 +4318,7 @@ class MainWindow(QMainWindow):
             self._start_social_browser_upload(platform_name=platform_name, video_path=video_path, caption=caption, title=title)
             return
 
+        self._cancel_social_upload_run(platform_name, reason="switching to UDP automation")
         self._ensure_udp_service()
         if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
             self._append_automation_log("Stopping previous UDP workflow before starting a new one.")
@@ -4325,9 +4326,12 @@ class MainWindow(QMainWindow):
                 self.udp_workflow_worker.request_stop()
                 if not self.udp_workflow_worker.wait(2000):
                     self.udp_workflow_worker.requestInterruption()
-                    self.udp_workflow_worker.wait(1000)
-            except Exception:
-                pass
+                    if not self.udp_workflow_worker.wait(1500):
+                        self._append_automation_log(
+                            "WARNING: Previous UDP workflow did not stop in time; starting a new run anyway."
+                        )
+            except Exception as exc:
+                self._append_automation_log(f"WARNING: Failed to stop previous UDP workflow cleanly: {exc}")
         self._append_automation_log("UDP action log file: logs/udp_automation.log")
         self._append_automation_log(f"Starting UDP workflow for {platform_name}.")
         worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption)
@@ -9571,7 +9575,31 @@ class MainWindow(QMainWindow):
         else:
             print("Status check failed:", resp.text)
 
+    def _cancel_social_upload_run(self, platform_name: str, reason: str = "") -> None:
+        pending = self.social_upload_pending.pop(platform_name, None)
+        timer = self.social_upload_timers.get(platform_name)
+        if timer is not None:
+            timer.stop()
+
+        if isinstance(pending, dict):
+            relay_future = pending.get("cdp_relay_future")
+            if isinstance(relay_future, concurrent.futures.Future) and not relay_future.done():
+                relay_future.cancel()
+
+        status_label = self.social_upload_status_labels.get(platform_name)
+        progress_bar = self.social_upload_progress_bars.get(platform_name)
+        if status_label is not None:
+            status_suffix = f" ({reason})" if reason else ""
+            status_label.setText(f"Status: restarted automation{status_suffix}.")
+        if progress_bar is not None:
+            progress_bar.setVisible(False)
+            progress_bar.setValue(0)
+
     def _start_social_browser_upload(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
+        if platform_name in self.social_upload_pending:
+            self._append_log(f"{platform_name}: previous automation run detected; canceling and starting fresh.")
+            self._cancel_social_upload_run(platform_name, reason="new run requested")
+
         browser = self.social_upload_browsers.get(platform_name)
         timer = self.social_upload_timers.get(platform_name)
         status_label = self.social_upload_status_labels.get(platform_name)
