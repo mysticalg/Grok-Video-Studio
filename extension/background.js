@@ -172,113 +172,193 @@ async function handleCmd(msg) {
       const platform = String(payload.platform || "").toLowerCase();
       const result = await executeInTab(async (p, name, currentPlatform) => {
         const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+        const normalize = (v) => String(v || "").replace(/\u200B/g, "").replace(/\s+/g, " ").trim();
 
-        const setValue = (el, value) => {
-          el.focus();
-          if (el.isContentEditable) {
-            el.textContent = value;
-            el.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
-            return true;
-          }
-          const proto = Object.getPrototypeOf(el);
-          const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-          if (setter) setter.call(el, value); else el.value = value;
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-          return true;
-        };
-
-        const typeToken = async (el, token) => {
+        const activate = (el) => {
           if (!el) return;
-          el.focus();
-          if (el.isContentEditable) {
-            if (document.execCommand) {
-              document.execCommand("insertText", false, token);
-            } else {
-              el.textContent = `${el.textContent || ""}${token}`;
-              el.dispatchEvent(new InputEvent("input", { bubbles: true, data: token, inputType: "insertText" }));
-            }
-          } else {
-            el.value = `${el.value || ""}${token}`;
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-          }
-          await wait(120);
+          try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+          try {
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+              el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+            });
+            el.click?.();
+          } catch (_) {}
+          try { el.focus(); } catch (_) {}
         };
 
-        const clickHashtagSuggestion = async () => {
-          const selectors = [
-            "[data-e2e*='hashtag'] li",
-            "[data-e2e*='hashtag'] button",
-            "[role='listbox'] [role='option']",
-            "div[class*='mention'] [role='option']",
-            "div[class*='hashtag'] [role='option']"
-          ];
-          for (const sel of selectors) {
-            const candidate = document.querySelector(sel);
-            if (candidate) {
-              candidate.scrollIntoView({ block: "center", inline: "center" });
-              candidate.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
-              candidate.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
-              candidate.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
-              await wait(120);
-              return true;
+        const setReactLikeValue = (el, value) => {
+          const next = String(value || "");
+          if (!el) return { ok: false, method: "missing", len: 0 };
+          activate(el);
+          const isEditable = el.isContentEditable || String(el.getAttribute("contenteditable") || "").toLowerCase() === "true";
+
+          if (isEditable) {
+            let method = "contenteditable_execCommand";
+            try {
+              try {
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                if (sel) {
+                  sel.removeAllRanges();
+                  sel.addRange(range);
+                }
+              } catch (_) {}
+              try { document.execCommand?.("selectAll", false, null); } catch (_) {}
+              try { document.execCommand?.("insertText", false, next); } catch (_) {}
+              if (normalize(el.textContent) !== normalize(next)) {
+                method = "contenteditable_textContent";
+                el.textContent = "";
+                el.textContent = next;
+              }
+              try { el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: next, inputType: "insertText" })); } catch (_) {}
+              try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: next, inputType: "insertText" })); } catch (_) {
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+              }
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+              el.dispatchEvent(new Event("blur", { bubbles: true }));
+            } catch (_) {
+              return { ok: false, method: "contenteditable_failed", len: normalize(el.textContent).length };
             }
+            return { ok: normalize(el.textContent) === normalize(next), method, len: normalize(el.textContent).length };
           }
-          return false;
+
+          try {
+            const proto = Object.getPrototypeOf(el);
+            const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+            if (setter) setter.call(el, next); else el.value = next;
+            el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: next, inputType: "insertText" }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            return { ok: normalize(el.value) === normalize(next), method: "value_setter", len: normalize(el.value).length };
+          } catch (_) {
+            return { ok: false, method: "value_failed", len: 0 };
+          }
+        };
+
+        const waitForSelector = async (selectors, timeoutMs = 10000) => {
+          const started = Date.now();
+          while (Date.now() - started < timeoutMs) {
+            for (const sel of selectors) {
+              try {
+                const matches = Array.from(document.querySelectorAll(sel));
+                const visible = matches.find(isVisible) || matches[0];
+                if (visible) return { el: visible, selector: sel };
+              } catch (_) {}
+            }
+            await wait(180);
+          }
+          return { el: null, selector: "" };
+        };
+
+        const findYoutubeByLabel = (labelHint) => {
+          const containers = Array.from(document.querySelectorAll("ytcp-form-input-container"));
+          for (const container of containers) {
+            const label = String(container.querySelector("#label-text")?.textContent || "").toLowerCase();
+            if (!label.includes(labelHint)) continue;
+            const outer = container.querySelector("#outer, #child-input, #container-content");
+            if (outer) activate(outer);
+            const tb = container.querySelector('#textbox[contenteditable="true"], textarea#textbox');
+            if (tb) return tb;
+          }
+          return null;
+        };
+
+        const findBestTextbox = () => {
+          const candidates = Array.from(document.querySelectorAll("textarea,[contenteditable='true'],[role='textbox']"))
+            .filter((el) => isVisible(el) && !el.disabled);
+          candidates.sort((a, b) => {
+            const ra = a.getBoundingClientRect();
+            const rb = b.getBoundingClientRect();
+            return (rb.width * rb.height) - (ra.width * ra.height);
+          });
+          return candidates[0] || null;
         };
 
         if (name === "dom.type") {
-          const el = document.querySelector(p.selector || "");
-          if (!el) return { typed: false, selector: p.selector || "" };
-          return { typed: setValue(el, p.text || ""), selector: p.selector || "" };
+          const typedValue = String(p.value ?? p.text ?? "");
+          const selector = String(p.selector || "");
+          const timeoutMs = Number(p.timeoutMs || 10000);
+          const { el, selector: used } = await waitForSelector([selector], timeoutMs);
+          if (!el) return { typed: false, selector, reason: "not_found" };
+          const wrote = setReactLikeValue(el, typedValue);
+          return { typed: Boolean(wrote.ok), selector: used || selector, method: wrote.method, len: wrote.len };
         }
 
         const fields = p.fields || {};
-        const selectors = {
-          title: ["textarea#title-textarea", "#textbox", "input[name='title']", "textarea[name='title']"],
+        const timeoutMs = Number(p.timeoutMs || 12000);
+        const selectorsByField = {
+          title: [
+            '#title-textarea #textbox[contenteditable="true"]',
+            'div#textbox[contenteditable="true"][aria-label*="title" i]',
+            'textarea#textbox[aria-label*="title" i]',
+            "input[name='title']",
+            "textarea[name='title']",
+          ],
           description: [
+            '#description #textbox[contenteditable="true"]',
+            'div#textbox[contenteditable="true"][aria-label*="tell viewers" i]',
+            'div#textbox[contenteditable="true"][aria-label*="description" i]',
+            '[contenteditable="true"][aria-placeholder*="describe your reel" i]',
+            '[contenteditable="true"][data-lexical-editor="true"]',
+            "textarea[name='description']",
             "div[contenteditable='true'][role='textbox']",
             "div[contenteditable='true']",
-            "textarea#description-textarea",
-            "textarea[name='description']"
-          ]
+          ],
         };
+
         const out = {};
+        const diagnostics = [];
         for (const [key, value] of Object.entries(fields)) {
-          const list = selectors[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
-          const el = list.map((sel) => document.querySelector(sel)).find(Boolean);
+          const text = String(value || "");
+          let el = null;
+          let usedSelector = "";
+
+          if (currentPlatform === "youtube") {
+            el = key === "title" ? findYoutubeByLabel("title") : (key === "description" ? findYoutubeByLabel("description") : null);
+            if (el) usedSelector = `ytcp-form-input-container[label~=${key}]`;
+          }
+
+          if (!el) {
+            const list = selectorsByField[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
+            const found = await waitForSelector(list, timeoutMs);
+            el = found.el;
+            usedSelector = found.selector;
+          }
+
+          if (!el && (key === "description" || key === "title")) {
+            const fallback = findBestTextbox();
+            if (fallback) {
+              el = fallback;
+              usedSelector = "fallback_best_textbox";
+            }
+          }
+
           if (!el) {
             out[key] = false;
+            diagnostics.push({ field: key, method: "not_found", selector: usedSelector, len: 0 });
             continue;
           }
 
-          const text = String(value || "");
-          if (currentPlatform === "tiktok" && key === "description") {
-            if (!setValue(el, "")) {
-              out[key] = false;
-              continue;
-            }
-            const parts = text.split(/(#[\w-]+)/g).filter(Boolean);
-            for (const part of parts) {
-              await typeToken(el, part);
-              if (part.startsWith("#")) {
-                const selected = await clickHashtagSuggestion();
-                if (!selected) {
-                  await typeToken(el, " ");
-                }
-              }
-            }
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-            out[key] = true;
-          } else {
-            out[key] = setValue(el, text);
-          }
+          const wrote = setReactLikeValue(el, text);
+          out[key] = Boolean(wrote.ok);
+          diagnostics.push({
+            field: key,
+            method: wrote.method,
+            selector: usedSelector,
+            tag: String(el.tagName || ""),
+            role: String(el.getAttribute?.("role") || ""),
+            contenteditable: String(el.getAttribute?.("contenteditable") || ""),
+            len: Number(wrote.len || 0),
+          });
         }
-        return out;
+
+        return { ...out, diagnostics };
       }, [payload, msg.name, platform], platform);
       ackCmd(msg, true, result);
       return;
     }
+
 
     if (msg.name === "upload.select_file") {
       sendEvent("error", {
