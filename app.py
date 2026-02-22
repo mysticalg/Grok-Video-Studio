@@ -10727,11 +10727,32 @@ class MainWindow(QMainWindow):
                             }
                         }
 
-                        if (Number(youtubeState.nextClicks || 0) >= 4) {
+                        const visibilityStepDetected = Boolean(bySelectors([
+                            'ytcp-video-visibility-select',
+                            'ytcp-video-visibility-select tp-yt-paper-radio-button[role="radio"]',
+                            'tp-yt-paper-radio-button[name="PUBLIC"]',
+                            'tp-yt-paper-radio-button[name="UNLISTED"]',
+                            'tp-yt-paper-radio-button[name="PRIVATE"]',
+                            'button[aria-label="Save"]',
+                        ]));
+                        if (visibilityStepDetected && Number(youtubeState.nextClicks || 0) < 4) {
+                            youtubeState.nextClicks = 4;
+                        }
+
+                        if (Number(youtubeState.nextClicks || 0) >= 4 || visibilityStepDetected) {
                             const visibilityGroup = bySelectors([
                                 'tp-yt-paper-radio-group#privacy-radios',
                                 'ytcp-video-visibility-select tp-yt-paper-radio-group',
                             ]);
+                            const visibilityName = visibility === "private"
+                                ? "PRIVATE"
+                                : (visibility === "unlisted" ? "UNLISTED" : "PUBLIC");
+                            const findVisibilityRadio = (name) => bySelectors([
+                                `tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button[name="${name}"]`,
+                                `ytcp-video-visibility-select tp-yt-paper-radio-button[name="${name}"]`,
+                                `tp-yt-paper-radio-button[name="${name}"]`,
+                            ]);
+
                             let visibilityRadio = visibility === "private"
                                 ? bySelectors([
                                     'tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button#private-radio-button',
@@ -10786,6 +10807,18 @@ class MainWindow(QMainWindow):
                                         : bySelectors(['tp-yt-paper-radio-button#public-radio-button', 'tp-yt-paper-radio-button[name="PUBLIC"]']));
                             }
 
+                            if (!visibilityRadio) {
+                                visibilityRadio = findVisibilityRadio(visibilityName);
+                            }
+
+                            if (visibilityRadio && actionSpacingElapsed) {
+                                try {
+                                    if (typeof visibilityRadio.scrollIntoView === 'function') {
+                                        visibilityRadio.scrollIntoView({ block: 'center', inline: 'nearest' });
+                                    }
+                                } catch (_) {}
+                            }
+
                             const visibilitySelected = Boolean(
                                 visibilityRadio
                                 && String(visibilityRadio.getAttribute('aria-checked') || '').toLowerCase() === 'true'
@@ -10816,8 +10849,9 @@ class MainWindow(QMainWindow):
                                 }
                             }
 
-                            const finalActionHints = visibility === "public" ? ["publish"] : ["save", "done"];
+                            const finalActionHints = visibility === "public" ? ["publish", "save"] : ["save", "done"];
                             const doneButton = bySelectors([
+                                'button[aria-label="Save"]',
                                 'ytcp-button#done-button button',
                                 'ytcp-button[id="done-button"] button',
                                 visibility === "public" ? 'button[aria-label*="publish" i]' : 'button[aria-label*="save" i]',
