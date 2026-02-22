@@ -86,7 +86,31 @@ class UdpAutomationService:
                 except Exception:
                     input_el = None
                 if input_el is not None and await input_el.count() > 0:
-                    await input_el.set_input_files(file_path)
+                    try:
+                        await input_el.set_input_files(file_path)
+                    except Exception as exc:
+                        err_text = str(exc)
+                        file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+                        if "Cannot transfer files larger than 50Mb" in err_text:
+                            await self._emit(
+                                "state",
+                                {
+                                    "state": "upload_requires_manual_selection",
+                                    "platform": platform,
+                                    "reason": "remote_browser_file_transfer_limit",
+                                    "fileSizeMb": round(file_size_mb, 2),
+                                },
+                            )
+                            return {
+                                "ok": True,
+                                "payload": {
+                                    "requiresUserAction": True,
+                                    "reason": "remote_browser_file_transfer_limit",
+                                    "message": "CDP remote upload is limited to 50MB; use a smaller file or manual picker",
+                                    "fileSizeMb": round(file_size_mb, 2),
+                                },
+                            }
+                        raise
                     await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path})
                     return {"ok": True, "payload": {"mode": "cdp_set_input_files"}}
                 ack = await self._send_extension_cmd("upload.select_file", payload)
