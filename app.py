@@ -9965,14 +9965,27 @@ class MainWindow(QMainWindow):
                         }
                         return results;
                     };
-                    const bySelectors = (selectors) => {
+                    const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
+                    const firstVisibleNode = (nodes) => nodes.find((node) => isVisible(node)) || null;
+                    const bySelectors = (selectors, options = {}) => {
+                        const contexts = (options.contexts && options.contexts.length)
+                            ? options.contexts
+                            : [document];
                         for (const selector of selectors) {
-                            const nodes = collectDeep(selector);
-                            if (nodes.length) return nodes[0];
+                            const matches = [];
+                            for (const contextNode of contexts) {
+                                let nodes = [];
+                                try {
+                                    nodes = Array.from(contextNode.querySelectorAll(selector));
+                                } catch (_) {}
+                                matches.push(...nodes);
+                            }
+                            const visible = firstVisibleNode(matches);
+                            if (visible) return visible;
+                            if (matches.length) return matches[0];
                         }
                         return null;
                     };
-                    const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
                     const normalizedNodeText = (node) => [
                         norm(node.innerText || node.textContent),
                         norm(node.getAttribute("aria-label")),
@@ -10718,7 +10731,7 @@ class MainWindow(QMainWindow):
                                 || String(nextButton.getAttribute('disabled') || '').toLowerCase() === 'true'
                             )
                         );
-                        if (nextButton && !nextDisabled && Number(youtubeState.nextClicks || 0) < 4 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
+                        if (nextButton && !nextDisabled && Number(youtubeState.nextClicks || 0) < 3 && actionSpacingElapsed && youtubeTitleFilled && youtubeDescriptionFilled) {
                             const clicked = clickNodeOrAncestor(nextButton);
                             if (clicked) {
                                 youtubeState.nextClicks = Number(youtubeState.nextClicks || 0) + 1;
@@ -10727,28 +10740,37 @@ class MainWindow(QMainWindow):
                             }
                         }
 
-                        if (Number(youtubeState.nextClicks || 0) >= 4) {
+                        const uploadDialog = bySelectors(['ytcp-uploads-dialog', 'tp-yt-paper-dialog'], { contexts: [document] });
+                        const visibilityContexts = [uploadDialog, bySelectors(['ytcp-video-visibility-select'], { contexts: [uploadDialog || document] }), document].filter(Boolean);
+                        const onVisibilityStep = Boolean(bySelectors([
+                            'ytcp-video-visibility-select',
+                            'tp-yt-paper-radio-group#privacy-radios',
+                            'ytcp-button#done-button button',
+                            'button[aria-label="Save"]',
+                        ], { contexts: visibilityContexts }));
+
+                        if (Number(youtubeState.nextClicks || 0) >= 3 || onVisibilityStep) {
                             const visibilityGroup = bySelectors([
                                 'tp-yt-paper-radio-group#privacy-radios',
                                 'ytcp-video-visibility-select tp-yt-paper-radio-group',
-                            ]);
+                            ], { contexts: visibilityContexts });
                             let visibilityRadio = visibility === "private"
                                 ? bySelectors([
                                     'tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button#private-radio-button',
                                     'tp-yt-paper-radio-button#private-radio-button',
                                     'tp-yt-paper-radio-button[name="PRIVATE"]',
-                                ])
+                                ], { contexts: visibilityContexts })
                                 : (visibility === "unlisted"
                                     ? bySelectors([
                                         'tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button#unlisted-radio-button',
                                         'tp-yt-paper-radio-button#unlisted-radio-button',
                                         'tp-yt-paper-radio-button[name="UNLISTED"]',
-                                    ])
+                                    ], { contexts: visibilityContexts })
                                     : bySelectors([
                                         'tp-yt-paper-radio-group#privacy-radios tp-yt-paper-radio-button#public-radio-button',
                                         'tp-yt-paper-radio-button#public-radio-button',
                                         'tp-yt-paper-radio-button[name="PUBLIC"]',
-                                    ]));
+                                    ], { contexts: visibilityContexts }));
 
                             if (!visibilityRadio && actionSpacingElapsed) {
                                 const dialogScroller = bySelectors([
@@ -10765,9 +10787,6 @@ class MainWindow(QMainWindow):
                             }
 
                             if (!visibilityRadio) {
-                                const visibilityContexts = [
-                                    bySelectors(['ytcp-video-visibility-select', 'ytcp-uploads-dialog']),
-                                ].filter(Boolean);
                                 const visibilityFallback = visibility === "private"
                                     ? findClickableByHints(["private"], { contexts: visibilityContexts })
                                     : (visibility === "unlisted"
@@ -10780,10 +10799,10 @@ class MainWindow(QMainWindow):
                                     }
                                 }
                                 visibilityRadio = visibility === "private"
-                                    ? bySelectors(['tp-yt-paper-radio-button#private-radio-button', 'tp-yt-paper-radio-button[name="PRIVATE"]'])
+                                    ? bySelectors(['tp-yt-paper-radio-button#private-radio-button', 'tp-yt-paper-radio-button[name="PRIVATE"]'], { contexts: visibilityContexts })
                                     : (visibility === "unlisted"
-                                        ? bySelectors(['tp-yt-paper-radio-button#unlisted-radio-button', 'tp-yt-paper-radio-button[name="UNLISTED"]'])
-                                        : bySelectors(['tp-yt-paper-radio-button#public-radio-button', 'tp-yt-paper-radio-button[name="PUBLIC"]']));
+                                        ? bySelectors(['tp-yt-paper-radio-button#unlisted-radio-button', 'tp-yt-paper-radio-button[name="UNLISTED"]'], { contexts: visibilityContexts })
+                                        : bySelectors(['tp-yt-paper-radio-button#public-radio-button', 'tp-yt-paper-radio-button[name="PUBLIC"]'], { contexts: visibilityContexts }));
                             }
 
                             const visibilitySelected = Boolean(
@@ -10816,13 +10835,15 @@ class MainWindow(QMainWindow):
                                 }
                             }
 
-                            const finalActionHints = visibility === "public" ? ["publish"] : ["save", "done"];
+                            const finalActionHints = visibility === "public" ? ["save", "publish", "done"] : ["save", "done"];
                             const doneButton = bySelectors([
                                 'ytcp-button#done-button button',
                                 'ytcp-button[id="done-button"] button',
-                                visibility === "public" ? 'button[aria-label*="publish" i]' : 'button[aria-label*="save" i]',
+                                'button[aria-label="Save"]',
+                                'button[aria-label*="save" i]',
+                                visibility === "public" ? 'button[aria-label*="publish" i]' : 'button[aria-label*="done" i]',
                                 'button[aria-label*="done" i]',
-                            ]) || findClickableByHints(finalActionHints);
+                            ], { contexts: visibilityContexts }) || findClickableByHints(finalActionHints, { contexts: visibilityContexts });
                             const doneDisabled = Boolean(
                                 doneButton
                                 && (
