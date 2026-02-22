@@ -127,7 +127,7 @@ async function handleCmd(msg) {
           return null;
         };
 
-        const timeoutMs = Number(opts.timeoutMs || 30000);
+        const timeoutMs = Math.max(1000, Number(opts.timeoutMs || 30000));
         const started = Date.now();
         while (Date.now() - started < timeoutMs) {
           const found = findCandidate();
@@ -146,7 +146,12 @@ async function handleCmd(msg) {
         if (!isEnabled(found.el)) return { clicked: false, reason: "disabled", selector: found.selector };
         if (opts.waitForUpload && !hasUploadReadySignal()) return { clicked: false, reason: "upload_not_ready", selector: found.selector };
         return { clicked: false, reason: "unknown", selector: found.selector };
-      }, [candidates, { waitForUpload: Boolean(payload.waitForUpload), timeoutMs: Number(payload.timeoutMs || 30000) }], platform);
+      }, [candidates, (() => {
+        const requestedTimeoutMs = Number(payload.timeoutMs || 0);
+        const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
+        const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs };
+      })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
           if (result?.clicked) {
