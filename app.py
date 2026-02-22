@@ -10915,6 +10915,28 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    const youtubeProcessingDialogDetected = platform === "youtube" && (() => {
+                        const directDialog = bySelectors([
+                            'tp-yt-paper-dialog[aria-label*="video processing" i]',
+                            'ytcp-video-processing-dialog',
+                            'ytcp-video-upload-progress',
+                            'ytcp-video-upload-progress-dialog',
+                        ]);
+                        if (directDialog) return true;
+                        const dialogNodes = collectDeep('tp-yt-paper-dialog, ytcp-dialog, [role="dialog"]');
+                        for (const node of dialogNodes) {
+                            if (!isVisible(node)) continue;
+                            const text = normalizedNodeText(node);
+                            if (!text) continue;
+                            if (text.includes('video processing')) return true;
+                            if (text.includes('checking') && text.includes('minutes left')) return true;
+                        }
+                        return false;
+                    })();
+                    if (youtubeProcessingDialogDetected) {
+                        youtubeState.submitted = true;
+                    }
+
                     return {
                         fileInputFound: Boolean(fileInput),
                         fileDialogTriggered,
@@ -10927,6 +10949,8 @@ class MainWindow(QMainWindow):
                         submitClicked,
                         tiktokPostEnabled,
                         tiktokSubmitClickedEver: Boolean(tiktokState.submitClicked),
+                        youtubeSubmitClickedEver: Boolean(youtubeState.submitted),
+                        youtubeProcessingDialogDetected,
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
@@ -10957,6 +10981,8 @@ class MainWindow(QMainWindow):
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostEnabled"))
             tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
+            youtube_submit_clicked_ever = bool(isinstance(result, dict) and result.get("youtubeSubmitClickedEver"))
+            youtube_processing_detected = bool(isinstance(result, dict) and result.get("youtubeProcessingDialogDetected"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -10973,7 +10999,7 @@ class MainWindow(QMainWindow):
                 and "tab=draft" in current_url.lower()
             )
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked} youtube_submit_seen={youtube_submit_clicked_ever} youtube_processing={youtube_processing_detected}"
             )
             pending["allow_file_dialog"] = False
 
@@ -10987,6 +11013,7 @@ class MainWindow(QMainWindow):
             submit_ok = (
                 submit_clicked
                 or (is_tiktok and (tiktok_submit_clicked_ever or tiktok_draft_landed))
+                or (is_youtube and (youtube_submit_clicked_ever or youtube_processing_detected))
             ) if (is_facebook or is_instagram or is_tiktok or is_youtube) else True
             completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok or is_youtube) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
