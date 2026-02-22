@@ -293,6 +293,38 @@ async function handleCmd(msg) {
           await wait(120);
         };
 
+        const getEditableText = (el) => String(el?.innerText || el?.textContent || "").replace(/\u00a0/g, " ").trim();
+
+        const clearEditable = (el) => {
+          if (!el) return;
+          try { el.focus(); } catch (_) {}
+          try { document.execCommand("selectAll", false, null); } catch (_) {}
+          try { document.execCommand("delete", false, null); } catch (_) {}
+          try { el.textContent = ""; } catch (_) {}
+          try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+        };
+
+        const typeTextIntoEditable = async (el, value) => {
+          if (!el) return false;
+          const text = String(value || "");
+          clearEditable(el);
+          for (const ch of text) {
+            try { el.focus(); } catch (_) {}
+            let inserted = false;
+            try { inserted = Boolean(document.execCommand("insertText", false, ch)); } catch (_) { inserted = false; }
+            if (!inserted) {
+              try { el.textContent = `${el.textContent || ""}${ch}`; } catch (_) {}
+            }
+            try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: ch, inputType: "insertText" })); } catch (_) {
+              try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+            }
+            await wait(8);
+          }
+          try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+          try { el.dispatchEvent(new Event("blur", { bubbles: true })); } catch (_) {}
+          return getEditableText(el).length > 0;
+        };
+
         const clickHashtagSuggestion = async () => {
           const selectors = [
             "[data-e2e*='hashtag'] li",
@@ -444,7 +476,9 @@ async function handleCmd(msg) {
               "div[contenteditable='true']",
             ];
             const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
-            out[key] = setValue(tiktokEl, text);
+            const pasteOk = setValue(tiktokEl, text);
+            const matches = getEditableText(tiktokEl).includes(text.trim());
+            out[key] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
           } else if (currentPlatform === "facebook" && key === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
             out[key] = setValue(facebookEl, text);
