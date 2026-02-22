@@ -1956,9 +1956,13 @@ class UdpWorkflowWorker(QThread):
         self.video_path = video_path
         self.title = title
         self.caption = caption
+        self._stop_event = threading.Event()
+
+    def request_stop(self) -> None:
+        self._stop_event.set()
 
     def run(self) -> None:
-        executor = UdpExecutor()
+        executor = UdpExecutor(stop_event=self._stop_event)
         try:
             platform = self.platform_name.lower()
             if platform == "youtube":
@@ -4269,6 +4273,16 @@ class MainWindow(QMainWindow):
             return
 
         self._ensure_udp_service()
+        if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
+            self._append_automation_log("Stopping previous UDP workflow before starting a new one.")
+            try:
+                self.udp_workflow_worker.request_stop()
+                if not self.udp_workflow_worker.wait(2000):
+                    self.udp_workflow_worker.requestInterruption()
+                    self.udp_workflow_worker.wait(1000)
+            except Exception:
+                pass
+        self._append_automation_log("UDP action log file: logs/udp_automation.log")
         self._append_automation_log(f"Starting UDP workflow for {platform_name}.")
         worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption)
         worker.finished_with_result.connect(lambda result: self._append_automation_log(f"{platform_name} UDP result: {result}"))
@@ -7402,6 +7416,12 @@ class MainWindow(QMainWindow):
         if self.stitch_worker and self.stitch_worker.isRunning():
             self.stitch_worker.request_stop()
             self._append_log("Stop requested: stitching/encoding worker is being interrupted.")
+        if self.udp_workflow_worker and self.udp_workflow_worker.isRunning():
+            try:
+                self.udp_workflow_worker.request_stop()
+            except Exception:
+                pass
+            self._append_automation_log("Stop requested: active UDP automation workflow interrupted.")
         if self._active_ffmpeg_process is not None and self._active_ffmpeg_process.poll() is None:
             self._active_ffmpeg_process.terminate()
             self._append_log("Stop requested: active ffmpeg stitch/encode process terminated.")
@@ -9188,8 +9208,8 @@ class MainWindow(QMainWindow):
         self._run_social_upload_via_mode(
             platform_name="TikTok",
             video_path=renamed_video_path,
-            caption="",
-            title="",
+            caption=self._compose_social_text(caption, hashtags),
+            title=title,
         )
 
 
