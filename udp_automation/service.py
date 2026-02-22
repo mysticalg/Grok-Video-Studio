@@ -86,33 +86,39 @@ class UdpAutomationService:
                 except Exception:
                     input_el = None
                 if input_el is not None and await input_el.count() > 0:
+                    file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
                     try:
                         await input_el.set_input_files(file_path)
+                        mode = "cdp_set_input_files"
                     except Exception as exc:
                         err_text = str(exc)
-                        file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
                         if "Cannot transfer files larger than 50Mb" in err_text:
-                            await self._emit(
-                                "state",
-                                {
-                                    "state": "upload_requires_manual_selection",
-                                    "platform": platform,
-                                    "reason": "remote_browser_file_transfer_limit",
-                                    "fileSizeMb": round(file_size_mb, 2),
-                                },
-                            )
-                            return {
-                                "ok": True,
-                                "payload": {
-                                    "requiresUserAction": True,
-                                    "reason": "remote_browser_file_transfer_limit",
-                                    "message": "CDP remote upload is limited to 50MB; use a smaller file or manual picker",
-                                    "fileSizeMb": round(file_size_mb, 2),
-                                },
-                            }
-                        raise
-                    await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path})
-                    return {"ok": True, "payload": {"mode": "cdp_set_input_files"}}
+                            used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, "input[type='file']", file_path)
+                            if used_dom_fallback:
+                                mode = "cdp_dom_set_file_input_files"
+                            else:
+                                await self._emit(
+                                    "state",
+                                    {
+                                        "state": "upload_requires_manual_selection",
+                                        "platform": platform,
+                                        "reason": "remote_browser_file_transfer_limit",
+                                        "fileSizeMb": round(file_size_mb, 2),
+                                    },
+                                )
+                                return {
+                                    "ok": True,
+                                    "payload": {
+                                        "requiresUserAction": True,
+                                        "reason": "remote_browser_file_transfer_limit",
+                                        "message": "Automatic upload over remote CDP failed for this file size",
+                                        "fileSizeMb": round(file_size_mb, 2),
+                                    },
+                                }
+                        else:
+                            raise
+                    await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
+                    return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
                 ack = await self._send_extension_cmd("upload.select_file", payload)
                 return _ack_from_extension(ack)
 
