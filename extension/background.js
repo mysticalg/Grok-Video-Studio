@@ -322,22 +322,53 @@ async function handleCmd(msg) {
         }
 
         const fields = p.fields || {};
+        const focusYouTubeTextbox = (textbox) => {
+          if (!textbox) return null;
+          const outer = textbox.closest("#outer, #child-input, #container-content") || textbox.parentElement;
+          if (outer) {
+            try { outer.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            try { outer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { outer.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { outer.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+          }
+          try { textbox.focus(); } catch (_) {}
+          return textbox;
+        };
+
         const findYouTubeContainerField = (key) => {
+          const titleCandidates = [
+            "#textbox[contenteditable='true'][aria-label*='add a title' i]",
+            "#textbox[contenteditable='true'][aria-required='true'][aria-label*='title' i]",
+            "#title-textarea #textbox[contenteditable='true']",
+          ];
+          const descriptionCandidates = [
+            "#textbox[contenteditable='true'][aria-label*='tell viewers about your video' i]",
+            "#description #textbox[contenteditable='true']",
+            "#textbox[contenteditable='true'][aria-label*='description' i]",
+          ];
+
+          if (key === "title") {
+            for (const sel of titleCandidates) {
+              const found = document.querySelector(sel);
+              if (found) return focusYouTubeTextbox(found);
+            }
+          }
+
+          if (key === "description") {
+            for (const sel of descriptionCandidates) {
+              const found = document.querySelector(sel);
+              if (found) return focusYouTubeTextbox(found);
+            }
+          }
+
           const containers = Array.from(document.querySelectorAll("ytcp-form-input-container#container, ytcp-form-input-container"));
           for (const container of containers) {
             const root = container.closest("ytcp-form-input-container") || container;
             const label = String(root.querySelector("#label-text")?.textContent || "").toLowerCase();
             if (key === "title" && !label.includes("title")) continue;
             if (key === "description" && !label.includes("description")) continue;
-            const outer = root.querySelector("#outer, #child-input, #container-content");
-            if (outer) {
-              try { outer.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-              try { outer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
-              try { outer.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
-              try { outer.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
-            }
             const textbox = root.querySelector("#textbox[contenteditable='true'], textarea#textbox");
-            if (textbox) return textbox;
+            if (textbox) return focusYouTubeTextbox(textbox);
           }
           return null;
         };
