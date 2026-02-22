@@ -525,17 +525,65 @@ async function handleCmd(msg) {
       const tab = await findTargetTab(platform);
       const debuggee = { tabId: tab.id };
       const selectorExpr = `(() => { const nodes = Array.from(document.querySelectorAll("input[type=\'file\']")); return nodes.find((n) => (n.offsetWidth || n.offsetHeight || n.getClientRects().length)) || nodes[0] || null; })()`;
+      const tiktokPrimeExpr = `(() => {
+        const selectors = [
+          '[data-e2e*="upload"]',
+          'button[data-e2e*="upload"]',
+          'div[data-e2e*="upload"]',
+          'button',
+          '[role="button"]',
+        ];
+        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+        const clickNode = (node) => {
+          if (!node) return false;
+          try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+          const target = node.closest('button, [role="button"], div') || node;
+          try {
+            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((evt) => {
+              target.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+            });
+            target.click?.();
+            return true;
+          } catch (_) { return false; }
+        };
+
+        for (const sel of selectors) {
+          let nodes = [];
+          try { nodes = Array.from(document.querySelectorAll(sel)); } catch (_) {}
+          const candidate = nodes.find(isVisible) || nodes[0];
+          if (candidate && clickNode(candidate)) return true;
+        }
+        return false;
+      })()`;
       let attached = false;
       try {
         await chrome.debugger.attach(debuggee, "1.3");
         attached = true;
         await chrome.debugger.sendCommand(debuggee, "DOM.enable", {});
         await chrome.debugger.sendCommand(debuggee, "Runtime.enable", {});
-        const evalRes = await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
-          expression: selectorExpr,
-          returnByValue: false,
-        });
-        const objectId = evalRes?.result?.objectId;
+
+        let objectId = null;
+        const maxAttempts = platform === "tiktok" ? 24 : 10;
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          const evalRes = await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
+            expression: selectorExpr,
+            returnByValue: false,
+          });
+          objectId = evalRes?.result?.objectId || null;
+          if (objectId) break;
+
+          if (platform === "tiktok") {
+            try {
+              await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
+                expression: tiktokPrimeExpr,
+                returnByValue: true,
+              });
+            } catch (_) {}
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, platform === "tiktok" ? 350 : 200));
+        }
+
         if (!objectId) throw new Error("file input element not found in target tab");
         const nodeInfo = await chrome.debugger.sendCommand(debuggee, "DOM.requestNode", { objectId });
         const nodeId = nodeInfo?.nodeId;
