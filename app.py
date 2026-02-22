@@ -10769,15 +10769,27 @@ class MainWindow(QMainWindow):
 
                         const findYouTubeTerminalActionButton = (desiredVisibility) => {
                             const contexts = youtubeDialogContexts.length ? youtubeDialogContexts : [document];
-                            const preferredHints = desiredVisibility === "public"
+                            const preferredActions = desiredVisibility === "public"
                                 ? ["publish", "save", "done"]
                                 : ["save", "done", "publish"];
-                            for (const hint of preferredHints) {
-                                const node = findClickableByHints([hint], {
-                                    contexts,
-                                    excludeHints: ["back", "close", "cancel"],
-                                });
-                                if (node) return node;
+                            const matchesAction = (node, action) => {
+                                const ariaLabel = norm(node.getAttribute && node.getAttribute('aria-label'));
+                                const nodeText = normalizedNodeText(node);
+                                const exactLabel = ariaLabel === action;
+                                const exactText = nodeText === action;
+                                const startsWithText = nodeText.startsWith(action + ' ');
+                                return exactLabel || exactText || startsWithText;
+                            };
+                            for (const context of contexts) {
+                                let candidates = [];
+                                try {
+                                    candidates = Array.from(context.querySelectorAll('ytcp-button button, button[aria-label], button'));
+                                } catch (_) {}
+                                const visibleCandidates = candidates.filter((node) => isVisible(node));
+                                for (const action of preferredActions) {
+                                    const match = visibleCandidates.find((node) => matchesAction(node, action));
+                                    if (match) return match;
+                                }
                             }
                             return null;
                         };
@@ -10942,11 +10954,7 @@ class MainWindow(QMainWindow):
                                     'button[aria-label*="done" i]',
                                 ];
                             const doneButton = bySelectors(finalActionSelectors, { requireEnabled: true })
-                                || terminalActionButton
-                                || findClickableByHints(finalActionHints, {
-                                    contexts: youtubeDialogContexts.length ? youtubeDialogContexts : [document],
-                                    excludeHints: ["back", "close", "cancel"],
-                                });
+                                || terminalActionButton;
                             const doneDisabled = Boolean(
                                 doneButton
                                 && (
