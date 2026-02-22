@@ -2096,6 +2096,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download: int | None = None
         self.pending_manual_download_type: str | None = None
         self.pending_manual_image_prompt: str | None = None
+        self.pending_manual_redirect_target = "grok"
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
@@ -5525,6 +5526,19 @@ class MainWindow(QMainWindow):
         self._append_log("Attempting to populate the visible Grok prompt box on the current page...")
         self._submit_next_manual_variant()
 
+    def _active_manual_browser_target(self) -> str:
+        return "sora" if self.browser is self.sora_browser else "grok"
+
+    def _return_embedded_browser_after_download(self) -> None:
+        redirect_target = (self.pending_manual_redirect_target or "grok").lower()
+        if redirect_target == "sora":
+            self._append_log("Download complete; returning embedded browser to sora.chatgpt.com/drafts.")
+            QTimer.singleShot(0, self.show_sora_browser_page)
+            return
+
+        self._append_log("Download complete; returning embedded browser to grok.com/imagine.")
+        QTimer.singleShot(0, self.show_browser_page)
+
     def _start_manual_browser_image_generation(self, prompt: str, count: int) -> None:
         self.manual_image_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._append_log(
@@ -5557,6 +5571,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download = variant
         self.pending_manual_download_type = "image"
         self.pending_manual_image_prompt = prompt
+        self.pending_manual_redirect_target = self._active_manual_browser_target()
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
@@ -6483,6 +6498,7 @@ class MainWindow(QMainWindow):
             return
         self.pending_manual_variant_for_download = variant
         self.pending_manual_download_type = "video"
+        self.pending_manual_redirect_target = self._active_manual_browser_target()
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         action_delay_ms = 1000
@@ -7547,11 +7563,11 @@ class MainWindow(QMainWindow):
                         "source_url": "browser-session",
                     }
                 )
-                self._append_log("Download complete; returning embedded browser to sora.chatgpt.com/drafts.")
-                QTimer.singleShot(0, self.show_sora_browser_page)
+                self._return_embedded_browser_after_download()
                 self.pending_manual_variant_for_download = None
                 self.pending_manual_download_type = None
                 self.pending_manual_image_prompt = None
+                self.pending_manual_redirect_target = "grok"
                 self.manual_image_pick_clicked = False
                 self.manual_image_video_mode_selected = False
                 self.manual_image_video_submit_sent = False
