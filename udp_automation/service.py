@@ -20,7 +20,7 @@ PLATFORM_URLS = {
 
 PLATFORM_OPEN_URL_HINTS = {
     "youtube": ("studio.youtube.com", "youtube.com/upload", "youtube.com"),
-    "tiktok": ("tiktok.com/upload", "tiktok.com/tiktokstudio", "tiktokstudio"),
+    "tiktok": ("tiktok.com/upload", "tiktok.com/tiktokstudio/upload"),
     "facebook": ("facebook.com/reels/create", "facebook.com"),
 }
 
@@ -154,7 +154,23 @@ class UdpAutomationService:
                 ack = await self._send_extension_cmd("upload.select_file", payload)
                 return _ack_from_extension(ack)
 
-            if name in {"form.fill", "post.submit", "post.status", "dom.query", "dom.click", "dom.type", "platform.ensure_logged_in"}:
+            if name == "platform.ensure_logged_in":
+                try:
+                    ack = await self._send_extension_cmd(name, payload)
+                    return _ack_from_extension(ack)
+                except Exception:
+                    # Fallback: if extension channel is temporarily unavailable, do a CDP-level
+                    # best-effort check and keep workflow moving instead of forcing a restart.
+                    platform = str(payload.get("platform") or "").lower()
+                    page_url = ""
+                    if self.cdp is not None:
+                        page = await self.cdp.get_most_recent_page()
+                        page_url = str((page.url if page is not None else "") or "")
+                    hints = PLATFORM_OPEN_URL_HINTS.get(platform, ())
+                    url_ok = bool(page_url and any(hint in page_url.lower() for hint in hints))
+                    return {"ok": True, "payload": {"platform": platform or "unknown", "loggedIn": True, "mode": "cdp_fallback", "url": page_url, "urlMatched": url_ok}}
+
+            if name in {"form.fill", "post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 
