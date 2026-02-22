@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Grok Video Studio Native Bridge",
+  "version": "0.1.0",
+  "description": "Bridge Chrome extension actions to Grok Video Studio native host.",
+  "permissions": ["nativeMessaging", "storage"],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "Grok Native Bridge"
+  }
+}

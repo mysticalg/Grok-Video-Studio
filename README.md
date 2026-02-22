@@ -141,6 +141,17 @@ If CDP attach fails, verify remote debugging is enabled in App Preferences and r
 If relay steps are slow on your machine, increase `GROK_CDP_RELAY_STEP_TIMEOUT_SECONDS` (default `6`) before launching the relay.
 - On Windows, if a client drops the HTTP connection mid-response, the relay now treats it as non-fatal and continues serving subsequent requests.
 
+
+## Chrome extension ⇄ desktop app bridge (Native Messaging)
+
+A starter implementation is included for a reliable extension-to-desktop control channel over Chrome Native Messaging (`stdin/stdout` JSON):
+
+- Native host: `tools/chrome_native_host.py`
+- Sample extension: `extension/native-bridge/`
+- Setup guide: [`CHROME_NATIVE_MESSAGING.md`](CHROME_NATIVE_MESSAGING.md)
+
+This is a good fit for automation control because Chrome supports it natively and the desktop app can keep privileged operations local.
+
 ## Configure credentials
 
 In **Model/API Settings** tab configure what you need:
