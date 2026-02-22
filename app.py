@@ -1957,24 +1957,43 @@ class UdpWorkflowWorker(QThread):
         self.title = title
         self.caption = caption
         self._stop_event = threading.Event()
+        self._stop_requested = False
 
     def request_stop(self) -> None:
+        self._stop_requested = True
         self._stop_event.set()
 
+    def _run_workflow(self, executor: UdpExecutor) -> dict[str, Any]:
+        platform = self.platform_name.lower()
+        if platform == "youtube":
+            return udp_youtube_workflow.run(executor, self.video_path, self.title, self.caption)
+        if platform == "tiktok":
+            return udp_tiktok_workflow.run(executor, self.video_path, self.caption)
+        if platform == "facebook":
+            return udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title)
+        raise RuntimeError(f"UDP workflow not implemented for {self.platform_name}")
+
     def run(self) -> None:
+        if not self._stop_requested:
+            self._stop_event.clear()
+
         executor = UdpExecutor(stop_event=self._stop_event)
         try:
-            platform = self.platform_name.lower()
-            if platform == "youtube":
-                result = udp_youtube_workflow.run(executor, self.video_path, self.title, self.caption)
-            elif platform == "tiktok":
-                result = udp_tiktok_workflow.run(executor, self.video_path, self.caption)
-            elif platform == "facebook":
-                result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title)
-            else:
-                raise RuntimeError(f"UDP workflow not implemented for {self.platform_name}")
+            result = self._run_workflow(executor)
             self.finished_with_result.emit(json.dumps(result, ensure_ascii=False))
+            return
         except Exception as exc:
+            # Defensive retry for stale-stop races observed during rapid stop/restart.
+            if str(exc) == "UDP workflow stopped by user" and not self._stop_requested:
+                try:
+                    self._stop_event.clear()
+                    retry_executor = UdpExecutor(stop_event=self._stop_event)
+                    retry_result = self._run_workflow(retry_executor)
+                    self.finished_with_result.emit(json.dumps(retry_result, ensure_ascii=False))
+                    return
+                except Exception as retry_exc:
+                    self.failed.emit(str(retry_exc))
+                    return
             self.failed.emit(str(exc))
 
 
