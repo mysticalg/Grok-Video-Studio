@@ -36,7 +36,10 @@ class UdpExecutor(BaseExecutor):
                 sock.sendto(json.dumps(message).encode("utf-8"), (self.host, self.port))
                 deadline = time.time() + self.timeout_s
                 while time.time() < deadline:
-                    data, _ = sock.recvfrom(65535)
+                    try:
+                        data, _ = sock.recvfrom(65535)
+                    except socket.timeout:
+                        break
                     response = json.loads(data.decode("utf-8"))
                     if response.get("type") == "event":
                         continue
