@@ -2134,7 +2134,14 @@ class MainWindow(QMainWindow):
         self.preview_volume = 100
         self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
-        self.cdp_enabled = True
+        self.cdp_enabled = False
+        self.browser_tab_enabled = {
+            "Grok": True,
+            "Sora": True,
+            "Facebook": True,
+            "TikTok": True,
+            "YouTube": True,
+        }
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
             medium_title="AI Generated Video Clip",
@@ -2665,6 +2672,29 @@ class MainWindow(QMainWindow):
         self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
         self.browser_tabs.currentChanged.connect(self._on_browser_tab_changed)
 
+        self.browser_tab_indices = {
+            "Grok": self.grok_browser_tab_index,
+            "Sora": self.sora_browser_tab_index,
+            **self.social_upload_tab_indices,
+        }
+        self.browser_tab_widgets = {
+            "Grok": self.grok_browser_tab,
+            "Sora": self.sora_browser_tab,
+        }
+        for platform_name in self.social_upload_browsers:
+            tab_idx = self.social_upload_tab_indices.get(platform_name)
+            if tab_idx is not None:
+                self.browser_tab_widgets[platform_name] = self.browser_tabs.widget(tab_idx)
+        self.browser_tab_webviews = {
+            "Grok": self.grok_browser_view,
+            "Sora": self.sora_browser,
+            **self.social_upload_browsers,
+        }
+
+        for tab_key in self.browser_tab_indices:
+            self._set_browser_tab_enabled(tab_key, self._is_browser_tab_enabled(tab_key))
+        self._refresh_browser_tab_selection()
+
         right_splitter = QSplitter(Qt.Vertical)
         right_splitter.setOpaqueResize(True)
         right_splitter.setChildrenCollapsible(False)
@@ -2812,6 +2842,9 @@ class MainWindow(QMainWindow):
         return fallback_url
 
     def _open_social_upload_page(self, platform_name: str, upload_url: str) -> None:
+        if not self._is_browser_tab_enabled(platform_name):
+            self._append_log(f"{platform_name} upload tab is disabled. Re-enable it from View → Browser Tabs.")
+            return
         browser = self.social_upload_browsers.get(platform_name)
         if browser is None:
             return
@@ -3494,6 +3527,44 @@ class MainWindow(QMainWindow):
         status_bar.setVisible(should_show)
         status_bar.setMaximumHeight(16777215 if should_show else 0)
 
+    def _is_browser_tab_enabled(self, tab_key: str) -> bool:
+        return bool(self.browser_tab_enabled.get(tab_key, True))
+
+    def _set_browser_tab_enabled(self, tab_key: str, enabled: bool) -> None:
+        enabled = bool(enabled)
+        self.browser_tab_enabled[tab_key] = enabled
+
+        tab_index = self.browser_tab_indices.get(tab_key) if hasattr(self, "browser_tab_indices") else None
+        tab_widget = self.browser_tab_widgets.get(tab_key) if hasattr(self, "browser_tab_widgets") else None
+        if tab_widget is not None:
+            tab_widget.setVisible(enabled)
+        if tab_index is not None:
+            self.browser_tabs.setTabVisible(tab_index, enabled)
+
+        browser = self.browser_tab_webviews.get(tab_key) if hasattr(self, "browser_tab_webviews") else None
+        if browser is not None:
+            if enabled:
+                browser.setEnabled(True)
+            else:
+                browser.stop()
+                browser.setEnabled(False)
+                browser.setHtml("<html><body style='font-family:sans-serif;padding:16px;'><h3>Tab disabled</h3><p>Re-enable this tab from View → Browser Tabs to reactivate it.</p></body></html>")
+
+        action = self.browser_tab_toggle_actions.get(tab_key) if hasattr(self, "browser_tab_toggle_actions") else None
+        if action is not None and action.isChecked() != enabled:
+            action.blockSignals(True)
+            action.setChecked(enabled)
+            action.blockSignals(False)
+
+    def _refresh_browser_tab_selection(self) -> None:
+        current = self.browser_tabs.currentIndex()
+        if current >= 0 and self.browser_tabs.isTabVisible(current):
+            return
+        for i in range(self.browser_tabs.count()):
+            if self.browser_tabs.isTabVisible(i):
+                self.browser_tabs.setCurrentIndex(i)
+                return
+
     def _build_menu_bar(self) -> None:
         menu_bar = self.menuBar()
 
@@ -3543,6 +3614,17 @@ class MainWindow(QMainWindow):
             False: cdp_disabled_action,
         }
         self._set_cdp_enabled(self.cdp_enabled)
+
+        view_menu = menu_bar.addMenu("View")
+        browser_tabs_menu = view_menu.addMenu("Browser Tabs")
+        self.browser_tab_toggle_actions = {}
+        for tab_key in ("Grok", "Sora", "Facebook", "TikTok", "YouTube"):
+            action = QAction(tab_key, self)
+            action.setCheckable(True)
+            action.setChecked(self._is_browser_tab_enabled(tab_key))
+            action.toggled.connect(lambda checked, k=tab_key: self._set_browser_tab_enabled(k, checked))
+            browser_tabs_menu.addAction(action)
+            self.browser_tab_toggle_actions[tab_key] = action
 
         help_menu = menu_bar.addMenu("Help")
         info_action = QAction("Info", self)
@@ -3865,6 +3947,7 @@ class MainWindow(QMainWindow):
             "cdp_social_upload_relay_enabled": self.cdp_social_upload_relay_enabled.isChecked(),
             "cdp_social_upload_relay_url": self.cdp_social_upload_relay_url.text().strip(),
             "cdp_enabled": self.cdp_enabled,
+            "browser_tab_enabled": dict(self.browser_tab_enabled),
             "automation_mode": self.automation_mode.currentData(),
             "count": self.count.value(),
             "video_resolution": str(self.video_resolution.currentData()),
@@ -4009,6 +4092,14 @@ class MainWindow(QMainWindow):
             self.cdp_social_upload_relay_url.setText(str(preferences["cdp_social_upload_relay_url"]))
         if "cdp_enabled" in preferences:
             self._set_cdp_enabled(bool(preferences["cdp_enabled"]))
+        if "browser_tab_enabled" in preferences and isinstance(preferences["browser_tab_enabled"], dict):
+            for tab_key, enabled in preferences["browser_tab_enabled"].items():
+                if tab_key in self.browser_tab_enabled:
+                    self.browser_tab_enabled[tab_key] = bool(enabled)
+            if hasattr(self, "browser_tab_indices"):
+                for tab_key in self.browser_tab_indices:
+                    self._set_browser_tab_enabled(tab_key, self._is_browser_tab_enabled(tab_key))
+                self._refresh_browser_tab_selection()
         if "automation_mode" in preferences:
             automation_mode_index = self.automation_mode.findData(str(preferences["automation_mode"]))
             if automation_mode_index >= 0:
@@ -8646,12 +8737,18 @@ class MainWindow(QMainWindow):
             self.browser = self.sora_browser
 
     def show_browser_page(self) -> None:
+        if not self._is_browser_tab_enabled("Grok"):
+            self._append_log("Grok Browser tab is disabled. Re-enable it from View → Browser Tabs.")
+            return
         self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
         self.browser = self.grok_browser_view
         self.grok_browser_view.setUrl(QUrl("https://grok.com/imagine"))
         self._append_log("Navigated embedded browser to grok.com/imagine.")
 
     def show_sora_browser_page(self) -> None:
+        if not self._is_browser_tab_enabled("Sora"):
+            self._append_log("Sora Browser tab is disabled. Re-enable it from View → Browser Tabs.")
+            return
         self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
         self.browser = self.sora_browser
         self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/drafts"))
@@ -9676,6 +9773,10 @@ class MainWindow(QMainWindow):
             progress_bar.setValue(0)
 
     def _start_social_browser_upload(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
+        if not self._is_browser_tab_enabled(platform_name):
+            QMessageBox.warning(self, "Social Upload", f"{platform_name} upload tab is disabled. Re-enable it from View → Browser Tabs.")
+            return
+
         if platform_name in self.social_upload_pending:
             self._append_log(f"{platform_name}: previous automation run detected; canceling and starting fresh.")
             self._cancel_social_upload_run(platform_name, reason="new run requested")
