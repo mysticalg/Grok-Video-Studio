@@ -2139,8 +2139,12 @@ class MainWindow(QMainWindow):
             "Grok": True,
             "Sora": True,
             "Facebook": True,
+            "Instagram": True,
             "TikTok": True,
             "YouTube": True,
+            "Sora2Settings": True,
+            "SeedanceSettings": True,
+            "AIFlowTrainer": True,
         }
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
@@ -2659,6 +2663,10 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("Facebook", self._facebook_upload_home_url()),
             "Facebook Upload",
         )
+        self.social_upload_tab_indices["Instagram"] = self.browser_tabs.addTab(
+            self._build_social_upload_tab("Instagram", self._instagram_reels_create_url()),
+            "Instagram Upload",
+        )
         self.social_upload_tab_indices["TikTok"] = self.browser_tabs.addTab(
             self._build_social_upload_tab("TikTok", "https://www.tiktok.com/upload"),
             "TikTok Upload",
@@ -2667,15 +2675,18 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("YouTube", "https://studio.youtube.com"),
             "YouTube Upload",
         )
-        self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
-        self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
-        self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
+        self.sora2_settings_tab_index = self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
+        self.seedance_settings_tab_index = self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
+        self.ai_flow_trainer_tab_index = self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
         self.browser_tabs.currentChanged.connect(self._on_browser_tab_changed)
 
         self.browser_tab_indices = {
             "Grok": self.grok_browser_tab_index,
             "Sora": self.sora_browser_tab_index,
             **self.social_upload_tab_indices,
+            "Sora2Settings": self.sora2_settings_tab_index,
+            "SeedanceSettings": self.seedance_settings_tab_index,
+            "AIFlowTrainer": self.ai_flow_trainer_tab_index,
         }
         self.browser_tab_widgets = {
             "Grok": self.grok_browser_tab,
@@ -3616,8 +3627,19 @@ class MainWindow(QMainWindow):
         view_menu = menu_bar.addMenu("View")
         browser_tabs_menu = view_menu.addMenu("Browser Tabs")
         self.browser_tab_toggle_actions = {}
-        for tab_key in ("Grok", "Sora", "Facebook", "TikTok", "YouTube"):
-            action = QAction(tab_key, self)
+        browser_tab_menu_items = (
+            ("Grok", "Grok"),
+            ("Sora", "Sora"),
+            ("Facebook", "Facebook"),
+            ("Instagram", "Instagram"),
+            ("TikTok", "TikTok"),
+            ("YouTube", "YouTube"),
+            ("Sora2Settings", "Sora 2 Video Settings"),
+            ("SeedanceSettings", "Seedance 2.0 Video Settings"),
+            ("AIFlowTrainer", "AI Flow Trainer"),
+        )
+        for tab_key, tab_label in browser_tab_menu_items:
+            action = QAction(tab_label, self)
             action.setCheckable(True)
             action.setChecked(self._is_browser_tab_enabled(tab_key))
             action.toggled.connect(lambda checked, k=tab_key: self._set_browser_tab_enabled(k, checked))
