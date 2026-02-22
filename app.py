@@ -1,4 +1,5 @@
 import os
+import asyncio
 import json
 import re
 import base64
@@ -55,6 +56,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QScrollArea,
     QTextBrowser,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
@@ -66,6 +68,9 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from social_uploaders import upload_video_to_facebook_page, upload_video_to_instagram_reels, upload_video_to_tiktok
 from youtube_uploader import upload_video_to_youtube
 from grok_web_automation import build_trained_process, run_trained_process, train_browser_flow
+from automation.chrome_manager import AutomationChromeManager, ChromeInstance
+from automation.cdp_controller import CDPController
+from automation.control_bus import ControlBusServer
 
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
@@ -625,11 +630,6 @@ def _configure_qtwebengine_runtime() -> None:
     existing_flags = os.getenv("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(default_flags + ([existing_flags] if existing_flags else []))
 
-    remote_debug_port = _env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 0)
-    if remote_debug_port <= 0:
-        remote_debug_port = _get_qtwebengine_remote_debug_port_from_preferences(default=0)
-    if remote_debug_port > 0 and not os.getenv("QTWEBENGINE_REMOTE_DEBUGGING"):
-        os.environ["QTWEBENGINE_REMOTE_DEBUGGING"] = str(remote_debug_port)
 
 
 @dataclass
@@ -1835,6 +1835,87 @@ class BrowserTrainingWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class AutomationRuntimeWorker(QThread):
+    log = Signal(str)
+    status = Signal(str, str)
+
+    def __init__(self, extension_dir: Path):
+        super().__init__()
+        self.extension_dir = extension_dir
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.bus: ControlBusServer | None = None
+        self.chrome_instance: ChromeInstance | None = None
+        self.cdp_controller: CDPController | None = None
+
+    def run(self) -> None:
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self._startup())
+        self.loop.run_forever()
+
+    async def _startup(self) -> None:
+        self.bus = ControlBusServer()
+        await self.bus.start()
+        self.log.emit("Control bus listening at ws://127.0.0.1:18792")
+
+    def _run_coro(self, coro):
+        if self.loop is None:
+            raise RuntimeError("Automation runtime not started")
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=30)
+
+    def start_chrome(self) -> ChromeInstance:
+        manager = AutomationChromeManager(extension_dir=self.extension_dir)
+        self.chrome_instance = manager.launch_or_reuse()
+        self.status.emit("chrome", "started")
+        self.log.emit(f"Automation Chrome ready on port {self.chrome_instance.port} (pid={self.chrome_instance.pid})")
+        return self.chrome_instance
+
+    def connect_cdp(self) -> str:
+        if self.chrome_instance is None:
+            raise RuntimeError("Start Automation Chrome first")
+
+        async def _connect() -> str:
+            self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+            title = await self.cdp_controller.smoke_test()
+            return title
+
+        title = self._run_coro(_connect())
+        self.status.emit("cdp", "connected")
+        self.log.emit(f"CDP connected. Smoke test title: {title}")
+        return title
+
+    def dom_ping(self) -> dict[str, Any]:
+        if self.bus is None:
+            raise RuntimeError("Control bus is not running")
+        clients = list(self.bus.clients.keys())
+        if not clients:
+            raise RuntimeError("Extension is not connected to the local control bus")
+
+        async def _ping() -> dict[str, Any]:
+            return await self.bus.send_dom_ping(clients[0])
+
+        result = self._run_coro(_ping())
+        self.log.emit(f"DOM ping result: {result}")
+        return result
+
+    def stop_runtime(self) -> None:
+        if self.loop is None:
+            return
+
+        async def _shutdown() -> None:
+            if self.cdp_controller is not None:
+                await self.cdp_controller.close()
+            if self.bus is not None:
+                await self.bus.stop()
+
+        try:
+            asyncio.run_coroutine_threadsafe(_shutdown(), self.loop).result(timeout=10)
+        except Exception:
+            pass
+        self.loop.call_soon_threadsafe(self.loop.stop)
+
+
+
 class FilteredWebEnginePage(QWebEnginePage):
     """Suppress noisy third-party console warnings from grok.com in the embedded browser."""
 
@@ -1931,6 +2012,8 @@ class MainWindow(QMainWindow):
         self.social_upload_tab_indices: dict[str, int] = {}
         self.browser_training_worker: BrowserTrainingWorker | None = None
         self.overlay_worker: VideoOverlayWorker | None = None
+        self.automation_runtime: AutomationRuntimeWorker | None = None
+        self.automation_chrome_instance: ChromeInstance | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -2055,6 +2138,29 @@ class MainWindow(QMainWindow):
 
         self._build_model_api_settings_dialog()
         self._build_menu_bar()
+
+        automation_group = QGroupBox("🤖 Automation Chrome + CDP")
+        automation_layout = QVBoxLayout(automation_group)
+        automation_buttons = QHBoxLayout()
+
+        self.start_automation_chrome_btn = QPushButton("Start Automation Chrome")
+        self.start_automation_chrome_btn.clicked.connect(self._start_automation_chrome)
+        automation_buttons.addWidget(self.start_automation_chrome_btn)
+
+        self.connect_cdp_btn = QPushButton("Connect CDP")
+        self.connect_cdp_btn.clicked.connect(self._connect_automation_cdp)
+        automation_buttons.addWidget(self.connect_cdp_btn)
+
+        self.extension_ping_btn = QPushButton("Extension DOM Ping")
+        self.extension_ping_btn.clicked.connect(self._run_extension_dom_ping)
+        automation_buttons.addWidget(self.extension_ping_btn)
+
+        automation_layout.addLayout(automation_buttons)
+        self.automation_log = QTextEdit()
+        self.automation_log.setReadOnly(True)
+        self.automation_log.setMinimumHeight(100)
+        automation_layout.addWidget(self.automation_log)
+        left_layout.addWidget(automation_group)
 
         prompt_group = QGroupBox("✨ Prompt Inputs")
         prompt_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -4045,6 +4151,48 @@ class MainWindow(QMainWindow):
             return
 
         self._load_preferences_from_path(Path(file_path), show_feedback=True)
+
+    def _append_automation_log(self, text: str) -> None:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        if hasattr(self, "automation_log") and self.automation_log is not None:
+            self.automation_log.append(f"[{timestamp}] {text}")
+        self._append_log(f"Automation: {text}")
+
+    def _ensure_automation_runtime(self) -> AutomationRuntimeWorker:
+        if self.automation_runtime is None:
+            runtime = AutomationRuntimeWorker(BASE_DIR / "extension")
+            runtime.log.connect(self._append_automation_log)
+            runtime.status.connect(lambda k, v: self._append_automation_log(f"{k}: {v}"))
+            runtime.start()
+            self.automation_runtime = runtime
+            time.sleep(0.2)
+        return self.automation_runtime
+
+    def _start_automation_chrome(self) -> None:
+        try:
+            runtime = self._ensure_automation_runtime()
+            instance = runtime.start_chrome()
+            self.automation_chrome_instance = instance
+            self._append_automation_log(f"Chrome websocket endpoint: {instance.ws_endpoint}")
+        except Exception as exc:
+            self._append_automation_log(f"Failed to start Automation Chrome: {exc}")
+
+    def _connect_automation_cdp(self) -> None:
+        try:
+            runtime = self._ensure_automation_runtime()
+            title = runtime.connect_cdp()
+            self._append_automation_log(f"CDP connected: smoke test page title '{title}'")
+        except Exception as exc:
+            self._append_automation_log(f"CDP connection failed: {exc}")
+            QMessageBox.warning(self, "CDP connection failed", f"Could not connect over CDP.\n\n{exc}")
+
+    def _run_extension_dom_ping(self) -> None:
+        try:
+            runtime = self._ensure_automation_runtime()
+            result = runtime.dom_ping()
+            self._append_automation_log(f"Extension DOM ping ack: {json.dumps(result, ensure_ascii=False)}")
+        except Exception as exc:
+            self._append_automation_log(f"Extension DOM ping failed: {exc}")
 
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -7182,6 +7330,14 @@ class MainWindow(QMainWindow):
             self._cdp_relay_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
+        if self.automation_runtime is not None:
+            try:
+                self.automation_runtime.stop_runtime()
+            except Exception:
+                pass
+            if self.automation_runtime.isRunning():
+                self.automation_runtime.quit()
+                self.automation_runtime.wait(3000)
         workers: list[tuple[str, QThread | None]] = [
             ("generation", self.worker),
             ("stitch", self.stitch_worker),

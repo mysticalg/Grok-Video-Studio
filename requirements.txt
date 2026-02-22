@@ -6,3 +6,5 @@ google-auth
 google
 playwright
 ffmpeg
+
+websockets
