@@ -221,6 +221,40 @@ async function handleCmd(msg) {
           return true;
         };
 
+        const setContentEditableByPaste = (el, value) => {
+          const text = String(value || "");
+          el.focus();
+          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
+          el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
+          el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+
+          let applied = false;
+          try {
+            const data = new DataTransfer();
+            data.setData("text/plain", text);
+            const pasteEvt = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
+            el.dispatchEvent(pasteEvt);
+            applied = String(el.textContent || "").trim().length > 0;
+          } catch (_) {}
+
+          if (!applied) {
+            try { document.execCommand("selectAll", false, null); } catch (_) {}
+            try { applied = Boolean(document.execCommand("insertText", false, text)); } catch (_) { applied = false; }
+          }
+
+          if (!applied || String(el.textContent || "").trim().length === 0) {
+            el.textContent = text;
+          }
+
+          try { el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" })); } catch (_) {}
+          try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" })); } catch (_) {
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("blur", { bubbles: true }));
+          return true;
+        };
+
         const setValue = (el, value) => {
           el.focus();
           const isDraftEditor = (
@@ -232,11 +266,7 @@ async function handleCmd(msg) {
             if (isDraftEditor) {
               return setDraftEditorValue(el, value);
             }
-            el.textContent = value;
-            el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: value, inputType: "insertText" }));
-            el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: value, inputType: "insertText" }));
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-            return true;
+            return setContentEditableByPaste(el, value);
           }
           const proto = Object.getPrototypeOf(el);
           const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
@@ -293,8 +323,20 @@ async function handleCmd(msg) {
 
         const fields = p.fields || {};
         const selectors = {
-          title: ["textarea#title-textarea", "#textbox", "input[name='title']", "textarea[name='title']"],
+          title: [
+            "#title-textarea #textbox[contenteditable='true']",
+            "ytcp-form-input-container #outer #textbox[contenteditable='true']",
+            "div#textbox[contenteditable='true'][aria-label*='title' i]",
+            "textarea#title-textarea",
+            "#textbox",
+            "input[name='title']",
+            "textarea[name='title']"
+          ],
           description: [
+            "#description #textbox[contenteditable='true']",
+            "div#textbox[contenteditable='true'][aria-label*='tell viewers' i]",
+            "div#textbox[contenteditable='true'][aria-label*='description' i]",
+            "[contenteditable='true'][aria-placeholder*='describe your reel' i]",
             ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
             "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
             "div[contenteditable='true'][role='combobox']",
