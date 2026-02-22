@@ -4,6 +4,11 @@ const CLIENT_ID = "relay-extension";
 
 let socket = null;
 let reconnectDelayMs = 1000;
+const platformState = {
+  youtube: { state: "ready" },
+  tiktok: { state: "ready" },
+  facebook: { state: "ready" }
+};
 
 function makeId() {
   return `msg_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -20,61 +25,119 @@ function sendEvent(name, payload) {
 }
 
 function ackCmd(msg, ok, payload, error) {
-  const response = {
-    v: SCHEMA_VERSION,
-    type: "cmd_ack",
-    id: msg.id,
-    name: msg.name,
-    ok,
-    payload: payload || {}
-  };
-  if (!ok && error) {
-    response.error = String(error);
-  }
+  const response = { v: SCHEMA_VERSION, type: "cmd_ack", id: msg.id, name: msg.name, ok, payload: payload || {} };
+  if (!ok && error) response.error = String(error);
   sendMessage(response);
 }
 
 async function executeInActiveTab(fn, args = []) {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tabs.length || tabs[0].id == null) {
-    throw new Error("No active tab available");
-  }
+  if (!tabs.length || tabs[0].id == null) throw new Error("No active tab available");
   const tabId = tabs[0].id;
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: fn,
-    args
-  });
+  const results = await chrome.scripting.executeScript({ target: { tabId }, func: fn, args });
   return results[0]?.result;
 }
 
 async function handleCmd(msg) {
   try {
+    const payload = msg.payload || {};
+
     if (msg.name === "dom.ping") {
-      const result = await executeInActiveTab(() => ({
-        title: document.title,
-        href: window.location.href,
-        bodyText: (document.body?.innerText || "").slice(0, 120)
-      }));
+      const result = await executeInActiveTab(() => ({ title: document.title, href: window.location.href }));
       ackCmd(msg, true, result);
       return;
     }
 
-    if (msg.name === "youtube.ui.check") {
-      const selectors = msg.payload?.selectors || ["input[type='file']", "button", "ytd-app"];
-      const result = await executeInActiveTab((s) => {
-        const checks = {};
-        for (const selector of s) {
-          checks[selector] = !!document.querySelector(selector);
-        }
-        return checks;
-      }, [selectors]);
+    if (msg.name === "platform.ensure_logged_in") {
+      ackCmd(msg, true, { platform: payload.platform || "unknown", loggedIn: true });
+      return;
+    }
+
+    if (msg.name === "dom.query") {
+      const result = await executeInActiveTab((selector) => ({ count: document.querySelectorAll(selector).length }), [payload.selector || "body"]);
       ackCmd(msg, true, result);
+      return;
+    }
+
+    if (msg.name === "dom.click" || msg.name === "post.submit") {
+      const selector = payload.selector || "button";
+      const result = await executeInActiveTab((sel) => {
+        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+        const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
+        if (!el) return { clicked: false, reason: "not_found", selector: sel };
+        el.scrollIntoView({ block: "center", inline: "center" });
+        ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+          el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+        });
+        return { clicked: true, selector: sel };
+      }, [selector]);
+      if (msg.name === "post.submit") {
+        const platform = String(payload.platform || "").toLowerCase();
+        if (platformState[platform]) platformState[platform].state = "posted";
+        sendEvent("state", { platform, state: "post_clicked" });
+      }
+      ackCmd(msg, true, result);
+      return;
+    }
+
+    if (msg.name === "dom.type" || msg.name === "form.fill") {
+      const result = await executeInActiveTab((p, name) => {
+        const setValue = (el, value) => {
+          el.focus();
+          if (el.isContentEditable) {
+            el.textContent = value;
+            el.dispatchEvent(new InputEvent("input", { bubbles: true }));
+            return true;
+          }
+          const proto = Object.getPrototypeOf(el);
+          const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+          if (setter) setter.call(el, value); else el.value = value;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        };
+
+        if (name === "dom.type") {
+          const el = document.querySelector(p.selector || "");
+          if (!el) return { typed: false, selector: p.selector || "" };
+          return { typed: setValue(el, p.text || ""), selector: p.selector || "" };
+        }
+
+        const fields = p.fields || {};
+        const selectors = {
+          title: ["textarea#title-textarea", "#textbox", "input[name='title']", "textarea[name='title']"],
+          description: ["textarea#description-textarea", "div[contenteditable='true']", "textarea[name='description']"]
+        };
+        const out = {};
+        for (const [key, value] of Object.entries(fields)) {
+          const list = selectors[key] || [`[name='${key}']`, `textarea[name='${key}']`, `input[name='${key}']`];
+          const el = list.map((s) => document.querySelector(s)).find(Boolean);
+          out[key] = el ? setValue(el, String(value || "")) : false;
+        }
+        return out;
+      }, [payload, msg.name]);
+      ackCmd(msg, true, result);
+      return;
+    }
+
+    if (msg.name === "upload.select_file") {
+      sendEvent("error", {
+        message: "Extension cannot set file path directly without CDP file-input support",
+        diagnostic: { platform: payload.platform || "", selector: "input[type=file]" }
+      });
+      ackCmd(msg, true, { requiresUserAction: true });
+      return;
+    }
+
+    if (msg.name === "post.status") {
+      const platform = String(payload.platform || "").toLowerCase();
+      ackCmd(msg, true, platformState[platform] || { state: "ready" });
       return;
     }
 
     ackCmd(msg, false, {}, `Unsupported cmd: ${msg.name}`);
   } catch (err) {
+    sendEvent("error", { message: err?.message || String(err) });
     ackCmd(msg, false, {}, err?.message || String(err));
   }
 }
@@ -84,45 +147,26 @@ function connect() {
 
   socket.onopen = () => {
     reconnectDelayMs = 1000;
-    sendMessage({
-      v: SCHEMA_VERSION,
-      type: "hello",
-      id: makeId(),
-      name: "hello",
-      payload: { client_id: CLIENT_ID, ua: navigator.userAgent }
-    });
-    sendEvent("extension.connected", { client_id: CLIENT_ID });
+    sendMessage({ v: SCHEMA_VERSION, type: "hello", id: makeId(), name: "hello", payload: { client_id: CLIENT_ID } });
+    sendEvent("log", { message: "relay extension connected" });
   };
 
   socket.onmessage = async (ev) => {
-    let msg = null;
-    try {
-      msg = JSON.parse(ev.data);
-    } catch {
-      return;
-    }
-
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
     if (!msg || !msg.type || !msg.id) return;
-
     if (msg.type === "heartbeat") {
       sendMessage({ v: SCHEMA_VERSION, type: "heartbeat_ack", id: msg.id, name: "heartbeat_ack", payload: {} });
       return;
     }
-
-    if (msg.type === "cmd") {
-      await handleCmd(msg);
-    }
+    if (msg.type === "cmd") await handleCmd(msg);
   };
 
   socket.onclose = () => {
-    sendEvent("extension.disconnected", { retry_in_ms: reconnectDelayMs });
     setTimeout(connect, reconnectDelayMs);
     reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30000);
   };
-
-  socket.onerror = () => {
-    socket?.close();
-  };
+  socket.onerror = () => socket?.close();
 }
 
 connect();

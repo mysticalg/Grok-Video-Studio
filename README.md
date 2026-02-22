@@ -105,6 +105,18 @@ python -m playwright install chromium
 2. Click **Connect CDP** (desktop attaches to Chrome using the discovered `webSocketDebuggerUrl`).
 3. Click **Extension DOM Ping** to send `dom.ping` and receive `cmd_ack` in the UI log.
 
+### UDP automation mode (new backend)
+
+Social browser posting now supports two coexisting executors:
+
+- **Embedded**: existing QtWebEngine click automation.
+- **UDP**: desktop workflow -> UDP command bus (`127.0.0.1:18793`) -> automation service -> relay extension DOM actions (+ CDP for page/tab and file-input handling).
+
+In the app, use the automation mode selector in the **Automation Chrome + CDP** panel:
+
+- `Embedded` keeps the prior behavior.
+- `UDP` runs platform workflows through command actions (`platform.open`, `upload.select_file`, `form.fill`, `post.submit`, `post.status`).
+
 ## Chrome extension ⇄ desktop app bridge (Native Messaging)
 
 A starter implementation is included for a reliable extension-to-desktop control channel over Chrome Native Messaging (`stdin/stdout` JSON):

@@ -71,6 +71,11 @@ from grok_web_automation import build_trained_process, run_trained_process, trai
 from automation.chrome_manager import AutomationChromeManager, ChromeInstance
 from automation.cdp_controller import CDPController
 from automation.control_bus import ControlBusServer
+from udp_automation.executors import UdpExecutor
+from udp_automation.service import UdpAutomationService
+from udp_automation.workflows import facebook as udp_facebook_workflow
+from udp_automation.workflows import tiktok as udp_tiktok_workflow
+from udp_automation.workflows import youtube as udp_youtube_workflow
 
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
@@ -1916,6 +1921,70 @@ class AutomationRuntimeWorker(QThread):
 
 
 
+class UdpAutomationServiceWorker(QThread):
+    log = Signal(str)
+
+    def __init__(self, extension_dir: Path):
+        super().__init__()
+        self.extension_dir = extension_dir
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.service: UdpAutomationService | None = None
+
+    def run(self) -> None:
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+
+        async def _start() -> None:
+            self.service = UdpAutomationService(extension_dir=self.extension_dir)
+            await self.service.start()
+            self.log.emit("UDP automation service listening on udp://127.0.0.1:18793")
+
+        self.loop.run_until_complete(_start())
+        self.loop.run_forever()
+
+    def stop_service(self) -> None:
+        if self.loop is None or self.service is None:
+            return
+
+        async def _stop() -> None:
+            assert self.service is not None
+            await self.service.stop()
+
+        try:
+            asyncio.run_coroutine_threadsafe(_stop(), self.loop).result(timeout=10)
+        except Exception:
+            pass
+        self.loop.call_soon_threadsafe(self.loop.stop)
+
+
+class UdpWorkflowWorker(QThread):
+    finished_with_result = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, platform_name: str, video_path: str, title: str, caption: str):
+        super().__init__()
+        self.platform_name = platform_name
+        self.video_path = video_path
+        self.title = title
+        self.caption = caption
+
+    def run(self) -> None:
+        executor = UdpExecutor()
+        try:
+            platform = self.platform_name.lower()
+            if platform == "youtube":
+                result = udp_youtube_workflow.run(executor, self.video_path, self.title, self.caption)
+            elif platform == "tiktok":
+                result = udp_tiktok_workflow.run(executor, self.video_path, self.caption)
+            elif platform == "facebook":
+                result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title)
+            else:
+                raise RuntimeError(f"UDP workflow not implemented for {self.platform_name}")
+            self.finished_with_result.emit(json.dumps(result, ensure_ascii=False))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class FilteredWebEnginePage(QWebEnginePage):
     """Suppress noisy third-party console warnings from grok.com in the embedded browser."""
 
@@ -2014,6 +2083,8 @@ class MainWindow(QMainWindow):
         self.overlay_worker: VideoOverlayWorker | None = None
         self.automation_runtime: AutomationRuntimeWorker | None = None
         self.automation_chrome_instance: ChromeInstance | None = None
+        self.udp_service_worker: UdpAutomationServiceWorker | None = None
+        self.udp_workflow_worker: UdpWorkflowWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -2154,6 +2225,11 @@ class MainWindow(QMainWindow):
         self.extension_ping_btn = QPushButton("Extension DOM Ping")
         self.extension_ping_btn.clicked.connect(self._run_extension_dom_ping)
         automation_buttons.addWidget(self.extension_ping_btn)
+
+        self.automation_mode = QComboBox()
+        self.automation_mode.addItem("Embedded", "embedded")
+        self.automation_mode.addItem("UDP", "udp")
+        automation_buttons.addWidget(self.automation_mode)
 
         automation_layout.addLayout(automation_buttons)
         self.automation_log = QTextEdit()
@@ -4193,6 +4269,30 @@ class MainWindow(QMainWindow):
             self._append_automation_log(f"Extension DOM ping ack: {json.dumps(result, ensure_ascii=False)}")
         except Exception as exc:
             self._append_automation_log(f"Extension DOM ping failed: {exc}")
+
+    def _ensure_udp_service(self) -> UdpAutomationServiceWorker:
+        if self.udp_service_worker is None:
+            worker = UdpAutomationServiceWorker(BASE_DIR / "extension")
+            worker.log.connect(self._append_automation_log)
+            worker.start()
+            self.udp_service_worker = worker
+            time.sleep(0.2)
+        return self.udp_service_worker
+
+    def _run_social_upload_via_mode(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
+        mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded")
+        if mode != "udp":
+            self._start_social_browser_upload(platform_name=platform_name, video_path=video_path, caption=caption, title=title)
+            return
+
+        self._ensure_udp_service()
+        self._append_automation_log(f"Starting UDP workflow for {platform_name}.")
+        worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption)
+        worker.finished_with_result.connect(lambda result: self._append_automation_log(f"{platform_name} UDP result: {result}"))
+        worker.failed.connect(lambda err: self._append_automation_log(f"{platform_name} UDP failed: {err}"))
+        worker.finished.connect(lambda: setattr(self, "udp_workflow_worker", None))
+        self.udp_workflow_worker = worker
+        worker.start()
 
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -7338,6 +7438,14 @@ class MainWindow(QMainWindow):
             if self.automation_runtime.isRunning():
                 self.automation_runtime.quit()
                 self.automation_runtime.wait(3000)
+        if self.udp_service_worker is not None:
+            try:
+                self.udp_service_worker.stop_service()
+            except Exception:
+                pass
+            if self.udp_service_worker.isRunning():
+                self.udp_service_worker.quit()
+                self.udp_service_worker.wait(3000)
         workers: list[tuple[str, QThread | None]] = [
             ("generation", self.worker),
             ("stitch", self.stitch_worker),
@@ -9058,7 +9166,7 @@ class MainWindow(QMainWindow):
         if not caption_text:
             caption_text = self._compose_social_text(self.ai_social_metadata.description, self.ai_social_metadata.hashtags)
 
-        self._start_social_browser_upload(
+        self._run_social_upload_via_mode(
             platform_name="Facebook",
             video_path=video_path,
             caption=caption_text,
@@ -9078,7 +9186,7 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
-        self._start_social_browser_upload(
+        self._run_social_upload_via_mode(
             platform_name="Instagram",
             video_path=video_path,
             caption=self._compose_social_text(caption, hashtags),
@@ -9102,7 +9210,7 @@ class MainWindow(QMainWindow):
         filename_slogan = self.ai_social_metadata.tiktok_subheading.strip()
         renamed_video_path = self._stage_tiktok_browser_video(video_path, filename_title, filename_slogan, hashtags)
 
-        self._start_social_browser_upload(
+        self._run_social_upload_via_mode(
             platform_name="TikTok",
             video_path=renamed_video_path,
             caption="",
@@ -9123,7 +9231,7 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
-        self._start_social_browser_upload(
+        self._run_social_upload_via_mode(
             platform_name="YouTube",
             video_path=video_path,
             caption=self._compose_social_text(description, hashtags),
