@@ -873,6 +873,52 @@ def _get_cdp_browser(endpoint: str):
         return browser
 
 
+def _install_dialog_guards(page) -> None:
+    try:
+        if getattr(page, "_grok_dialog_guards_installed", False):
+            return
+        setattr(page, "_grok_dialog_guards_installed", True)
+    except Exception:
+        pass
+
+    try:
+        page.add_init_script(
+            """
+            (() => {
+                try { window.alert = () => {}; } catch (_) {}
+                try { window.confirm = () => true; } catch (_) {}
+                try { window.prompt = () => ''; } catch (_) {}
+                try {
+                    window.addEventListener('beforeunload', (event) => {
+                        try {
+                            event.preventDefault();
+                            event.returnValue = '';
+                        } catch (_) {}
+                    }, true);
+                } catch (_) {}
+            })();
+            """
+        )
+    except Exception:
+        pass
+
+    def _safe_close_dialog(dialog) -> None:
+        try:
+            dialog.dismiss()
+            return
+        except Exception:
+            pass
+        try:
+            dialog.accept()
+        except Exception:
+            pass
+
+    try:
+        page.on("dialog", _safe_close_dialog)
+    except Exception:
+        pass
+
+
 def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
     platform = str(payload.get("platform") or "").strip().lower()
     if not platform:
@@ -897,6 +943,8 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                 page.set_default_timeout(int(RELAY_CDP_STEP_TIMEOUT_SECONDS * 1000))
             except Exception:
                 pass
+
+            _install_dialog_guards(page)
 
             file_staged, file_stage_detail = _stage_file_upload(
                 page,
