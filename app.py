@@ -9420,15 +9420,15 @@ class MainWindow(QMainWindow):
             status_label.setText(relay_status or f"Status: CDP relay step {attempts} not handled yet.")
 
             if "cdp unavailable" in relay_status.lower() or "browser.setdownloadbehavior" in relay_status.lower():
-                self._cdp_relay_temporarily_disabled = True
-                pending["cdp_relay_halted"] = True
                 if not pending.get("cdp_relay_fallback_logged"):
                     self._append_log(
-                        f"ERROR: {platform_name} CDP relay reported unsupported target ({relay_status or 'unavailable'}); "
-                        "automation halted (CDP-only mode, no DOM fallback)."
+                        f"WARNING: {platform_name} CDP relay reported unsupported target ({relay_status or 'unavailable'}); "
+                        "ignoring unsupported-target path and continuing CDP retries."
                     )
                     pending["cdp_relay_fallback_logged"] = True
-                status_label.setText(relay_status or "Status: CDP relay unsupported target; automation halted for inspection.")
+                status_label.setText(relay_status or "Status: CDP relay unsupported target; ignoring and retrying...")
+                retry_ms = int(relay_data.get("retry_ms", 1500) or 1500)
+                timer.start(max(400, retry_ms))
                 return True
 
             retry_ms = int(relay_data.get("retry_ms", 1500) or 1500)
