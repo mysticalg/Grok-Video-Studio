@@ -407,28 +407,94 @@ def _script_for_platform(platform: str) -> str:
         return (
             common
             + r'''
-        const captionTarget = bySelectors([
+        const isVisible = (node) => {
+            if (!node) return false;
+            try {
+                const style = window.getComputedStyle(node);
+                if (!style || style.display === "none" || style.visibility === "hidden") return false;
+                const rect = node.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            } catch (_) {
+                return true;
+            }
+        };
+        const byVisibleSelectors = (selectors) => {
+            for (const selector of selectors) {
+                try {
+                    const nodes = Array.from(document.querySelectorAll(selector));
+                    const visible = nodes.find((node) => isVisible(node));
+                    if (visible) return visible;
+                    if (nodes[0]) return nodes[0];
+                } catch (_) {}
+            }
+            return null;
+        };
+        const clickNodeOrAncestor = (el) => {
+            if (!el) return false;
+            const target = el.closest('button, [role="button"]') || el;
+            try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+            try {
+                target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window }));
+                target.click?.();
+                return true;
+            } catch (_) {
+                try { target.click(); return true; } catch (_) { return false; }
+            }
+        };
+
+        const captionTarget = byVisibleSelectors([
             '[contenteditable="true"][data-e2e*="caption"]',
             '[contenteditable="true"][aria-label*="caption" i]',
+            '[contenteditable="true"][placeholder*="describe" i]',
             '[contenteditable="true"]',
         ]);
         const captionFilled = setText(captionTarget, captionText || titleText);
 
-        const postButton = bySelectors([
-            'button[data-e2e="save_draft_button"]',
+        const postButton = byVisibleSelectors([
             'button[data-e2e*="post"]',
             'button[aria-label*="post" i]',
-            'button:has-text("Post")',
+            'div[role="button"][aria-label*="post" i]',
+            'button[class*="post" i]',
         ]);
-        const submitClicked = click(postButton);
+        const postByText = Array.from(document.querySelectorAll('button, [role="button"], div'))
+            .find((node) => isVisible(node) && String(node.textContent || '').trim().toLowerCase() === 'post');
+        const finalPostButton = postButton || postByText || null;
+
+        const postDisabled = Boolean(
+            finalPostButton
+            && (
+                finalPostButton.disabled
+                || String(finalPostButton.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+                || String(finalPostButton.getAttribute('disabled') || '').toLowerCase() === 'true'
+            )
+        );
+
+        const submitClicked = Boolean(finalPostButton && !postDisabled && clickNodeOrAncestor(finalPostButton));
+        const draftButton = byVisibleSelectors([
+            'button[data-e2e="save_draft_button"]',
+            'button[data-e2e*="draft"]',
+            'button[aria-label*="draft" i]',
+        ]);
+        const draftClicked = !submitClicked ? clickNodeOrAncestor(draftButton) : false;
         const url = String(location.href || "");
 
         return {
             platform: "tiktok",
             captionFilled,
+            postFound: Boolean(finalPostButton),
+            postEnabled: Boolean(finalPostButton && !postDisabled),
             submitClicked,
-            done: Boolean(submitClicked || url.includes("tab=draft")),
-            status: submitClicked ? "TikTok: clicked post/draft button via CDP." : "TikTok: caption step executed.",
+            draftClicked,
+            done: Boolean(submitClicked || draftClicked || url.includes("tab=draft")),
+            status: submitClicked
+                ? "TikTok: clicked Post via CDP."
+                : (draftClicked
+                    ? "TikTok: clicked Save draft via CDP."
+                    : `TikTok: form step executed (captionFilled=${Boolean(captionFilled)}, postFound=${Boolean(finalPostButton)}, postEnabled=${Boolean(finalPostButton && !postDisabled)}).`),
         };
         ''')
 
