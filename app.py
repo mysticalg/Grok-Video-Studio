@@ -10740,7 +10740,7 @@ class MainWindow(QMainWindow):
                             clickNodeOrAncestor(notKidsLabel);
                         }
 
-                        const youtubeDialogContexts = collectDeep('ytcp-uploads-dialog, tp-yt-paper-dialog, ytcp-dialog');
+                        const youtubeDialogContexts = collectDeep('ytcp-uploads-dialog, tp-yt-paper-dialog, ytcp-dialog').filter(Boolean);
                         const nextButton = bySelectors([
                             'ytcp-uploads-dialog ytcp-button#next-button button',
                             'ytcp-uploads-dialog ytcp-button[id="next-button"] button',
@@ -10767,6 +10767,22 @@ class MainWindow(QMainWindow):
                             }
                         }
 
+                        const findYouTubeTerminalActionButton = (desiredVisibility) => {
+                            const contexts = youtubeDialogContexts.length ? youtubeDialogContexts : [document];
+                            const preferredHints = desiredVisibility === "public"
+                                ? ["publish", "save", "done"]
+                                : ["save", "done", "publish"];
+                            for (const hint of preferredHints) {
+                                const node = findClickableByHints([hint], {
+                                    contexts,
+                                    excludeHints: ["back", "close", "cancel"],
+                                });
+                                if (node) return node;
+                            }
+                            return null;
+                        };
+
+                        const terminalActionButton = findYouTubeTerminalActionButton(visibility);
                         const visibilityStepDetected = Boolean(bySelectors([
                             'ytcp-video-visibility-select',
                             'ytcp-video-visibility-select tp-yt-paper-radio-button[role="radio"]',
@@ -10774,7 +10790,8 @@ class MainWindow(QMainWindow):
                             'tp-yt-paper-radio-button[name="UNLISTED"]',
                             'tp-yt-paper-radio-button[name="PRIVATE"]',
                             'button[aria-label="Save"]',
-                        ]));
+                            'button[aria-label="Publish"]',
+                        ]) || terminalActionButton);
                         if (visibilityStepDetected && Number(youtubeState.nextClicks || 0) < 4) {
                             youtubeState.nextClicks = 4;
                         }
@@ -10924,7 +10941,12 @@ class MainWindow(QMainWindow):
                                     'ytcp-button[id="done-button"] button',
                                     'button[aria-label*="done" i]',
                                 ];
-                            const doneButton = bySelectors(finalActionSelectors, { requireEnabled: true }) || findClickableByHints(finalActionHints);
+                            const doneButton = bySelectors(finalActionSelectors, { requireEnabled: true })
+                                || terminalActionButton
+                                || findClickableByHints(finalActionHints, {
+                                    contexts: youtubeDialogContexts.length ? youtubeDialogContexts : [document],
+                                    excludeHints: ["back", "close", "cancel"],
+                                });
                             const doneDisabled = Boolean(
                                 doneButton
                                 && (
