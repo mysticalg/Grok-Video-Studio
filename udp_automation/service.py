@@ -81,7 +81,11 @@ class UdpAutomationService:
                     raise RuntimeError("CDP is not connected")
                 page = await self.cdp.get_or_create_page(PLATFORM_URLS.get(platform.lower(), "https://example.com"))
                 input_el = page.locator("input[type='file']").first
-                if await input_el.count() > 0:
+                try:
+                    await input_el.wait_for(state="attached", timeout=15000)
+                except Exception:
+                    input_el = None
+                if input_el is not None and await input_el.count() > 0:
                     await input_el.set_input_files(file_path)
                     await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path})
                     return {"ok": True, "payload": {"mode": "cdp_set_input_files"}}

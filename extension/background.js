@@ -10,6 +10,15 @@ const platformState = {
   facebook: { state: "ready" }
 };
 
+const POST_SELECTORS = {
+  tiktok: [
+    "button[data-e2e=\"post_video_button\"]",
+    "button[aria-label*=\"Post\"]"
+  ],
+  youtube: ["#done-button", "button[aria-label*=\"Publish\"]"],
+  facebook: ["div[aria-label*=\"Publish\"]", "button[aria-label*=\"Publish\"]"]
+};
+
 function makeId() {
   return `msg_${crypto.randomUUID().replace(/-/g, "")}`;
 }
@@ -60,21 +69,28 @@ async function handleCmd(msg) {
     }
 
     if (msg.name === "dom.click" || msg.name === "post.submit") {
-      const selector = payload.selector || "button";
-      const result = await executeInActiveTab((sel) => {
+      const platform = String(payload.platform || "").toLowerCase();
+      const candidates = msg.name === "post.submit"
+        ? (POST_SELECTORS[platform] || [payload.selector || "button"])
+        : [payload.selector || "button"];
+      const result = await executeInActiveTab((selectors) => {
         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-        const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
-        if (!el) return { clicked: false, reason: "not_found", selector: sel };
-        el.scrollIntoView({ block: "center", inline: "center" });
-        ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
-          el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
-        });
-        return { clicked: true, selector: sel };
-      }, [selector]);
+        for (const sel of selectors) {
+          const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
+          if (!el) continue;
+          el.scrollIntoView({ block: "center", inline: "center" });
+          ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+            el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+          });
+          return { clicked: true, selector: sel };
+        }
+        return { clicked: false, reason: "not_found", selectors };
+      }, [candidates]);
       if (msg.name === "post.submit") {
-        const platform = String(payload.platform || "").toLowerCase();
-        if (platformState[platform]) platformState[platform].state = "posted";
-        sendEvent("state", { platform, state: "post_clicked" });
+        if (platformState[platform]) {
+          platformState[platform].state = result?.clicked ? "submitted" : "submit_not_found";
+        }
+        sendEvent("state", { platform, state: result?.clicked ? "post_clicked" : "post_button_not_found", selector: result?.selector });
       }
       ackCmd(msg, true, result);
       return;
