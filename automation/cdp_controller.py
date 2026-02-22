@@ -67,6 +67,18 @@ class CDPController:
         self.browser = None
         await self._playwright.stop()
 
+
+    async def is_alive(self) -> bool:
+        try:
+            contexts = self._iter_contexts()
+            if not contexts:
+                return False
+            for ctx in contexts:
+                _ = len(ctx.pages)
+            return True
+        except Exception:
+            return False
+
     def _iter_contexts(self) -> list[BrowserContext]:
         if self.context is not None:
             return [self.context]
@@ -95,12 +107,11 @@ class CDPController:
             pass
 
     async def get_or_create_page(self, url: str, reuse_tab: bool = False) -> Page:
-        if reuse_tab:
-            page = await self.get_most_recent_page()
-            if page is not None:
-                if url not in (page.url or ""):
-                    await self._goto_best_effort(page, url)
-                return page
+        page = await self.get_most_recent_page()
+        if page is not None and reuse_tab:
+            if url not in (page.url or ""):
+                await self._goto_best_effort(page, url)
+            return page
 
         page = await self.find_page_by_url_contains(url)
         if page is not None:

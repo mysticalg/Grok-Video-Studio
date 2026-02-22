@@ -70,7 +70,19 @@ class UdpAutomationService:
             if name == "platform.open":
                 platform = str(payload.get("platform") or "").lower()
                 url = str(payload.get("url") or PLATFORM_URLS.get(platform) or "https://example.com")
-                if self.cdp is None:
+                needs_launch = self.cdp is None
+                if self.cdp is not None:
+                    try:
+                        needs_launch = not await self.cdp.is_alive()
+                    except Exception:
+                        needs_launch = True
+                if needs_launch:
+                    if self.cdp is not None:
+                        try:
+                            await self.cdp.close()
+                        except Exception:
+                            pass
+                        self.cdp = None
                     base_profile_dir = self.chrome_manager._profile_dir()
                     profile_dir = (base_profile_dir / "playwright-persistent").resolve()
                     profile_dir.mkdir(parents=True, exist_ok=True)
