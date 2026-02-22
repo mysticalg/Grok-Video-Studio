@@ -436,19 +436,77 @@ def _script_for_platform(platform: str) -> str:
         return (
             common
             + r'''
-        const titleTarget = bySelectors([
-            'textarea#textbox[aria-label*="title" i]',
-            'div#textbox[contenteditable="true"][aria-label*="title" i]',
-            '#textbox[contenteditable="true"]',
-        ]);
-        const descTarget = bySelectors([
-            'textarea#textbox[aria-label*="description" i]',
-            'div#textbox[contenteditable="true"][aria-label*="description" i]',
-        ]);
-        const titleFilled = setText(titleTarget, titleText);
-        const captionFilled = setText(descTarget, captionText);
+        const isVisible = (node) => {
+            if (!node) return false;
+            try {
+                const style = window.getComputedStyle(node);
+                if (!style || style.display === "none" || style.visibility === "hidden") return false;
+                const rect = node.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            } catch (_) {
+                return true;
+            }
+        };
+        const byVisibleSelectors = (selectors) => {
+            for (const selector of selectors) {
+                try {
+                    const nodes = Array.from(document.querySelectorAll(selector));
+                    const visible = nodes.find((node) => isVisible(node));
+                    if (visible) return visible;
+                    if (nodes[0]) return nodes[0];
+                } catch (_) {}
+            }
+            return null;
+        };
+        const findYoutubeTextbox = (kinds) => {
+            const nodes = Array.from(document.querySelectorAll('div#textbox[contenteditable="true"], textarea#textbox, [contenteditable="true"][id="textbox"]'));
+            for (const node of nodes) {
+                const aria = String(node.getAttribute('aria-label') || '').toLowerCase();
+                if (kinds.some((kind) => aria.includes(kind)) && isVisible(node)) return node;
+            }
+            for (const node of nodes) {
+                const aria = String(node.getAttribute('aria-label') || '').toLowerCase();
+                if (kinds.some((kind) => aria.includes(kind))) return node;
+            }
+            return null;
+        };
+        const setYouTubeText = (el, value) => {
+            if (!el || !value) return false;
+            try {
+                if (el.isContentEditable) {
+                    el.focus();
+                    try { document.execCommand('selectAll', false, null); } catch (_) {}
+                    try { document.execCommand('insertText', false, value); } catch (_) {}
+                    if (String(el.textContent || '').trim() !== String(value).trim()) {
+                        el.textContent = value;
+                    }
+                    el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: value, inputType: 'insertText' }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return String(el.textContent || '').trim() === String(value).trim();
+                }
+                if ('value' in el) {
+                    el.value = value;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return String(el.value || '').trim() === String(value).trim();
+                }
+            } catch (_) {}
+            return false;
+        };
 
-        const publishButton = bySelectors([
+        const titleTarget = findYoutubeTextbox(['title', 'describes your video']) || byVisibleSelectors([
+            'div#textbox[contenteditable="true"][aria-label*="title" i]',
+            'textarea#textbox[aria-label*="title" i]',
+        ]);
+        const descTarget = findYoutubeTextbox(['description', 'tell viewers about your video']) || byVisibleSelectors([
+            'div#textbox[contenteditable="true"][aria-label*="description" i]',
+            'textarea#textbox[aria-label*="description" i]',
+        ]);
+
+        const titleFilled = setYouTubeText(titleTarget, titleText);
+        const captionFilled = setYouTubeText(descTarget, captionText);
+
+        const publishButton = byVisibleSelectors([
             'button[aria-label*="publish" i]',
             'button[aria-label*="save" i]',
             'ytcp-button[aria-label*="publish" i] button',
@@ -461,7 +519,9 @@ def _script_for_platform(platform: str) -> str:
             captionFilled,
             submitClicked,
             done: Boolean(submitClicked),
-            status: submitClicked ? "YouTube: clicked publish/save button via CDP." : "YouTube: metadata step executed.",
+            status: submitClicked
+                ? "YouTube: clicked publish/save button via CDP."
+                : `YouTube: metadata step executed (titleFilled=${Boolean(titleFilled)}, captionFilled=${Boolean(captionFilled)}).`,
         };
         ''')
 
