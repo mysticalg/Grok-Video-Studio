@@ -10780,7 +10780,7 @@ class MainWindow(QMainWindow):
                                 const startsWithText = nodeText.startsWith(action + ' ');
                                 return exactLabel || exactText || startsWithText;
                             };
-                            for (const context of contexts) {
+                            const findInContext = (context) => {
                                 let candidates = [];
                                 try {
                                     candidates = Array.from(context.querySelectorAll('ytcp-button button, button[aria-label], button'));
@@ -10790,6 +10790,25 @@ class MainWindow(QMainWindow):
                                     const match = visibleCandidates.find((node) => matchesAction(node, action));
                                     if (match) return match;
                                 }
+                                return null;
+                            };
+
+                            const visibilitySelect = bySelectors(['ytcp-video-visibility-select']);
+                            const activeDialog = visibilitySelect
+                                ? pick([
+                                    visibilitySelect.closest && visibilitySelect.closest('ytcp-uploads-dialog'),
+                                    visibilitySelect.closest && visibilitySelect.closest('tp-yt-paper-dialog'),
+                                    visibilitySelect.closest && visibilitySelect.closest('[role="dialog"]'),
+                                ])
+                                : null;
+                            if (activeDialog) {
+                                const dialogMatch = findInContext(activeDialog);
+                                if (dialogMatch) return dialogMatch;
+                            }
+
+                            for (const context of contexts) {
+                                const match = findInContext(context);
+                                if (match) return match;
                             }
                             return null;
                         };
@@ -10969,7 +10988,7 @@ class MainWindow(QMainWindow):
                                 : (doneButtonText.includes("save") || doneButtonText.includes("done"));
                             const finalActionReady = visibilityReady || finalActionMatchesVisibility;
                             if (doneButton && !doneDisabled && !youtubeState.submitted && finalActionReady && actionSpacingElapsed) {
-                                submitClicked = clickNodeOrAncestor(doneButton) || submitClicked;
+                                submitClicked = clickNodeSingle(doneButton) || clickNodeOrAncestor(doneButton) || submitClicked;
                                 if (submitClicked) {
                                     youtubeState.submitted = true;
                                     youtubeState.lastActionAtMs = nowMs;
