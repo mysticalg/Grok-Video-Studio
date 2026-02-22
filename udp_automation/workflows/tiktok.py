@@ -32,7 +32,11 @@ def run(executor: BaseExecutor, video_path: str, caption: str) -> dict[str, Any]
     _run_with_attempts(executor, "platform.open", {"platform": "tiktok", "reuseTab": True})
     time.sleep(STEP_DELAY_S)
 
-    _run_with_attempts(executor, "platform.ensure_logged_in", {"platform": "tiktok"})
+    try:
+        executor.run("platform.ensure_logged_in", {"platform": "tiktok"})
+    except Exception:
+        # Soft-fail after executor-level retries for this action.
+        pass
     time.sleep(STEP_DELAY_S)
 
     _, upload_result = _run_with_attempts(executor, "upload.select_file", {"platform": "tiktok", "filePath": video_path})

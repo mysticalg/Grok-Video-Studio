@@ -8,6 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+
+ACTION_RETRY_POLICY: dict[str, dict[str, float | int]] = {
+    "platform.ensure_logged_in": {"retries": 2, "retry_interval_s": 2.0},
+}
+
 from udp_automation.protocol import cmd
 
 
@@ -61,7 +66,11 @@ class UdpExecutor(BaseExecutor):
             raise RuntimeError("UDP workflow stopped by user")
         message = cmd(action, payload)
         self._log(action, "start", f"id={message['id']}")
-        for attempt in range(self.retries + 1):
+        policy = ACTION_RETRY_POLICY.get(action, {})
+        retries = int(policy.get("retries", self.retries))
+        retry_interval_s = float(policy.get("retry_interval_s", 0.35))
+
+        for attempt in range(retries + 1):
             if self.stop_event.is_set():
                 self._log(action, "stopped", f"attempt={attempt + 1}")
                 raise RuntimeError("UDP workflow stopped by user")
@@ -88,8 +97,8 @@ class UdpExecutor(BaseExecutor):
                             return response
                         self._log(action, "error", str(response.get("error") or "command failed"))
                         raise RuntimeError(response.get("error") or f"Command failed: {action}")
-            if attempt < self.retries:
+            if attempt < retries:
                 self._log(action, "retry", f"attempt={attempt + 1}")
-                time.sleep(0.35)
-        self._log(action, "timeout", f"retries={self.retries}")
+                time.sleep(retry_interval_s)
+        self._log(action, "timeout", f"retries={retries}")
         raise TimeoutError(f"No UDP cmd_ack for {action}")
