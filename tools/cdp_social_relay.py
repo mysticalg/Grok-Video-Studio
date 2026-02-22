@@ -590,14 +590,39 @@ def _script_for_platform(platform: str) -> str:
             return false;
         };
 
-        const titleTarget = findYoutubeTextbox(['title', 'describes your video'], [
+        const activateContainer = (node) => {
+            if (!node) return false;
+            try { node.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+            try {
+                node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window }));
+                node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window }));
+                node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window }));
+                node.click?.();
+            } catch (_) {}
+            return true;
+        };
+        const findYoutubeTextboxByOuterLabel = (hints) => {
+            const containers = Array.from(document.querySelectorAll('ytcp-form-input-container'));
+            for (const container of containers) {
+                const label = String(container.querySelector('#label-text')?.textContent || '').toLowerCase();
+                if (!hints.some((hint) => label.includes(hint))) continue;
+                const outer = container.querySelector('#outer, #child-input, #container-content');
+                if (outer) activateContainer(outer);
+                const textbox = container.querySelector('#textbox[contenteditable="true"], textarea#textbox');
+                if (textbox && isVisible(textbox)) return textbox;
+                if (textbox) return textbox;
+            }
+            return null;
+        };
+
+        const titleTarget = findYoutubeTextboxByOuterLabel(['title']) || findYoutubeTextbox(['title', 'describes your video'], [
             '#title-textarea #textbox[contenteditable="true"]',
             '[aria-label*="add a title" i]#textbox[contenteditable="true"]',
         ]) || byVisibleSelectors([
             'div#textbox[contenteditable="true"][aria-label*="title" i]',
             'textarea#textbox[aria-label*="title" i]',
         ]);
-        const descTarget = findYoutubeTextbox(['description', 'tell viewers about your video'], [
+        const descTarget = findYoutubeTextboxByOuterLabel(['description']) || findYoutubeTextbox(['description', 'tell viewers about your video'], [
             '#description #textbox[contenteditable="true"]',
             '[aria-label*="tell viewers about your video" i]#textbox[contenteditable="true"]',
             '[aria-label*="tell viewers" i][contenteditable="true"]#textbox',
@@ -611,22 +636,24 @@ def _script_for_platform(platform: str) -> str:
         const titleFilled = setYouTubeText(titleTarget, titleText);
         const captionFilled = setYouTubeText(descTarget, captionText);
 
+        const canSubmit = Boolean((!titleText || titleFilled) && (!captionText || captionFilled));
         const publishButton = byVisibleSelectors([
             'button[aria-label*="publish" i]',
             'button[aria-label*="save" i]',
             'ytcp-button[aria-label*="publish" i] button',
         ]);
-        const submitClicked = click(publishButton);
+        const submitClicked = canSubmit ? click(publishButton) : false;
 
         return {
             platform: "youtube",
             titleFilled,
             captionFilled,
+            canSubmit,
             submitClicked,
             done: Boolean(submitClicked),
             status: submitClicked
                 ? "YouTube: clicked publish/save button via CDP."
-                : `YouTube: metadata step executed (titleFilled=${Boolean(titleFilled)}, captionFilled=${Boolean(captionFilled)}).`,
+                : `YouTube: metadata step executed (titleFilled=${Boolean(titleFilled)}, captionFilled=${Boolean(captionFilled)}, canSubmit=${Boolean(canSubmit)}).`,
         };
         ''')
 
