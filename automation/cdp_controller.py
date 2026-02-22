@@ -31,10 +31,23 @@ class CDPController:
                     return page
         return None
 
-    async def get_or_create_page(self, url: str) -> Page:
+    async def get_most_recent_page(self) -> Page | None:
+        for context in self.browser.contexts:
+            if context.pages:
+                return context.pages[-1]
+        return None
+
+    async def get_or_create_page(self, url: str, reuse_tab: bool = False) -> Page:
+        if reuse_tab:
+            page = await self.get_most_recent_page()
+            if page is not None:
+                await page.goto(url)
+                return page
+
         page = await self.find_page_by_url_contains(url)
         if page is not None:
             return page
+
         context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         page = await context.new_page()
         await page.goto(url)

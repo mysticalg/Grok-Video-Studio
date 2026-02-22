@@ -67,7 +67,8 @@ class UdpAutomationService:
                 self.chrome_instance = self.chrome_manager.launch_or_reuse()
                 if self.cdp is None:
                     self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
-                page = await self.cdp.get_or_create_page(url)
+                reuse_tab = bool(payload.get("reuseTab", False))
+                page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
                 await page.bring_to_front()
                 await self._emit("state", {"state": "page_opened", "platform": platform, "url": page.url})
                 return {"ok": True, "payload": {"url": page.url}}
@@ -79,7 +80,10 @@ class UdpAutomationService:
                     raise RuntimeError("filePath is required")
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
-                page = await self.cdp.get_or_create_page(PLATFORM_URLS.get(platform.lower(), "https://example.com"))
+                page = await self.cdp.get_or_create_page(
+                    PLATFORM_URLS.get(platform.lower(), "https://example.com"),
+                    reuse_tab=True,
+                )
                 input_el = page.locator("input[type='file']").first
                 try:
                     await input_el.wait_for(state="attached", timeout=15000)
