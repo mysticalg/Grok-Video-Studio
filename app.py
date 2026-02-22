@@ -10874,10 +10874,25 @@ class MainWindow(QMainWindow):
                                 }
                             }
 
-                            const visibilityReady = Boolean(
-                                visibilityRadio
-                                && String(visibilityRadio.getAttribute('aria-checked') || '').toLowerCase() === 'true'
-                            );
+                            const isVisibilityRadioSelected = (radioNode) => {
+                                if (!radioNode) return false;
+                                const candidates = [
+                                    radioNode,
+                                    radioNode.querySelector && radioNode.querySelector('[role="radio"]'),
+                                    radioNode.querySelector && radioNode.querySelector('#radioContainer'),
+                                ].filter(Boolean);
+                                for (const candidate of candidates) {
+                                    const ariaChecked = String(candidate.getAttribute && candidate.getAttribute('aria-checked') || '').toLowerCase();
+                                    const ariaPressed = String(candidate.getAttribute && candidate.getAttribute('aria-pressed') || '').toLowerCase();
+                                    const checkedAttr = String(candidate.getAttribute && candidate.getAttribute('checked') || '').toLowerCase();
+                                    const classText = norm((candidate.className && String(candidate.className)) || '');
+                                    if (ariaChecked === 'true' || ariaPressed === 'true' || checkedAttr === 'true' || classText.includes('checked')) {
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            };
+                            const visibilityReady = isVisibilityRadioSelected(visibilityRadio);
 
                             const scheduleText = String(youtubeOptions.schedule || "").trim();
                             if (scheduleText) {
@@ -10918,7 +10933,12 @@ class MainWindow(QMainWindow):
                                     || String(doneButton.getAttribute('disabled') || '').toLowerCase() === 'true'
                                 )
                             );
-                            if (doneButton && !doneDisabled && !youtubeState.submitted && visibilityReady && actionSpacingElapsed) {
+                            const doneButtonText = doneButton ? normalizedNodeText(doneButton) : "";
+                            const finalActionMatchesVisibility = visibility === "public"
+                                ? doneButtonText.includes("publish")
+                                : (doneButtonText.includes("save") || doneButtonText.includes("done"));
+                            const finalActionReady = visibilityReady || finalActionMatchesVisibility;
+                            if (doneButton && !doneDisabled && !youtubeState.submitted && finalActionReady && actionSpacingElapsed) {
                                 submitClicked = clickNodeOrAncestor(doneButton) || submitClicked;
                                 if (submitClicked) {
                                     youtubeState.submitted = true;
