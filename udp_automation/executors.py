@@ -11,6 +11,18 @@ from typing import Any, Callable
 from udp_automation.protocol import cmd
 
 
+ACTION_TIMEOUTS: dict[str, float] = {
+    "platform.open": 25.0,
+    "platform.ensure_logged_in": 20.0,
+    "upload.select_file": 45.0,
+    "form.fill": 35.0,
+    "dom.click": 20.0,
+    "dom.type": 25.0,
+    "post.submit": 90.0,
+    "post.status": 25.0,
+}
+
+
 class BaseExecutor:
     def run(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
@@ -66,10 +78,11 @@ class UdpExecutor(BaseExecutor):
                 self._log(action, "stopped", f"attempt={attempt + 1}")
                 raise RuntimeError("UDP workflow stopped by user")
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.settimeout(min(0.5, self.timeout_s))
+                action_timeout_s = float(ACTION_TIMEOUTS.get(action, self.timeout_s))
+                sock.settimeout(min(0.5, action_timeout_s))
                 sock.sendto(json.dumps(message).encode("utf-8"), (self.host, self.port))
-                deadline = time.time() + self.timeout_s
-                self._log(action, "sent", f"attempt={attempt + 1}")
+                deadline = time.time() + action_timeout_s
+                self._log(action, "sent", f"attempt={attempt + 1} timeout={action_timeout_s:.1f}s")
                 while time.time() < deadline:
                     if self.stop_event.is_set():
                         self._log(action, "stopped", f"attempt={attempt + 1}")
