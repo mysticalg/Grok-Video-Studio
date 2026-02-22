@@ -80,10 +80,12 @@ class UdpAutomationService:
                     raise RuntimeError("filePath is required")
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
-                page = await self.cdp.get_or_create_page(
-                    PLATFORM_URLS.get(platform.lower(), "https://example.com"),
-                    reuse_tab=True,
-                )
+                page = await self.cdp.get_most_recent_page()
+                if page is None:
+                    page = await self.cdp.get_or_create_page(
+                        PLATFORM_URLS.get(platform.lower(), "https://example.com"),
+                        reuse_tab=True,
+                    )
                 input_el = page.locator("input[type='file']").first
                 try:
                     await input_el.wait_for(state="attached", timeout=15000)

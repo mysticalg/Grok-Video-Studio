@@ -19,6 +19,14 @@ const POST_SELECTORS = {
   facebook: ["div[aria-label*=\"Publish\"]", "button[aria-label*=\"Publish\"]"]
 };
 
+const DRAFT_SELECTORS = {
+  tiktok: [
+    "button[data-e2e=\"save_draft_button\"]",
+    "button[aria-label*=\"Draft\"]",
+    "button[class*=\"draft\"]"
+  ]
+};
+
 function makeId() {
   return `msg_${crypto.randomUUID().replace(/-/g, "")}`;
 }
@@ -70,8 +78,10 @@ async function handleCmd(msg) {
 
     if (msg.name === "dom.click" || msg.name === "post.submit") {
       const platform = String(payload.platform || "").toLowerCase();
+      const isDraft = String(payload.mode || payload.publishMode || "").toLowerCase() === "draft";
+      const submitSelectors = isDraft ? (DRAFT_SELECTORS[platform] || []) : (POST_SELECTORS[platform] || []);
       const candidates = msg.name === "post.submit"
-        ? (POST_SELECTORS[platform] || [payload.selector || "button"])
+        ? (submitSelectors.length ? submitSelectors : [payload.selector || "button"])
         : [payload.selector || "button"];
       const result = await executeInActiveTab((selectors) => {
         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -88,9 +98,19 @@ async function handleCmd(msg) {
       }, [candidates]);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
-          platformState[platform].state = result?.clicked ? "submitted" : "submit_not_found";
+          if (result?.clicked) {
+            platformState[platform].state = isDraft ? "drafted" : "submitted";
+          } else {
+            platformState[platform].state = isDraft ? "draft_button_not_found" : "submit_not_found";
+          }
         }
-        sendEvent("state", { platform, state: result?.clicked ? "post_clicked" : "post_button_not_found", selector: result?.selector });
+        sendEvent("state", {
+          platform,
+          state: result?.clicked
+            ? (isDraft ? "draft_clicked" : "post_clicked")
+            : (isDraft ? "draft_button_not_found" : "post_button_not_found"),
+          selector: result?.selector,
+        });
       }
       ackCmd(msg, true, result);
       return;

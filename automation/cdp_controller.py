@@ -37,11 +37,19 @@ class CDPController:
                 return context.pages[-1]
         return None
 
+    async def _goto_best_effort(self, page: Page, url: str) -> None:
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        except Exception:
+            # Keep the flow moving; some social pages hold long network connections.
+            pass
+
     async def get_or_create_page(self, url: str, reuse_tab: bool = False) -> Page:
         if reuse_tab:
             page = await self.get_most_recent_page()
             if page is not None:
-                await page.goto(url)
+                if url not in (page.url or ""):
+                    await self._goto_best_effort(page, url)
                 return page
 
         page = await self.find_page_by_url_contains(url)
@@ -50,7 +58,7 @@ class CDPController:
 
         context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         page = await context.new_page()
-        await page.goto(url)
+        await self._goto_best_effort(page, url)
         return page
 
     async def navigate(self, page: Page, url: str) -> None:
