@@ -469,24 +469,83 @@ def _script_for_platform(platform: str) -> str:
         return (
             common
             + r'''
-        const captionTarget = bySelectors([
+        const isVisible = (node) => {
+            if (!node) return false;
+            try {
+                const style = window.getComputedStyle(node);
+                if (!style || style.display === "none" || style.visibility === "hidden") return false;
+                const rect = node.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            } catch (_) {
+                return true;
+            }
+        };
+        const byVisibleSelectors = (selectors) => {
+            for (const selector of selectors) {
+                try {
+                    const nodes = Array.from(document.querySelectorAll(selector));
+                    const visible = nodes.find((node) => isVisible(node));
+                    if (visible) return visible;
+                    if (nodes[0]) return nodes[0];
+                } catch (_) {}
+            }
+            return null;
+        };
+        const findFacebookNextButton = () => {
+            const direct = byVisibleSelectors([
+                'div[role="button"][aria-label="Next"]',
+                'div[role="button"][aria-label*="next" i]',
+                'button[aria-label="Next"]',
+                'button[aria-label*="next" i]',
+            ]);
+            if (direct) return direct;
+
+            const textNodes = Array.from(document.querySelectorAll('span, div, button')).filter((node) => {
+                const text = String(node.textContent || "").trim().toLowerCase();
+                return text === "next" && isVisible(node);
+            });
+            for (const textNode of textNodes) {
+                const clickable = textNode.closest('div[role="button"], button');
+                if (clickable && isVisible(clickable)) return clickable;
+            }
+            return null;
+        };
+
+        const captionTarget = byVisibleSelectors([
+            '[contenteditable="true"][aria-placeholder*="describe your reel" i]',
+            '[contenteditable="true"][aria-label*="describe your reel" i]',
             '[contenteditable="true"][aria-label*="write" i]',
             '[contenteditable="true"][role="textbox"]',
         ]);
-        const captionFilled = setText(captionTarget, captionText || titleText);
-        const postButton = bySelectors([
+        const desiredCaption = captionText || titleText;
+        const captionFilled = setText(captionTarget, desiredCaption);
+
+        const nextButton = findFacebookNextButton();
+        const postButton = byVisibleSelectors([
             'div[role="button"][aria-label*="post" i]',
             'button[aria-label*="post" i]',
+            'div[role="button"][aria-label*="share" i]',
+            'button[aria-label*="share" i]',
         ]);
-        const submitClicked = click(postButton);
+
+        let nextClicked = false;
+        if (nextButton) {
+            nextClicked = click(nextButton);
+        }
+
+        const submitClicked = !nextButton ? click(postButton) : false;
         return {
             platform: "facebook",
             captionFilled,
+            nextClicked,
             submitClicked,
             done: Boolean(submitClicked),
-            status: submitClicked ? "Facebook: clicked post button via CDP." : "Facebook: caption step executed.",
+            status: submitClicked
+                ? "Facebook: clicked post button via CDP."
+                : (nextClicked ? "Facebook: clicked Next via CDP." : "Facebook: waiting for Next/description/post step."),
         };
         ''')
+
 
     if platform == "instagram":
         return (
