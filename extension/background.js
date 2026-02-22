@@ -3,6 +3,29 @@ const SCHEMA_VERSION = 1;
 const CLIENT_ID = "relay-extension";
 
 let socket = null;
+
+async function findTargetTab(platform = "") {
+  const normalized = String(platform || "").toLowerCase();
+  const matchByPlatform = {
+    tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
+    youtube: ["studio.youtube.com", "youtube.com"],
+    facebook: ["facebook.com/reels/create", "facebook.com"]
+  };
+
+  const allTabs = await chrome.tabs.query({});
+  const targets = matchByPlatform[normalized] || [];
+  const platformTab = allTabs.find((tab) => tab.id != null && targets.some((host) => String(tab.url || "").includes(host)));
+
+  let activeTab = allTabs.find((tab) => tab.active && tab.lastFocusedWindow && tab.id != null);
+  if (!activeTab) activeTab = allTabs.find((tab) => tab.active && tab.id != null);
+
+  const chosen = platformTab || activeTab;
+  if (!chosen || chosen.id == null) {
+    throw new Error(`No suitable tab available for platform=${normalized || "unknown"}`);
+  }
+  return chosen;
+}
+
 let reconnectDelayMs = 1000;
 const platformState = {
   youtube: { state: "ready" },
@@ -48,27 +71,7 @@ function ackCmd(msg, ok, payload, error) {
 }
 
 async function executeInTab(fn, args = [], platform = "") {
-  const normalized = String(platform || "").toLowerCase();
-  const matchByPlatform = {
-    tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
-    youtube: ["studio.youtube.com", "youtube.com"],
-    facebook: ["facebook.com/reels/create", "facebook.com"]
-  };
-
-  const allTabs = await chrome.tabs.query({});
-  const targets = matchByPlatform[normalized] || [];
-  const platformTab = allTabs.find((tab) => tab.id != null && targets.some((host) => String(tab.url || "").includes(host)));
-
-  let activeTab = allTabs.find((tab) => tab.active && tab.lastFocusedWindow && tab.id != null);
-  if (!activeTab) {
-    activeTab = allTabs.find((tab) => tab.active && tab.id != null);
-  }
-
-  const chosen = platformTab || activeTab;
-  if (!chosen || chosen.id == null) {
-    throw new Error(`No suitable tab available for platform=${normalized || "unknown"}`);
-  }
-
+  const chosen = await findTargetTab(platform);
   const results = await chrome.scripting.executeScript({ target: { tabId: chosen.id }, func: fn, args });
   return results[0]?.result;
 }
@@ -513,11 +516,40 @@ async function handleCmd(msg) {
     }
 
     if (msg.name === "upload.select_file") {
-      sendEvent("error", {
-        message: "Extension cannot set file path directly without CDP file-input support",
-        diagnostic: { platform: payload.platform || "", selector: "input[type=file]" }
-      });
-      ackCmd(msg, true, { requiresUserAction: true });
+      const platform = String(payload.platform || "").toLowerCase();
+      const filePath = String(payload.filePath || "");
+      if (!filePath) {
+        ackCmd(msg, false, {}, "filePath is required");
+        return;
+      }
+      const tab = await findTargetTab(platform);
+      const debuggee = { tabId: tab.id };
+      const selectorExpr = `(() => { const nodes = Array.from(document.querySelectorAll("input[type=\'file\']")); return nodes.find((n) => (n.offsetWidth || n.offsetHeight || n.getClientRects().length)) || nodes[0] || null; })()`;
+      let attached = false;
+      try {
+        await chrome.debugger.attach(debuggee, "1.3");
+        attached = true;
+        await chrome.debugger.sendCommand(debuggee, "DOM.enable", {});
+        await chrome.debugger.sendCommand(debuggee, "Runtime.enable", {});
+        const evalRes = await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
+          expression: selectorExpr,
+          returnByValue: false,
+        });
+        const objectId = evalRes?.result?.objectId;
+        if (!objectId) throw new Error("file input element not found in target tab");
+        const nodeInfo = await chrome.debugger.sendCommand(debuggee, "DOM.requestNode", { objectId });
+        const nodeId = nodeInfo?.nodeId;
+        if (!nodeId) throw new Error("failed to resolve file input nodeId");
+        await chrome.debugger.sendCommand(debuggee, "DOM.setFileInputFiles", { nodeId, files: [filePath] });
+        sendEvent("state", { state: "upload_selected", platform, filePath, mode: "extension_debugger_set_file_input_files" });
+        ackCmd(msg, true, { mode: "extension_debugger_set_file_input_files" });
+      } catch (err) {
+        ackCmd(msg, false, {}, err?.message || String(err));
+      } finally {
+        if (attached) {
+          try { await chrome.debugger.detach(debuggee); } catch (_) {}
+        }
+      }
       return;
     }
 
