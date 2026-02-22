@@ -9965,14 +9965,29 @@ class MainWindow(QMainWindow):
                         }
                         return results;
                     };
-                    const bySelectors = (selectors) => {
+                    const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
+                    const bySelectors = (selectors, options = {}) => {
+                        const requireVisible = options.requireVisible !== false;
+                        const requireEnabled = Boolean(options.requireEnabled);
                         for (const selector of selectors) {
                             const nodes = collectDeep(selector);
-                            if (nodes.length) return nodes[0];
+                            if (!nodes.length) continue;
+                            for (const node of nodes) {
+                                if (requireVisible && !isVisible(node)) continue;
+                                if (requireEnabled) {
+                                    const disabled = Boolean(
+                                        node.disabled
+                                        || String(node.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+                                        || String(node.getAttribute('disabled') || '').toLowerCase() === 'true'
+                                    );
+                                    if (disabled) continue;
+                                }
+                                return node;
+                            }
+                            if (!requireVisible) return nodes[0];
                         }
                         return null;
                     };
-                    const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
                     const normalizedNodeText = (node) => [
                         norm(node.innerText || node.textContent),
                         norm(node.getAttribute("aria-label")),
@@ -10365,10 +10380,25 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    const youtubeDialog = platform === "youtube"
+                        ? bySelectors(['ytcp-uploads-dialog', 'tp-yt-paper-dialog ytcp-uploads-dialog'])
+                        : null;
+                    const youtubeDialogHasProgress = Boolean(
+                        youtubeDialog
+                        && (
+                            bySelectors([
+                                'ytcp-uploads-dialog ytcp-button#next-button button',
+                                'ytcp-uploads-dialog #next-button button',
+                                'ytcp-uploads-dialog ytcp-video-info',
+                                'ytcp-uploads-dialog ytcp-form-input-container',
+                            ])
+                        )
+                    );
                     const fileReadySignal = Boolean(
                         (fileInput && fileInput.files && fileInput.files.length > 0)
                         || document.querySelector('video')
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
+                        || youtubeDialogHasProgress
                     );
 
                     if (platform === "facebook") {
@@ -10639,13 +10669,19 @@ class MainWindow(QMainWindow):
                             return null;
                         };
 
-                        if (!fileInput && actionSpacingElapsed) {
+                        const inUploadDialog = Boolean(bySelectors([
+                            'ytcp-uploads-dialog',
+                            'ytcp-uploads-dialog ytcp-button#next-button button',
+                            'ytcp-uploads-dialog #dialog',
+                        ]));
+
+                        if (!fileInput && !inUploadDialog && actionSpacingElapsed) {
                             const createButton = bySelectors([
                                 'button[aria-label*="create" i]',
                                 'ytcp-button#create-icon button',
                                 'ytcp-button[id="create-icon"] button',
                                 'ytcp-button#create-icon',
-                            ]) || findClickableByHints(["create"]);
+                            ], { requireEnabled: true }) || findClickableByHints(["create"]);
                             if (createButton) {
                                 const clickedCreate = clickNodeOrAncestor(createButton);
                                 openUploadClicked = clickedCreate || openUploadClicked;
@@ -10659,7 +10695,7 @@ class MainWindow(QMainWindow):
                                 'tp-yt-paper-item#text-item-0',
                                 'tp-yt-paper-item[aria-label*="upload" i]',
                                 'ytd-menu-service-item-renderer tp-yt-paper-item[role="menuitem"]',
-                            ]) || findClickableByHints(["upload videos", "upload video", "upload"]);
+                            ], { requireEnabled: true }) || findClickableByHints(["upload videos", "upload video", "upload"], { excludeHints: ["thumbnail", "auto-generated"] });
                             if (uploadItem) {
                                 const clickedUpload = clickNodeOrAncestor(uploadItem);
                                 openUploadClicked = clickedUpload || openUploadClicked;
@@ -10704,12 +10740,16 @@ class MainWindow(QMainWindow):
                             clickNodeOrAncestor(notKidsLabel);
                         }
 
+                        const youtubeDialogContexts = collectDeep('ytcp-uploads-dialog, tp-yt-paper-dialog, ytcp-dialog');
                         const nextButton = bySelectors([
+                            'ytcp-uploads-dialog ytcp-button#next-button button',
+                            'ytcp-uploads-dialog ytcp-button[id="next-button"] button',
+                            'ytcp-uploads-dialog button[aria-label*="next" i]',
                             'ytcp-button#next-button button',
                             'ytcp-button[id="next-button"] button',
                             'button[aria-label*="next" i]',
                             'ytcp-uploads-dialog ytcp-button[id*="next" i] button',
-                        ]) || findClickableByHints(["next"], { contexts: collectDeep('ytcp-uploads-dialog, tp-yt-paper-dialog, ytcp-dialog') });
+                        ], { requireEnabled: true }) || findClickableByHints(["next"], { contexts: youtubeDialogContexts });
                         const nextDisabled = Boolean(
                             nextButton
                             && (
