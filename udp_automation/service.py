@@ -18,6 +18,12 @@ PLATFORM_URLS = {
     "facebook": "https://www.facebook.com/reels/create",
 }
 
+PLATFORM_OPEN_URL_HINTS = {
+    "youtube": ("studio.youtube.com", "youtube.com/upload", "youtube.com"),
+    "tiktok": ("tiktok.com/upload", "tiktok.com/tiktokstudio", "tiktokstudio"),
+    "facebook": ("facebook.com/reels/create", "facebook.com"),
+}
+
 
 EXTENSION_CMD_TIMEOUTS = {
     "form.fill": 90.0,
@@ -74,7 +80,16 @@ class UdpAutomationService:
                 if self.cdp is None:
                     self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
                 reuse_tab = bool(payload.get("reuseTab", False))
-                page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
+                page = None
+                if reuse_tab:
+                    current_page = await self.cdp.get_most_recent_page()
+                    current_url = str((current_page.url if current_page is not None else "") or "").lower()
+                    platform_hints = PLATFORM_OPEN_URL_HINTS.get(platform, ())
+                    if current_page is not None and any(hint in current_url for hint in platform_hints):
+                        page = current_page
+
+                if page is None:
+                    page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
                 await page.bring_to_front()
                 await self._emit("state", {"state": "page_opened", "platform": platform, "url": page.url})
                 return {"ok": True, "payload": {"url": page.url}}
