@@ -20,7 +20,7 @@ class ChromeInstance:
 
 class AutomationChromeManager:
     def __init__(self, extension_dir: Path, port: int = 9222, timeout_s: float = 20.0):
-        self.extension_dir = extension_dir
+        self.extension_dir = extension_dir.resolve()
         self.port = port
         self.timeout_s = timeout_s
         self.process: subprocess.Popen[str] | None = None
@@ -38,9 +38,23 @@ class AutomationChromeManager:
     def _profile_dir(self) -> Path:
         appdata = os.getenv("APPDATA")
         base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
-        profile_dir = base / "GrokAutomation" / "chrome-profile"
+        profile_dir = (base / "GrokAutomation" / "chrome-profile").resolve()
         profile_dir.mkdir(parents=True, exist_ok=True)
+
+        # Ensure folder is writable and non-ephemeral before launch.
+        probe = profile_dir / ".write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
         return profile_dir
+
+    def _validate_extension_dir(self) -> Path:
+        extension_dir = self.extension_dir
+        manifest_path = extension_dir / "manifest.json"
+        if not extension_dir.exists() or not extension_dir.is_dir():
+            raise FileNotFoundError(f"Extension directory does not exist: {extension_dir}")
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"Extension manifest not found: {manifest_path}")
+        return extension_dir
 
     def _fetch_json_version(self) -> dict[str, Any] | None:
         try:
@@ -58,6 +72,10 @@ class AutomationChromeManager:
 
         chrome_path = self._detect_chrome_path()
         profile_dir = self._profile_dir()
+        extension_dir = self._validate_extension_dir()
+
+        # Keep Chrome in normal profile mode (no guest/incognito/app/kiosk launch flags)
+        # so MV3 extension service workers can run reliably.
         args = [
             str(chrome_path),
             f"--remote-debugging-port={self.port}",
@@ -66,8 +84,8 @@ class AutomationChromeManager:
             "--no-default-browser-check",
             "--disable-popup-blocking",
             "--disable-features=Translate",
-            f"--load-extension={self.extension_dir}",
-            f"--disable-extensions-except={self.extension_dir}",
+            f"--load-extension={extension_dir}",
+            f"--disable-extensions-except={extension_dir}",
         ]
         self.process = subprocess.Popen(args)
 
