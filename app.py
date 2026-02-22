@@ -2155,6 +2155,8 @@ class MainWindow(QMainWindow):
             category="22",
         )
         self._build_ui()
+        self._applying_preferences = False
+        self._initialize_preferences_autosave()
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
@@ -3578,7 +3580,7 @@ class MainWindow(QMainWindow):
         menu_bar = self.menuBar()
 
         file_menu = menu_bar.addMenu("File")
-        save_action = QAction("Save Preferences...", self)
+        save_action = QAction("Save Preferences", self)
         save_action.triggered.connect(self.save_preferences)
         file_menu.addAction(save_action)
 
@@ -3667,6 +3669,10 @@ class MainWindow(QMainWindow):
         extension_dir_action.triggered.connect(self.open_extension_directory)
         help_menu.addAction(extension_dir_action)
 
+        downloads_dir_action = QAction("Open Downloads Folder", self)
+        downloads_dir_action.triggered.connect(self.open_downloads_folder)
+        help_menu.addAction(downloads_dir_action)
+
         self.quick_actions_toolbar = QToolBar("Quick Actions", self)
         self.quick_actions_toolbar.setMovable(False)
         self.quick_actions_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -3697,6 +3703,12 @@ class MainWindow(QMainWindow):
         homepage_action.setToolTip("Open grok.com/imagine in the embedded browser.")
         homepage_action.triggered.connect(self.show_browser_page)
         self.quick_actions_toolbar.addAction(homepage_action)
+
+
+        open_downloads_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon), "Open Downloads Folder", self)
+        open_downloads_action.setToolTip("Open the downloads folder in your system file explorer.")
+        open_downloads_action.triggered.connect(self.open_downloads_folder)
+        self.quick_actions_toolbar.addAction(open_downloads_action)
 
         self.quick_actions_toolbar.addSeparator()
         auto_youtube_upload_action = QAction(self._toolbar_tinted_standard_icon(QStyle.StandardPixmap.SP_ArrowUp), "Automate YouTube Upload", self)
@@ -3861,6 +3873,16 @@ class MainWindow(QMainWindow):
         )
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(extension_dir)))
 
+    def open_downloads_folder(self) -> None:
+        download_path = str(self.download_dir.resolve())
+        if sys.platform.startswith("win"):
+            try:
+                subprocess.Popen(["explorer", download_path])
+            except Exception:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(download_path))
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(download_path))
+
     def _set_cdp_enabled(self, enabled: bool) -> None:
         self.cdp_enabled = bool(enabled)
         if hasattr(self, "automation_group"):
@@ -3932,6 +3954,51 @@ class MainWindow(QMainWindow):
         else:
             self.video_options_dropdown.setCurrentIndex(2)
         self.video_options_dropdown.blockSignals(False)
+
+    def _initialize_preferences_autosave(self) -> None:
+        self._preferences_autosave_timer = QTimer(self)
+        self._preferences_autosave_timer.setSingleShot(True)
+        self._preferences_autosave_timer.setInterval(700)
+        self._preferences_autosave_timer.timeout.connect(self._autosave_preferences_to_default_file)
+
+        connected_widgets: set[int] = set()
+
+        def _connect(widget: QWidget, signal_name: str) -> None:
+            key = (id(widget), signal_name)
+            if key in connected_widgets:
+                return
+            signal = getattr(widget, signal_name, None)
+            if signal is None:
+                return
+            signal.connect(self._schedule_preferences_autosave)
+            connected_widgets.add(key)
+
+        for widget in self.findChildren(QLineEdit):
+            _connect(widget, "editingFinished")
+        for widget in self.findChildren(QPlainTextEdit):
+            _connect(widget, "textChanged")
+        for widget in self.findChildren(QTextEdit):
+            _connect(widget, "textChanged")
+        for widget in self.findChildren(QComboBox):
+            _connect(widget, "currentIndexChanged")
+        for widget in self.findChildren(QCheckBox):
+            _connect(widget, "toggled")
+        for widget in self.findChildren(QSpinBox):
+            _connect(widget, "valueChanged")
+        for widget in self.findChildren(QDoubleSpinBox):
+            _connect(widget, "valueChanged")
+        for widget in self.findChildren(QSlider):
+            _connect(widget, "valueChanged")
+        for widget in self.findChildren(QFontComboBox):
+            _connect(widget, "currentFontChanged")
+
+    def _schedule_preferences_autosave(self, *_args: object) -> None:
+        if self._applying_preferences:
+            return
+        self._preferences_autosave_timer.start()
+
+    def _autosave_preferences_to_default_file(self) -> None:
+        self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=False)
 
     def _collect_preferences(self) -> dict:
         return {
@@ -4030,6 +4097,7 @@ class MainWindow(QMainWindow):
         if not isinstance(preferences, dict):
             raise ValueError("Preferences file must contain a JSON object.")
 
+        self._applying_preferences = True
         if "api_key" in preferences:
             self.api_key.setText(str(preferences["api_key"]))
         if "chat_model" in preferences:
@@ -4308,6 +4376,7 @@ class MainWindow(QMainWindow):
 
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
+        self._applying_preferences = False
 
     def _save_preferences_to_path(self, file_path: Path, *, show_feedback: bool = False) -> bool:
         try:
@@ -4362,16 +4431,7 @@ class MainWindow(QMainWindow):
         self._load_preferences_from_path(DEFAULT_PREFERENCES_FILE, show_feedback=False)
 
     def save_preferences(self) -> None:
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Preferences",
-            str(DEFAULT_PREFERENCES_FILE),
-            "JSON Files (*.json)",
-        )
-        if not file_path:
-            return
-
-        self._save_preferences_to_path(Path(file_path), show_feedback=True)
+        self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=True)
 
     def load_preferences(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
