@@ -4320,6 +4320,9 @@ class MainWindow(QMainWindow):
 
         self._cancel_social_upload_run(platform_name, reason="switching to UDP automation")
         self._ensure_udp_service()
+        if self.udp_workflow_worker is not None and not self.udp_workflow_worker.isRunning():
+            self.udp_workflow_worker = None
+
         if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
             self._append_automation_log("Stopping previous UDP workflow before starting a new one.")
             try:
@@ -7471,9 +7474,24 @@ class MainWindow(QMainWindow):
         if self.udp_workflow_worker and self.udp_workflow_worker.isRunning():
             try:
                 self.udp_workflow_worker.request_stop()
+                if not self.udp_workflow_worker.wait(2000):
+                    self.udp_workflow_worker.requestInterruption()
+                    if not self.udp_workflow_worker.wait(1500):
+                        self._append_automation_log(
+                            "WARNING: UDP workflow did not stop in time; forcing thread termination."
+                        )
+                        self.udp_workflow_worker.terminate()
+                        self.udp_workflow_worker.wait(800)
             except Exception:
                 pass
             self._append_automation_log("Stop requested: active UDP automation workflow interrupted.")
+        self.udp_workflow_worker = None
+
+        # Ensure browser-automation state is fully reset so pressing Automate again can
+        # immediately start a fresh run for every social tab.
+        for platform_name in list(self.social_upload_pending.keys()):
+            self._cancel_social_upload_run(platform_name, reason="stopped by user")
+
         if self._active_ffmpeg_process is not None and self._active_ffmpeg_process.poll() is None:
             self._active_ffmpeg_process.terminate()
             self._append_log("Stop requested: active ffmpeg stitch/encode process terminated.")
