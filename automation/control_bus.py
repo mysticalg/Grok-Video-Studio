@@ -42,14 +42,24 @@ class ControlBusServer:
             raise RuntimeError(f"Client not connected: {client_id}")
         msg_id = cmd.get("id") or make_id()
         cmd["id"] = msg_id
+        cmd_name = str(cmd.get("name") or "unknown")
         future = asyncio.get_running_loop().create_future()
         self._ack_waiters[msg_id] = future
         try:
             await asyncio.wait_for(ws.send(json.dumps(cmd)), timeout=min(5.0, timeout_s))
-            return await asyncio.wait_for(future, timeout=timeout_s)
-        except (ConnectionClosed, asyncio.TimeoutError) as exc:
+        except ConnectionClosed as exc:
             self.clients.pop(client_id, None)
-            raise RuntimeError(f"Control bus send/ack failed for {client_id}: {exc}") from exc
+            raise RuntimeError(f"Control bus send failed for {client_id} ({cmd_name}): connection closed") from exc
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"Control bus send timed out for {client_id} ({cmd_name})") from exc
+
+        try:
+            return await asyncio.wait_for(future, timeout=timeout_s)
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"Control bus ack timed out for {client_id} ({cmd_name}) after {timeout_s:.0f}s") from exc
+        except ConnectionClosed as exc:
+            self.clients.pop(client_id, None)
+            raise RuntimeError(f"Control bus ack failed for {client_id} ({cmd_name}): connection closed") from exc
         finally:
             self._ack_waiters.pop(msg_id, None)
 

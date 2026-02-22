@@ -20,8 +20,8 @@ PLATFORM_URLS = {
 
 
 EXTENSION_CMD_TIMEOUTS = {
-    "form.fill": 45.0,
-    "post.submit": 45.0,
+    "form.fill": 90.0,
+    "post.submit": 150.0,
 }
 
 
