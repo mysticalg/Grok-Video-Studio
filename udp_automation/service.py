@@ -52,6 +52,14 @@ class UdpAutomationService:
         self._clients.add(addr)
         name = msg.get("name")
         payload = msg.get("payload") or {}
+
+        def _ack_from_extension(ack: dict[str, Any]) -> dict[str, Any]:
+            response = {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {})}
+            error = ack.get("error")
+            if error:
+                response["error"] = error
+            return response
+
         try:
             if name == "platform.open":
                 platform = str(payload.get("platform") or "").lower()
@@ -78,15 +86,15 @@ class UdpAutomationService:
                     await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path})
                     return {"ok": True, "payload": {"mode": "cdp_set_input_files"}}
                 ack = await self._send_extension_cmd("upload.select_file", payload)
-                return {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {}), "error": ack.get("error")}
+                return _ack_from_extension(ack)
 
             if name in {"form.fill", "post.submit", "post.status", "dom.query", "dom.click", "dom.type", "platform.ensure_logged_in"}:
                 ack = await self._send_extension_cmd(name, payload)
-                return {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {}), "error": ack.get("error")}
+                return _ack_from_extension(ack)
 
             if name == "dom.ping":
                 ack = await self._send_extension_cmd("dom.ping", payload)
-                return {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {}), "error": ack.get("error")}
+                return _ack_from_extension(ack)
 
             raise RuntimeError(f"Unsupported command: {name}")
         except Exception as exc:
