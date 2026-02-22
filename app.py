@@ -2089,6 +2089,8 @@ class MainWindow(QMainWindow):
         self._active_ffmpeg_process: subprocess.Popen[str] | None = None
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
+        self.automation_counter_total = 0
+        self.automation_counter_completed = 0
         self.pending_manual_variant_for_download: int | None = None
         self.pending_manual_download_type: str | None = None
         self.pending_manual_image_prompt: str | None = None
@@ -2747,6 +2749,11 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setVisible(False)
         self.upload_progress_bar.setFixedWidth(260)
         status_bar.addPermanentWidget(self.upload_progress_bar)
+
+        self.automation_counter_status_label = QLabel("Automation turn: idle")
+        self.automation_counter_status_label.setStyleSheet("color: #9fb3c8;")
+        self.automation_counter_status_label.setVisible(False)
+        status_bar.addWidget(self.automation_counter_status_label)
 
         self.stitch_progress_label = QLabel("Stitch all video progress: idle")
         self.stitch_progress_label.setStyleSheet("color: #9fb3c8;")
@@ -3529,8 +3536,36 @@ class MainWindow(QMainWindow):
             getattr(self, "upload_progress_bar", None),
             getattr(self, "stitch_progress_label", None),
             getattr(self, "stitch_progress_bar", None),
+            getattr(self, "automation_counter_status_label", None),
         ]
         return any(widget is not None and widget.isVisible() for widget in tracked_widgets)
+
+    def _start_automation_counter_tracking(self, total: int) -> None:
+        self.automation_counter_total = max(0, int(total))
+        self.automation_counter_completed = 0
+        if self.automation_counter_total > 1:
+            self.automation_counter_status_label.setText(f"Automation turn: 0/{self.automation_counter_total}")
+            self.automation_counter_status_label.setVisible(True)
+        else:
+            self.automation_counter_status_label.setVisible(False)
+        self._refresh_status_bar_visibility()
+
+    def _advance_automation_counter_tracking(self) -> None:
+        if self.automation_counter_total <= 1:
+            return
+        self.automation_counter_completed = min(self.automation_counter_completed + 1, self.automation_counter_total)
+        turn_text = f"{self.automation_counter_completed}/{self.automation_counter_total}"
+        self.automation_counter_status_label.setText(f"Automation turn: {turn_text}")
+        self.automation_counter_status_label.setVisible(True)
+        self._append_log(f"Automation counter progress: completed turn {turn_text}.")
+        self._refresh_status_bar_visibility()
+
+    def _reset_automation_counter_tracking(self) -> None:
+        self.automation_counter_total = 0
+        self.automation_counter_completed = 0
+        self.automation_counter_status_label.setVisible(False)
+        self.automation_counter_status_label.setText("Automation turn: idle")
+        self._refresh_status_bar_visibility()
 
     def _refresh_status_bar_visibility(self) -> None:
         status_bar = self.statusBar()
@@ -3809,7 +3844,7 @@ class MainWindow(QMainWindow):
         automation_widget = QWidget(self)
         automation_layout = QHBoxLayout(automation_widget)
         automation_layout.setContentsMargins(8, 4, 8, 4)
-        automation_layout.addWidget(QLabel("Count"))
+        automation_layout.addWidget(QLabel("Counter"))
         automation_layout.addWidget(self.count)
         automation_layout.addStretch(1)
         self._add_widget_to_menu(self.automation_menu, automation_widget)
@@ -4038,7 +4073,7 @@ class MainWindow(QMainWindow):
             "cdp_enabled": self.cdp_enabled,
             "browser_tab_enabled": dict(self.browser_tab_enabled),
             "automation_mode": self.automation_mode.currentData(),
-            "count": self.count.value(),
+            "counter": self.count.value(),
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
@@ -4205,7 +4240,12 @@ class MainWindow(QMainWindow):
                 hashtags=[str(tag).strip().lstrip("#") for tag in hashtags if str(tag).strip()],
                 category=str(metadata.get("category", self.ai_social_metadata.category)),
             )
-        if "count" in preferences:
+        if "counter" in preferences:
+            try:
+                self.count.setValue(int(preferences["counter"]))
+            except (TypeError, ValueError):
+                pass
+        elif "count" in preferences:
             try:
                 self.count.setValue(int(preferences["count"]))
             except (TypeError, ValueError):
@@ -5531,11 +5571,12 @@ class MainWindow(QMainWindow):
 
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
         self.manual_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
+        self._start_automation_counter_tracking(count)
         self._append_log(
             "Manual mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
         )
-        self._append_log(f"Manual mode queued with repeat count={count}.")
+        self._append_log(f"Manual mode queued with counter={count}.")
         self._append_log("Attempting to populate the visible Grok prompt box on the current page...")
         self._submit_next_manual_variant()
 
@@ -5554,11 +5595,12 @@ class MainWindow(QMainWindow):
 
     def _start_manual_browser_image_generation(self, prompt: str, count: int) -> None:
         self.manual_image_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
+        self._start_automation_counter_tracking(count)
         self._append_log(
             "Manual image mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
         )
-        self._append_log(f"Manual image mode queued with repeat count={count}.")
+        self._append_log(f"Manual image mode queued with counter={count}.")
         self._submit_next_manual_image_variant()
 
     def _submit_next_manual_image_variant(self) -> None:
@@ -5568,6 +5610,7 @@ class MainWindow(QMainWindow):
 
         if not self.manual_image_generation_queue:
             self._append_log("Manual browser image generation complete.")
+            self._reset_automation_counter_tracking()
             return
 
         item = self.manual_image_generation_queue.pop(0)
@@ -6497,6 +6540,7 @@ class MainWindow(QMainWindow):
 
         if not self.manual_generation_queue:
             self._append_log("Manual browser generation complete.")
+            self._reset_automation_counter_tracking()
             return
 
         item = self.manual_generation_queue.pop(0)
@@ -7510,6 +7554,7 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after_poll)
 
     def _complete_manual_video_download(self, video_path: Path, variant: int) -> None:
+        self._advance_automation_counter_tracking()
         self.on_video_finished(
             {
                 "title": f"Manual Browser Video {variant}",
@@ -7544,6 +7589,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(800, self._start_continue_iteration)
             else:
                 self._append_log("Continue workflow complete.")
+                self._reset_automation_counter_tracking()
                 self.continue_from_frame_active = False
                 self.continue_from_frame_target_count = 0
                 self.continue_from_frame_completed = 0
@@ -7702,6 +7748,7 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
         self.manual_download_deadline = None
+        self._reset_automation_counter_tracking()
 
         self.continue_from_frame_active = False
         self.continue_from_frame_target_count = 0
@@ -8517,6 +8564,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_waiting_for_reload = False
         self.continue_from_frame_reload_timeout_timer.stop()
         self.continue_from_frame_target_count = self.count.value()
+        self._start_automation_counter_tracking(self.continue_from_frame_target_count)
         self.continue_from_frame_completed = 0
         self.continue_from_frame_prompt = manual_prompt
         self.continue_from_frame_current_source_video = ""
@@ -8546,6 +8594,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_waiting_for_reload = False
         self.continue_from_frame_reload_timeout_timer.stop()
         self.continue_from_frame_target_count = self.count.value()
+        self._start_automation_counter_tracking(self.continue_from_frame_target_count)
         self.continue_from_frame_completed = 0
         self.continue_from_frame_prompt = manual_prompt
         self.continue_from_frame_current_source_video = ""
