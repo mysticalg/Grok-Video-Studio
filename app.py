@@ -2782,6 +2782,7 @@ class MainWindow(QMainWindow):
 
         status_bar = QStatusBar(self)
         status_bar.setSizeGripEnabled(False)
+        status_bar.setContentsMargins(8, 0, 0, 0)
         self.setStatusBar(status_bar)
 
         self.upload_progress_label = QLabel("Upload progress: idle")
@@ -3626,6 +3627,17 @@ class MainWindow(QMainWindow):
             action.setChecked(enabled)
             action.blockSignals(False)
 
+    def _set_quick_actions_toolbar_visible(self, visible: bool) -> None:
+        visible = bool(visible)
+        if hasattr(self, "quick_actions_toolbar"):
+            self.quick_actions_toolbar.setVisible(visible)
+
+        action = getattr(self, "quick_actions_toolbar_toggle_action", None)
+        if action is not None and action.isChecked() != visible:
+            action.blockSignals(True)
+            action.setChecked(visible)
+            action.blockSignals(False)
+
     def _refresh_browser_tab_selection(self) -> None:
         current = self.browser_tabs.currentIndex()
         if current >= 0 and self.browser_tabs.isTabVisible(current):
@@ -3686,6 +3698,12 @@ class MainWindow(QMainWindow):
         self._set_cdp_enabled(self.cdp_enabled)
 
         view_menu = menu_bar.addMenu("View")
+        self.quick_actions_toolbar_toggle_action = QAction("Show Top Icon Toolbar", self)
+        self.quick_actions_toolbar_toggle_action.setCheckable(True)
+        self.quick_actions_toolbar_toggle_action.setChecked(True)
+        self.quick_actions_toolbar_toggle_action.toggled.connect(self._set_quick_actions_toolbar_visible)
+        view_menu.addAction(self.quick_actions_toolbar_toggle_action)
+
         browser_tabs_menu = view_menu.addMenu("Browser Tabs")
         self.browser_tab_toggle_actions = {}
         browser_tab_menu_items = (
@@ -3810,6 +3828,8 @@ class MainWindow(QMainWindow):
         tiktok_upload_action.setToolTip("Upload selected video to TikTok.")
         tiktok_upload_action.triggered.connect(self.upload_selected_to_tiktok)
         self.quick_actions_toolbar.addAction(tiktok_upload_action)
+
+        self._set_quick_actions_toolbar_visible(self.quick_actions_toolbar_toggle_action.isChecked())
 
     def _run_with_button_feedback(self, button: QPushButton, callback: Callable[[], None]) -> None:
         if button is not None and button.isCheckable():
@@ -4098,6 +4118,7 @@ class MainWindow(QMainWindow):
             "cdp_social_upload_relay_url": self.cdp_social_upload_relay_url.text().strip(),
             "cdp_enabled": self.cdp_enabled,
             "browser_tab_enabled": dict(self.browser_tab_enabled),
+            "quick_actions_toolbar_visible": self.quick_actions_toolbar.isVisible(),
             "automation_mode": self.automation_mode.currentData(),
             "counter": self.count.value(),
             "video_resolution": str(self.video_resolution.currentData()),
@@ -4251,6 +4272,8 @@ class MainWindow(QMainWindow):
                 for tab_key in self.browser_tab_indices:
                     self._set_browser_tab_enabled(tab_key, self._is_browser_tab_enabled(tab_key))
                 self._refresh_browser_tab_selection()
+        if "quick_actions_toolbar_visible" in preferences:
+            self._set_quick_actions_toolbar_visible(bool(preferences["quick_actions_toolbar_visible"]))
         if "automation_mode" in preferences:
             automation_mode_index = self.automation_mode.findData(str(preferences["automation_mode"]))
             if automation_mode_index >= 0:
