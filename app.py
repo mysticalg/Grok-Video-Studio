@@ -5979,16 +5979,43 @@ class MainWindow(QMainWindow):
                         return expanded || controlledVisible || anyOpenMenuVisible;
                     };
 
+                    const triggerMenuOpenByEvents = (trigger) => {
+                        if (!trigger) return false;
+                        const eventInit = { bubbles: true, cancelable: true, composed: true, view: window };
+                        const pointerInit = { ...eventInit, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1 };
+                        const keyboardInit = { bubbles: true, cancelable: true, composed: true };
+
+                        const tryAction = (action) => {
+                            try { action(); } catch (_) {}
+                            return isMenuOpenForTrigger(trigger);
+                        };
+
+                        if (tryAction(() => emulateClick(trigger))) return true;
+                        if (tryAction(() => trigger.click())) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new MouseEvent("click", eventInit)))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new PointerEvent("pointerdown", pointerInit)))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new MouseEvent("mousedown", eventInit)))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new PointerEvent("pointerup", pointerInit)))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new MouseEvent("mouseup", eventInit)))) return true;
+
+                        trigger.focus();
+                        if (tryAction(() => trigger.dispatchEvent(new KeyboardEvent("keydown", { ...keyboardInit, key: "Enter", code: "Enter" })))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new KeyboardEvent("keyup", { ...keyboardInit, key: "Enter", code: "Enter" })))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new KeyboardEvent("keydown", { ...keyboardInit, key: " ", code: "Space" })))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new KeyboardEvent("keyup", { ...keyboardInit, key: " ", code: "Space" })))) return true;
+
+                        const childTarget = trigger.querySelector("span, div, svg") || trigger.firstElementChild;
+                        if (childTarget) {
+                            if (tryAction(() => childTarget.dispatchEvent(new MouseEvent("click", eventInit)))) return true;
+                            if (tryAction(() => childTarget.click && childTarget.click())) return true;
+                        }
+
+                        return isMenuOpenForTrigger(trigger);
+                    };
+
                     let optionsOpened = isMenuOpenForTrigger(modelTrigger);
                     if (!optionsOpened && modelTrigger) {
-                        optionsOpened = emulateClick(modelTrigger);
-                        optionsOpened = isMenuOpenForTrigger(modelTrigger) || optionsOpened;
-                        if (!optionsOpened) {
-                            modelTrigger.focus();
-                            modelTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-                            modelTrigger.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
-                            optionsOpened = isMenuOpenForTrigger(modelTrigger);
-                        }
+                        optionsOpened = triggerMenuOpenByEvents(modelTrigger);
                     }
 
                     const menuItemSelectors = [
@@ -6542,16 +6569,43 @@ class MainWindow(QMainWindow):
                         return expanded || controlledVisible || anyOpenMenuVisible;
                     }};
 
+                    const triggerMenuOpenByEvents = (trigger) => {{
+                        if (!trigger) return false;
+                        const eventInit = {{ bubbles: true, cancelable: true, composed: true, view: window }};
+                        const pointerInit = {{ ...eventInit, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1 }};
+                        const keyboardInit = {{ bubbles: true, cancelable: true, composed: true }};
+
+                        const tryAction = (action) => {{
+                            try {{ action(); }} catch (_) {{}}
+                            return isMenuOpenForTrigger(trigger);
+                        }};
+
+                        if (tryAction(() => emulateClick(trigger))) return true;
+                        if (tryAction(() => trigger.click())) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new MouseEvent("click", eventInit)))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new PointerEvent("pointerdown", pointerInit)))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new MouseEvent("mousedown", eventInit)))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new PointerEvent("pointerup", pointerInit)))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new MouseEvent("mouseup", eventInit)))) return true;
+
+                        trigger.focus();
+                        if (tryAction(() => trigger.dispatchEvent(new KeyboardEvent("keydown", {{ ...keyboardInit, key: "Enter", code: "Enter" }})))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new KeyboardEvent("keyup", {{ ...keyboardInit, key: "Enter", code: "Enter" }})))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new KeyboardEvent("keydown", {{ ...keyboardInit, key: " ", code: "Space" }})))) return true;
+                        if (tryAction(() => trigger.dispatchEvent(new KeyboardEvent("keyup", {{ ...keyboardInit, key: " ", code: "Space" }})))) return true;
+
+                        const childTarget = trigger.querySelector("span, div, svg") || trigger.firstElementChild;
+                        if (childTarget) {{
+                            if (tryAction(() => childTarget.dispatchEvent(new MouseEvent("click", eventInit)))) return true;
+                            if (tryAction(() => childTarget.click && childTarget.click())) return true;
+                        }}
+
+                        return isMenuOpenForTrigger(trigger);
+                    }};
+
                     let optionsOpened = isMenuOpenForTrigger(modelTrigger);
                     if (!optionsOpened && modelTrigger) {{
-                        optionsOpened = emulateClick(modelTrigger);
-                        optionsOpened = isMenuOpenForTrigger(modelTrigger) || optionsOpened;
-                        if (!optionsOpened) {{
-                            modelTrigger.focus();
-                            modelTrigger.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", bubbles: true }}));
-                            modelTrigger.dispatchEvent(new KeyboardEvent("keyup", {{ key: "Enter", code: "Enter", bubbles: true }}));
-                            optionsOpened = isMenuOpenForTrigger(modelTrigger);
-                        }}
+                        optionsOpened = triggerMenuOpenByEvents(modelTrigger);
                     }}
                     await sleep(ACTION_DELAY_MS);
 
