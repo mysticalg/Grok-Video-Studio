@@ -5990,10 +5990,12 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("button, [role='button']"),
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
 
-                    const modelTrigger = modelTriggerCandidates.find((el) => {
+                    const modelTrigger = modelTriggerCandidates.find((el) => (el.id || "") === "model-select-trigger")
+                        || modelTriggerCandidates.find((el) => {
                         const txt = textOf(el);
                         return /model|video|image|options|settings/i.test(txt) || (el.id || "") === "model-select-trigger";
-                    }) || null;
+                    })
+                        || null;
 
                     let optionsOpened = false;
                     if (modelTrigger) {
@@ -6983,7 +6985,8 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("button[aria-haspopup='menu']"),
                         ...document.querySelectorAll("button[id^='radix-']")
                     ].filter((el, index, arr) => arr.indexOf(el) === index);
-                    const settingsButton = settingsCandidates.find((el) => {
+                    const settingsButton = settingsCandidates.find((el) => (el.id || "").trim() === "model-select-trigger")
+                        || settingsCandidates.find((el) => {
                         if (!isVisible(el) || el.disabled) return false;
                         const aria = (el.getAttribute("aria-label") || "").trim();
                         const txt = (el.textContent || "").trim();
@@ -6994,7 +6997,8 @@ class MainWindow(QMainWindow):
                             || /model\s*select/i.test(aria)
                             || /settings?|options?/i.test(aria)
                             || /settings?|options?/i.test(txt);
-                    }) || null;
+                    })
+                        || null;
 
                     if (!settingsButton) {
                         return { ok: false, error: "Settings/model-select button not found", panelVisible: !!findOpenMenu() };
