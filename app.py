@@ -5947,16 +5947,22 @@ class MainWindow(QMainWindow):
                         return selectedEls.some((el) => /(^|\s)image(\s|$)/i.test(textOf(el)));
                     };
 
+                    const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\s+/g, " ").trim();
+                    const isModelSelectTrigger = (el) => {
+                        const txt = textOf(el);
+                        const aria = ariaOf(el);
+                        const id = (el?.id || "").trim();
+                        return /model\s*select/i.test(aria) || id === "model-select-trigger" || /model|video|image|options|settings/i.test(txt);
+                    };
                     const modelTriggerCandidates = [
+                        ...document.querySelectorAll("button[aria-label='Model select']"),
+                        ...document.querySelectorAll("button[aria-label*='Model select' i], [role='button'][aria-label*='Model select' i]"),
                         ...document.querySelectorAll("#model-select-trigger"),
                         ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
                         ...document.querySelectorAll("button, [role='button']"),
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
 
-                    const modelTrigger = modelTriggerCandidates.find((el) => {
-                        const txt = textOf(el);
-                        return /model|video|image|options|settings/i.test(txt) || (el.id || "") === "model-select-trigger";
-                    }) || null;
+                    const modelTrigger = modelTriggerCandidates.find((el) => isModelSelectTrigger(el)) || null;
 
                     let optionsOpened = false;
                     if (modelTrigger) {
@@ -6313,6 +6319,8 @@ class MainWindow(QMainWindow):
                         try {
                             const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                             const trigger = [
+                                ...document.querySelectorAll("button[aria-label='Model select']"),
+                                ...document.querySelectorAll("button[aria-label*='Model select' i], [role='button'][aria-label*='Model select' i]"),
                                 ...document.querySelectorAll("#model-select-trigger"),
                                 ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']")
                             ].find((el) => isVisible(el) && !el.disabled) || null;
@@ -6469,16 +6477,21 @@ class MainWindow(QMainWindow):
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
                     const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(`${{textOf(el)}} ${{ariaOf(el)}}`);
+                    const isModelSelectTrigger = (el) => {{
+                        const txt = textOf(el);
+                        const aria = ariaOf(el);
+                        const id = (el?.id || "").trim();
+                        return /model\s*select/i.test(aria) || id === "model-select-trigger" || /model|video|image|options|settings/i.test(txt);
+                    }};
                     const modelTriggerCandidates = [
+                        ...document.querySelectorAll("button[aria-label='Model select']"),
+                        ...document.querySelectorAll("button[aria-label*='Model select' i], [role='button'][aria-label*='Model select' i]"),
                         ...document.querySelectorAll("#model-select-trigger"),
                         ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
                         ...document.querySelectorAll("button, [role='button']"),
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
 
-                    const modelTrigger = modelTriggerCandidates.find((el) => {{
-                        const txt = textOf(el);
-                        return /model|video|image|options|settings/i.test(txt) || (el.id || "") === "model-select-trigger";
-                    }}) || null;
+                    const modelTrigger = modelTriggerCandidates.find((el) => isModelSelectTrigger(el)) || null;
 
                     let optionsOpened = false;
                     if (modelTrigger) {{
