@@ -5966,6 +5966,17 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                         return true;
                     };
+                    const emulateActivate = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = emulateClick(el);
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.click(); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        return fired;
+                    };
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const hasImageSelectionMarker = () => {
                         const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
@@ -5986,7 +5997,7 @@ class MainWindow(QMainWindow):
 
                     let optionsOpened = false;
                     if (modelTrigger) {
-                        optionsOpened = emulateClick(modelTrigger);
+                        optionsOpened = emulateActivate(modelTrigger);
                     }
 
                     const menuItemSelectors = [
@@ -6006,7 +6017,7 @@ class MainWindow(QMainWindow):
                         return /(^|\s)image(\s|$)/i.test(txt) || /generate multiple images/i.test(txt);
                     }) || null;
 
-                    const imageClicked = imageItem ? emulateClick(imageItem) : false;
+                    const imageClicked = imageItem ? emulateActivate(imageItem) : false;
 
                     const triggerNowSaysImage = !!(modelTrigger && /(^|\s)image(\s|$)/i.test(textOf(modelTrigger)));
                     const imageSelected = imageClicked || hasImageSelectionMarker() || triggerNowSaysImage;
@@ -6065,13 +6076,24 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                         return true;
                     };
+                    const emulateActivate = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = emulateClick(el);
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.click(); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        return fired;
+                    };
 
                     const matchesAny = (text, patterns) => patterns.some((pattern) => pattern.test(text));
                     const clickByText = (patterns, root = document) => {
                         const candidate = visibleTextElements(root).find((el) => matchesAny(textOf(el), patterns));
                         const target = clickableAncestor(candidate);
                         if (!target) return false;
-                        return emulateClick(target);
+                        return emulateActivate(target);
                     };
                     const hasSelectedByText = (patterns, root = document) => selectedTextElements(root)
                         .some((el) => matchesAny(textOf(el), patterns));
@@ -6114,7 +6136,7 @@ class MainWindow(QMainWindow):
                     const clickVisibleButtonByAriaLabel = (ariaLabel, root = document) => {
                         const button = findVisibleButtonByAriaLabel(ariaLabel, root) || findVisibleButtonByAriaLabel(ariaLabel, document);
                         if (!button) return false;
-                        return emulateClick(button);
+                        return emulateActivate(button);
                     };
 
                     const applyOption = (name, patterns, ariaLabel = null) => {
@@ -9649,7 +9671,7 @@ class MainWindow(QMainWindow):
         return ["-c:v", "libx264", "-preset", "fast", "-crf", str(crf)]
 
     def _mp4_compatibility_args(self) -> list[str]:
-        # Keep stitched output broadly compatible with Windows thumbnails, Android playback,
+        # Keep stitched output broadly compatible with common desktop/mobile players
         # and social upload transcoders.
         return ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
 
