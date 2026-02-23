@@ -27,6 +27,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -61,7 +62,14 @@ from PySide6.QtWidgets import (
     QWidget,
     QWidgetAction,
     QMenu,
+    QListWidget,
+    QListWidgetItem,
+    QHeaderView,
+    QStackedWidget,
     QToolBar,
+    QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -2451,13 +2459,45 @@ class MainWindow(QMainWindow):
         generated_videos_layout.addWidget(self.music_file_label)
         generated_videos_layout.addLayout(self.music_actions_row)
 
-        self.video_picker = QComboBox()
-        self.video_picker.setIconSize(QPixmap(180, 102).size())
-        self.video_picker.setMinimumHeight(354)
-        self.video_picker.setMaxVisibleItems(9)
-        self.video_picker.view().setMinimumHeight(990)
-        self.video_picker.currentIndexChanged.connect(self.show_selected_video)
-        generated_videos_layout.addWidget(self.video_picker)
+        view_toggle_row = QHBoxLayout()
+        view_toggle_row.addStretch(1)
+        self.video_view_toggle_btn = QToolButton()
+        self.video_view_toggle_btn.setText("☷")
+        self.video_view_toggle_btn.setCheckable(True)
+        self.video_view_toggle_btn.setToolTip("Toggle between thumbnail grid and details list view.")
+        self.video_view_toggle_btn.toggled.connect(self._toggle_video_view_mode)
+        view_toggle_row.addWidget(self.video_view_toggle_btn)
+        generated_videos_layout.addLayout(view_toggle_row)
+
+        self.video_view_stack = QStackedWidget()
+        self.video_grid = QListWidget()
+        self.video_grid.setViewMode(QListWidget.IconMode)
+        self.video_grid.setResizeMode(QListWidget.Adjust)
+        self.video_grid.setMovement(QListWidget.Static)
+        self.video_grid.setWrapping(True)
+        self.video_grid.setUniformItemSizes(True)
+        self.video_grid.setSpacing(10)
+        self.video_grid.setIconSize(QPixmap(180, 102).size())
+        self.video_grid.setGridSize(QPixmap(220, 138).size())
+        self.video_grid.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.video_grid.setMinimumHeight(354)
+        self.video_grid.currentRowChanged.connect(self.show_selected_video)
+
+        self.video_details = QTreeWidget()
+        self.video_details.setColumnCount(3)
+        self.video_details.setHeaderLabels(["Date", "Filename", "Resolution"])
+        self.video_details.setRootIsDecorated(False)
+        self.video_details.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.video_details.setAlternatingRowColors(True)
+        self.video_details.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.video_details.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.video_details.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.video_details.setMinimumHeight(354)
+        self.video_details.currentItemChanged.connect(self._on_video_details_selection_changed)
+
+        self.video_view_stack.addWidget(self.video_grid)
+        self.video_view_stack.addWidget(self.video_details)
+        generated_videos_layout.addWidget(self.video_view_stack)
 
         video_list_controls = QHBoxLayout()
         self.open_video_btn = QPushButton("📂 Open Video(s)")
@@ -2742,6 +2782,7 @@ class MainWindow(QMainWindow):
 
         status_bar = QStatusBar(self)
         status_bar.setSizeGripEnabled(False)
+        status_bar.setContentsMargins(8, 0, 0, 0)
         self.setStatusBar(status_bar)
 
         self.upload_progress_label = QLabel("Upload progress: idle")
@@ -2920,7 +2961,7 @@ class MainWindow(QMainWindow):
         return []
 
     def _selected_video_path_for_upload(self) -> str:
-        index = self.video_picker.currentIndex()
+        index = self._selected_video_index()
         if index < 0 or index >= len(self.videos):
             return ""
         return str(self.videos[index].get("video_file_path") or "").strip()
@@ -3586,6 +3627,17 @@ class MainWindow(QMainWindow):
             action.setChecked(enabled)
             action.blockSignals(False)
 
+    def _set_quick_actions_toolbar_visible(self, visible: bool) -> None:
+        visible = bool(visible)
+        if hasattr(self, "quick_actions_toolbar"):
+            self.quick_actions_toolbar.setVisible(visible)
+
+        action = getattr(self, "quick_actions_toolbar_toggle_action", None)
+        if action is not None and action.isChecked() != visible:
+            action.blockSignals(True)
+            action.setChecked(visible)
+            action.blockSignals(False)
+
     def _refresh_browser_tab_selection(self) -> None:
         current = self.browser_tabs.currentIndex()
         if current >= 0 and self.browser_tabs.isTabVisible(current):
@@ -3646,6 +3698,12 @@ class MainWindow(QMainWindow):
         self._set_cdp_enabled(self.cdp_enabled)
 
         view_menu = menu_bar.addMenu("View")
+        self.quick_actions_toolbar_toggle_action = QAction("Show Top Icon Toolbar", self)
+        self.quick_actions_toolbar_toggle_action.setCheckable(True)
+        self.quick_actions_toolbar_toggle_action.setChecked(True)
+        self.quick_actions_toolbar_toggle_action.toggled.connect(self._set_quick_actions_toolbar_visible)
+        view_menu.addAction(self.quick_actions_toolbar_toggle_action)
+
         browser_tabs_menu = view_menu.addMenu("Browser Tabs")
         self.browser_tab_toggle_actions = {}
         browser_tab_menu_items = (
@@ -3770,6 +3828,8 @@ class MainWindow(QMainWindow):
         tiktok_upload_action.setToolTip("Upload selected video to TikTok.")
         tiktok_upload_action.triggered.connect(self.upload_selected_to_tiktok)
         self.quick_actions_toolbar.addAction(tiktok_upload_action)
+
+        self._set_quick_actions_toolbar_visible(self.quick_actions_toolbar_toggle_action.isChecked())
 
     def _run_with_button_feedback(self, button: QPushButton, callback: Callable[[], None]) -> None:
         if button is not None and button.isCheckable():
@@ -4058,6 +4118,7 @@ class MainWindow(QMainWindow):
             "cdp_social_upload_relay_url": self.cdp_social_upload_relay_url.text().strip(),
             "cdp_enabled": self.cdp_enabled,
             "browser_tab_enabled": dict(self.browser_tab_enabled),
+            "quick_actions_toolbar_visible": self.quick_actions_toolbar.isVisible(),
             "automation_mode": self.automation_mode.currentData(),
             "counter": self.count.value(),
             "video_resolution": str(self.video_resolution.currentData()),
@@ -4105,7 +4166,7 @@ class MainWindow(QMainWindow):
             "training_trace_path": self.training_trace_path.text(),
             "training_process_path": self.training_process_path.text(),
             "generated_videos": self._serialize_video_list_for_preferences(),
-            "selected_generated_video_index": self.video_picker.currentIndex(),
+            "selected_generated_video_index": self._selected_video_index(),
             "ai_social_metadata": {
                 "title": self.ai_social_metadata.title,
                 "medium_title": self.ai_social_metadata.medium_title,
@@ -4211,6 +4272,8 @@ class MainWindow(QMainWindow):
                 for tab_key in self.browser_tab_indices:
                     self._set_browser_tab_enabled(tab_key, self._is_browser_tab_enabled(tab_key))
                 self._refresh_browser_tab_selection()
+        if "quick_actions_toolbar_visible" in preferences:
+            self._set_quick_actions_toolbar_visible(bool(preferences["quick_actions_toolbar_visible"]))
         if "automation_mode" in preferences:
             automation_mode_index = self.automation_mode.findData(str(preferences["automation_mode"]))
             if automation_mode_index >= 0:
@@ -7916,19 +7979,92 @@ class MainWindow(QMainWindow):
             return QIcon()
         return QIcon(pixmap)
 
+    def _format_video_date(self, video_path: str) -> str:
+        try:
+            mtime = Path(video_path).stat().st_mtime
+            return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return "unknown"
+
+    def _selected_video_index(self) -> int:
+        if hasattr(self, "video_view_stack") and self.video_view_stack.currentWidget() is self.video_details:
+            item = self.video_details.currentItem()
+            if item is None:
+                return -1
+            index = item.data(0, Qt.UserRole)
+            return int(index) if isinstance(index, int) else -1
+        return self.video_grid.currentRow() if hasattr(self, "video_grid") else -1
+
+    def _set_selected_video_index(self, index: int) -> None:
+        if not hasattr(self, "video_grid") or not hasattr(self, "video_details"):
+            return
+
+        self.video_grid.blockSignals(True)
+        self.video_details.blockSignals(True)
+
+        if 0 <= index < self.video_grid.count():
+            self.video_grid.setCurrentRow(index)
+        else:
+            self.video_grid.clearSelection()
+            self.video_grid.setCurrentRow(-1)
+
+        tree_item = self.video_details.topLevelItem(index) if 0 <= index < self.video_details.topLevelItemCount() else None
+        self.video_details.setCurrentItem(tree_item)
+
+        self.video_grid.blockSignals(False)
+        self.video_details.blockSignals(False)
+
+    def _on_video_details_selection_changed(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None) -> None:
+        if current is None:
+            return
+        index = current.data(0, Qt.UserRole)
+        if isinstance(index, int):
+            self._set_selected_video_index(index)
+            self.show_selected_video(index)
+
+    def _toggle_video_view_mode(self, details_mode: bool) -> None:
+        selected_index = self._selected_video_index()
+        self.video_view_stack.setCurrentWidget(self.video_details if details_mode else self.video_grid)
+        self.video_view_toggle_btn.setText("☰" if details_mode else "☷")
+        self.video_view_toggle_btn.setToolTip(
+            "Switch to thumbnail grid view." if details_mode else "Switch to details list view."
+        )
+        self._set_selected_video_index(selected_index)
+
     def _refresh_video_picker(self, selected_index: int = -1) -> None:
-        self.video_picker.blockSignals(True)
-        self.video_picker.clear()
-        for video in self.videos:
-            self.video_picker.addItem(self._thumbnail_for_video(video["video_file_path"]), self._build_video_label(video))
-        self.video_picker.blockSignals(False)
+        self.video_grid.blockSignals(True)
+        self.video_details.blockSignals(True)
+        self.video_grid.clear()
+        self.video_details.clear()
+
+        for index, video in enumerate(self.videos):
+            label = self._build_video_label(video)
+            video_path = str(video.get("video_file_path") or "")
+            icon = self._thumbnail_for_video(video_path)
+
+            grid_item = QListWidgetItem(icon, label)
+            grid_item.setToolTip(video_path)
+            self.video_grid.addItem(grid_item)
+
+            filename = Path(video_path).name if video_path else "unknown"
+            detail_item = QTreeWidgetItem([
+                self._format_video_date(video_path),
+                filename,
+                str(video.get("resolution") or "unknown"),
+            ])
+            detail_item.setData(0, Qt.UserRole, index)
+            detail_item.setToolTip(1, video_path)
+            self.video_details.addTopLevelItem(detail_item)
+
+        self.video_grid.blockSignals(False)
+        self.video_details.blockSignals(False)
 
         if not self.videos:
             return
 
         if selected_index < 0 or selected_index >= len(self.videos):
             selected_index = len(self.videos) - 1
-        self.video_picker.setCurrentIndex(selected_index)
+        self._set_selected_video_index(selected_index)
         self.show_selected_video(selected_index)
 
     def on_video_finished(self, video: dict) -> None:
@@ -7964,7 +8100,7 @@ class MainWindow(QMainWindow):
             self.on_video_finished(loaded_video)
 
     def move_selected_video(self, delta: int) -> None:
-        index = self.video_picker.currentIndex()
+        index = self._selected_video_index()
         if index < 0 or index >= len(self.videos):
             return
 
@@ -7977,7 +8113,7 @@ class MainWindow(QMainWindow):
         self._append_log(f"Reordered videos: moved item to position {target + 1}.")
 
     def remove_selected_video(self) -> None:
-        index = self.video_picker.currentIndex()
+        index = self._selected_video_index()
         if index < 0 or index >= len(self.videos):
             return
 
@@ -8069,7 +8205,7 @@ class MainWindow(QMainWindow):
         }, True
 
     def add_overlay_to_selected_video(self) -> None:
-        index = self.video_picker.currentIndex()
+        index = self._selected_video_index()
         if index < 0 or index >= len(self.videos):
             QMessageBox.warning(self, "No Video Selected", "Select a video first.")
             return
@@ -9461,7 +9597,7 @@ class MainWindow(QMainWindow):
         temp_output.replace(output_file)
 
     def upload_selected_to_youtube(self) -> None:
-        index = self.video_picker.currentIndex()
+        index = self._selected_video_index()
         if index < 0 or index >= len(self.videos):
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
@@ -9649,7 +9785,7 @@ class MainWindow(QMainWindow):
         )
 
     def upload_selected_to_facebook(self) -> None:
-        index = self.video_picker.currentIndex()
+        index = self._selected_video_index()
         if index < 0 or index >= len(self.videos):
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
@@ -9668,7 +9804,7 @@ class MainWindow(QMainWindow):
         
 
     def upload_selected_to_instagram(self) -> None:
-        index = self.video_picker.currentIndex()
+        index = self._selected_video_index()
         if index < 0 or index >= len(self.videos):
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
@@ -9702,7 +9838,7 @@ class MainWindow(QMainWindow):
         )
 
     def upload_selected_to_tiktok(self) -> None:
-        index = self.video_picker.currentIndex()
+        index = self._selected_video_index()
         if index < 0 or index >= len(self.videos):
             QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
             return
