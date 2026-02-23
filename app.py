@@ -123,6 +123,7 @@ CDP_RELAY_SOCIAL_UPLOAD_URL = os.getenv("GROK_CDP_RELAY_SOCIAL_UPLOAD_URL", "htt
 CDP_RELAY_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_TIMEOUT_SECONDS", "25")))
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
 GITHUB_RELEASES_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api/releases"
+GITHUB_LATEST_RELEASE_API_URL = "https://api.github.com/repos/mysticalg/Grok-video-to-youtube-api/releases/latest"
 GITHUB_ACTIONS_RUNS_URL = f"{GITHUB_REPO_URL}/actions"
 BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/dhooksterm"
 PAYPAL_DONATION_URL = "https://www.paypal.com/paypalme/dhookster"
@@ -136,6 +137,18 @@ _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
 
 
+def _read_local_app_version(default: str = "0.0.0") -> str:
+    try:
+        version_path = BASE_DIR / "VERSION"
+        version_text = version_path.read_text(encoding="utf-8").strip()
+        return version_text or default
+    except Exception:
+        return default
+
+
+CURRENT_APP_VERSION = _read_local_app_version()
+
+
 def _next_session_download_count() -> int:
     global _session_download_counter
     with _session_download_counter_lock:
@@ -146,6 +159,20 @@ def _next_session_download_count() -> int:
 def _slugify_filename_part(value: str, fallback: str = "na") -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return cleaned or fallback
+
+
+def _normalize_version_key(value: str) -> tuple[int, ...]:
+    cleaned = str(value or "").strip().lower().lstrip("v")
+    if not cleaned:
+        return (0,)
+    parts: list[int] = []
+    for token in re.split(r"[^0-9]+", cleaned):
+        if token:
+            try:
+                parts.append(int(token))
+            except ValueError:
+                parts.append(0)
+    return tuple(parts) if parts else (0,)
 
 
 def _parse_query_preserving_plus(query: str) -> dict[str, str]:
@@ -2141,6 +2168,7 @@ class MainWindow(QMainWindow):
         self.preview_volume = 100
         self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
+        self.last_update_prompt_ts = 0
         self.cdp_enabled = False
         self.browser_tab_enabled = {
             "Grok": True,
@@ -2170,6 +2198,7 @@ class MainWindow(QMainWindow):
             app.installEventFilter(self)
         self._load_startup_preferences()
         self._apply_default_theme()
+        QTimer.singleShot(1200, self.check_for_updates_on_startup)
 
     def eventFilter(self, watched, event):
         if watched is getattr(self, "preview", None) and event.type() in (QEvent.Type.Resize, QEvent.Type.Move):
@@ -3738,6 +3767,10 @@ class MainWindow(QMainWindow):
         releases_action.triggered.connect(self.open_github_releases_page)
         help_menu.addAction(releases_action)
 
+        check_updates_action = QAction("Check for Updates", self)
+        check_updates_action.triggered.connect(lambda: self.check_for_updates(manual=True))
+        help_menu.addAction(check_updates_action)
+
         actions_action = QAction("Build Artifacts", self)
         actions_action.triggered.connect(self.open_github_actions_runs_page)
         help_menu.addAction(actions_action)
@@ -3911,7 +3944,7 @@ class MainWindow(QMainWindow):
         )
         info_browser.setHtml(
             "<h3>Grok Video Desktop Studio</h3>"
-            "<p><b>Version:</b> 1.0.0<br>"
+            f"<p><b>Version:</b> {CURRENT_APP_VERSION}<br>"
             "<b>Authors:</b> Grok Video Desktop Studio contributors<br>"
             "<b>Desktop workflow:</b> PyQt + embedded Grok browser + YouTube uploader</p>"
             "<p><b>Downloads</b><br>"
@@ -3942,6 +3975,153 @@ class MainWindow(QMainWindow):
 
     def open_github_actions_runs_page(self) -> None:
         QDesktopServices.openUrl(QUrl(GITHUB_ACTIONS_RUNS_URL))
+
+    def _release_asset_matches_platform(self, asset_name: str) -> bool:
+        normalized = str(asset_name or "").strip().lower()
+        if not normalized:
+            return False
+        if sys.platform.startswith("win"):
+            return any(token in normalized for token in (".exe", ".msi", "windows", "win64", "win32"))
+        if sys.platform == "darwin":
+            return any(token in normalized for token in (".dmg", ".pkg", "mac", "darwin", "osx"))
+        return any(token in normalized for token in (".appimage", ".deb", ".rpm", ".tar.gz", ".zip", "linux"))
+
+    def _fetch_latest_release(self) -> dict[str, object] | None:
+        try:
+            response = requests.get(
+                GITHUB_LATEST_RELEASE_API_URL,
+                headers={"Accept": "application/vnd.github+json"},
+                timeout=12,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict):
+                return payload
+        except Exception as exc:
+            self._append_log(f"Update check failed: {exc}")
+        return None
+
+    def _pick_installer_asset(self, release_payload: dict[str, object]) -> dict[str, str] | None:
+        assets = release_payload.get("assets")
+        if not isinstance(assets, list):
+            return None
+        candidates: list[dict[str, str]] = []
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            name = str(asset.get("name") or "").strip()
+            url = str(asset.get("browser_download_url") or "").strip()
+            if not name or not url:
+                continue
+            if self._release_asset_matches_platform(name):
+                candidates.append({"name": name, "url": url})
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: len(item["name"]))
+        return candidates[0]
+
+    def _download_update_installer(self, download_url: str, filename_hint: str) -> Path:
+        updates_dir = self.download_dir / "updates"
+        updates_dir.mkdir(parents=True, exist_ok=True)
+        target_path = updates_dir / _slugify_filename_part(Path(filename_hint).stem, "installer")
+        suffix = Path(filename_hint).suffix or ".bin"
+        final_path = target_path.with_suffix(suffix)
+
+        with requests.get(download_url, stream=True, timeout=60) as response:
+            response.raise_for_status()
+            with open(final_path, "wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 512):
+                    if chunk:
+                        handle.write(chunk)
+        return final_path
+
+    def _open_installer_file(self, installer_path: Path) -> None:
+        if sys.platform.startswith("win"):
+            os.startfile(str(installer_path))  # type: ignore[attr-defined]
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(installer_path)])
+            return
+        subprocess.Popen(["xdg-open", str(installer_path)])
+
+    def _maybe_run_update_installation(self, release_payload: dict[str, object]) -> None:
+        installer_asset = self._pick_installer_asset(release_payload)
+        if installer_asset is None:
+            QMessageBox.information(
+                self,
+                "Installer Not Found",
+                "No installer was found for your operating system in the latest release assets.",
+            )
+            self.open_github_releases_page()
+            return
+
+        installer_name = installer_asset["name"]
+        installer_url = installer_asset["url"]
+        self._append_log(f"Downloading update installer: {installer_name}")
+        try:
+            installer_path = self._download_update_installer(installer_url, installer_name)
+            self._append_log(f"Downloaded update installer to: {installer_path}")
+            self._open_installer_file(installer_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Update Download Failed", f"Could not download installer.\n\n{exc}")
+            self._append_log(f"Update installer download/open failed: {exc}")
+            return
+
+        QMessageBox.information(
+            self,
+            "Installing Update",
+            "The installer has been opened. The app will now close so the update can continue.",
+        )
+        self.close()
+
+    def check_for_updates_on_startup(self) -> None:
+        self.check_for_updates(manual=False)
+
+    def check_for_updates(self, manual: bool = False) -> None:
+        now_ts = int(time.time())
+        one_day_seconds = 24 * 60 * 60
+        if not manual:
+            last_prompt = int(getattr(self, "last_update_prompt_ts", 0) or 0)
+            if last_prompt > 0 and (now_ts - last_prompt) < one_day_seconds:
+                return
+
+        release_payload = self._fetch_latest_release()
+        if release_payload is None:
+            if manual:
+                QMessageBox.warning(self, "Update Check Failed", "Could not reach GitHub releases right now.")
+            return
+
+        latest_version = str(release_payload.get("tag_name") or "").strip() or str(release_payload.get("name") or "").strip()
+        if not latest_version:
+            if manual:
+                QMessageBox.warning(self, "Update Check Failed", "Latest release version could not be determined.")
+            return
+
+        current_key = _normalize_version_key(CURRENT_APP_VERSION)
+        latest_key = _normalize_version_key(latest_version)
+        if latest_key <= current_key:
+            if manual:
+                QMessageBox.information(
+                    self,
+                    "No Update Needed",
+                    f"You are running version {CURRENT_APP_VERSION}, which is up to date.",
+                )
+            return
+
+        self.last_update_prompt_ts = now_ts
+        self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=False, only_if_changed=False)
+
+        prompt = QMessageBox(self)
+        prompt.setIcon(QMessageBox.Icon.Information)
+        prompt.setWindowTitle("Update Available")
+        prompt.setText(
+            f"A newer version is available.\n\nCurrent: {CURRENT_APP_VERSION}\nLatest: {latest_version}\n\n"
+            "Would you like to download and install the latest recommended version now?"
+        )
+        prompt.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        prompt.setDefaultButton(QMessageBox.StandardButton.Yes)
+        if prompt.exec() == QMessageBox.StandardButton.Yes:
+            self._maybe_run_update_installation(release_payload)
 
     def open_extension_directory(self) -> None:
         extension_dir = (BASE_DIR / "extension").resolve()
@@ -4165,6 +4345,7 @@ class MainWindow(QMainWindow):
             "training_use_embedded_browser": self.training_use_embedded_browser.isChecked(),
             "training_trace_path": self.training_trace_path.text(),
             "training_process_path": self.training_process_path.text(),
+            "last_update_prompt_ts": int(getattr(self, "last_update_prompt_ts", 0) or 0),
             "generated_videos": self._serialize_video_list_for_preferences(),
             "selected_generated_video_index": self._selected_video_index(),
             "ai_social_metadata": {
@@ -4458,6 +4639,11 @@ class MainWindow(QMainWindow):
             self.training_trace_path.setText(str(preferences["training_trace_path"]))
         if "training_process_path" in preferences:
             self.training_process_path.setText(str(preferences["training_process_path"]))
+        if "last_update_prompt_ts" in preferences:
+            try:
+                self.last_update_prompt_ts = int(preferences["last_update_prompt_ts"])
+            except (TypeError, ValueError):
+                self.last_update_prompt_ts = 0
 
         if "generated_videos" in preferences:
             self._restore_video_list_from_preferences(
