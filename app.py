@@ -2100,6 +2100,7 @@ class MainWindow(QMainWindow):
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
+        self.browser_devtools_windows: dict[QWebEngineView, QMainWindow] = {}
         self.social_upload_status_labels: dict[str, QLabel] = {}
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
@@ -2346,6 +2347,13 @@ class MainWindow(QMainWindow):
         self.browser_home_btn.setCheckable(True)
         self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
 
+        self.browser_devtools_btn = QPushButton("🛠 DevTools")
+        self.browser_devtools_btn.setToolTip("Open Chromium DevTools for the Grok browser tab.")
+        self.browser_devtools_btn.setCheckable(True)
+        self.browser_devtools_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.browser_devtools_btn, self.open_grok_browser_devtools)
+        )
+
         self.sora_generate_image_btn = QPushButton("🎬 Create New Video")
         self.sora_generate_image_btn.setToolTip("Build and paste a video prompt into the Sora browser tab.")
         self.sora_generate_image_btn.setCheckable(True)
@@ -2374,14 +2382,23 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.sora_browser_home_btn, self.show_sora_browser_page)
         )
 
+        self.sora_browser_devtools_btn = QPushButton("🛠 DevTools")
+        self.sora_browser_devtools_btn.setToolTip("Open Chromium DevTools for the Sora browser tab.")
+        self.sora_browser_devtools_btn.setCheckable(True)
+        self.sora_browser_devtools_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_browser_devtools_btn, self.open_sora_browser_devtools)
+        )
+
         self.generate_image_btn.setMaximumWidth(170)
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
         self.browser_home_btn.setMaximumWidth(170)
+        self.browser_devtools_btn.setMaximumWidth(170)
         self.sora_generate_image_btn.setMaximumWidth(170)
         self.sora_continue_frame_btn.setMaximumWidth(170)
         self.sora_continue_image_btn.setMaximumWidth(170)
         self.sora_browser_home_btn.setMaximumWidth(170)
+        self.sora_browser_devtools_btn.setMaximumWidth(170)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
@@ -2703,6 +2720,7 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
         grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
         grok_browser_controls.addWidget(self.browser_home_btn, 0, 3)
+        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 4)
 
         self.sora_browser_tab = QWidget()
         sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
@@ -2711,6 +2729,7 @@ class MainWindow(QMainWindow):
         sora_browser_controls.addWidget(self.sora_continue_frame_btn, 0, 1)
         sora_browser_controls.addWidget(self.sora_continue_image_btn, 0, 2)
         sora_browser_controls.addWidget(self.sora_browser_home_btn, 0, 3)
+        sora_browser_controls.addWidget(self.sora_browser_devtools_btn, 0, 4)
 
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
@@ -2756,6 +2775,16 @@ class MainWindow(QMainWindow):
         self.seedance_settings_tab_index = self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
         self.ai_flow_trainer_tab_index = self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
         self.browser_tabs.currentChanged.connect(self._on_browser_tab_changed)
+
+        self.devtools_action = QAction("Open Browser DevTools", self)
+        self.devtools_action.setShortcut("Ctrl+Shift+I")
+        self.devtools_action.triggered.connect(self.open_current_browser_devtools)
+        self.addAction(self.devtools_action)
+
+        self.devtools_action_f12 = QAction("Open Browser DevTools (F12)", self)
+        self.devtools_action_f12.setShortcut("F12")
+        self.devtools_action_f12.triggered.connect(self.open_current_browser_devtools)
+        self.addAction(self.devtools_action_f12)
 
         self.browser_tab_indices = {
             "Grok": self.grok_browser_tab_index,
@@ -9504,6 +9533,76 @@ class MainWindow(QMainWindow):
             self.browser = self.grok_browser_view
         elif index == getattr(self, "sora_browser_tab_index", -1):
             self.browser = self.sora_browser
+
+    def _browser_for_tab_index(self, index: int) -> QWebEngineView | None:
+        if index == getattr(self, "grok_browser_tab_index", -1):
+            return self.grok_browser_view
+        if index == getattr(self, "sora_browser_tab_index", -1):
+            return self.sora_browser
+        for platform_name, tab_index in self.social_upload_tab_indices.items():
+            if index == tab_index:
+                return self.social_upload_browsers.get(platform_name)
+        return None
+
+    def _open_devtools_for_browser(self, browser: QWebEngineView, label: str) -> None:
+        if browser is None or browser.page() is None:
+            self._append_log(f"{label}: browser page unavailable; cannot open DevTools.")
+            return
+
+        existing_window = self.browser_devtools_windows.get(browser)
+        if existing_window is not None:
+            existing_window.show()
+            existing_window.raise_()
+            existing_window.activateWindow()
+            self._append_log(f"{label}: DevTools brought to front.")
+            return
+
+        devtools_window = QMainWindow(self)
+        devtools_window.setWindowTitle(f"DevTools - {label}")
+        devtools_window.resize(1200, 800)
+
+        devtools_view = QWebEngineView(devtools_window)
+        devtools_page = QWebEnginePage(self.browser_profile, devtools_view)
+        devtools_view.setPage(devtools_page)
+        devtools_window.setCentralWidget(devtools_view)
+
+        browser.page().setDevToolsPage(devtools_page)
+
+        def _on_devtools_closed(event):
+            try:
+                browser.page().setDevToolsPage(None)
+            except Exception:
+                pass
+            self.browser_devtools_windows.pop(browser, None)
+            event.accept()
+
+        devtools_window.closeEvent = _on_devtools_closed  # type: ignore[method-assign]
+        self.browser_devtools_windows[browser] = devtools_window
+        devtools_window.show()
+        self._append_log(f"{label}: DevTools opened.")
+
+    def open_current_browser_devtools(self) -> None:
+        index = self.browser_tabs.currentIndex()
+        target_browser = self._browser_for_tab_index(index)
+        if target_browser is None:
+            self._append_log("Current tab does not host an embedded browser; DevTools not opened.")
+            return
+
+        if index == getattr(self, "grok_browser_tab_index", -1):
+            label = "Grok Browser"
+        elif index == getattr(self, "sora_browser_tab_index", -1):
+            label = "Sora Browser"
+        else:
+            label = next((name for name, tab_index in self.social_upload_tab_indices.items() if tab_index == index), "Browser")
+        self._open_devtools_for_browser(target_browser, label)
+
+    def open_grok_browser_devtools(self) -> None:
+        self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
+        self._open_devtools_for_browser(self.grok_browser_view, "Grok Browser")
+
+    def open_sora_browser_devtools(self) -> None:
+        self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
+        self._open_devtools_for_browser(self.sora_browser, "Sora Browser")
 
     def show_browser_page(self) -> None:
         if not self._is_browser_tab_enabled("Grok"):
