@@ -2750,11 +2750,6 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setFixedWidth(260)
         status_bar.addPermanentWidget(self.upload_progress_bar)
 
-        self.automation_counter_status_label = QLabel("Automation turn: idle")
-        self.automation_counter_status_label.setStyleSheet("color: #9fb3c8;")
-        self.automation_counter_status_label.setVisible(False)
-        status_bar.addWidget(self.automation_counter_status_label)
-
         self.stitch_progress_label = QLabel("Stitch all video progress: idle")
         self.stitch_progress_label.setStyleSheet("color: #9fb3c8;")
         self.stitch_progress_label.setVisible(False)
@@ -3532,40 +3527,25 @@ class MainWindow(QMainWindow):
 
     def _status_bar_has_active_content(self) -> bool:
         tracked_widgets = [
-            getattr(self, "upload_progress_label", None),
-            getattr(self, "upload_progress_bar", None),
             getattr(self, "stitch_progress_label", None),
             getattr(self, "stitch_progress_bar", None),
-            getattr(self, "automation_counter_status_label", None),
         ]
         return any(widget is not None and widget.isVisible() for widget in tracked_widgets)
 
     def _start_automation_counter_tracking(self, total: int) -> None:
         self.automation_counter_total = max(0, int(total))
         self.automation_counter_completed = 0
-        if self.automation_counter_total > 1:
-            self.automation_counter_status_label.setText(f"Automation turn: 0/{self.automation_counter_total}")
-            self.automation_counter_status_label.setVisible(True)
-        else:
-            self.automation_counter_status_label.setVisible(False)
-        self._refresh_status_bar_visibility()
 
     def _advance_automation_counter_tracking(self) -> None:
         if self.automation_counter_total <= 1:
             return
         self.automation_counter_completed = min(self.automation_counter_completed + 1, self.automation_counter_total)
         turn_text = f"{self.automation_counter_completed}/{self.automation_counter_total}"
-        self.automation_counter_status_label.setText(f"Automation turn: {turn_text}")
-        self.automation_counter_status_label.setVisible(True)
         self._append_log(f"Automation counter progress: completed turn {turn_text}.")
-        self._refresh_status_bar_visibility()
 
     def _reset_automation_counter_tracking(self) -> None:
         self.automation_counter_total = 0
         self.automation_counter_completed = 0
-        self.automation_counter_status_label.setVisible(False)
-        self.automation_counter_status_label.setText("Automation turn: idle")
-        self._refresh_status_bar_visibility()
 
     def _refresh_status_bar_visibility(self) -> None:
         status_bar = self.statusBar()
