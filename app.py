@@ -2212,6 +2212,7 @@ class MainWindow(QMainWindow):
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
+        left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._build_model_api_settings_dialog()
         self._build_menu_bar()
@@ -2441,18 +2442,22 @@ class MainWindow(QMainWindow):
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
-        left_layout.addWidget(QLabel("Generated Videos"))
-        left_layout.addWidget(self.stitch_btn)
-        left_layout.addWidget(self.music_file_label)
-        left_layout.addLayout(self.music_actions_row)
+        generated_videos_group = QGroupBox("🎬 Generated Videos")
+        generated_videos_layout = QVBoxLayout(generated_videos_group)
+        generated_videos_layout.setContentsMargins(8, 8, 8, 8)
+        generated_videos_layout.setSpacing(6)
+
+        generated_videos_layout.addWidget(self.stitch_btn)
+        generated_videos_layout.addWidget(self.music_file_label)
+        generated_videos_layout.addLayout(self.music_actions_row)
 
         self.video_picker = QComboBox()
         self.video_picker.setIconSize(QPixmap(180, 102).size())
-        self.video_picker.setMinimumHeight(118)
-        self.video_picker.setMaxVisibleItems(3)
-        self.video_picker.view().setMinimumHeight(330)
+        self.video_picker.setMinimumHeight(354)
+        self.video_picker.setMaxVisibleItems(9)
+        self.video_picker.view().setMinimumHeight(990)
         self.video_picker.currentIndexChanged.connect(self.show_selected_video)
-        left_layout.addWidget(self.video_picker)
+        generated_videos_layout.addWidget(self.video_picker)
 
         video_list_controls = QHBoxLayout()
         self.open_video_btn = QPushButton("📂 Open Video(s)")
@@ -2480,7 +2485,8 @@ class MainWindow(QMainWindow):
         self.video_overlay_btn.clicked.connect(lambda: self._run_with_button_feedback(self.video_overlay_btn, self.add_overlay_to_selected_video))
         video_list_controls.addWidget(self.video_overlay_btn)
 
-        left_layout.addLayout(video_list_controls)
+        generated_videos_layout.addLayout(video_list_controls)
+        left_layout.addWidget(generated_videos_group)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -8973,6 +8979,7 @@ class MainWindow(QMainWindow):
         started_at = time.time()
         self.stitch_progress_label.setVisible(True)
         self.stitch_progress_bar.setVisible(True)
+        self.statusBar().show()
         self._refresh_status_bar_visibility()
 
         def update_progress(value: int, stage: str) -> None:
@@ -8985,22 +8992,24 @@ class MainWindow(QMainWindow):
 
             self.stitch_progress_bar.setValue(bounded_value)
             self.stitch_progress_label.setText(
-                f"Upload progress: {stage} | {bounded_value}% | Elapsed: {elapsed:.1f}s | ETA: {eta_label} | {settings_summary}"
+                f"Stitch progress: {stage} | {bounded_value}% | Elapsed: {elapsed:.1f}s | ETA: {eta_label} | {settings_summary}"
             )
 
         def on_stitch_failed(title: str, message: str) -> None:
-            self.stitch_progress_label.setText(f"Upload progress: failed ({message[:120]})")
+            self.stitch_progress_label.setText(f"Stitch progress: failed ({message[:120]})")
             self.stitch_progress_bar.setVisible(False)
             self.stitch_progress_label.setVisible(False)
+            self.statusBar().hide()
             self._refresh_status_bar_visibility()
             QMessageBox.critical(self, title, message)
 
         def on_stitch_finished(stitched_video: dict) -> None:
             self._append_log(f"Stitched video created: {stitched_video['video_file_path']}")
-            self.stitch_progress_label.setText("Upload progress: complete")
+            self.stitch_progress_label.setText("Stitch progress: complete")
             self.stitch_progress_bar.setValue(100)
             self.stitch_progress_bar.setVisible(False)
             self.stitch_progress_label.setVisible(False)
+            self.statusBar().hide()
             self._refresh_status_bar_visibility()
             self.on_video_finished(stitched_video)
 
