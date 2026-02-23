@@ -5875,6 +5875,7 @@ class MainWindow(QMainWindow):
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_label = f"{int(self.video_duration.currentData() or 10)}s"
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+        manual_action_delay_ms = 2000
 
         populate_script = rf"""
             (() => {{
@@ -6227,7 +6228,7 @@ class MainWindow(QMainWindow):
                 self._submit_next_manual_image_variant()
                 return
             self.manual_image_generation_queue.insert(0, item)
-            QTimer.singleShot(1200, self._submit_next_manual_image_variant)
+            QTimer.singleShot(manual_action_delay_ms, self._submit_next_manual_image_variant)
 
         submit_attempts = 0
 
@@ -6246,7 +6247,7 @@ class MainWindow(QMainWindow):
                     f"Submitted manual image variant {variant} (attempt {attempts}); "
                     "waiting for first rendered image, then opening it for download."
                 )
-                QTimer.singleShot(7000, self._poll_for_manual_image)
+                QTimer.singleShot(manual_action_delay_ms, self._poll_for_manual_image)
                 return
 
             if isinstance(result, dict) and result.get("waiting"):
@@ -6254,7 +6255,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Manual image variant {variant}: submit button still disabled (attempt {submit_attempts}); retrying click..."
                     )
-                    QTimer.singleShot(500, _run_submit_attempt)
+                    QTimer.singleShot(manual_action_delay_ms, _run_submit_attempt)
                     return
                 _retry_variant(f"submit button stayed disabled: {result!r}")
                 return
@@ -6266,7 +6267,7 @@ class MainWindow(QMainWindow):
                     f"Submitted manual image variant {variant} (attempt {attempts}); "
                     "submit callback returned empty result after page activity; continuing to image polling."
                 )
-                QTimer.singleShot(7000, self._poll_for_manual_image)
+                QTimer.singleShot(manual_action_delay_ms, self._poll_for_manual_image)
                 return
 
             _retry_variant(f"submit failed: {result!r}")
@@ -6307,11 +6308,42 @@ class MainWindow(QMainWindow):
                         f"applied markers: {applied_summary}; missing: {missing_summary}."
                     )
 
-                QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+                close_image_options_script = r"""
+                    (() => {
+                        try {
+                            const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                            const trigger = [
+                                ...document.querySelectorAll("#model-select-trigger"),
+                                ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']")
+                            ].find((el) => isVisible(el) && !el.disabled) || null;
+                            if (!trigger) return { ok: false, reason: "trigger-missing" };
+                            trigger.click();
+                            return { ok: true };
+                        } catch (err) {
+                            return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                        }
+                    })()
+                """
 
-            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_options_script, _after_image_options))
+                def _after_close_image_options(close_result):
+                    if not isinstance(close_result, dict) or not close_result.get("ok"):
+                        self._append_log(
+                            f"WARNING: Manual image variant {variant}: close options step returned {close_result!r}; continuing to prompt entry."
+                        )
+                    else:
+                        self._append_log(
+                            f"Manual image variant {variant}: options menu closed; waiting {manual_action_delay_ms / 1000:.1f}s before prompt entry."
+                        )
+                    QTimer.singleShot(manual_action_delay_ms, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
 
-        submit_delay_ms = 2000
+                QTimer.singleShot(
+                    manual_action_delay_ms,
+                    lambda: self.browser.page().runJavaScript(close_image_options_script, _after_close_image_options),
+                )
+
+            QTimer.singleShot(manual_action_delay_ms, lambda: self.browser.page().runJavaScript(set_image_options_script, _after_image_options))
+
+        submit_delay_ms = manual_action_delay_ms
 
         def _after_populate(result):
             if result in (None, ""):
@@ -6344,6 +6376,7 @@ class MainWindow(QMainWindow):
             return
 
         prompt = self.pending_manual_image_prompt or ""
+        poll_action_delay_ms = 2000
         if not self.manual_image_pick_clicked:
             phase = "pick"
         elif not self.manual_image_video_mode_selected:
@@ -6355,7 +6388,7 @@ class MainWindow(QMainWindow):
                 const prompt = {prompt!r};
                 const phase = {phase!r};
                 const submitToken = {self.manual_image_submit_token};
-                const ACTION_DELAY_MS = 200;
+                const ACTION_DELAY_MS = 2000;
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
@@ -6559,7 +6592,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_pick_retry_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(1000, self._poll_for_manual_image)
+                    QTimer.singleShot(2000, self._poll_for_manual_image)
                     return
 
                 if status == "video-mode-selected":
@@ -6574,7 +6607,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    QTimer.singleShot(2000, self._poll_for_manual_image)
                     return
 
                 if status in ("video-submit-clicked", "video-submit-already-clicked"):
@@ -6594,7 +6627,13 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.pending_manual_download_type = "video"
-                    self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                    self._append_log(
+                        f"Variant {current_variant}: waiting {poll_action_delay_ms / 1000:.1f}s before starting download polling."
+                    )
+                    QTimer.singleShot(
+                        poll_action_delay_ms,
+                        lambda: self._trigger_browser_video_download(current_variant, allow_make_video_click=False),
+                    )
                     return
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
@@ -6613,7 +6652,7 @@ class MainWindow(QMainWindow):
                             self.manual_image_pick_retry_count = 0
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            QTimer.singleShot(2000, self._poll_for_manual_image)
                             return
                         self._append_log(
                             "WARNING: Variant "
@@ -6624,7 +6663,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
                     )
-                    QTimer.singleShot(3000, self._poll_for_manual_image)
+                    QTimer.singleShot(2000, self._poll_for_manual_image)
 
                 if status == "callback-empty":
                     pick_ready_probe_script = """
@@ -6670,7 +6709,7 @@ class MainWindow(QMainWindow):
                             self.manual_image_pick_retry_count = 0
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            QTimer.singleShot(2000, self._poll_for_manual_image)
                             return
                         _queue_pick_retry(status)
 
@@ -6693,7 +6732,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Variant {current_variant}: waiting for video mode selection ({status}); retrying..."
                 )
-                QTimer.singleShot(2500, self._poll_for_manual_image)
+                QTimer.singleShot(2000, self._poll_for_manual_image)
                 return
 
             self.manual_image_submit_retry_count += 1
@@ -6706,13 +6745,19 @@ class MainWindow(QMainWindow):
                 self.manual_image_video_submit_sent = True
                 self.manual_image_submit_retry_count = 0
                 self.pending_manual_download_type = "video"
-                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                self._append_log(
+                    f"Variant {current_variant}: waiting {poll_action_delay_ms / 1000:.1f}s before starting download polling."
+                )
+                QTimer.singleShot(
+                    poll_action_delay_ms,
+                    lambda: self._trigger_browser_video_download(current_variant, allow_make_video_click=False),
+                )
                 return
 
             self._append_log(
                 f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying..."
             )
-            QTimer.singleShot(3000, self._poll_for_manual_image)
+            QTimer.singleShot(2000, self._poll_for_manual_image)
 
         self.browser.page().runJavaScript(script, _after_poll)
 
