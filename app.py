@@ -6951,6 +6951,8 @@ class MainWindow(QMainWindow):
                     };
 
                     const settingsCandidates = [
+                        ...document.querySelectorAll("button[aria-label='Video Options']"),
+                        ...document.querySelectorAll("button[aria-label*='video options' i]"),
                         ...document.querySelectorAll("#model-select-trigger"),
                         ...document.querySelectorAll("button[aria-label='Model select']"),
                         ...document.querySelectorAll("button[aria-label*='model select' i]"),
@@ -6965,6 +6967,8 @@ class MainWindow(QMainWindow):
                         const txt = (el.textContent || "").trim();
                         const id = (el.id || "").trim();
                         return id === "model-select-trigger"
+                            || /video\s*options?/i.test(aria)
+                            || /video\s*options?/i.test(txt)
                             || /model\s*select/i.test(aria)
                             || /settings?|options?/i.test(aria)
                             || /settings?|options?/i.test(txt);
