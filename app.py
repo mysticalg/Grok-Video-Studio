@@ -5872,6 +5872,8 @@ class MainWindow(QMainWindow):
         self.manual_image_submit_token += 1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
+        selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
+        selected_duration_label = f"{int(self.video_duration.currentData() or 10)}s"
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
 
         populate_script = rf"""
@@ -5999,6 +6001,8 @@ class MainWindow(QMainWindow):
         set_image_options_script = r"""
             (() => {
                 try {
+                    const desiredQuality = "{selected_quality_label}";
+                    const desiredDuration = "{selected_duration_label}";
                     const desiredAspect = "{selected_aspect_ratio}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
@@ -6059,6 +6063,16 @@ class MainWindow(QMainWindow):
                     };
                     const imagePatterns = [/(^|\s)image(\s|$)/i, /generate multiple images/i];
                     const desiredAspectPatterns = aspectPatterns[desiredAspect] || aspectPatterns["16:9"];
+                    const qualityPatterns = {
+                        "480p": [/^480p$/i, /480\s*p/i, /854\s*[x×]\s*480/i],
+                        "720p": [/^720p$/i, /720\s*p/i, /1280\s*[x×]\s*720/i],
+                    };
+                    const durationPatterns = {
+                        "6s": [/^6s$/i, /^6\s*s(ec(onds?)?)?$/i],
+                        "10s": [/^10s$/i, /^10\s*s(ec(onds?)?)?$/i],
+                    };
+                    const desiredQualityPatterns = qualityPatterns[desiredQuality] || qualityPatterns["720p"];
+                    const desiredDurationPatterns = durationPatterns[desiredDuration] || durationPatterns["10s"];
 
                     const optionsRequested = [];
                     const optionsApplied = [];
@@ -6107,11 +6121,19 @@ class MainWindow(QMainWindow):
                     };
 
                     applyOption("image", imagePatterns);
+                    applyOption(desiredQuality, desiredQualityPatterns);
+                    applyOption(desiredDuration, desiredDurationPatterns);
                     applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
 
                     const missingOptions = [];
                     if (!(hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
                         missingOptions.push("image");
+                    }
+                    if (!(hasSelectedByText(desiredQualityPatterns, composer) || hasSelectedByText(desiredQualityPatterns))) {
+                        missingOptions.push(desiredQuality);
+                    }
+                    if (!(hasSelectedByText(desiredDurationPatterns, composer) || hasSelectedByText(desiredDurationPatterns))) {
+                        missingOptions.push(desiredDuration);
                     }
                     if (!(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
                         || hasSelectedByText(desiredAspectPatterns, composer)
@@ -6121,6 +6143,8 @@ class MainWindow(QMainWindow):
 
                     return {
                         ok: true,
+                        desiredQuality,
+                        desiredDuration,
                         desiredAspect,
                         optionsRequested,
                         optionsApplied,
@@ -6131,6 +6155,8 @@ class MainWindow(QMainWindow):
                 }
             })()
         """
+        set_image_options_script = set_image_options_script.replace('"{selected_quality_label}"', json.dumps(selected_quality_label))
+        set_image_options_script = set_image_options_script.replace('"{selected_duration_label}"', json.dumps(selected_duration_label))
         set_image_options_script = set_image_options_script.replace('"{selected_aspect_ratio}"', json.dumps(selected_aspect_ratio))
 
         submit_script = r"""
@@ -6264,7 +6290,7 @@ class MainWindow(QMainWindow):
                 f"(opened={result.get('optionsOpened') if isinstance(result, dict) else 'unknown'}, "
                 f"itemFound={result.get('imageItemFound') if isinstance(result, dict) else 'unknown'}, "
                 f"itemClicked={result.get('imageClicked') if isinstance(result, dict) else 'unknown'}); "
-                f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
+                f"applying options quality={selected_quality_label}, duration={selected_duration_label}, aspect={selected_aspect_ratio} next (attempt {attempts})."
             )
 
             def _after_image_options(options_result):
