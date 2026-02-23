@@ -2,7 +2,6 @@
 
 Desktop PySide6 app for generating AI videos, managing clips, previewing/stitching outputs, and publishing to social platforms with API + browser automation workflows.
 
-This repo now also includes an Android module under `android/` for packaging an installable mobile app artifact (`.apk`/`.aab`) suitable for Google Play deployment.
 
 ## Features
 
@@ -65,21 +64,6 @@ pip install -r requirements.txt
 ```bash
 python app.py
 ```
-
-## Android build (Google Play ready)
-
-Use the Android project in `android/` to build and sign installable artifacts.
-
-```bash
-cd android
-gradle assembleDebug
-gradle bundleRelease
-```
-
-See full Android packaging/signing/deployment steps in [`android/README.md`](android/README.md).
-
-Set the Android app entry URL (for full feature-parity web deployment) with `APP_ENTRY_URL` in `android/app/build.gradle.kts`.
-
 
 ## Automation Chrome + CDP + Relay Extension architecture
 
