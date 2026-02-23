@@ -6795,13 +6795,116 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         action_delay_ms = 1000
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
-        selected_duration_label = f"{int(self.video_duration.currentData() or 10)}s"
+        selected_duration_seconds = int(self.video_duration.currentData() or 10)
+        selected_duration_label = f"{selected_duration_seconds}s"
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+        selected_resolution_value = str(self.video_resolution.currentData() or "1280x720")
+        resolution_name_map = {
+            "854x480": "480p",
+            "1280x720": "720p",
+        }
+        selected_resolution_name = resolution_name_map.get(selected_resolution_value, "720p")
         self._append_log(
             f"Populating prompt for manual variant {variant} in browser, setting video options "
             f"({selected_quality_label}, {selected_aspect_ratio}), then force submitting with {action_delay_ms}ms delays between each action. "
             f"Remaining repeats after this: {remaining_count}."
         )
+
+        post_create_video_script = r"""
+            (async () => {
+                try {
+                    const basePrompt = "__PROMPT__";
+                    const aspectRatio = "__ASPECT__";
+                    const videoLength = __SECONDS__;
+                    const resolutionName = "__RESOLUTION__";
+                    const modelName = "grok-3";
+
+                    const normalizePrompt = (value) => {
+                        const txt = String(value || "").trim();
+                        if (!txt) return txt;
+                        return /--mode=custom\b/i.test(txt) ? txt : `${txt} --mode=custom`;
+                    };
+
+                    const extractParentPostId = () => {
+                        const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
+                        const hrefSources = [
+                            window.location.href,
+                            ...Array.from(document.querySelectorAll("a[href], button[data-post-id], [data-parent-post-id]"))
+                                .map((el) => el.getAttribute("href") || el.getAttribute("data-post-id") || el.getAttribute("data-parent-post-id") || ""),
+                        ];
+                        for (const source of hrefSources) {
+                            const matches = String(source || "").match(uuidRegex);
+                            if (matches && matches.length) return matches[matches.length - 1];
+                        }
+                        return "";
+                    };
+
+                    const payload = {
+                        temporary: true,
+                        modelName,
+                        message: normalizePrompt(basePrompt),
+                        toolOverrides: { videoGen: true },
+                        enableSideBySide: true,
+                    };
+
+                    const parentPostId = extractParentPostId();
+                    payload.responseMetadata = {
+                        experiments: [],
+                        modelConfigOverride: {
+                            modelMap: {
+                                videoGenModelConfig: {
+                                    aspectRatio,
+                                    videoLength,
+                                    resolutionName,
+                                },
+                            },
+                        },
+                    };
+                    if (parentPostId) {
+                        payload.responseMetadata.modelConfigOverride.modelMap.videoGenModelConfig.parentPostId = parentPostId;
+                    }
+
+                    const response = await fetch("https://grok.com/rest/app-chat/conversations/new", {
+                        method: "POST",
+                        credentials: "include",
+                        headers: {
+                            "content-type": "application/json",
+                            "accept": "application/json, text/plain, */*",
+                        },
+                        body: JSON.stringify(payload),
+                    });
+
+                    const responseText = await response.text();
+                    let responseJson = null;
+                    try {
+                        responseJson = responseText ? JSON.parse(responseText) : null;
+                    } catch (_) {
+                        responseJson = null;
+                    }
+
+                    return {
+                        ok: response.ok,
+                        status: response.status,
+                        usedDirectPost: true,
+                        parentPostId,
+                        payloadSummary: { aspectRatio, videoLength, resolutionName },
+                        responseSnippet: responseText.slice(0, 400),
+                        conversationId: responseJson && (responseJson.conversationId || responseJson.id || ""),
+                        error: response.ok ? "" : `HTTP ${response.status}`,
+                    };
+                } catch (err) {
+                    return {
+                        ok: false,
+                        usedDirectPost: true,
+                        error: String(err && err.stack ? err.stack : err),
+                    };
+                }
+            })()
+        """
+        post_create_video_script = post_create_video_script.replace("__PROMPT__", json.dumps(prompt))
+        post_create_video_script = post_create_video_script.replace("__ASPECT__", json.dumps(selected_aspect_ratio))
+        post_create_video_script = post_create_video_script.replace("__SECONDS__", str(selected_duration_seconds))
+        post_create_video_script = post_create_video_script.replace("__RESOLUTION__", json.dumps(selected_resolution_name))
 
         escaped_prompt = repr(prompt)
         script = rf"""
@@ -7507,7 +7610,24 @@ class MainWindow(QMainWindow):
                 lambda: self.browser.page().runJavaScript(verify_prompt_script, _after_verify_prompt),
             )
 
-        self.browser.page().runJavaScript(script, after_submit)
+        def _after_direct_post(post_result):
+            if isinstance(post_result, dict) and post_result.get("ok"):
+                payload_summary = post_result.get("payloadSummary") or {}
+                self._append_log(
+                    f"Submitted manual variant {variant} via direct POST "
+                    f"(aspect={payload_summary.get('aspectRatio')}, duration={payload_summary.get('videoLength')}s, "
+                    f"resolution={payload_summary.get('resolutionName')})."
+                )
+                self._trigger_browser_video_download(variant)
+                return
+
+            post_error = post_result.get("error") if isinstance(post_result, dict) else post_result
+            self._append_log(
+                f"WARNING: Direct POST submit failed for variant {variant}: {post_error!r}. Falling back to browser UI automation."
+            )
+            self.browser.page().runJavaScript(script, after_submit)
+
+        self.browser.page().runJavaScript(post_create_video_script, _after_direct_post)
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
