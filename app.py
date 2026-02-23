@@ -6198,7 +6198,7 @@ class MainWindow(QMainWindow):
         post_create_image_script = r"""
             (async () => {
                 try {
-                    const basePrompt = "__PROMPT__";
+                    const basePrompt = __PROMPT_JSON__;
                     const modelName = "grok-3";
                     const aspectRatio = "__ASPECT__";
                     const videoLength = __SECONDS__;
@@ -6206,7 +6206,7 @@ class MainWindow(QMainWindow):
                     const payload = {
                         temporary: true,
                         modelName,
-                        message: String(basePrompt || "").trim(),
+                        message: (/--mode=/i.test(String(basePrompt || "").trim()) ? String(basePrompt || "").trim() : `${String(basePrompt || "").trim()} --mode=custom`),
                         enableSideBySide: true,
                         responseMetadata: {
                             experiments: [],
@@ -6250,14 +6250,14 @@ class MainWindow(QMainWindow):
                 }
             })()
         """
-        post_create_image_script = post_create_image_script.replace("__PROMPT__", json.dumps(prompt))
+        post_create_image_script = post_create_image_script.replace("__PROMPT_JSON__", json.dumps(prompt))
         post_create_image_script = post_create_image_script.replace("__ASPECT__", json.dumps(selected_aspect_ratio))
         post_create_image_script = post_create_image_script.replace("__SECONDS__", str(selected_duration_seconds))
         post_create_image_script = post_create_image_script.replace("__RESOLUTION__", json.dumps(selected_resolution_name))
         post_image_payload_preview = {
             "temporary": True,
             "modelName": "grok-3",
-            "message": prompt,
+            "message": prompt if "--mode=" in prompt else f"{prompt} --mode=custom",
             "enableSideBySide": True,
             "responseMetadata": {
                 "modelConfigOverride": {
@@ -6920,7 +6920,7 @@ class MainWindow(QMainWindow):
         post_create_video_script = r"""
             (async () => {
                 try {
-                    const basePrompt = "__PROMPT__";
+                    const basePrompt = __PROMPT_JSON__;
                     const aspectRatio = "__ASPECT__";
                     const videoLength = __SECONDS__;
                     const resolutionName = "__RESOLUTION__";
@@ -6929,7 +6929,7 @@ class MainWindow(QMainWindow):
                     const normalizePrompt = (value) => {
                         const txt = String(value || "").trim();
                         if (!txt) return txt;
-                        return /--mode=custom\b/i.test(txt) ? txt : `${txt} --mode=custom`;
+                        return /--mode=/i.test(txt) ? txt : `${txt} --mode=custom`;
                     };
 
                     const extractParentPostId = () => {
@@ -7008,7 +7008,7 @@ class MainWindow(QMainWindow):
                 }
             })()
         """
-        post_create_video_script = post_create_video_script.replace("__PROMPT__", json.dumps(prompt))
+        post_create_video_script = post_create_video_script.replace("__PROMPT_JSON__", json.dumps(prompt))
         post_create_video_script = post_create_video_script.replace("__ASPECT__", json.dumps(selected_aspect_ratio))
         post_create_video_script = post_create_video_script.replace("__SECONDS__", str(selected_duration_seconds))
         post_create_video_script = post_create_video_script.replace("__RESOLUTION__", json.dumps(selected_resolution_name))
@@ -7016,7 +7016,7 @@ class MainWindow(QMainWindow):
         post_payload_preview = {
             "temporary": True,
             "modelName": "grok-3",
-            "message": prompt if "--mode=custom" in prompt else f"{prompt} --mode=custom",
+            "message": prompt if "--mode=" in prompt else f"{prompt} --mode=custom",
             "toolOverrides": {"videoGen": True},
             "enableSideBySide": True,
             "responseMetadata": {
