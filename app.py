@@ -6906,6 +6906,29 @@ class MainWindow(QMainWindow):
         post_create_video_script = post_create_video_script.replace("__SECONDS__", str(selected_duration_seconds))
         post_create_video_script = post_create_video_script.replace("__RESOLUTION__", json.dumps(selected_resolution_name))
 
+        post_payload_preview = {
+            "temporary": True,
+            "modelName": "grok-3",
+            "message": prompt if "--mode=custom" in prompt else f"{prompt} --mode=custom",
+            "toolOverrides": {"videoGen": True},
+            "enableSideBySide": True,
+            "responseMetadata": {
+                "modelConfigOverride": {
+                    "modelMap": {
+                        "videoGenModelConfig": {
+                            "aspectRatio": selected_aspect_ratio,
+                            "videoLength": selected_duration_seconds,
+                            "resolutionName": selected_resolution_name,
+                        }
+                    }
+                }
+            },
+        }
+        self._append_log(
+            f"Variant {variant}: attempting direct POST to https://grok.com/rest/app-chat/conversations/new "
+            f"with payload {json.dumps(post_payload_preview, ensure_ascii=False)}"
+        )
+
         escaped_prompt = repr(prompt)
         script = rf"""
             (() => {{
@@ -7611,21 +7634,27 @@ class MainWindow(QMainWindow):
             )
 
         def _after_direct_post(post_result):
+            post_status = post_result.get("status") if isinstance(post_result, dict) else "unknown"
+            response_snippet = post_result.get("responseSnippet") if isinstance(post_result, dict) else ""
+            self._append_log(
+                f"Variant {variant}: /conversations/new response status={post_status}; body snippet={response_snippet!r}"
+            )
             if isinstance(post_result, dict) and post_result.get("ok"):
                 payload_summary = post_result.get("payloadSummary") or {}
                 self._append_log(
                     f"Submitted manual variant {variant} via direct POST "
                     f"(aspect={payload_summary.get('aspectRatio')}, duration={payload_summary.get('videoLength')}s, "
-                    f"resolution={payload_summary.get('resolutionName')})."
+                    f"resolution={payload_summary.get('resolutionName')}). Waiting 2.0s before continuing."
                 )
-                self._trigger_browser_video_download(variant)
+                QTimer.singleShot(2000, lambda: self._trigger_browser_video_download(variant))
                 return
 
             post_error = post_result.get("error") if isinstance(post_result, dict) else post_result
             self._append_log(
-                f"WARNING: Direct POST submit failed for variant {variant}: {post_error!r}. Falling back to browser UI automation."
+                f"WARNING: Direct POST submit failed for variant {variant}: {post_error!r}. "
+                "Waiting 2.0s before falling back to browser UI automation."
             )
-            self.browser.page().runJavaScript(script, after_submit)
+            QTimer.singleShot(2000, lambda: self.browser.page().runJavaScript(script, after_submit))
 
         self.browser.page().runJavaScript(post_create_video_script, _after_direct_post)
 
