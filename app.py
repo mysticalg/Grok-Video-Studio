@@ -5902,9 +5902,6 @@ class MainWindow(QMainWindow):
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
-        selected_duration_seconds = int(self.video_duration.currentData() or 10)
-        selected_resolution_value = str(self.video_resolution.currentData() or "1280x720")
-        selected_resolution_name = {"854x480": "480p", "1280x720": "720p"}.get(selected_resolution_value, "720p")
 
         populate_script = rf"""
             (() => {{
@@ -6224,87 +6221,6 @@ class MainWindow(QMainWindow):
             })()
         """
 
-        post_create_image_script = r"""
-            (async () => {
-                try {
-                    const basePrompt = __PROMPT_JSON__;
-                    const modelName = "grok-3";
-                    const aspectRatio = __ASPECT_JSON__;
-                    const videoLength = __SECONDS__;
-                    const resolutionName = __RESOLUTION_JSON__;
-                    const payload = {
-                        temporary: true,
-                        modelName,
-                        message: (/--mode=/i.test(String(basePrompt || "").trim()) ? String(basePrompt || "").trim() : `${String(basePrompt || "").trim()} --mode=custom`),
-                        toolOverrides: { videoGen: true },
-                        enableSideBySide: true,
-                        responseMetadata: {
-                            experiments: [],
-                            modelConfigOverride: {
-                                modelMap: {
-                                    videoGenModelConfig: {
-                                        aspectRatio,
-                                        videoLength,
-                                        isVideoEdit: false,
-                                        resolutionName,
-                                    },
-                                },
-                            },
-                        },
-                    };
-
-                    const response = await fetch("https://grok.com/rest/app-chat/conversations/new", {
-                        method: "POST",
-                        credentials: "include",
-                        headers: {
-                            "content-type": "application/json",
-                            "accept": "application/json, text/plain, */*",
-                        },
-                        body: JSON.stringify(payload),
-                    });
-
-                    const responseText = await response.text();
-                    return {
-                        ok: response.ok,
-                        status: response.status,
-                        payloadSummary: { aspectRatio, videoLength, resolutionName },
-                        responseSnippet: responseText.slice(0, 400),
-                        error: response.ok ? "" : `HTTP ${response.status}`,
-                    };
-                } catch (err) {
-                    return {
-                        ok: false,
-                        status: 0,
-                        responseSnippet: "",
-                        error: String(err && err.stack ? err.stack : err),
-                    };
-                }
-            })()
-        """
-        post_create_image_script = post_create_image_script.replace("__PROMPT_JSON__", json.dumps(prompt))
-        post_create_image_script = post_create_image_script.replace("__ASPECT_JSON__", json.dumps(selected_aspect_ratio))
-        post_create_image_script = post_create_image_script.replace("__SECONDS__", str(selected_duration_seconds))
-        post_create_image_script = post_create_image_script.replace("__RESOLUTION_JSON__", json.dumps(selected_resolution_name))
-        post_image_payload_preview = {
-            "temporary": True,
-            "modelName": "grok-3",
-            "message": prompt if "--mode=" in prompt else f"{prompt} --mode=custom",
-            "toolOverrides": {"videoGen": True},
-            "enableSideBySide": True,
-            "responseMetadata": {
-                "modelConfigOverride": {
-                    "modelMap": {
-                        "videoGenModelConfig": {
-                            "aspectRatio": selected_aspect_ratio,
-                            "videoLength": selected_duration_seconds,
-                            "isVideoEdit": False,
-                            "resolutionName": selected_resolution_name,
-                        }
-                    }
-                }
-            },
-        }
-
         def _retry_variant(reason: str) -> None:
             self._append_log(f"WARNING: Manual image variant {variant} attempt {attempts} failed: {reason}")
             if attempts >= 4:
@@ -6322,36 +6238,9 @@ class MainWindow(QMainWindow):
             nonlocal submit_attempts
             submit_attempts += 1
             self._append_log(
-                f"Manual image variant {variant}: attempting direct POST submit to https://grok.com/rest/app-chat/conversations/new "
-                f"({submit_attempts}/12) with payload {json.dumps(post_image_payload_preview, ensure_ascii=False)}"
+                f"Manual image variant {variant}: attempting submit click ({submit_attempts}/12)."
             )
-            self.browser.page().runJavaScript(post_create_image_script, _after_direct_post_submit)
-
-        def _after_direct_post_submit(result):
-            post_status = result.get("status") if isinstance(result, dict) else "unknown"
-            response_snippet = result.get("responseSnippet") if isinstance(result, dict) else ""
-            self._append_log(
-                f"Manual image variant {variant}: /conversations/new response status={post_status}; body snippet={response_snippet!r}"
-            )
-
-            if isinstance(result, dict) and result.get("ok"):
-                payload_summary = result.get("payloadSummary") if isinstance(result, dict) else {}
-                self._append_log(
-                    f"Submitted manual image variant {variant} via direct POST "
-                    f"(aspect={payload_summary.get('aspectRatio') if isinstance(payload_summary, dict) else 'unknown'}, "
-                    f"duration={payload_summary.get('videoLength') if isinstance(payload_summary, dict) else 'unknown'}s, "
-                    f"resolution={payload_summary.get('resolutionName') if isinstance(payload_summary, dict) else 'unknown'}). "
-                    "Waiting 2.0s before continuing to image polling."
-                )
-                QTimer.singleShot(2000, lambda: QTimer.singleShot(7000, self._poll_for_manual_image))
-                return
-
-            post_error = result.get("error") if isinstance(result, dict) else result
-            self._append_log(
-                f"WARNING: Manual image variant {variant}: direct POST submit failed: {post_error!r}; "
-                "waiting 2.0s before fallback submit click."
-            )
-            QTimer.singleShot(2000, lambda: self.browser.page().runJavaScript(submit_script, _after_submit))
+            self.browser.page().runJavaScript(submit_script, _after_submit)
 
         def _after_submit(result):
             if isinstance(result, dict) and result.get("ok"):
@@ -6950,127 +6839,6 @@ class MainWindow(QMainWindow):
             f"Remaining repeats after this: {remaining_count}."
         )
 
-        post_create_video_script = r"""
-            (async () => {
-                try {
-                    const basePrompt = __PROMPT_JSON__;
-                    const aspectRatio = __ASPECT_JSON__;
-                    const videoLength = __SECONDS__;
-                    const resolutionName = __RESOLUTION_JSON__;
-                    const modelName = "grok-3";
-
-                    const normalizePrompt = (value) => {
-                        const txt = String(value || "").trim();
-                        if (!txt) return txt;
-                        return /--mode=/i.test(txt) ? txt : `${txt} --mode=custom`;
-                    };
-
-                    const extractParentPostId = () => {
-                        const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
-                        const hrefSources = [
-                            window.location.href,
-                            ...Array.from(document.querySelectorAll("a[href], button[data-post-id], [data-parent-post-id]"))
-                                .map((el) => el.getAttribute("href") || el.getAttribute("data-post-id") || el.getAttribute("data-parent-post-id") || ""),
-                        ];
-                        for (const source of hrefSources) {
-                            const matches = String(source || "").match(uuidRegex);
-                            if (matches && matches.length) return matches[matches.length - 1];
-                        }
-                        return "";
-                    };
-
-                    const payload = {
-                        temporary: true,
-                        modelName,
-                        message: normalizePrompt(basePrompt),
-                        toolOverrides: { videoGen: true },
-                        enableSideBySide: true,
-                    };
-
-                    const parentPostId = extractParentPostId();
-                    payload.responseMetadata = {
-                        experiments: [],
-                        modelConfigOverride: {
-                            modelMap: {
-                                videoGenModelConfig: {
-                                    aspectRatio,
-                                    videoLength,
-                                    isVideoEdit: false,
-                                    resolutionName,
-                                },
-                            },
-                        },
-                    };
-                    if (parentPostId) {
-                        payload.responseMetadata.modelConfigOverride.modelMap.videoGenModelConfig.parentPostId = parentPostId;
-                    }
-
-                    const response = await fetch("https://grok.com/rest/app-chat/conversations/new", {
-                        method: "POST",
-                        credentials: "include",
-                        headers: {
-                            "content-type": "application/json",
-                            "accept": "application/json, text/plain, */*",
-                        },
-                        body: JSON.stringify(payload),
-                    });
-
-                    const responseText = await response.text();
-                    let responseJson = null;
-                    try {
-                        responseJson = responseText ? JSON.parse(responseText) : null;
-                    } catch (_) {
-                        responseJson = null;
-                    }
-
-                    return {
-                        ok: response.ok,
-                        status: response.status,
-                        usedDirectPost: true,
-                        parentPostId,
-                        payloadSummary: { aspectRatio, videoLength, resolutionName },
-                        responseSnippet: responseText.slice(0, 400),
-                        conversationId: responseJson && (responseJson.conversationId || responseJson.id || ""),
-                        error: response.ok ? "" : `HTTP ${response.status}`,
-                    };
-                } catch (err) {
-                    return {
-                        ok: false,
-                        usedDirectPost: true,
-                        error: String(err && err.stack ? err.stack : err),
-                    };
-                }
-            })()
-        """
-        post_create_video_script = post_create_video_script.replace("__PROMPT_JSON__", json.dumps(prompt))
-        post_create_video_script = post_create_video_script.replace("__ASPECT_JSON__", json.dumps(selected_aspect_ratio))
-        post_create_video_script = post_create_video_script.replace("__SECONDS__", str(selected_duration_seconds))
-        post_create_video_script = post_create_video_script.replace("__RESOLUTION_JSON__", json.dumps(selected_resolution_name))
-
-        post_payload_preview = {
-            "temporary": True,
-            "modelName": "grok-3",
-            "message": prompt if "--mode=" in prompt else f"{prompt} --mode=custom",
-            "toolOverrides": {"videoGen": True},
-            "enableSideBySide": True,
-            "responseMetadata": {
-                "modelConfigOverride": {
-                    "modelMap": {
-                        "videoGenModelConfig": {
-                            "aspectRatio": selected_aspect_ratio,
-                            "videoLength": selected_duration_seconds,
-                            "isVideoEdit": False,
-                            "resolutionName": selected_resolution_name,
-                        }
-                    }
-                }
-            },
-        }
-        self._append_log(
-            f"Variant {variant}: attempting direct POST to https://grok.com/rest/app-chat/conversations/new "
-            f"with payload {json.dumps(post_payload_preview, ensure_ascii=False)}"
-        )
-
         escaped_prompt = repr(prompt)
         script = rf"""
             (() => {{
@@ -7172,11 +6940,19 @@ class MainWindow(QMainWindow):
                     };
 
                     const settingsCandidates = [
-                        ...document.querySelectorAll("button[aria-label='Settings'][id='radix-:rg:']"),
-                        ...document.querySelectorAll("button[aria-haspopup='menu'][aria-label='Settings'][id='radix-:rg:']"),
-                        ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings'][id='radix-:rg:']")
+                        ...document.querySelectorAll("button[aria-label='Settings']"),
+                        ...document.querySelectorAll("button[aria-label*='setting' i]"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu']"),
+                        ...document.querySelectorAll("button[id^='radix-']"),
+                        ...document.querySelectorAll("button")
                     ].filter((el, index, arr) => arr.indexOf(el) === index);
-                    const settingsButton = settingsCandidates.find((el) => isVisible(el) && !el.disabled) || null;
+                    const settingsButton = settingsCandidates.find((el) => {
+                        if (!isVisible(el) || el.disabled) return false;
+                        const aria = (el.getAttribute("aria-label") || "").trim();
+                        const txt = (el.textContent || "").trim();
+                        const hasCog = !!el.querySelector("svg");
+                        return /settings?|options?/i.test(aria) || /settings?|options?/i.test(txt) || hasCog;
+                    }) || null;
 
                     if (!settingsButton) {
                         return { ok: false, error: "Settings button not found", panelVisible: !!findOpenMenu() };
@@ -7775,30 +7551,7 @@ class MainWindow(QMainWindow):
                 lambda: self.browser.page().runJavaScript(verify_prompt_script, _after_verify_prompt),
             )
 
-        def _after_direct_post(post_result):
-            post_status = post_result.get("status") if isinstance(post_result, dict) else "unknown"
-            response_snippet = post_result.get("responseSnippet") if isinstance(post_result, dict) else ""
-            self._append_log(
-                f"Variant {variant}: /conversations/new response status={post_status}; body snippet={response_snippet!r}"
-            )
-            if isinstance(post_result, dict) and post_result.get("ok"):
-                payload_summary = post_result.get("payloadSummary") or {}
-                self._append_log(
-                    f"Submitted manual variant {variant} via direct POST "
-                    f"(aspect={payload_summary.get('aspectRatio')}, duration={payload_summary.get('videoLength')}s, "
-                    f"resolution={payload_summary.get('resolutionName')}). Waiting 2.0s before continuing."
-                )
-                QTimer.singleShot(2000, lambda: self._trigger_browser_video_download(variant))
-                return
-
-            post_error = post_result.get("error") if isinstance(post_result, dict) else post_result
-            self._append_log(
-                f"WARNING: Direct POST submit failed for variant {variant}: {post_error!r}. "
-                "Waiting 2.0s before falling back to browser UI automation."
-            )
-            QTimer.singleShot(2000, lambda: self.browser.page().runJavaScript(script, after_submit))
-
-        self.browser.page().runJavaScript(post_create_video_script, _after_direct_post)
+        self.browser.page().runJavaScript(script, after_submit)
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
