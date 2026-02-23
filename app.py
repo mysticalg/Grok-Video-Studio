@@ -5873,6 +5873,9 @@ class MainWindow(QMainWindow):
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+        selected_duration_seconds = int(self.video_duration.currentData() or 10)
+        selected_resolution_value = str(self.video_resolution.currentData() or "1280x720")
+        selected_resolution_name = {"854x480": "480p", "1280x720": "720p"}.get(selected_resolution_value, "720p")
 
         populate_script = rf"""
             (() => {{
@@ -6192,6 +6195,83 @@ class MainWindow(QMainWindow):
             })()
         """
 
+        post_create_image_script = r"""
+            (async () => {
+                try {
+                    const basePrompt = "__PROMPT__";
+                    const modelName = "grok-3";
+                    const aspectRatio = "__ASPECT__";
+                    const videoLength = __SECONDS__;
+                    const resolutionName = "__RESOLUTION__";
+                    const payload = {
+                        temporary: true,
+                        modelName,
+                        message: String(basePrompt || "").trim(),
+                        enableSideBySide: true,
+                        responseMetadata: {
+                            experiments: [],
+                            modelConfigOverride: {
+                                modelMap: {
+                                    videoGenModelConfig: {
+                                        aspectRatio,
+                                        videoLength,
+                                        resolutionName,
+                                    },
+                                },
+                            },
+                        },
+                    };
+
+                    const response = await fetch("https://grok.com/rest/app-chat/conversations/new", {
+                        method: "POST",
+                        credentials: "include",
+                        headers: {
+                            "content-type": "application/json",
+                            "accept": "application/json, text/plain, */*",
+                        },
+                        body: JSON.stringify(payload),
+                    });
+
+                    const responseText = await response.text();
+                    return {
+                        ok: response.ok,
+                        status: response.status,
+                        payloadSummary: { aspectRatio, videoLength, resolutionName },
+                        responseSnippet: responseText.slice(0, 400),
+                        error: response.ok ? "" : `HTTP ${response.status}`,
+                    };
+                } catch (err) {
+                    return {
+                        ok: false,
+                        status: 0,
+                        responseSnippet: "",
+                        error: String(err && err.stack ? err.stack : err),
+                    };
+                }
+            })()
+        """
+        post_create_image_script = post_create_image_script.replace("__PROMPT__", json.dumps(prompt))
+        post_create_image_script = post_create_image_script.replace("__ASPECT__", json.dumps(selected_aspect_ratio))
+        post_create_image_script = post_create_image_script.replace("__SECONDS__", str(selected_duration_seconds))
+        post_create_image_script = post_create_image_script.replace("__RESOLUTION__", json.dumps(selected_resolution_name))
+        post_image_payload_preview = {
+            "temporary": True,
+            "modelName": "grok-3",
+            "message": prompt,
+            "enableSideBySide": True,
+            "responseMetadata": {
+                "modelConfigOverride": {
+                    "modelMap": {
+                        "videoGenModelConfig": {
+                            "aspectRatio": selected_aspect_ratio,
+                            "videoLength": selected_duration_seconds,
+                            "resolutionName": selected_resolution_name,
+                        }
+                    }
+                }
+            },
+        }
+
         def _retry_variant(reason: str) -> None:
             self._append_log(f"WARNING: Manual image variant {variant} attempt {attempts} failed: {reason}")
             if attempts >= 4:
@@ -6209,9 +6289,36 @@ class MainWindow(QMainWindow):
             nonlocal submit_attempts
             submit_attempts += 1
             self._append_log(
-                f"Manual image variant {variant}: attempting submit click ({submit_attempts}/12)."
+                f"Manual image variant {variant}: attempting direct POST submit to https://grok.com/rest/app-chat/conversations/new "
+                f"({submit_attempts}/12) with payload {json.dumps(post_image_payload_preview, ensure_ascii=False)}"
             )
-            self.browser.page().runJavaScript(submit_script, _after_submit)
+            self.browser.page().runJavaScript(post_create_image_script, _after_direct_post_submit)
+
+        def _after_direct_post_submit(result):
+            post_status = result.get("status") if isinstance(result, dict) else "unknown"
+            response_snippet = result.get("responseSnippet") if isinstance(result, dict) else ""
+            self._append_log(
+                f"Manual image variant {variant}: /conversations/new response status={post_status}; body snippet={response_snippet!r}"
+            )
+
+            if isinstance(result, dict) and result.get("ok"):
+                payload_summary = result.get("payloadSummary") if isinstance(result, dict) else {}
+                self._append_log(
+                    f"Submitted manual image variant {variant} via direct POST "
+                    f"(aspect={payload_summary.get('aspectRatio') if isinstance(payload_summary, dict) else 'unknown'}, "
+                    f"duration={payload_summary.get('videoLength') if isinstance(payload_summary, dict) else 'unknown'}s, "
+                    f"resolution={payload_summary.get('resolutionName') if isinstance(payload_summary, dict) else 'unknown'}). "
+                    "Waiting 2.0s before continuing to image polling."
+                )
+                QTimer.singleShot(2000, lambda: QTimer.singleShot(7000, self._poll_for_manual_image))
+                return
+
+            post_error = result.get("error") if isinstance(result, dict) else result
+            self._append_log(
+                f"WARNING: Manual image variant {variant}: direct POST submit failed: {post_error!r}; "
+                "waiting 2.0s before fallback submit click."
+            )
+            QTimer.singleShot(2000, lambda: self.browser.page().runJavaScript(submit_script, _after_submit))
 
         def _after_submit(result):
             if isinstance(result, dict) and result.get("ok"):
