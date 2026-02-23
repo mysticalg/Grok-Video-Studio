@@ -2100,6 +2100,7 @@ class MainWindow(QMainWindow):
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
+        self.browser_devtools_windows: dict[QWebEngineView, QMainWindow] = {}
         self.social_upload_status_labels: dict[str, QLabel] = {}
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
@@ -2346,6 +2347,13 @@ class MainWindow(QMainWindow):
         self.browser_home_btn.setCheckable(True)
         self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
 
+        self.browser_devtools_btn = QPushButton("🛠 DevTools")
+        self.browser_devtools_btn.setToolTip("Open Chromium DevTools for the Grok browser tab.")
+        self.browser_devtools_btn.setCheckable(True)
+        self.browser_devtools_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.browser_devtools_btn, self.open_grok_browser_devtools)
+        )
+
         self.sora_generate_image_btn = QPushButton("🎬 Create New Video")
         self.sora_generate_image_btn.setToolTip("Build and paste a video prompt into the Sora browser tab.")
         self.sora_generate_image_btn.setCheckable(True)
@@ -2374,14 +2382,23 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.sora_browser_home_btn, self.show_sora_browser_page)
         )
 
+        self.sora_browser_devtools_btn = QPushButton("🛠 DevTools")
+        self.sora_browser_devtools_btn.setToolTip("Open Chromium DevTools for the Sora browser tab.")
+        self.sora_browser_devtools_btn.setCheckable(True)
+        self.sora_browser_devtools_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_browser_devtools_btn, self.open_sora_browser_devtools)
+        )
+
         self.generate_image_btn.setMaximumWidth(170)
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
         self.browser_home_btn.setMaximumWidth(170)
+        self.browser_devtools_btn.setMaximumWidth(170)
         self.sora_generate_image_btn.setMaximumWidth(170)
         self.sora_continue_frame_btn.setMaximumWidth(170)
         self.sora_continue_image_btn.setMaximumWidth(170)
         self.sora_browser_home_btn.setMaximumWidth(170)
+        self.sora_browser_devtools_btn.setMaximumWidth(170)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
@@ -2703,6 +2720,7 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
         grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
         grok_browser_controls.addWidget(self.browser_home_btn, 0, 3)
+        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 4)
 
         self.sora_browser_tab = QWidget()
         sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
@@ -2711,6 +2729,7 @@ class MainWindow(QMainWindow):
         sora_browser_controls.addWidget(self.sora_continue_frame_btn, 0, 1)
         sora_browser_controls.addWidget(self.sora_continue_image_btn, 0, 2)
         sora_browser_controls.addWidget(self.sora_browser_home_btn, 0, 3)
+        sora_browser_controls.addWidget(self.sora_browser_devtools_btn, 0, 4)
 
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
@@ -2756,6 +2775,16 @@ class MainWindow(QMainWindow):
         self.seedance_settings_tab_index = self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
         self.ai_flow_trainer_tab_index = self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
         self.browser_tabs.currentChanged.connect(self._on_browser_tab_changed)
+
+        self.devtools_action = QAction("Open Browser DevTools", self)
+        self.devtools_action.setShortcut("Ctrl+Shift+I")
+        self.devtools_action.triggered.connect(self.open_current_browser_devtools)
+        self.addAction(self.devtools_action)
+
+        self.devtools_action_f12 = QAction("Open Browser DevTools (F12)", self)
+        self.devtools_action_f12.setShortcut("F12")
+        self.devtools_action_f12.triggered.connect(self.open_current_browser_devtools)
+        self.addAction(self.devtools_action_f12)
 
         self.browser_tab_indices = {
             "Grok": self.grok_browser_tab_index,
@@ -6795,8 +6824,15 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         action_delay_ms = 1000
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
-        selected_duration_label = f"{int(self.video_duration.currentData() or 10)}s"
+        selected_duration_seconds = int(self.video_duration.currentData() or 10)
+        selected_duration_label = f"{selected_duration_seconds}s"
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+        selected_resolution_value = str(self.video_resolution.currentData() or "1280x720")
+        resolution_name_map = {
+            "854x480": "480p",
+            "1280x720": "720p",
+        }
+        selected_resolution_name = resolution_name_map.get(selected_resolution_value, "720p")
         self._append_log(
             f"Populating prompt for manual variant {variant} in browser, setting video options "
             f"({selected_quality_label}, {selected_aspect_ratio}), then force submitting with {action_delay_ms}ms delays between each action. "
@@ -6887,6 +6923,17 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                         return true;
                     };
+                    const emulateActivate = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = emulateClick(el);
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.click(); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        return fired;
+                    };
 
                     const isOptionsMenu = (el) => {
                         if (!el || !isVisible(el)) return false;
@@ -6904,20 +6951,45 @@ class MainWindow(QMainWindow):
                     };
 
                     const settingsCandidates = [
-                        ...document.querySelectorAll("button[aria-label='Settings'][id='radix-:rg:']"),
-                        ...document.querySelectorAll("button[aria-haspopup='menu'][aria-label='Settings'][id='radix-:rg:']"),
-                        ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings'][id='radix-:rg:']")
+                        ...document.querySelectorAll("button[aria-label='Video Options']"),
+                        ...document.querySelectorAll("button[aria-label*='video options' i]"),
+                        ...document.querySelectorAll("#model-select-trigger"),
+                        ...document.querySelectorAll("button[aria-label='Model select']"),
+                        ...document.querySelectorAll("button[aria-label*='model select' i]"),
+                        ...document.querySelectorAll("button[aria-label='Settings']"),
+                        ...document.querySelectorAll("button[aria-label*='setting' i]"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu']"),
+                        ...document.querySelectorAll("button[id^='radix-']")
                     ].filter((el, index, arr) => arr.indexOf(el) === index);
-                    const settingsButton = settingsCandidates.find((el) => isVisible(el) && !el.disabled) || null;
+                    const settingsButton = settingsCandidates.find((el) => {
+                        if (!isVisible(el) || el.disabled) return false;
+                        const aria = (el.getAttribute("aria-label") || "").trim();
+                        const txt = (el.textContent || "").trim();
+                        const id = (el.id || "").trim();
+                        return id === "model-select-trigger"
+                            || /video\s*options?/i.test(aria)
+                            || /video\s*options?/i.test(txt)
+                            || /model\s*select/i.test(aria)
+                            || /settings?|options?/i.test(aria)
+                            || /settings?|options?/i.test(txt);
+                    }) || null;
 
                     if (!settingsButton) {
-                        return { ok: false, error: "Settings button not found", panelVisible: !!findOpenMenu() };
+                        return { ok: false, error: "Settings/model-select button not found", panelVisible: !!findOpenMenu() };
                     }
 
                     const wasExpanded = settingsButton.getAttribute("aria-expanded") === "true";
                     const menuBefore = findOpenMenu();
-                    const opened = menuBefore ? true : emulateClick(settingsButton);
-                    const menu = findOpenMenu();
+                    let opened = !!menuBefore;
+                    if (!opened) {
+                        opened = emulateActivate(settingsButton);
+                    }
+                    let menu = findOpenMenu();
+                    if (!menu) {
+                        emulateActivate(settingsButton);
+                        menu = findOpenMenu();
+                    }
+
                     return {
                         ok: opened || !!menu,
                         opened,
@@ -9242,6 +9314,76 @@ class MainWindow(QMainWindow):
             self.browser = self.grok_browser_view
         elif index == getattr(self, "sora_browser_tab_index", -1):
             self.browser = self.sora_browser
+
+    def _browser_for_tab_index(self, index: int) -> QWebEngineView | None:
+        if index == getattr(self, "grok_browser_tab_index", -1):
+            return self.grok_browser_view
+        if index == getattr(self, "sora_browser_tab_index", -1):
+            return self.sora_browser
+        for platform_name, tab_index in self.social_upload_tab_indices.items():
+            if index == tab_index:
+                return self.social_upload_browsers.get(platform_name)
+        return None
+
+    def _open_devtools_for_browser(self, browser: QWebEngineView, label: str) -> None:
+        if browser is None or browser.page() is None:
+            self._append_log(f"{label}: browser page unavailable; cannot open DevTools.")
+            return
+
+        existing_window = self.browser_devtools_windows.get(browser)
+        if existing_window is not None:
+            existing_window.show()
+            existing_window.raise_()
+            existing_window.activateWindow()
+            self._append_log(f"{label}: DevTools brought to front.")
+            return
+
+        devtools_window = QMainWindow(self)
+        devtools_window.setWindowTitle(f"DevTools - {label}")
+        devtools_window.resize(1200, 800)
+
+        devtools_view = QWebEngineView(devtools_window)
+        devtools_page = QWebEnginePage(self.browser_profile, devtools_view)
+        devtools_view.setPage(devtools_page)
+        devtools_window.setCentralWidget(devtools_view)
+
+        browser.page().setDevToolsPage(devtools_page)
+
+        def _on_devtools_closed(event):
+            try:
+                browser.page().setDevToolsPage(None)
+            except Exception:
+                pass
+            self.browser_devtools_windows.pop(browser, None)
+            event.accept()
+
+        devtools_window.closeEvent = _on_devtools_closed  # type: ignore[method-assign]
+        self.browser_devtools_windows[browser] = devtools_window
+        devtools_window.show()
+        self._append_log(f"{label}: DevTools opened.")
+
+    def open_current_browser_devtools(self) -> None:
+        index = self.browser_tabs.currentIndex()
+        target_browser = self._browser_for_tab_index(index)
+        if target_browser is None:
+            self._append_log("Current tab does not host an embedded browser; DevTools not opened.")
+            return
+
+        if index == getattr(self, "grok_browser_tab_index", -1):
+            label = "Grok Browser"
+        elif index == getattr(self, "sora_browser_tab_index", -1):
+            label = "Sora Browser"
+        else:
+            label = next((name for name, tab_index in self.social_upload_tab_indices.items() if tab_index == index), "Browser")
+        self._open_devtools_for_browser(target_browser, label)
+
+    def open_grok_browser_devtools(self) -> None:
+        self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
+        self._open_devtools_for_browser(self.grok_browser_view, "Grok Browser")
+
+    def open_sora_browser_devtools(self) -> None:
+        self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
+        self._open_devtools_for_browser(self.sora_browser, "Sora Browser")
 
     def show_browser_page(self) -> None:
         if not self._is_browser_tab_enabled("Grok"):
