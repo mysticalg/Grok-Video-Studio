@@ -5964,9 +5964,31 @@ class MainWindow(QMainWindow):
 
                     const modelTrigger = modelTriggerCandidates.find((el) => isModelSelectTrigger(el)) || null;
 
-                    let optionsOpened = false;
-                    if (modelTrigger) {
+                    const isMenuOpenForTrigger = (trigger) => {
+                        if (!trigger) return false;
+                        const expanded = (trigger.getAttribute("aria-expanded") || "").toLowerCase() === "true";
+                        const controlsId = (trigger.getAttribute("aria-controls") || "").trim();
+                        const controlledVisible = controlsId
+                            ? (() => {
+                                const controlled = document.getElementById(controlsId);
+                                return !!(controlled && isVisible(controlled) && (controlled.getAttribute("data-state") || "").toLowerCase() !== "closed");
+                            })()
+                            : false;
+                        const anyOpenMenuVisible = !![...document.querySelectorAll("[role='menu'][data-state='open'], [data-radix-menu-content][data-state='open']")]
+                            .find((el) => isVisible(el));
+                        return expanded || controlledVisible || anyOpenMenuVisible;
+                    };
+
+                    let optionsOpened = isMenuOpenForTrigger(modelTrigger);
+                    if (!optionsOpened && modelTrigger) {
                         optionsOpened = emulateClick(modelTrigger);
+                        optionsOpened = isMenuOpenForTrigger(modelTrigger) || optionsOpened;
+                        if (!optionsOpened) {
+                            modelTrigger.focus();
+                            modelTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+                            modelTrigger.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
+                            optionsOpened = isMenuOpenForTrigger(modelTrigger);
+                        }
                     }
 
                     const menuItemSelectors = [
@@ -6325,8 +6347,20 @@ class MainWindow(QMainWindow):
                                 ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']")
                             ].find((el) => isVisible(el) && !el.disabled) || null;
                             if (!trigger) return { ok: false, reason: "trigger-missing" };
+                            const controlsId = (trigger.getAttribute("aria-controls") || "").trim();
+                            const isClosed = (trigger.getAttribute("aria-expanded") || "").toLowerCase() !== "true";
+                            if (isClosed) {
+                                return { ok: true, alreadyClosed: true, controlsId };
+                            }
                             trigger.click();
-                            return { ok: true };
+                            const expandedAfter = (trigger.getAttribute("aria-expanded") || "").toLowerCase() === "true";
+                            const controlledVisibleAfter = controlsId
+                                ? (() => {
+                                    const controlled = document.getElementById(controlsId);
+                                    return !!(controlled && isVisible(controlled) && (controlled.getAttribute("data-state") || "").toLowerCase() !== "closed");
+                                })()
+                                : false;
+                            return { ok: !expandedAfter && !controlledVisibleAfter, controlsId, expandedAfter, controlledVisibleAfter };
                         } catch (err) {
                             return { ok: false, error: String(err && err.stack ? err.stack : err) };
                         }
@@ -6493,9 +6527,31 @@ class MainWindow(QMainWindow):
 
                     const modelTrigger = modelTriggerCandidates.find((el) => isModelSelectTrigger(el)) || null;
 
-                    let optionsOpened = false;
-                    if (modelTrigger) {{
+                    const isMenuOpenForTrigger = (trigger) => {{
+                        if (!trigger) return false;
+                        const expanded = (trigger.getAttribute("aria-expanded") || "").toLowerCase() === "true";
+                        const controlsId = (trigger.getAttribute("aria-controls") || "").trim();
+                        const controlledVisible = controlsId
+                            ? (() => {{
+                                const controlled = document.getElementById(controlsId);
+                                return !!(controlled && isVisible(controlled) && (controlled.getAttribute("data-state") || "").toLowerCase() !== "closed");
+                            }})()
+                            : false;
+                        const anyOpenMenuVisible = !![...document.querySelectorAll("[role='menu'][data-state='open'], [data-radix-menu-content][data-state='open']")]
+                            .find((el) => isVisible(el));
+                        return expanded || controlledVisible || anyOpenMenuVisible;
+                    }};
+
+                    let optionsOpened = isMenuOpenForTrigger(modelTrigger);
+                    if (!optionsOpened && modelTrigger) {{
                         optionsOpened = emulateClick(modelTrigger);
+                        optionsOpened = isMenuOpenForTrigger(modelTrigger) || optionsOpened;
+                        if (!optionsOpened) {{
+                            modelTrigger.focus();
+                            modelTrigger.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", bubbles: true }}));
+                            modelTrigger.dispatchEvent(new KeyboardEvent("keyup", {{ key: "Enter", code: "Enter", bubbles: true }}));
+                            optionsOpened = isMenuOpenForTrigger(modelTrigger);
+                        }}
                     }}
                     await sleep(ACTION_DELAY_MS);
 
