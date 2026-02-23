@@ -6923,6 +6923,17 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                         return true;
                     };
+                    const emulateActivate = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = emulateClick(el);
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.click(); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        return fired;
+                    };
 
                     const isOptionsMenu = (el) => {
                         if (!el || !isVisible(el)) return false;
@@ -6940,28 +6951,41 @@ class MainWindow(QMainWindow):
                     };
 
                     const settingsCandidates = [
+                        ...document.querySelectorAll("#model-select-trigger"),
+                        ...document.querySelectorAll("button[aria-label='Model select']"),
+                        ...document.querySelectorAll("button[aria-label*='model select' i]"),
                         ...document.querySelectorAll("button[aria-label='Settings']"),
                         ...document.querySelectorAll("button[aria-label*='setting' i]"),
                         ...document.querySelectorAll("button[aria-haspopup='menu']"),
-                        ...document.querySelectorAll("button[id^='radix-']"),
-                        ...document.querySelectorAll("button")
+                        ...document.querySelectorAll("button[id^='radix-']")
                     ].filter((el, index, arr) => arr.indexOf(el) === index);
                     const settingsButton = settingsCandidates.find((el) => {
                         if (!isVisible(el) || el.disabled) return false;
                         const aria = (el.getAttribute("aria-label") || "").trim();
                         const txt = (el.textContent || "").trim();
-                        const hasCog = !!el.querySelector("svg");
-                        return /settings?|options?/i.test(aria) || /settings?|options?/i.test(txt) || hasCog;
+                        const id = (el.id || "").trim();
+                        return id === "model-select-trigger"
+                            || /model\s*select/i.test(aria)
+                            || /settings?|options?/i.test(aria)
+                            || /settings?|options?/i.test(txt);
                     }) || null;
 
                     if (!settingsButton) {
-                        return { ok: false, error: "Settings button not found", panelVisible: !!findOpenMenu() };
+                        return { ok: false, error: "Settings/model-select button not found", panelVisible: !!findOpenMenu() };
                     }
 
                     const wasExpanded = settingsButton.getAttribute("aria-expanded") === "true";
                     const menuBefore = findOpenMenu();
-                    const opened = menuBefore ? true : emulateClick(settingsButton);
-                    const menu = findOpenMenu();
+                    let opened = !!menuBefore;
+                    if (!opened) {
+                        opened = emulateActivate(settingsButton);
+                    }
+                    let menu = findOpenMenu();
+                    if (!menu) {
+                        emulateActivate(settingsButton);
+                        menu = findOpenMenu();
+                    }
+
                     return {
                         ok: opened || !!menu,
                         opened,
