@@ -6200,13 +6200,14 @@ class MainWindow(QMainWindow):
                 try {
                     const basePrompt = __PROMPT_JSON__;
                     const modelName = "grok-3";
-                    const aspectRatio = "__ASPECT__";
+                    const aspectRatio = __ASPECT_JSON__;
                     const videoLength = __SECONDS__;
-                    const resolutionName = "__RESOLUTION__";
+                    const resolutionName = __RESOLUTION_JSON__;
                     const payload = {
                         temporary: true,
                         modelName,
                         message: (/--mode=/i.test(String(basePrompt || "").trim()) ? String(basePrompt || "").trim() : `${String(basePrompt || "").trim()} --mode=custom`),
+                        toolOverrides: { videoGen: true },
                         enableSideBySide: true,
                         responseMetadata: {
                             experiments: [],
@@ -6215,6 +6216,7 @@ class MainWindow(QMainWindow):
                                     videoGenModelConfig: {
                                         aspectRatio,
                                         videoLength,
+                                        isVideoEdit: false,
                                         resolutionName,
                                     },
                                 },
@@ -6251,13 +6253,14 @@ class MainWindow(QMainWindow):
             })()
         """
         post_create_image_script = post_create_image_script.replace("__PROMPT_JSON__", json.dumps(prompt))
-        post_create_image_script = post_create_image_script.replace("__ASPECT__", json.dumps(selected_aspect_ratio))
+        post_create_image_script = post_create_image_script.replace("__ASPECT_JSON__", json.dumps(selected_aspect_ratio))
         post_create_image_script = post_create_image_script.replace("__SECONDS__", str(selected_duration_seconds))
-        post_create_image_script = post_create_image_script.replace("__RESOLUTION__", json.dumps(selected_resolution_name))
+        post_create_image_script = post_create_image_script.replace("__RESOLUTION_JSON__", json.dumps(selected_resolution_name))
         post_image_payload_preview = {
             "temporary": True,
             "modelName": "grok-3",
             "message": prompt if "--mode=" in prompt else f"{prompt} --mode=custom",
+            "toolOverrides": {"videoGen": True},
             "enableSideBySide": True,
             "responseMetadata": {
                 "modelConfigOverride": {
@@ -6265,6 +6268,7 @@ class MainWindow(QMainWindow):
                         "videoGenModelConfig": {
                             "aspectRatio": selected_aspect_ratio,
                             "videoLength": selected_duration_seconds,
+                            "isVideoEdit": False,
                             "resolutionName": selected_resolution_name,
                         }
                     }
@@ -6921,9 +6925,9 @@ class MainWindow(QMainWindow):
             (async () => {
                 try {
                     const basePrompt = __PROMPT_JSON__;
-                    const aspectRatio = "__ASPECT__";
+                    const aspectRatio = __ASPECT_JSON__;
                     const videoLength = __SECONDS__;
-                    const resolutionName = "__RESOLUTION__";
+                    const resolutionName = __RESOLUTION_JSON__;
                     const modelName = "grok-3";
 
                     const normalizePrompt = (value) => {
@@ -6962,6 +6966,7 @@ class MainWindow(QMainWindow):
                                 videoGenModelConfig: {
                                     aspectRatio,
                                     videoLength,
+                                    isVideoEdit: false,
                                     resolutionName,
                                 },
                             },
@@ -7009,9 +7014,9 @@ class MainWindow(QMainWindow):
             })()
         """
         post_create_video_script = post_create_video_script.replace("__PROMPT_JSON__", json.dumps(prompt))
-        post_create_video_script = post_create_video_script.replace("__ASPECT__", json.dumps(selected_aspect_ratio))
+        post_create_video_script = post_create_video_script.replace("__ASPECT_JSON__", json.dumps(selected_aspect_ratio))
         post_create_video_script = post_create_video_script.replace("__SECONDS__", str(selected_duration_seconds))
-        post_create_video_script = post_create_video_script.replace("__RESOLUTION__", json.dumps(selected_resolution_name))
+        post_create_video_script = post_create_video_script.replace("__RESOLUTION_JSON__", json.dumps(selected_resolution_name))
 
         post_payload_preview = {
             "temporary": True,
@@ -7025,6 +7030,7 @@ class MainWindow(QMainWindow):
                         "videoGenModelConfig": {
                             "aspectRatio": selected_aspect_ratio,
                             "videoLength": selected_duration_seconds,
+                            "isVideoEdit": False,
                             "resolutionName": selected_resolution_name,
                         }
                     }
