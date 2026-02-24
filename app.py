@@ -12140,6 +12140,11 @@ class MainWindow(QMainWindow):
 
                     let nextClicked = false;
                     let submitClicked = false;
+                    const actionAttempts = [];
+                    const logActionAttempt = (action, details) => {
+                        const detailText = String(details || "").trim();
+                        actionAttempts.push(detailText ? `${action} ${detailText}` : action);
+                    };
                     if (platform === "instagram" && fileReadySignal) {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']) || document;
                         const nextButton = pick(Array.from(instagramDialog.querySelectorAll('div[role="button"][tabindex="0"], button')).filter((node) => normalizedNodeText(node).includes("next"))) || findClickableByHints(["next"]);
@@ -12351,6 +12356,10 @@ class MainWindow(QMainWindow):
                             'button[aria-label*="save draft" i] div.Button__content',
                             'button[aria-label*="save draft" i]',
                         ]) || findClickableByHints(["save draft"], { excludeHints: ["discard"] });
+                        logActionAttempt(
+                            "tiktok.save_draft.lookup",
+                            `found=${Boolean(tiktokPostButton)} caption_ready=${captionReady} upload_ready=${Boolean(fileReadySignal || tiktokUploadCompletionSignal || tiktokNetworkReadySignal || tiktokSaveDraftUiReady)} delay_ok=${tiktokSubmitDelayElapsed} spacing_ok=${actionSpacingElapsed && tiktokSubmitSpacingElapsed}`,
+                        );
                         if (tiktokPostButton) {
                             const tiktokPostTarget = tiktokPostButton.closest('button, [role="button"]') || tiktokPostButton;
                             const targetText = normalizedNodeText(tiktokPostTarget);
@@ -12366,8 +12375,18 @@ class MainWindow(QMainWindow):
                             const tiktokUploadReadyForDraft = fileReadySignal || tiktokUploadCompletionSignal || tiktokNetworkReadySignal || tiktokSaveDraftUiReady;
                             const canSubmitNormally = captionReady && tiktokUploadReadyForDraft && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
                             const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled && tiktokUploadReadyForDraft;
+                            logActionAttempt(
+                                "tiktok.save_draft.evaluate",
+                                `enabled=${tiktokPostEnabled} discard=${isDiscardButton} aria_disabled=${ariaDisabled || 'unset'} data_disabled=${dataDisabled || 'unset'} native_disabled=${nativeDisabled} loading=${loading} can_submit=${Boolean(canSubmitNormally || canSubmitAfterGesture)}`,
+                            );
                             if (!tiktokState.submitClicked && tiktokPostEnabled && (canSubmitNormally || canSubmitAfterGesture)) {
-                                submitClicked = clickNodeSingle(tiktokPostTarget) || clickNodeOrAncestor(tiktokPostButton) || submitClicked;
+                                const directClick = clickNodeSingle(tiktokPostTarget);
+                                const ancestorClick = !directClick && clickNodeOrAncestor(tiktokPostButton);
+                                submitClicked = directClick || ancestorClick || submitClicked;
+                                logActionAttempt(
+                                    "tiktok.save_draft.click",
+                                    `attempted=true direct=${Boolean(directClick)} ancestor=${Boolean(ancestorClick)} clicked=${submitClicked}`,
+                                );
                                 if (submitClicked) {
                                     const clickedAtMs = Date.now();
                                     tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
@@ -12375,7 +12394,14 @@ class MainWindow(QMainWindow):
                                     tiktokState.submitClicked = true;
                                     tiktokState.awaitingDraftAfterUserGesture = false;
                                 }
+                            } else {
+                                logActionAttempt(
+                                    "tiktok.save_draft.click",
+                                    `attempted=false already_clicked=${Boolean(tiktokState.submitClicked)} enabled=${tiktokPostEnabled}`,
+                                );
                             }
+                        } else {
+                            logActionAttempt("tiktok.save_draft.click", "attempted=false reason=button_not_found");
                         }
                     }
 
@@ -12629,6 +12655,7 @@ class MainWindow(QMainWindow):
                         tiktokNetworkReadySignal,
                         tiktokSaveDraftUiReady,
                         tiktokSubmitClickedEver: Boolean(tiktokState.submitClicked),
+                        actionAttempts,
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
@@ -12662,6 +12689,7 @@ class MainWindow(QMainWindow):
             tiktok_network_ready_signal = bool(isinstance(result, dict) and result.get("tiktokNetworkReadySignal"))
             tiktok_save_draft_ui_ready = bool(isinstance(result, dict) and result.get("tiktokSaveDraftUiReady"))
             tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
+            action_attempts = result.get("actionAttempts") if isinstance(result, dict) else None
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -12680,6 +12708,14 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
+            if isinstance(action_attempts, list):
+                for action_attempt in action_attempts:
+                    try:
+                        action_text = str(action_attempt or "").strip()
+                    except Exception:
+                        action_text = ""
+                    if action_text:
+                        self._append_log(f"{platform_name}: action {action_text}")
             pending["allow_file_dialog"] = False
 
             is_tiktok = platform_name == "TikTok"
