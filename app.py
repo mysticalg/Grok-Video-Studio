@@ -6488,11 +6488,13 @@ class MainWindow(QMainWindow):
                     "continuing with prompt population and assuming current mode is correct."
                 )
             elif not isinstance(result, dict) or not result.get("ok"):
-                _retry_variant(f"set image mode script failed: {result!r}")
-                return
+                self._append_log(
+                    f"WARNING: Manual image variant {variant}: set image mode script failed ({result!r}); continuing anyway."
+                )
             elif not result.get("imageSelected"):
-                _retry_variant(f"image option not selected: {result!r}")
-                return
+                self._append_log(
+                    f"WARNING: Manual image variant {variant}: image option not selected ({result!r}); continuing anyway."
+                )
 
             self._append_log(
                 "Manual image variant "
@@ -6557,8 +6559,9 @@ class MainWindow(QMainWindow):
                             return
 
                         if options_missing:
-                            _retry_variant(f"image options not confirmed after {image_options_attempts} attempts: missing={options_missing}")
-                            return
+                            self._append_log(
+                                f"WARNING: Manual image variant {variant}: image options not confirmed after {image_options_attempts} attempts: missing={options_missing}; continuing to prompt+submit anyway."
+                            )
 
                         QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
 
