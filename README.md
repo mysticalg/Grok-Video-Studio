@@ -99,7 +99,7 @@ Social browser posting now supports two coexisting executors:
 In the app, use the automation mode selector in the **Automation Chrome + CDP** panel:
 
 - `Embedded` keeps the prior behavior.
-- `UDP` runs platform workflows through command actions (`platform.open`, `upload.select_file`, `form.fill`, `post.submit`, `post.status`).
+- `UDP` runs platform workflows through command actions (`platform.open`, `upload.select_file`, `form.fill`, `post.submit`, `post.status`) for YouTube, TikTok, Facebook, Instagram, and X tabs.
 
 ## Chrome extension ⇄ desktop app bridge (Native Messaging)
 

@@ -9,7 +9,9 @@ async function findTargetTab(platform = "") {
   const matchByPlatform = {
     tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
     youtube: ["studio.youtube.com", "youtube.com"],
-    facebook: ["facebook.com/reels/create", "facebook.com"]
+    facebook: ["facebook.com/reels/create", "facebook.com"],
+    instagram: ["instagram.com/create/reel", "instagram.com"],
+    x: ["x.com/compose/post", "x.com/compose", "x.com"]
   };
 
   const allTabs = await chrome.tabs.query({});
@@ -30,16 +32,20 @@ let reconnectDelayMs = 1000;
 const platformState = {
   youtube: { state: "ready" },
   tiktok: { state: "ready" },
-  facebook: { state: "ready" }
+  facebook: { state: "ready" },
+  instagram: { state: "ready" },
+  x: { state: "ready" }
 };
 
 const POST_SELECTORS = {
   tiktok: [
-    "button[data-e2e=\"post_video_button\"]",
-    "button[aria-label*=\"Post\"]"
+    'button[data-e2e="post_video_button"]',
+    'button[aria-label*="Post"]'
   ],
-  youtube: ["#done-button", "button[aria-label*=\"Publish\"]"],
-  facebook: ["div[aria-label*=\"Publish\"]", "button[aria-label*=\"Publish\"]"]
+  youtube: ['#done-button', 'button[aria-label*="Publish"]'],
+  facebook: ['div[aria-label*="Publish"]', 'button[aria-label*="Publish"]'],
+  instagram: ['button[aria-label*="Share" i]', 'button[type="submit"]'],
+  x: ['button[data-testid="tweetButton"]', 'button[data-testid="tweetButtonInline"]', 'div[data-testid="tweetButtonInline"]']
 };
 
 const DRAFT_SELECTORS = {
@@ -476,6 +482,9 @@ async function handleCmd(msg) {
             "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
             "div[contenteditable='true'][role='combobox']",
             "div[contenteditable='true'][role='textbox']",
+            "div[role='textbox'][contenteditable='true']",
+            "div[data-testid='tweetTextarea_0'][contenteditable='true']",
+            "textarea[aria-label*='Write a caption' i]",
             "div[contenteditable='true']",
             "textarea#description-textarea",
             "textarea[name='description']"
@@ -520,6 +529,8 @@ async function handleCmd(msg) {
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
             out[rawKey] = setValue(facebookEl, text);
+          } else if ((currentPlatform === "instagram" || currentPlatform === "x") && canonicalKey === "description") {
+            out[rawKey] = setValue(el, text);
           } else {
             out[rawKey] = setValue(el, text);
           }

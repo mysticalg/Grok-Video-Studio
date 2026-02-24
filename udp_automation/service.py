@@ -16,6 +16,8 @@ PLATFORM_URLS = {
     "youtube": "https://studio.youtube.com",
     "tiktok": "https://www.tiktok.com/upload",
     "facebook": "https://www.facebook.com/reels/create",
+    "instagram": "https://www.instagram.com/create/reel/",
+    "x": "https://x.com/compose/post",
 }
 
 

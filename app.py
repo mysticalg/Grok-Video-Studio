@@ -82,7 +82,9 @@ from automation.control_bus import ControlBusServer
 from udp_automation.executors import UdpExecutor
 from udp_automation.service import UdpAutomationService
 from udp_automation.workflows import facebook as udp_facebook_workflow
+from udp_automation.workflows import instagram as udp_instagram_workflow
 from udp_automation.workflows import tiktok as udp_tiktok_workflow
+from udp_automation.workflows import x as udp_x_workflow
 from udp_automation.workflows import youtube as udp_youtube_workflow
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -2005,6 +2007,10 @@ class UdpWorkflowWorker(QThread):
                 result = udp_tiktok_workflow.run(executor, self.video_path, self.caption)
             elif platform == "facebook":
                 result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title)
+            elif platform == "instagram":
+                result = udp_instagram_workflow.run(executor, self.video_path, self.caption)
+            elif platform == "x":
+                result = udp_x_workflow.run(executor, self.video_path, self.caption)
             else:
                 raise RuntimeError(f"UDP workflow not implemented for {self.platform_name}")
             self.finished_with_result.emit(json.dumps(result, ensure_ascii=False))
