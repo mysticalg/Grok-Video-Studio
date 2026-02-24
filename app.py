@@ -6788,6 +6788,11 @@ class MainWindow(QMainWindow):
 
                 if (phase === "pick") {{
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
+                    const listItemReady = (el) => {{
+                        const listItem = listItemOf(el);
+                        if (!listItem) return true;
+                        return !listItem.querySelector("div.invisible");
+                    }};
 
                     const customizePromptReady = !!document.querySelector(
                         "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
@@ -6803,7 +6808,7 @@ class MainWindow(QMainWindow):
                     }}
 
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isVisible(btn) && !btn.disabled);
+                        .filter((btn) => isVisible(btn) && !btn.disabled && listItemReady(btn));
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -6825,7 +6830,7 @@ class MainWindow(QMainWindow):
 
                     const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
                         .filter((img) => {{
-                            if (!isVisible(img)) return false;
+                            if (!isVisible(img) || !listItemReady(img)) return false;
                             const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
                             const title = (img.getAttribute("title") || "").trim().toLowerCase();
                             const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
@@ -7075,6 +7080,11 @@ class MainWindow(QMainWindow):
                                     return true;
                                 };
                                 const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
+                                const listItemReady = (el) => {
+                                    const listItem = listItemOf(el);
+                                    if (!listItem) return true;
+                                    return !listItem.querySelector("div.invisible");
+                                };
 
                                 const scrollBottom = () => {
                                     const scrollTargets = [
@@ -7097,7 +7107,7 @@ class MainWindow(QMainWindow):
 
                                 const tryClickFirstGeneratedTile = () => {
                                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                                        .filter((btn) => isVisible(btn) && !btn.disabled);
+                                        .filter((btn) => isVisible(btn) && !btn.disabled && listItemReady(btn));
 
                                     if (makeVideoButtons.length) {
                                         makeVideoButtons.sort((a, b) => {
@@ -7116,7 +7126,7 @@ class MainWindow(QMainWindow):
 
                                     const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
                                         .filter((img) => {
-                                            if (!isVisible(img)) return false;
+                                            if (!isVisible(img) || !listItemReady(img)) return false;
                                             const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
                                             const title = (img.getAttribute("title") || "").trim().toLowerCase();
                                             const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
