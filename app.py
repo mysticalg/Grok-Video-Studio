@@ -7100,6 +7100,7 @@ class MainWindow(QMainWindow):
                                     if (!listItem) return true;
                                     return !listItem.querySelector("div.invisible");
                                 };
+                                const SCROLL_PAUSE_MS = 5000;
 
                                 const scrollBottom = () => {
                                     const scrollTargets = [
@@ -7167,11 +7168,34 @@ class MainWindow(QMainWindow):
                                     return (emulateClick(firstImage) || emulateClick(listItem)) ? "generated-image-clicked" : "";
                                 };
 
+                                const queueScrollWithRecheck = () => {
+                                    if (window.__grokManualPickObserverResult) return;
+                                    if (window.__grokManualPickScrollTimer) return;
+
+                                    const now = Date.now();
+                                    const lastScrollAt = Number(window.__grokManualPickLastScrollAt || 0);
+                                    const waitMs = Math.max(0, SCROLL_PAUSE_MS - (now - lastScrollAt));
+
+                                    window.__grokManualPickScrollTimer = window.setTimeout(() => {
+                                        window.__grokManualPickScrollTimer = 0;
+                                        if (window.__grokManualPickObserverResult) return;
+
+                                        const outcome = tryClickFirstGeneratedTile();
+                                        if (outcome) {
+                                            window.__grokManualPickObserverResult = outcome;
+                                            return;
+                                        }
+
+                                        window.__grokManualPickLastScrollAt = Date.now();
+                                        scrollBottom();
+                                    }, waitMs);
+                                };
+
                                 const initialOutcome = tryClickFirstGeneratedTile();
                                 if (initialOutcome) {
                                     window.__grokManualPickObserverResult = initialOutcome;
                                 } else {
-                                    scrollBottom();
+                                    queueScrollWithRecheck();
                                 }
 
                                 if (!window.__grokManualPickObserver || window.__grokManualPickObserverDisconnected) {
@@ -7180,11 +7204,15 @@ class MainWindow(QMainWindow):
                                         const outcome = tryClickFirstGeneratedTile();
                                         if (outcome) {
                                             window.__grokManualPickObserverResult = outcome;
+                                            if (window.__grokManualPickScrollTimer) {
+                                                window.clearTimeout(window.__grokManualPickScrollTimer);
+                                                window.__grokManualPickScrollTimer = 0;
+                                            }
                                             try { observer.disconnect(); } catch (_) {}
                                             window.__grokManualPickObserverDisconnected = true;
                                             return;
                                         }
-                                        scrollBottom();
+                                        queueScrollWithRecheck();
                                     });
                                     observer.observe(document.body || document.documentElement, {
                                         childList: true,
@@ -7193,6 +7221,7 @@ class MainWindow(QMainWindow):
                                     });
                                     window.__grokManualPickObserver = observer;
                                     window.__grokManualPickObserverDisconnected = false;
+                                    window.__grokManualPickLastScrollAt = Number(window.__grokManualPickLastScrollAt || 0);
                                 }
 
                                 return {
