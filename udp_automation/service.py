@@ -40,6 +40,33 @@ class UdpAutomationService:
         self._transport = None
         self._clients: set[tuple[str, int]] = set()
 
+    @staticmethod
+    def _is_connection_closed_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "connection closed" in text or "target page, context or browser has been closed" in text
+
+    async def _connect_cdp(self) -> None:
+        if self.chrome_instance is None:
+            raise RuntimeError("Chrome instance is not available")
+        if self.cdp is not None:
+            await self.cdp.close()
+        self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
+
+    async def _open_platform_page(self, url: str, reuse_tab: bool) -> Any:
+        if self.cdp is None:
+            await self._connect_cdp()
+        try:
+            page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
+            await page.bring_to_front()
+            return page
+        except Exception as exc:
+            if not self._is_connection_closed_error(exc):
+                raise
+            await self._connect_cdp()
+            page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
+            await page.bring_to_front()
+            return page
+
     async def start(self) -> None:
         if self._start_bus:
             await self.bus.start()
@@ -73,11 +100,8 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 url = str(payload.get("url") or PLATFORM_URLS.get(platform) or "https://example.com")
                 self.chrome_instance = self.chrome_manager.launch_or_reuse()
-                if self.cdp is None:
-                    self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
                 reuse_tab = bool(payload.get("reuseTab", False))
-                page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
-                await page.bring_to_front()
+                page = await self._open_platform_page(url, reuse_tab=reuse_tab)
                 await self._emit("state", {"state": "page_opened", "platform": platform, "url": page.url})
                 return {"ok": True, "payload": {"url": page.url}}
 
