@@ -5968,13 +5968,22 @@ class MainWindow(QMainWindow):
                     };
                     const emulateActivate = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
-                        let fired = emulateClick(el);
+                        const common = { bubbles: true, cancelable: true, composed: true, view: window };
+                        let fired = false;
+                        try { el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
                         try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.dispatchEvent(new MouseEvent("mouseover", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new MouseEvent("mouseenter", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerover", { ...common, pointerType: "mouse", isPrimary: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerenter", { ...common, pointerType: "mouse", isPrimary: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true, composed: true })); fired = true; } catch (_) {}
+                        fired = emulateClick(el) || fired;
                         try { el.click(); fired = true; } catch (_) {}
-                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
-                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
-                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
-                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true, composed: true })); fired = true; } catch (_) {}
                         return fired;
                     };
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
@@ -6186,6 +6195,75 @@ class MainWindow(QMainWindow):
         """
         set_image_options_script = set_image_options_script.replace('"{selected_aspect_ratio}"', json.dumps(selected_aspect_ratio))
 
+        verify_image_options_script = r"""
+            (() => {
+                try {
+                    const desiredAspect = "{selected_aspect_ratio}";
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
+                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const clickableAncestor = (el) => {
+                        if (!el) return null;
+                        if (typeof el.closest === "function") {
+                            const ancestor = el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label");
+                            if (ancestor) return ancestor;
+                        }
+                        return el;
+                    };
+                    const visibleTextElements = (root = document) => [...root.querySelectorAll(interactiveSelector)]
+                        .filter((el) => isVisible(el) && textOf(el));
+                    const selectedTextElements = (root = document) => visibleTextElements(root)
+                        .filter((el) => {
+                            const target = clickableAncestor(el);
+                            if (!target) return false;
+                            const ariaPressed = target.getAttribute("aria-pressed") === "true";
+                            const ariaSelected = target.getAttribute("aria-selected") === "true";
+                            const dataState = (target.getAttribute("data-state") || "").toLowerCase() === "checked";
+                            const dataSelected = target.getAttribute("data-selected") === "true";
+                            return ariaPressed || ariaSelected || dataState || dataSelected;
+                        });
+                    const hasSelectedByText = (patterns, root = document) => selectedTextElements(root)
+                        .some((el) => patterns.some((pattern) => pattern.test(textOf(el))));
+                    const findVisibleButtonByAriaLabel = (ariaLabel, root = document) => {
+                        const candidates = [...root.querySelectorAll(`button[aria-label='${ariaLabel}']`)];
+                        return candidates.find((el) => isVisible(el) && !el.disabled) || null;
+                    };
+                    const isOptionButtonSelected = (button) => {
+                        if (!button) return false;
+                        const ariaPressed = button.getAttribute("aria-pressed") === "true";
+                        const ariaSelected = button.getAttribute("aria-selected") === "true";
+                        const dataSelected = button.getAttribute("data-selected") === "true";
+                        const dataState = (button.getAttribute("data-state") || "").toLowerCase();
+                        return ariaPressed || ariaSelected || dataSelected || dataState === "checked" || dataState === "active";
+                    };
+                    const hasSelectedByAriaLabel = (ariaLabel, root = document) => isOptionButtonSelected(findVisibleButtonByAriaLabel(ariaLabel, root));
+
+                    const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
+                    const composer = (promptInput && (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section"))) || document;
+
+                    const aspectPatterns = {
+                        "2:3": [/^2\s*:\s*3$/i],
+                        "3:2": [/^3\s*:\s*2$/i],
+                        "1:1": [/^1\s*:\s*1$/i],
+                        "9:16": [/^9\s*:\s*16$/i],
+                        "16:9": [/^16\s*:\s*9$/i],
+                    };
+                    const imagePatterns = [/(^|\s)image(\s|$)/i, /generate multiple images/i];
+                    const desiredAspectPatterns = aspectPatterns[desiredAspect] || aspectPatterns["16:9"];
+                    const missingOptions = [];
+                    if (!(hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) missingOptions.push("image");
+                    if (!(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
+                        || hasSelectedByText(desiredAspectPatterns, composer) || hasSelectedByText(desiredAspectPatterns))) {
+                        missingOptions.push(desiredAspect);
+                    }
+                    return { ok: true, missingOptions };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+        verify_image_options_script = verify_image_options_script.replace('"{selected_aspect_ratio}"', json.dumps(selected_aspect_ratio))
+
         submit_script = r"""
             (() => {
                 try {
@@ -6343,21 +6421,43 @@ class MainWindow(QMainWindow):
                     )
                 elif options_result in (None, ""):
                     self._append_log(
-                        f"WARNING: Manual image variant {variant}: image options callback returned empty result (attempt {image_options_attempts}/3)."
+                        f"WARNING: Manual image variant {variant}: image options callback returned empty result (attempt {image_options_attempts}/3); verifying state directly."
                     )
                     options_missing = ["image", selected_aspect_ratio]
                 else:
                     self._append_log(
-                        f"WARNING: Manual image variant {variant}: image options script failed (attempt {image_options_attempts}/3). result={options_result!r}"
+                        f"WARNING: Manual image variant {variant}: image options script failed (attempt {image_options_attempts}/3). result={options_result!r}; verifying state directly."
                     )
                     options_missing = ["image", selected_aspect_ratio]
 
-                if options_missing and image_options_attempts < 3:
-                    QTimer.singleShot(550, _run_image_options)
-                    return
-
                 if options_missing:
-                    _retry_variant(f"image options not confirmed after {image_options_attempts} attempts: missing={options_missing}")
+                    def _after_verify_options(verify_result):
+                        nonlocal options_missing
+                        if isinstance(verify_result, dict) and verify_result.get("ok"):
+                            verified_missing = [str(name) for name in (verify_result.get("missingOptions") or [])]
+                            if not verified_missing:
+                                options_missing = []
+                                self._append_log(
+                                    f"Manual image variant {variant}: option verification succeeded despite callback-empty/error."
+                                )
+                            else:
+                                options_missing = verified_missing
+                        elif verify_result not in (None, ""):
+                            self._append_log(
+                                f"WARNING: Manual image variant {variant}: option verification returned unexpected result={verify_result!r}."
+                            )
+
+                        if options_missing and image_options_attempts < 3:
+                            QTimer.singleShot(550, _run_image_options)
+                            return
+
+                        if options_missing:
+                            _retry_variant(f"image options not confirmed after {image_options_attempts} attempts: missing={options_missing}")
+                            return
+
+                        QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+
+                    self.browser.page().runJavaScript(verify_image_options_script, _after_verify_options)
                     return
 
                 QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
