@@ -7100,7 +7100,7 @@ class MainWindow(QMainWindow):
                                     if (!listItem) return true;
                                     return !listItem.querySelector("div.invisible");
                                 };
-                                const SCROLL_PAUSE_MS = 5000;
+                                const SCROLL_PAUSE_MS = 8000;
 
                                 const scrollBottom = () => {
                                     const scrollTargets = [
