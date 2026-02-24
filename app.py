@@ -6802,7 +6802,7 @@ class MainWindow(QMainWindow):
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
 
-                    const makeVideoButtons = [...document.querySelectorAll("[role='listitem'] button[aria-label*='make video' i]")]
+                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
                         .filter((btn) => isVisible(btn) && !btn.disabled);
 
                     if (makeVideoButtons.length) {{
@@ -7096,7 +7096,7 @@ class MainWindow(QMainWindow):
                                 };
 
                                 const tryClickFirstGeneratedTile = () => {
-                                    const makeVideoButtons = [...document.querySelectorAll("[role='listitem'] button[aria-label*='make video' i]")]
+                                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
                                         .filter((btn) => isVisible(btn) && !btn.disabled);
 
                                     if (makeVideoButtons.length) {
@@ -7142,17 +7142,22 @@ class MainWindow(QMainWindow):
                                     return emulateClick(firstImage) || emulateClick(listItem);
                                 };
 
-                                scrollBottom();
+                                if (tryClickFirstGeneratedTile()) {
+                                    window.__grokManualPickObserverClicked = true;
+                                } else {
+                                    scrollBottom();
+                                }
 
                                 if (!window.__grokManualPickObserver || window.__grokManualPickObserverDisconnected) {
                                     const observer = new MutationObserver(() => {
-                                        scrollBottom();
                                         if (window.__grokManualPickObserverClicked) return;
                                         if (tryClickFirstGeneratedTile()) {
                                             window.__grokManualPickObserverClicked = true;
                                             try { observer.disconnect(); } catch (_) {}
                                             window.__grokManualPickObserverDisconnected = true;
+                                            return;
                                         }
+                                        scrollBottom();
                                     });
                                     observer.observe(document.body || document.documentElement, {
                                         childList: true,
