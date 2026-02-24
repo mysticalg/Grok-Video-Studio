@@ -8823,7 +8823,16 @@ class MainWindow(QMainWindow):
         if not source_path.exists():
             return QIcon()
 
-        safe_name = f"thumb_{source_path.stem}_{abs(hash(str(source_path.resolve()))) % 10**10}.jpg"
+        try:
+            source_stat = source_path.stat()
+        except Exception:
+            return QIcon()
+
+        source_fingerprint = hashlib.sha1(str(source_path.resolve()).encode("utf-8")).hexdigest()[:12]
+        safe_name = (
+            f"thumb_{source_path.stem}_{source_fingerprint}_"
+            f"{source_stat.st_mtime_ns}_{source_stat.st_size}.jpg"
+        )
         thumb_path = THUMBNAILS_DIR / safe_name
         if not thumb_path.exists():
             try:
