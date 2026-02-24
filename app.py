@@ -7049,7 +7049,7 @@ class MainWindow(QMainWindow):
                                     document.scrollingElement,
                                     document.documentElement,
                                     document.body,
-                                    ...document.querySelectorAll("[data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
+                                    ...document.querySelectorAll(".w-full, [data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
                                 ].filter((el, idx, arr) => el && arr.indexOf(el) === idx);
 
                                 let scrolled = false;
