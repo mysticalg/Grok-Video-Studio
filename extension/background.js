@@ -44,6 +44,7 @@ const POST_SELECTORS = {
 
 const DRAFT_SELECTORS = {
   tiktok: [
+    "button[data-e2e=\"save_draft_button\"] div.Button__content",
     "button[data-e2e=\"save_draft_button\"]",
     "button[aria-label*=\"Draft\"]",
     "button[class*=\"draft\"]"
@@ -117,9 +118,22 @@ async function handleCmd(msg) {
 
         const hasUploadReadySignal = () => {
           const status = document.querySelector("div.info-status.success");
-          if (!status) return false;
-          const text = (status.textContent || "").toLowerCase();
-          return text.includes("uploaded");
+          if (status) {
+            const text = (status.textContent || "").toLowerCase();
+            if (text.includes("uploaded") || text.includes("complete")) return true;
+          }
+          try {
+            const entries = [];
+            entries.push(...performance.getEntriesByType("measure"));
+            entries.push(...performance.getEntriesByType("mark"));
+            entries.push(...performance.getEntriesByType("resource"));
+            const hasPerfReady = entries.some((entry) => {
+              const name = String(entry?.name || "").toLowerCase();
+              return name.includes("video_ready") || name.includes("video_post_ready") || name.includes("upload") || name.includes("complete");
+            });
+            if (hasPerfReady) return true;
+          } catch (_) {}
+          return false;
         };
 
         const findCandidate = () => {
@@ -135,10 +149,17 @@ async function handleCmd(msg) {
         while (Date.now() - started < timeoutMs) {
           const found = findCandidate();
           if (found && isEnabled(found.el) && (!opts.waitForUpload || hasUploadReadySignal())) {
-            found.el.scrollIntoView({ block: "center", inline: "center" });
+            const clickTarget = found.el.closest("button, [role='button']") || found.el;
+            const clickText = String(clickTarget.textContent || "").trim().toLowerCase();
+            const clickE2E = String(clickTarget.getAttribute("data-e2e") || "").trim().toLowerCase();
+            if (opts.isDraft && (clickE2E === "discard_post_button" || clickText.includes("discard"))) {
+              return { clicked: false, reason: "blacklisted_discard", selector: found.selector };
+            }
+            clickTarget.scrollIntoView({ block: "center", inline: "center" });
             ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
-              found.el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+              clickTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
             });
+            try { clickTarget.click?.(); } catch (_) {}
             return { clicked: true, selector: found.selector, waitedMs: Date.now() - started };
           }
           await new Promise((resolve) => setTimeout(resolve, 250));
@@ -153,7 +174,7 @@ async function handleCmd(msg) {
         const requestedTimeoutMs = Number(payload.timeoutMs || 0);
         const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
         const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
-        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs };
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft };
       })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {

@@ -11513,7 +11513,7 @@ class MainWindow(QMainWindow):
         if platform_name == "Instagram":
             max_attempts = 6
         elif platform_name == "TikTok":
-            max_attempts = 12
+            max_attempts = 24
         elif platform_name == "Facebook":
             max_attempts = 8
         elif platform_name == "YouTube":
@@ -11704,6 +11704,50 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     const youtubeState = uploadState.youtube = uploadState.youtube || {};
+                    const tiktokNetworkState = uploadState.tiktokNetwork = uploadState.tiktokNetwork || {};
+                    if (!tiktokNetworkState.hooksInstalled) {
+                        tiktokNetworkState.hooksInstalled = true;
+                        tiktokNetworkState.lastReadySignalAtMs = Number(tiktokNetworkState.lastReadySignalAtMs || 0);
+                        const markReadyFromUrl = (urlValue) => {
+                            const url = norm(urlValue);
+                            if (!url || !url.includes("tiktok")) return;
+                            const looksUploadReady = (
+                                (url.includes("upload") || url.includes("editor_tool"))
+                                && (url.includes("complete") || url.includes("finish") || url.includes("success") || url.includes("ready"))
+                            );
+                            if (looksUploadReady) {
+                                tiktokNetworkState.lastReadySignalAtMs = Date.now();
+                            }
+                        };
+                        try {
+                            const origFetch = window.fetch;
+                            if (typeof origFetch === "function") {
+                                window.fetch = async (...args) => {
+                                    const reqUrl = args[0] && typeof args[0] === "object" ? String(args[0].url || "") : String(args[0] || "");
+                                    try { markReadyFromUrl(reqUrl); } catch (_) {}
+                                    const resp = await origFetch(...args);
+                                    try { markReadyFromUrl(reqUrl); } catch (_) {}
+                                    return resp;
+                                };
+                            }
+                        } catch (_) {}
+                        try {
+                            const origOpen = XMLHttpRequest.prototype.open;
+                            XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                                try { this.__codexReqUrl = String(url || ""); } catch (_) {}
+                                return origOpen.call(this, method, url, ...rest);
+                            };
+                            const origSend = XMLHttpRequest.prototype.send;
+                            XMLHttpRequest.prototype.send = function(...args) {
+                                try {
+                                    this.addEventListener("loadend", () => {
+                                        try { markReadyFromUrl(this.__codexReqUrl || ""); } catch (_) {}
+                                    }, { once: true });
+                                } catch (_) {}
+                                return origSend.apply(this, args);
+                            };
+                        } catch (_) {}
+                    }
                     if (platform === "instagram") {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
@@ -11829,6 +11873,34 @@ class MainWindow(QMainWindow):
                             openUploadClicked = clicked || openUploadClicked;
                             if (clicked) {
                                 facebookState.uploadChooserOpened = true;
+                            }
+                        }
+                    }
+
+                    if (platform === "tiktok") {
+                        const tiktokUploadPreState = uploadState.tiktok = uploadState.tiktok || {};
+                        const nowMs = Date.now();
+                        const triggerCooldownMs = Math.max(4000, configuredActionDelayMs);
+                        const hasRecentTriggerClick = Boolean(
+                            tiktokUploadPreState.uploadTriggerClickedAtMs
+                            && (nowMs - Number(tiktokUploadPreState.uploadTriggerClickedAtMs)) < triggerCooldownMs
+                        );
+                        const tiktokUploadingNow = Boolean(
+                            document.querySelector('div.info-status, div.info-status.success, [aria-label*="uploading" i], [aria-label*="processing" i], progress')
+                        );
+                        const tiktokUploadTrigger = !hasRecentTriggerClick && !tiktokUploadingNow
+                            ? bySelectors([
+                                'button[data-e2e="upload_video_button"]',
+                                'button[data-e2e*="upload"]',
+                                'div[data-e2e*="upload"][role="button"]',
+                                '[data-e2e*="upload"] button',
+                            ])
+                            : null;
+                        if (tiktokUploadTrigger) {
+                            const clicked = clickNodeOrAncestor(tiktokUploadTrigger);
+                            openUploadClicked = clicked || openUploadClicked;
+                            if (clicked) {
+                                tiktokUploadPreState.uploadTriggerClickedAtMs = nowMs;
                             }
                         }
                     }
@@ -11992,10 +12064,68 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    const detectTikTokUploadCompletionSignal = () => {
+                        if (platform !== "tiktok") return false;
+                        const hasReadyText = (value) => {
+                            const text = norm(value);
+                            return text.includes("video_ready")
+                                || text.includes("video_post_ready")
+                                || text.includes("upload complete")
+                                || text.includes("uploaded")
+                                || text.includes("transcoded");
+                        };
+                        try {
+                            if (typeof performance !== "undefined") {
+                                const perfEntries = [];
+                                try { perfEntries.push(...performance.getEntriesByType("measure")); } catch (_) {}
+                                try { perfEntries.push(...performance.getEntriesByType("mark")); } catch (_) {}
+                                try { perfEntries.push(...performance.getEntriesByType("resource")); } catch (_) {}
+                                if (perfEntries.some((entry) => hasReadyText(entry && (entry.name || entry.entryType || "")))) {
+                                    return true;
+                                }
+                            }
+                        } catch (_) {}
+                        try {
+                            const bodyText = norm(document.body && document.body.innerText ? document.body.innerText : "");
+                            if (bodyText.includes("upload complete") || bodyText.includes("video uploaded")) {
+                                return true;
+                            }
+                        } catch (_) {}
+                        return false;
+                    };
+                    const tiktokUploadCompletionSignal = detectTikTokUploadCompletionSignal();
+                    const tiktokNetworkReadySignal = Boolean(
+                        platform === "tiktok"
+                        && Number(tiktokNetworkState.lastReadySignalAtMs || 0) > 0
+                        && (Date.now() - Number(tiktokNetworkState.lastReadySignalAtMs || 0)) <= 15 * 60 * 1000
+                    );
+                    const tiktokSaveDraftCandidate = bySelectors([
+                        'button[data-e2e="save_draft_button"] div.Button__content',
+                        'button[data-e2e="save_draft_button"]',
+                        'div.Button__content.Button__content--shape-default.Button__content--size-large.Button__content--type-neutral.Button__content--loading-false',
+                        'button[aria-label*="save draft" i] div.Button__content',
+                        'button[aria-label*="save draft" i]',
+                    ]) || findClickableByHints(["save draft"], { excludeHints: ["discard"] });
+                    const tiktokSaveDraftTarget = tiktokSaveDraftCandidate
+                        ? (tiktokSaveDraftCandidate.closest('button, [role="button"]') || tiktokSaveDraftCandidate)
+                        : null;
+                    const tiktokSaveDraftUiReady = Boolean(
+                        platform === "tiktok"
+                        && tiktokSaveDraftTarget
+                        && String(tiktokSaveDraftTarget.getAttribute("aria-disabled") || "").toLowerCase() !== "true"
+                        && String(tiktokSaveDraftTarget.getAttribute("data-disabled") || "").toLowerCase() !== "true"
+                        && !Boolean(tiktokSaveDraftTarget.disabled)
+                        && String(tiktokSaveDraftTarget.getAttribute("data-loading") || "").toLowerCase() !== "true"
+                        && !document.querySelector('[aria-label*="uploading" i], [aria-label*="processing" i]')
+                    );
+
                     const fileReadySignal = Boolean(
                         (fileInput && fileInput.files && fileInput.files.length > 0)
                         || document.querySelector('video')
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
+                        || tiktokUploadCompletionSignal
+                        || tiktokNetworkReadySignal
+                        || tiktokSaveDraftUiReady
                     );
 
                     if (platform === "facebook") {
@@ -12013,6 +12143,11 @@ class MainWindow(QMainWindow):
 
                     let nextClicked = false;
                     let submitClicked = false;
+                    const actionAttempts = [];
+                    const logActionAttempt = (action, details) => {
+                        const detailText = String(details || "").trim();
+                        actionAttempts.push(detailText ? `${action} ${detailText}` : action);
+                    };
                     if (platform === "instagram" && fileReadySignal) {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']) || document;
                         const nextButton = pick(Array.from(instagramDialog.querySelectorAll('div[role="button"][tabindex="0"], button')).filter((node) => normalizedNodeText(node).includes("next"))) || findClickableByHints(["next"]);
@@ -12100,6 +12235,7 @@ class MainWindow(QMainWindow):
                             tiktokState.submitClicked = false;
                             tiktokState.userInteractionConfirmed = false;
                             tiktokState.awaitingDraftAfterUserGesture = false;
+                            tiktokState.uploadTriggerClickedAtMs = 0;
                         }
                         const nowMs = Date.now();
                         const minTikTokActionGapMs = configuredActionDelayMs;
@@ -12193,10 +12329,18 @@ class MainWindow(QMainWindow):
                                 return current === norm(nextText);
                             };
 
-                            const captionAlreadyPresent = draftEditable
-                                ? normalizedNodeText(draftEditable) === norm(captionText)
-                                : false;
-                            if (captionAlreadyPresent) {
+                            const currentDraftText = draftEditable ? normalizedNodeText(draftEditable) : "";
+                            const normalizedCaption = norm(captionText);
+                            const captionAlreadyPresent = Boolean(
+                                currentDraftText
+                                && (
+                                    currentDraftText === normalizedCaption
+                                    || currentDraftText.includes(normalizedCaption)
+                                    || normalizedCaption.includes(currentDraftText)
+                                )
+                            );
+                            const captionNonEmpty = Boolean(currentDraftText && currentDraftText.length > 0);
+                            if (captionAlreadyPresent || captionNonEmpty) {
                                 textFilled = true;
                             } else if (actionSpacingElapsed && (draftEditable || draftSpan)) {
                                 try {
@@ -12217,19 +12361,43 @@ class MainWindow(QMainWindow):
                             || (Date.now() - Number(tiktokState.lastSubmitAttemptAtMs)) >= configuredActionDelayMs;
 
                         const tiktokPostButton = bySelectors([
+                            'button[data-e2e="save_draft_button"] div.Button__content',
                             'button[data-e2e="save_draft_button"]',
                             'button[aria-disabled="false"][data-e2e="save_draft_button"]',
-                        ]);
+                            'button[aria-label*="save draft" i] div.Button__content',
+                            'button[aria-label*="save draft" i]',
+                        ]) || findClickableByHints(["save draft"], { excludeHints: ["discard"] });
+                        logActionAttempt(
+                            "tiktok.save_draft.lookup",
+                            `found=${Boolean(tiktokPostButton)} caption_ready=${captionReady} upload_ready=${Boolean(fileReadySignal || tiktokUploadCompletionSignal || tiktokNetworkReadySignal || tiktokSaveDraftUiReady)} delay_ok=${tiktokSubmitDelayElapsed} spacing_ok=${actionSpacingElapsed && tiktokSubmitSpacingElapsed}`,
+                        );
                         if (tiktokPostButton) {
-                            const ariaDisabled = String(tiktokPostButton.getAttribute("aria-disabled") || "").toLowerCase();
-                            const dataDisabled = String(tiktokPostButton.getAttribute("data-disabled") || "").toLowerCase();
-                            const nativeDisabled = Boolean(tiktokPostButton.disabled);
-                            tiktokPostEnabled = ariaDisabled === "false" && dataDisabled !== "true" && !nativeDisabled;
+                            const tiktokPostTarget = tiktokPostButton.closest('button, [role="button"]') || tiktokPostButton;
+                            const targetText = normalizedNodeText(tiktokPostTarget);
+                            const targetE2E = String(tiktokPostTarget.getAttribute("data-e2e") || "").toLowerCase();
+                            const isDiscardButton = targetE2E === "discard_post_button" || targetText.includes("discard");
+                            const ariaDisabled = String(tiktokPostTarget.getAttribute("aria-disabled") || "").toLowerCase();
+                            const dataDisabled = String(tiktokPostTarget.getAttribute("data-disabled") || "").toLowerCase();
+                            const nativeDisabled = Boolean(tiktokPostTarget.disabled);
+                            const loading = String(tiktokPostTarget.getAttribute("data-loading") || "").toLowerCase() === "true";
+                            const explicitEnabled = ariaDisabled === "false" || dataDisabled === "false";
+                            tiktokPostEnabled = !isDiscardButton && (explicitEnabled || (!nativeDisabled && ariaDisabled !== "true" && dataDisabled !== "true" && !loading));
                             const waitingForDraftAfterGesture = Boolean(tiktokState.awaitingDraftAfterUserGesture);
-                            const canSubmitNormally = captionReady && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
-                            const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled;
+                            const tiktokUploadReadyForDraft = fileReadySignal || tiktokUploadCompletionSignal || tiktokNetworkReadySignal || tiktokSaveDraftUiReady;
+                            const canSubmitNormally = captionReady && tiktokUploadReadyForDraft && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
+                            const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled && tiktokUploadReadyForDraft;
+                            logActionAttempt(
+                                "tiktok.save_draft.evaluate",
+                                `enabled=${tiktokPostEnabled} discard=${isDiscardButton} aria_disabled=${ariaDisabled || 'unset'} data_disabled=${dataDisabled || 'unset'} native_disabled=${nativeDisabled} loading=${loading} can_submit=${Boolean(canSubmitNormally || canSubmitAfterGesture)}`,
+                            );
                             if (!tiktokState.submitClicked && tiktokPostEnabled && (canSubmitNormally || canSubmitAfterGesture)) {
-                                submitClicked = clickNodeSingle(tiktokPostButton) || submitClicked;
+                                const directClick = clickNodeSingle(tiktokPostTarget);
+                                const ancestorClick = !directClick && clickNodeOrAncestor(tiktokPostButton);
+                                submitClicked = directClick || ancestorClick || submitClicked;
+                                logActionAttempt(
+                                    "tiktok.save_draft.click",
+                                    `attempted=true direct=${Boolean(directClick)} ancestor=${Boolean(ancestorClick)} clicked=${submitClicked}`,
+                                );
                                 if (submitClicked) {
                                     const clickedAtMs = Date.now();
                                     tiktokState.lastSubmitAttemptAtMs = clickedAtMs;
@@ -12237,7 +12405,14 @@ class MainWindow(QMainWindow):
                                     tiktokState.submitClicked = true;
                                     tiktokState.awaitingDraftAfterUserGesture = false;
                                 }
+                            } else {
+                                logActionAttempt(
+                                    "tiktok.save_draft.click",
+                                    `attempted=false already_clicked=${Boolean(tiktokState.submitClicked)} enabled=${tiktokPostEnabled}`,
+                                );
                             }
+                        } else {
+                            logActionAttempt("tiktok.save_draft.click", "attempted=false reason=button_not_found");
                         }
                     }
 
@@ -12487,7 +12662,11 @@ class MainWindow(QMainWindow):
                         nextClicked,
                         submitClicked,
                         tiktokPostEnabled,
+                        tiktokUploadCompletionSignal,
+                        tiktokNetworkReadySignal,
+                        tiktokSaveDraftUiReady,
                         tiktokSubmitClickedEver: Boolean(tiktokState.submitClicked),
+                        actionAttempts,
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
@@ -12517,7 +12696,11 @@ class MainWindow(QMainWindow):
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostEnabled"))
+            tiktok_upload_completion_signal = bool(isinstance(result, dict) and result.get("tiktokUploadCompletionSignal"))
+            tiktok_network_ready_signal = bool(isinstance(result, dict) and result.get("tiktokNetworkReadySignal"))
+            tiktok_save_draft_ui_ready = bool(isinstance(result, dict) and result.get("tiktokSaveDraftUiReady"))
             tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
+            action_attempts = result.get("actionAttempts") if isinstance(result, dict) else None
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
             caption_queued = bool(str(self.social_upload_pending.get(platform_name, {}).get("caption") or "").strip())
@@ -12533,9 +12716,78 @@ class MainWindow(QMainWindow):
                 and "tiktokstudio/content" in current_url.lower()
                 and "tab=draft" in current_url.lower()
             )
+            action_attempt_count = len(action_attempts) if isinstance(action_attempts, list) else 0
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked} action_attempts={action_attempt_count}"
             )
+            if isinstance(action_attempts, list):
+                for action_attempt in action_attempts:
+                    try:
+                        action_text = str(action_attempt or "").strip()
+                    except Exception:
+                        action_text = ""
+                    if action_text:
+                        self._append_log(f"{platform_name}: action {action_text}")
+            else:
+                self._append_log(f"{platform_name}: action unavailable reason=script_result_missing_action_attempts")
+                if platform_name == "TikTok":
+                    probe_script = """
+                        (() => {
+                            try {
+                                const norm = (s) => String(s || "").toLowerCase();
+                                const selectors = [
+                                    'button[data-e2e="save_draft_button"] div.Button__content',
+                                    'button[data-e2e="save_draft_button"]',
+                                    'button[aria-label*="save draft" i] div.Button__content',
+                                    'button[aria-label*="save draft" i]',
+                                ];
+                                let candidate = null;
+                                for (const sel of selectors) {
+                                    const nodes = Array.from(document.querySelectorAll(sel));
+                                    candidate = nodes.find((node) => (node.offsetWidth || node.offsetHeight || node.getClientRects().length)) || nodes[0] || null;
+                                    if (candidate) break;
+                                }
+                                const target = candidate ? (candidate.closest('button, [role="button"]') || candidate) : null;
+                                const text = target ? norm(target.innerText || target.textContent || target.getAttribute('aria-label')) : "";
+                                const e2e = target ? norm(target.getAttribute('data-e2e')) : "";
+                                const discard = e2e === 'discard_post_button' || text.includes('discard');
+                                const ariaDisabled = target ? norm(target.getAttribute('aria-disabled')) : "";
+                                const dataDisabled = target ? norm(target.getAttribute('data-disabled')) : "";
+                                const loading = target ? norm(target.getAttribute('data-loading')) === 'true' : false;
+                                const enabled = Boolean(target && !discard && ariaDisabled !== 'true' && dataDisabled !== 'true' && !target.disabled && !loading);
+                                let clicked = false;
+                                if (enabled) {
+                                    try { target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (_) {}
+                                    try { target.focus({ preventScroll: true }); } catch (_) {}
+                                    try { target.click(); clicked = true; } catch (_) {}
+                                }
+                                return {
+                                    found: Boolean(target),
+                                    enabled,
+                                    discard,
+                                    clicked,
+                                    ariaDisabled,
+                                    dataDisabled,
+                                    loading,
+                                };
+                            } catch (err) {
+                                return { error: String(err && err.stack ? err.stack : err) };
+                            }
+                        })();
+                    """
+
+                    def _after_probe(probe_result):
+                        if platform_name not in self.social_upload_pending:
+                            return
+                        if isinstance(probe_result, dict) and probe_result.get("error"):
+                            self._append_log(f"{platform_name}: action probe error={probe_result.get('error')}")
+                            return
+                        if isinstance(probe_result, dict):
+                            self._append_log(
+                                f"{platform_name}: action probe found={bool(probe_result.get('found'))} enabled={bool(probe_result.get('enabled'))} discard={bool(probe_result.get('discard'))} clicked={bool(probe_result.get('clicked'))} aria_disabled={probe_result.get('ariaDisabled')} data_disabled={probe_result.get('dataDisabled')} loading={bool(probe_result.get('loading'))}"
+                            )
+
+                    browser.page().runJavaScript(probe_script, _after_probe)
             pending["allow_file_dialog"] = False
 
             is_tiktok = platform_name == "TikTok"
