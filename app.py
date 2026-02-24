@@ -8124,12 +8124,9 @@ class MainWindow(QMainWindow):
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
         if continue_last_video_mode:
-            option_steps = [
-                ("resolution", selected_quality_label),
-                ("seconds", selected_duration_label),
-            ]
+            option_steps = []
             self._append_log(
-                f"Variant {variant}: continue-last-video mode detected; bypassing ratio/type selection and applying only resolution/duration."
+                f"Variant {variant}: continue-last-video mode detected; bypassing the entire video-option selection phase."
             )
         else:
             option_steps = [
