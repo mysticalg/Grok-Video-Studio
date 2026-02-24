@@ -2032,6 +2032,7 @@ class FilteredWebEnginePage(QWebEnginePage):
         profile: QWebEngineProfile | None = None,
         parent=None,
         auto_file_selector: Callable[[str, object, list[str], list[str]], list[str]] | None = None,
+        popup_handler: Callable[[QWebEnginePage, QWebEnginePage.WebWindowType], QWebEnginePage | None] | None = None,
     ):
         if profile is not None:
             super().__init__(profile, parent)
@@ -2039,7 +2040,18 @@ class FilteredWebEnginePage(QWebEnginePage):
             super().__init__(parent)
         self._on_console_message = on_console_message
         self._auto_file_selector = auto_file_selector
+        self._popup_handler = popup_handler
 
+    def createWindow(self, window_type):  # type: ignore[override]
+        if self._popup_handler:
+            try:
+                popup_page = self._popup_handler(self, window_type)
+                if popup_page is not None:
+                    return popup_page
+            except Exception as exc:
+                if self._on_console_message:
+                    self._on_console_message(f"Browser popup handler error: {exc}")
+        return super().createWindow(window_type)
 
     def chooseFiles(self, mode, old_files, accepted_mime_types):  # type: ignore[override]
         if self._auto_file_selector:
@@ -2108,6 +2120,7 @@ class MainWindow(QMainWindow):
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
         self.browser_devtools_windows: dict[QWebEngineView, QMainWindow] = {}
+        self.browser_popup_windows: list[QMainWindow] = []
         self.social_upload_status_labels: dict[str, QLabel] = {}
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
@@ -2610,8 +2623,22 @@ class MainWindow(QMainWindow):
             # Off-the-record profile avoids startup cache/quota errors on locked folders (common on synced drives).
             self.browser_profile = QWebEngineProfile(self)
 
-        self.grok_browser_view.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.grok_browser_view))
-        self.sora_browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.sora_browser))
+        self.grok_browser_view.setPage(
+            FilteredWebEnginePage(
+                self._append_log,
+                self.browser_profile,
+                self.grok_browser_view,
+                popup_handler=self._open_popup_browser_window,
+            )
+        )
+        self.sora_browser.setPage(
+            FilteredWebEnginePage(
+                self._append_log,
+                self.browser_profile,
+                self.sora_browser,
+                popup_handler=self._open_popup_browser_window,
+            )
+        )
         browser_profile = self.browser_profile
         if QTWEBENGINE_USE_DISK_CACHE:
             (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
@@ -2631,6 +2658,9 @@ class MainWindow(QMainWindow):
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+            js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
+            if js_popups_attr is not None:
+                browser_settings.setAttribute(js_popups_attr, True)
             developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
             if developer_extras_attr is not None:
                 browser_settings.setAttribute(developer_extras_attr, True)
@@ -2954,10 +2984,14 @@ class MainWindow(QMainWindow):
                 self.browser_profile,
                 browser,
                 auto_file_selector=self._resolve_social_auto_file_selection,
+                popup_handler=self._open_popup_browser_window,
             )
         )
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+        js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
+        if js_popups_attr is not None:
+            browser.settings().setAttribute(js_popups_attr, True)
         developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
         if developer_extras_attr is not None:
             browser.settings().setAttribute(developer_extras_attr, True)
@@ -10230,6 +10264,52 @@ class MainWindow(QMainWindow):
         self.browser_devtools_windows[browser] = devtools_window
         devtools_window.show()
         self._append_log(f"{label}: DevTools opened.")
+
+    def _open_popup_browser_window(
+        self,
+        source_page: QWebEnginePage,
+        _window_type: QWebEnginePage.WebWindowType,
+    ) -> QWebEnginePage | None:
+        popup_window = QMainWindow(self)
+        popup_window.setWindowTitle("Browser Login Popup")
+        popup_window.resize(980, 760)
+
+        popup_view = QWebEngineView(popup_window)
+        popup_page = FilteredWebEnginePage(
+            self._append_log,
+            self.browser_profile,
+            popup_view,
+            auto_file_selector=self._resolve_social_auto_file_selection,
+            popup_handler=self._open_popup_browser_window,
+        )
+        popup_view.setPage(popup_page)
+        popup_window.setCentralWidget(popup_view)
+
+        popup_settings = popup_view.settings()
+        popup_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        popup_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+        js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
+        if js_popups_attr is not None:
+            popup_settings.setAttribute(js_popups_attr, True)
+        developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
+        if developer_extras_attr is not None:
+            popup_settings.setAttribute(developer_extras_attr, True)
+
+        self._apply_browser_zoom(popup_view)
+
+        def _remove_closed_popup(_obj=None):
+            try:
+                self.browser_popup_windows.remove(popup_window)
+            except ValueError:
+                pass
+
+        popup_window.destroyed.connect(_remove_closed_popup)
+        self.browser_popup_windows.append(popup_window)
+        popup_window.show()
+        popup_window.raise_()
+        popup_window.activateWindow()
+        self._append_log("Opened browser popup window for login/authorization flow.")
+        return popup_page
 
     def open_current_browser_devtools(self) -> None:
         index = self.browser_tabs.currentIndex()
