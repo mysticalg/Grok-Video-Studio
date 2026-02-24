@@ -6803,11 +6803,7 @@ class MainWindow(QMainWindow):
                     }}
 
                     if (window.__grokManualPickObserverResult) {{
-                        const observerStatus = window.__grokManualPickObserverResult;
                         window.__grokManualPickObserverResult = "";
-                        if (observerStatus === "video-submit-clicked") {{
-                            return {{ ok: true, status: "video-submit-clicked", buttonLabel: "Make video" }};
-                        }}
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
 
@@ -6824,12 +6820,6 @@ class MainWindow(QMainWindow):
                         }});
 
                         const firstButton = makeVideoButtons[0];
-                        const clickedSubmit = emulateClick(firstButton);
-                        if (clickedSubmit) {{
-                            await sleep(ACTION_DELAY_MS);
-                            return {{ ok: true, status: "video-submit-clicked", buttonLabel: "Make video" }};
-                        }}
-
                         const tile = listItemOf(firstButton) || firstButton.parentElement;
                         const tileImage = tile?.querySelector?.("img") || null;
                         const clickedTile = emulateClick(tileImage) || emulateClick(tile);
@@ -7142,7 +7132,6 @@ class MainWindow(QMainWindow):
                                         });
 
                                         const firstButton = makeVideoButtons[0];
-                                        if (emulateClick(firstButton)) return "video-submit-clicked";
                                         const tile = listItemOf(firstButton) || firstButton.parentElement;
                                         const tileImage = tile?.querySelector?.("img") || null;
                                         return (emulateClick(tileImage) || emulateClick(tile)) ? "generated-image-clicked" : "";
