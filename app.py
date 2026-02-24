@@ -12551,6 +12551,36 @@ class MainWindow(QMainWindow):
                             'div[role="textbox"][contenteditable="true"][aria-label*="post text" i]',
                         ]);
                         const xForm = xComposer ? (xComposer.closest('form') || xComposer.parentElement && xComposer.parentElement.closest('form')) : null;
+
+                        // Re-attach local file metadata and payload right before submit (helps after refresh/re-render).
+                        const xUploadInput = pickVideoInput() || fileInput;
+                        if (xUploadInput) {
+                            try { xUploadInput.setAttribute("data-codex-video-path", requestedVideoPath || ""); } catch (_) {}
+                            try { xUploadInput.setAttribute("data-codex-video-name", videoName || "upload.mp4"); } catch (_) {}
+                            const hasXFile = Boolean(xUploadInput.files && xUploadInput.files.length > 0);
+                            if (!hasXFile && videoBase64) {
+                                try {
+                                    const binary = atob(videoBase64);
+                                    const bytes = new Uint8Array(binary.length);
+                                    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                                    const xFile = new File([bytes], videoName, { type: videoMime });
+                                    const xDt = new DataTransfer();
+                                    xDt.items.add(xFile);
+                                    if (setInputFiles(xUploadInput, xDt.files)) {
+                                        xUploadInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                        xUploadInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                        logActionAttempt('x_file_prepare', `injected=true name=${videoName}`);
+                                    }
+                                } catch (_) {
+                                    logActionAttempt('x_file_prepare', 'injected=false reason=exception');
+                                }
+                            } else {
+                                logActionAttempt('x_file_prepare', `injected=false already_has_file=${Boolean(hasXFile)}`);
+                            }
+                        } else {
+                            logActionAttempt('x_file_prepare', 'injected=false input_missing=true');
+                        }
+
                         const xPostCandidates = [
                             'button[data-testid="tweetButtonInline"]',
                             'button[data-testid="tweetButton"]',
