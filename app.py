@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import base64
+import mimetypes
 import concurrent.futures
 import hashlib
 import secrets
@@ -11424,6 +11425,7 @@ class MainWindow(QMainWindow):
 
         video_file = Path(str(video_path))
         encoded_video = ""
+        guessed_mime = mimetypes.guess_type(str(video_file))[0] or "application/octet-stream"
         if video_file.exists() and video_file.is_file():
             # Avoid embedding very large TikTok blobs into in-page JS payloads.
             # Large base64 payloads can freeze the browser process before upload starts.
@@ -11452,7 +11454,7 @@ class MainWindow(QMainWindow):
             "allow_file_dialog": True,
             "video_base64": encoded_video,
             "video_name": video_file.name or "upload.mp4",
-            "video_mime": "video/mp4",
+            "video_mime": guessed_mime,
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
         self._append_log(
