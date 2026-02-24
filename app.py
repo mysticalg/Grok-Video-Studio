@@ -11834,20 +11834,30 @@ class MainWindow(QMainWindow):
                     }
 
                     if (platform === "tiktok") {
-                        const tiktokUploadTrigger = bySelectors([
-                            'button[data-e2e*="upload"]',
-                            'div[data-e2e*="upload"][role="button"]',
-                            '[data-e2e*="upload"] button',
-                            'button[aria-label*="upload" i]',
-                        ]) || findClickableByHints([
-                            "select video",
-                            "upload video",
-                            "select file",
-                            "choose file",
-                        ]);
+                        const tiktokUploadPreState = uploadState.tiktok = uploadState.tiktok || {};
+                        const nowMs = Date.now();
+                        const triggerCooldownMs = Math.max(4000, configuredActionDelayMs);
+                        const hasRecentTriggerClick = Boolean(
+                            tiktokUploadPreState.uploadTriggerClickedAtMs
+                            && (nowMs - Number(tiktokUploadPreState.uploadTriggerClickedAtMs)) < triggerCooldownMs
+                        );
+                        const tiktokUploadingNow = Boolean(
+                            document.querySelector('div.info-status, div.info-status.success, [aria-label*="uploading" i], [aria-label*="processing" i], progress')
+                        );
+                        const tiktokUploadTrigger = !hasRecentTriggerClick && !tiktokUploadingNow
+                            ? bySelectors([
+                                'button[data-e2e="upload_video_button"]',
+                                'button[data-e2e*="upload"]',
+                                'div[data-e2e*="upload"][role="button"]',
+                                '[data-e2e*="upload"] button',
+                            ])
+                            : null;
                         if (tiktokUploadTrigger) {
                             const clicked = clickNodeOrAncestor(tiktokUploadTrigger);
                             openUploadClicked = clicked || openUploadClicked;
+                            if (clicked) {
+                                tiktokUploadPreState.uploadTriggerClickedAtMs = nowMs;
+                            }
                         }
                     }
 
@@ -12150,6 +12160,7 @@ class MainWindow(QMainWindow):
                             tiktokState.submitClicked = false;
                             tiktokState.userInteractionConfirmed = false;
                             tiktokState.awaitingDraftAfterUserGesture = false;
+                            tiktokState.uploadTriggerClickedAtMs = 0;
                         }
                         const nowMs = Date.now();
                         const minTikTokActionGapMs = configuredActionDelayMs;
