@@ -12010,10 +12010,42 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    const detectTikTokUploadCompletionSignal = () => {
+                        if (platform !== "tiktok") return false;
+                        const hasReadyText = (value) => {
+                            const text = norm(value);
+                            return text.includes("video_ready")
+                                || text.includes("video_post_ready")
+                                || text.includes("upload complete")
+                                || text.includes("uploaded")
+                                || text.includes("transcoded");
+                        };
+                        try {
+                            if (typeof performance !== "undefined") {
+                                const perfEntries = [];
+                                try { perfEntries.push(...performance.getEntriesByType("measure")); } catch (_) {}
+                                try { perfEntries.push(...performance.getEntriesByType("mark")); } catch (_) {}
+                                try { perfEntries.push(...performance.getEntriesByType("resource")); } catch (_) {}
+                                if (perfEntries.some((entry) => hasReadyText(entry && (entry.name || entry.entryType || "")))) {
+                                    return true;
+                                }
+                            }
+                        } catch (_) {}
+                        try {
+                            const bodyText = norm(document.body && document.body.innerText ? document.body.innerText : "");
+                            if (bodyText.includes("upload complete") || bodyText.includes("video uploaded")) {
+                                return true;
+                            }
+                        } catch (_) {}
+                        return false;
+                    };
+                    const tiktokUploadCompletionSignal = detectTikTokUploadCompletionSignal();
+
                     const fileReadySignal = Boolean(
                         (fileInput && fileInput.files && fileInput.files.length > 0)
                         || document.querySelector('video')
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
+                        || tiktokUploadCompletionSignal
                     );
 
                     if (platform === "facebook") {
@@ -12251,8 +12283,9 @@ class MainWindow(QMainWindow):
                             const explicitEnabled = ariaDisabled === "false" || dataDisabled === "false";
                             tiktokPostEnabled = !isDiscardButton && (explicitEnabled || (!nativeDisabled && ariaDisabled !== "true" && dataDisabled !== "true" && !loading));
                             const waitingForDraftAfterGesture = Boolean(tiktokState.awaitingDraftAfterUserGesture);
-                            const canSubmitNormally = captionReady && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
-                            const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled;
+                            const tiktokUploadReadyForDraft = fileReadySignal || tiktokUploadCompletionSignal;
+                            const canSubmitNormally = captionReady && tiktokUploadReadyForDraft && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
+                            const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled && tiktokUploadReadyForDraft;
                             if (!tiktokState.submitClicked && tiktokPostEnabled && (canSubmitNormally || canSubmitAfterGesture)) {
                                 submitClicked = clickNodeSingle(tiktokPostTarget) || clickNodeOrAncestor(tiktokPostButton) || submitClicked;
                                 if (submitClicked) {
@@ -12512,6 +12545,7 @@ class MainWindow(QMainWindow):
                         nextClicked,
                         submitClicked,
                         tiktokPostEnabled,
+                        tiktokUploadCompletionSignal,
                         tiktokSubmitClickedEver: Boolean(tiktokState.submitClicked),
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
@@ -12542,6 +12576,7 @@ class MainWindow(QMainWindow):
             next_clicked = bool(isinstance(result, dict) and result.get("nextClicked"))
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostEnabled"))
+            tiktok_upload_completion_signal = bool(isinstance(result, dict) and result.get("tiktokUploadCompletionSignal"))
             tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
@@ -12559,7 +12594,7 @@ class MainWindow(QMainWindow):
                 and "tab=draft" in current_url.lower()
             )
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
             pending["allow_file_dialog"] = False
 

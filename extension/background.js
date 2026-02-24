@@ -118,9 +118,22 @@ async function handleCmd(msg) {
 
         const hasUploadReadySignal = () => {
           const status = document.querySelector("div.info-status.success");
-          if (!status) return false;
-          const text = (status.textContent || "").toLowerCase();
-          return text.includes("uploaded");
+          if (status) {
+            const text = (status.textContent || "").toLowerCase();
+            if (text.includes("uploaded") || text.includes("complete")) return true;
+          }
+          try {
+            const entries = [];
+            entries.push(...performance.getEntriesByType("measure"));
+            entries.push(...performance.getEntriesByType("mark"));
+            entries.push(...performance.getEntriesByType("resource"));
+            const hasPerfReady = entries.some((entry) => {
+              const name = String(entry?.name || "").toLowerCase();
+              return name.includes("video_ready") || name.includes("video_post_ready") || name.includes("upload") || name.includes("complete");
+            });
+            if (hasPerfReady) return true;
+          } catch (_) {}
+          return false;
         };
 
         const findCandidate = () => {
