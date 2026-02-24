@@ -6255,13 +6255,20 @@ class MainWindow(QMainWindow):
 
                     openModelOptionsPanel();
                     applyOption("image", imagePatterns);
+                    // Grok often auto-closes the menu after each selection.
+                    openModelOptionsPanel();
                     applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
+
+                    const anyAspectButtonsVisible = () => {
+                        const labels = ["2:3", "3:2", "1:1", "9:16", "16:9"];
+                        return labels.some((label) => !!findVisibleButtonByAriaLabel(label, composer) || !!findVisibleButtonByAriaLabel(label));
+                    };
 
                     const missingOptions = [];
                     if (!(imageOptionClicked || imageSelectedByTriggerLabel() || hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
                         missingOptions.push("image");
                     }
-                    if (!(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
+                    if (anyAspectButtonsVisible() && !(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
                         || hasSelectedByText(desiredAspectPatterns, composer)
                         || hasSelectedByText(desiredAspectPatterns))) {
                         missingOptions.push(desiredAspect);
@@ -6344,9 +6351,13 @@ class MainWindow(QMainWindow):
                         const txt = textOf(trigger);
                         return /(^|\s)image(\s|$)/i.test(aria) || /(^|\s)image(\s|$)/i.test(txt);
                     };
+                    const anyAspectButtonsVisible = () => {
+                        const labels = ["2:3", "3:2", "1:1", "9:16", "16:9"];
+                        return labels.some((label) => !!findVisibleButtonByAriaLabel(label, composer) || !!findVisibleButtonByAriaLabel(label));
+                    };
                     const missingOptions = [];
                     if (!(imageSelectedByTriggerLabel() || hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) missingOptions.push("image");
-                    if (!(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
+                    if (anyAspectButtonsVisible() && !(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
                         || hasSelectedByText(desiredAspectPatterns, composer) || hasSelectedByText(desiredAspectPatterns))) {
                         missingOptions.push(desiredAspect);
                     }
