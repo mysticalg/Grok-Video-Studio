@@ -202,8 +202,14 @@ class UdpAutomationService:
         if self._transport is None:
             return
         message = json.dumps(event(name, payload)).encode("utf-8")
+        dead_clients: list[tuple[str, int]] = []
         for addr in self._clients:
-            self._transport.sendto(message, addr)
+            try:
+                self._transport.sendto(message, addr)
+            except OSError:
+                dead_clients.append(addr)
+        for addr in dead_clients:
+            self._clients.discard(addr)
 
 
 class _UdpProtocol(asyncio.DatagramProtocol):
@@ -220,7 +226,12 @@ class _UdpProtocol(asyncio.DatagramProtocol):
                 msg = json.loads(data.decode("utf-8"))
             except Exception:
                 return
-            result = await self.service.handle_command(msg, addr)
+
+            try:
+                result = await self.service.handle_command(msg, addr)
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc), "payload": {}}
+
             response = {
                 "v": 1,
                 "type": "cmd_ack",
@@ -229,6 +240,9 @@ class _UdpProtocol(asyncio.DatagramProtocol):
                 **result,
             }
             if self.transport is not None:
-                self.transport.sendto(json.dumps(response).encode("utf-8"), addr)
+                try:
+                    self.transport.sendto(json.dumps(response).encode("utf-8"), addr)
+                except OSError:
+                    return
 
         asyncio.create_task(_handle())
