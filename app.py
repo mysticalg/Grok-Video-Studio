@@ -6815,51 +6815,62 @@ class MainWindow(QMainWindow):
                         return width >= 220 && height >= 220;
                     }};
 
-                    const allPreviewImages = [...document.querySelectorAll("[role='listitem'] img, li img, article img, figure img")]
-                        .filter(looksLikePreviewImage);
+                    const listItems = [...document.querySelectorAll("div[role='listitem'], [role='listitem']")]
+                        .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                        .filter((el) => isVisible(el));
 
-                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label='Make video']")]
-                        .filter((btn) => isVisible(btn) && !btn.disabled);
+                    const makeVideoCandidates = listItems
+                        .map((item) => {{
+                            const button = item.querySelector("button[aria-label='Make video']");
+                            if (!button || !isVisible(button) || button.disabled) return null;
+                            const tileImages = [...item.querySelectorAll("img")].filter(looksLikePreviewImage);
+                            return {{ item, button, tileImages }};
+                        }})
+                        .filter((entry) => !!entry);
 
-                    if (makeVideoButtons.length) {{
-                        makeVideoButtons.sort(rankByPosition);
-                        const firstButton = makeVideoButtons[0];
-                        const tile = listItemOf(firstButton) || firstButton.closest("article, figure, li") || firstButton.parentElement;
-
-                        const tileImages = tile
-                            ? [...tile.querySelectorAll("img")].filter(looksLikePreviewImage)
-                            : [];
-                        const nearestTileImage = tileImages.sort(rankByPosition)[0] || null;
-
-                        let nearestGlobalImage = null;
-                        if (!nearestTileImage && allPreviewImages.length) {{
-                            const br = firstButton.getBoundingClientRect();
-                            nearestGlobalImage = allPreviewImages
-                                .map((img) => {{
-                                    const ir = img.getBoundingClientRect();
-                                    const dx = (ir.left + ir.width / 2) - (br.left + br.width / 2);
-                                    const dy = (ir.top + ir.height / 2) - (br.top + br.height / 2);
-                                    return {{ img, distance: Math.hypot(dx, dy) }};
-                                }})
-                                .sort((a, b) => a.distance - b.distance)[0]?.img || null;
-                        }}
-
-                        const imageToClick = nearestTileImage || nearestGlobalImage;
-                        const clickedTile = emulateClick(imageToClick) || emulateClick(tile) || emulateClick(firstButton);
-                        if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
-                        await sleep(ACTION_DELAY_MS);
-                        return {{ ok: true, status: "generated-image-clicked", pickedViaMakeVideo: true }};
+                    if (!makeVideoCandidates.length) {{
+                        return {{
+                            ok: false,
+                            status: listItems.length ? "waiting-for-make-video-button" : "waiting-for-generated-image",
+                            listItemCount: listItems.length,
+                            makeVideoVisibleCount: 0,
+                        }};
                     }}
 
-                    if (!allPreviewImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
+                    makeVideoCandidates.sort((a, b) => rankByPosition(a.button, b.button));
+                    const targetEntry = makeVideoCandidates[0];
+                    const firstButton = targetEntry.button;
+                    const tile = targetEntry.item || listItemOf(firstButton) || firstButton.closest("article, figure, li") || firstButton.parentElement;
 
-                    allPreviewImages.sort(rankByPosition);
-                    const firstImage = allPreviewImages[0];
-                    const listItem = listItemOf(firstImage) || firstImage.closest("button, [role='button']") || firstImage.parentElement;
-                    const clickedImage = emulateClick(firstImage) || emulateClick(listItem);
-                    if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
+                    const tileImages = targetEntry.tileImages || [];
+                    const nearestTileImage = tileImages.sort(rankByPosition)[0] || null;
+
+                    const allPreviewImages = [...document.querySelectorAll("[role='listitem'] img, li img, article img, figure img")]
+                        .filter(looksLikePreviewImage);
+                    let nearestGlobalImage = null;
+                    if (!nearestTileImage && allPreviewImages.length) {{
+                        const br = firstButton.getBoundingClientRect();
+                        nearestGlobalImage = allPreviewImages
+                            .map((img) => {{
+                                const ir = img.getBoundingClientRect();
+                                const dx = (ir.left + ir.width / 2) - (br.left + br.width / 2);
+                                const dy = (ir.top + ir.height / 2) - (br.top + br.height / 2);
+                                return {{ img, distance: Math.hypot(dx, dy) }};
+                            }})
+                            .sort((a, b) => a.distance - b.distance)[0]?.img || null;
+                    }}
+
+                    const imageToClick = nearestTileImage || nearestGlobalImage;
+                    const clickedTile = emulateClick(imageToClick) || emulateClick(tile) || emulateClick(firstButton);
+                    if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
                     await sleep(ACTION_DELAY_MS);
-                    return {{ ok: true, status: "generated-image-clicked", pickedViaMakeVideo: false }};
+                    return {{
+                        ok: true,
+                        status: "generated-image-clicked",
+                        pickedViaMakeVideo: true,
+                        listItemCount: listItems.length,
+                        makeVideoVisibleCount: makeVideoCandidates.length,
+                    }};
                 }}
 
                 if (phase === "video-mode") {{
@@ -7051,9 +7062,16 @@ class MainWindow(QMainWindow):
                             f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
                         )
                         self.manual_image_pick_retry_count = 0
-                    self._append_log(
-                        f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
-                    )
+                    if current_status == "waiting-for-make-video-button":
+                        list_item_count = result.get("listItemCount") if isinstance(result, dict) else "unknown"
+                        self._append_log(
+                            f"Variant {current_variant}: polling current page listitems for visible button[aria-label='Make video'] "
+                            f"(listitems={list_item_count}); none found yet, retrying..."
+                        )
+                    else:
+                        self._append_log(
+                            f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
+                        )
                     QTimer.singleShot(3000, self._poll_for_manual_image)
 
                 if status == "callback-empty":
