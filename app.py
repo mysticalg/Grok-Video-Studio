@@ -5903,7 +5903,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
-        selected_duration_label = f"{int(self.video_duration.value())}s"
+        selected_duration_label = f"{int(self.video_duration.currentData() or 10)}s"
 
         populate_script = rf"""
             (() => {{
