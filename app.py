@@ -6150,6 +6150,49 @@ class MainWindow(QMainWindow):
                         return emulateActivate(button);
                     };
 
+                    const openModelOptionsPanel = () => {
+                        const triggerCandidates = [
+                            ...document.querySelectorAll("#model-select-trigger"),
+                            ...document.querySelectorAll("button[aria-label='Model select']"),
+                            ...document.querySelectorAll("button[aria-label*='model select' i]"),
+                            ...document.querySelectorAll("button[aria-haspopup='menu']"),
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                          .filter((el) => isVisible(el) && !el.disabled);
+
+                        const trigger = triggerCandidates.find((el) => (el.id || "") === "model-select-trigger")
+                            || triggerCandidates[0]
+                            || null;
+
+                        if (!trigger) return false;
+
+                        const panelVisible = () => {
+                            const menuNodes = [
+                                ...document.querySelectorAll("[role='menu'][data-state='open']"),
+                                ...document.querySelectorAll("[data-radix-dropdown-menu-content][data-state='open']"),
+                                ...document.querySelectorAll("[data-radix-popper-content-wrapper] [role='menu']"),
+                                ...document.querySelectorAll("[role='menu']"),
+                            ].filter((node, idx, arr) => arr.indexOf(node) === idx)
+                              .filter((node) => isVisible(node));
+                            if (menuNodes.some((node) => /aspect\s*ratio|image|video/i.test(textOf(node)))) return true;
+                            const aspectButton = findVisibleButtonByAriaLabel(desiredAspect);
+                            return !!aspectButton;
+                        };
+
+                        if (panelVisible()) return true;
+                        emulateActivate(trigger);
+                        if (panelVisible()) return true;
+                        emulateActivate(trigger);
+                        return panelVisible();
+                    };
+
+                    const clickAspectButtonByAriaLabel = (ariaLabel, root = document) => {
+                        const escaped = String(ariaLabel).replace(/"/g, '\"');
+                        const candidates = [...root.querySelectorAll(`button[aria-label="${escaped}"]`)];
+                        const button = candidates.find((el) => isVisible(el) && !el.disabled) || null;
+                        if (!button) return false;
+                        return emulateActivate(button);
+                    };
+
                     const applyOption = (name, patterns, ariaLabel = null) => {
                         const alreadySelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
                             || hasSelectedByText(patterns, composer)
@@ -6158,16 +6201,24 @@ class MainWindow(QMainWindow):
                             optionsApplied.push(`${name}(already-selected)`);
                             return;
                         }
-                        const clicked = (ariaLabel && (clickVisibleButtonByAriaLabel(ariaLabel, composer) || clickVisibleButtonByAriaLabel(ariaLabel)))
+
+                        const clicked = (ariaLabel && (
+                                clickAspectButtonByAriaLabel(ariaLabel, composer)
+                                || clickAspectButtonByAriaLabel(ariaLabel)
+                                || clickVisibleButtonByAriaLabel(ariaLabel, composer)
+                                || clickVisibleButtonByAriaLabel(ariaLabel)
+                            ))
                             || clickByText(patterns, composer)
                             || clickByText(patterns);
                         if (clicked) optionsRequested.push(name);
+
                         const selected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
                             || hasSelectedByText(patterns, composer)
                             || hasSelectedByText(patterns);
                         if (selected) optionsApplied.push(name);
                     };
 
+                    openModelOptionsPanel();
                     applyOption("image", imagePatterns);
                     applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
 
