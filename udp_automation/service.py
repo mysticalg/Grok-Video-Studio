@@ -49,7 +49,14 @@ class UdpAutomationService:
         if self.chrome_instance is None:
             raise RuntimeError("Chrome instance is not available")
         if self.cdp is not None:
-            await self.cdp.close()
+            try:
+                await self.cdp.close()
+            except Exception:
+                # The previous CDP connection may already be gone (e.g. driver closed).
+                # Swallow teardown failures and establish a fresh session.
+                pass
+            finally:
+                self.cdp = None
         self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
 
     async def _open_platform_page(self, url: str, reuse_tab: bool) -> Any:
@@ -62,10 +69,14 @@ class UdpAutomationService:
         except Exception as exc:
             if not self._is_connection_closed_error(exc):
                 raise
-            await self._connect_cdp()
-            page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
-            await page.bring_to_front()
-            return page
+
+        # The original browser/debugger session may have been torn down.
+        # Re-attach to a running browser (or relaunch) and retry once.
+        self.chrome_instance = self.chrome_manager.launch_or_reuse()
+        await self._connect_cdp()
+        page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
+        await page.bring_to_front()
+        return page
 
     async def start(self) -> None:
         if self._start_bus:
@@ -75,8 +86,10 @@ class UdpAutomationService:
 
     async def stop(self) -> None:
         if self.cdp is not None:
-            await self.cdp.close()
-            self.cdp = None
+            try:
+                await self.cdp.close()
+            finally:
+                self.cdp = None
         if self._transport is not None:
             self._transport.close()
             self._transport = None
