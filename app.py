@@ -12315,6 +12315,20 @@ class MainWindow(QMainWindow):
                             if (byFacebookClass) return byFacebookClass;
                         }
                         if (platform === "x") {
+                            const byXCanonical = fileInputs.find((node) => {
+                                const testId = norm(node.getAttribute("data-testid"));
+                                const accept = norm(node.getAttribute("accept"));
+                                const allowsExpectedMedia = (
+                                    accept.includes("image/jpeg")
+                                    && accept.includes("image/png")
+                                    && accept.includes("image/webp")
+                                    && accept.includes("image/gif")
+                                    && accept.includes("video/mp4")
+                                    && accept.includes("video/quicktime")
+                                );
+                                return testId === "fileinput" && allowsExpectedMedia;
+                            });
+                            if (byXCanonical) return byXCanonical;
                             const byXTestId = fileInputs.find((node) => {
                                 const testId = norm(node.getAttribute("data-testid"));
                                 return testId.includes("fileinput");
