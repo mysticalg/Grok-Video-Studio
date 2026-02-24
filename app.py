@@ -2087,6 +2087,7 @@ class FilteredWebEnginePage(QWebEnginePage):
 class MainWindow(QMainWindow):
     DEFAULT_AUTOMATION_ACTION_DELAY_MS = 1000
     DEFAULT_AUTOMATION_RETRY_ATTEMPTS = 3
+    DEFAULT_BROWSER_ZOOM_FACTOR = 0.5
 
     def __init__(self):
         super().__init__()
@@ -2110,6 +2111,7 @@ class MainWindow(QMainWindow):
         self.social_upload_status_labels: dict[str, QLabel] = {}
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
+        self.browser_address_bars: dict[QWebEngineView, QLineEdit] = {}
         self.browser_training_worker: BrowserTrainingWorker | None = None
         self.overlay_worker: VideoOverlayWorker | None = None
         self.automation_runtime: AutomationRuntimeWorker | None = None
@@ -2188,6 +2190,7 @@ class MainWindow(QMainWindow):
             "SeedanceSettings": True,
             "AIFlowTrainer": True,
         }
+        self.browser_zoom_factor = self.DEFAULT_BROWSER_ZOOM_FACTOR
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
             medium_title="AI Generated Video Clip",
@@ -2763,10 +2766,10 @@ class MainWindow(QMainWindow):
         self.video_aspect_ratio.addItem("16:9", "16:9")
         self.video_aspect_ratio.setCurrentIndex(4)
         grok_browser_layout.addLayout(grok_browser_controls)
-        grok_browser_layout.addWidget(self.grok_browser_view)
+        grok_browser_layout.addWidget(self._build_browser_container(self.grok_browser_view), 1)
 
         sora_browser_layout.addLayout(sora_browser_controls)
-        sora_browser_layout.addWidget(self.sora_browser)
+        sora_browser_layout.addWidget(self._build_browser_container(self.sora_browser), 1)
 
         self.browser_tabs = QTabWidget()
         self.grok_browser_tab_index = self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
@@ -2951,7 +2954,7 @@ class MainWindow(QMainWindow):
             browser.settings().setAttribute(developer_extras_attr, True)
         browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
-        layout.addWidget(browser, 1)
+        layout.addWidget(self._build_browser_container(browser), 1)
 
         self.social_upload_browsers[platform_name] = browser
         self.social_upload_status_labels[platform_name] = status_label
@@ -3777,6 +3780,19 @@ class MainWindow(QMainWindow):
         self.quick_actions_toolbar_toggle_action.setChecked(True)
         self.quick_actions_toolbar_toggle_action.toggled.connect(self._set_quick_actions_toolbar_visible)
         view_menu.addAction(self.quick_actions_toolbar_toggle_action)
+
+        view_menu.addSeparator()
+        zoom_in_action = QAction("Browser Zoom In (+10%)", self)
+        zoom_in_action.triggered.connect(lambda: self._adjust_browser_zoom(0.1))
+        view_menu.addAction(zoom_in_action)
+
+        zoom_out_action = QAction("Browser Zoom Out (-10%)", self)
+        zoom_out_action.triggered.connect(lambda: self._adjust_browser_zoom(-0.1))
+        view_menu.addAction(zoom_out_action)
+
+        zoom_reset_action = QAction("Browser Zoom Reset (50%)", self)
+        zoom_reset_action.triggered.connect(lambda: self._set_browser_zoom(self.DEFAULT_BROWSER_ZOOM_FACTOR))
+        view_menu.addAction(zoom_reset_action)
 
         browser_tabs_menu = view_menu.addMenu("Browser Tabs")
         self.browser_tab_toggle_actions = {}
@@ -10101,6 +10117,62 @@ class MainWindow(QMainWindow):
             self.browser = self.grok_browser_view
         elif index == getattr(self, "sora_browser_tab_index", -1):
             self.browser = self.sora_browser
+
+    def _build_browser_container(self, browser: QWebEngineView) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        address_bar = QLineEdit()
+        address_bar.setPlaceholderText("Enter URL and press Enter")
+        address_bar.returnPressed.connect(lambda b=browser, bar=address_bar: self._navigate_browser_from_address_bar(b, bar))
+        layout.addWidget(address_bar)
+        layout.addWidget(browser, 1)
+
+        self.browser_address_bars[browser] = address_bar
+        self._connect_browser_signals(browser)
+        return container
+
+    def _connect_browser_signals(self, browser: QWebEngineView) -> None:
+        browser.urlChanged.connect(lambda url, b=browser: self._on_browser_url_changed(b, url))
+        browser.loadFinished.connect(lambda _ok, b=browser: self._sync_address_bar_with_browser(b))
+        self._apply_browser_zoom(browser)
+        self._sync_address_bar_with_browser(browser)
+
+    def _navigate_browser_from_address_bar(self, browser: QWebEngineView, address_bar: QLineEdit) -> None:
+        raw = address_bar.text().strip()
+        if not raw:
+            return
+
+        parsed = urlparse(raw)
+        if not parsed.scheme:
+            raw = f"https://{raw}"
+
+        browser.setUrl(QUrl(raw))
+
+    def _on_browser_url_changed(self, browser: QWebEngineView, url: QUrl) -> None:
+        address_bar = self.browser_address_bars.get(browser)
+        if address_bar is None:
+            return
+        text = url.toString()
+        if address_bar.text() != text:
+            address_bar.setText(text)
+
+    def _sync_address_bar_with_browser(self, browser: QWebEngineView) -> None:
+        self._on_browser_url_changed(browser, browser.url())
+
+    def _set_browser_zoom(self, zoom_factor: float) -> None:
+        self.browser_zoom_factor = max(0.25, min(3.0, float(zoom_factor)))
+        for browser in self.browser_address_bars:
+            self._apply_browser_zoom(browser)
+        self._append_log(f"Browser zoom set to {int(round(self.browser_zoom_factor * 100))}%.")
+
+    def _adjust_browser_zoom(self, delta: float) -> None:
+        self._set_browser_zoom(self.browser_zoom_factor + delta)
+
+    def _apply_browser_zoom(self, browser: QWebEngineView) -> None:
+        browser.setZoomFactor(self.browser_zoom_factor)
 
     def _browser_for_tab_index(self, index: int) -> QWebEngineView | None:
         if index == getattr(self, "grok_browser_tab_index", -1):
