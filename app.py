@@ -698,6 +698,7 @@ class AISocialMetadata:
     medium_title: str
     tiktok_subheading: str
     description: str
+    x_post: str
     hashtags: list[str]
     category: str
 
@@ -2210,6 +2211,7 @@ class MainWindow(QMainWindow):
             medium_title="AI Generated Video Clip",
             tiktok_subheading="Swipe for more AI visuals.",
             description="",
+            x_post="",
             hashtags=["grok", "ai", "generated-video"],
             category="22",
         )
@@ -4466,6 +4468,7 @@ class MainWindow(QMainWindow):
                 "medium_title": self.ai_social_metadata.medium_title,
                 "tiktok_subheading": self.ai_social_metadata.tiktok_subheading,
                 "description": self.ai_social_metadata.description,
+                "x_post": self.ai_social_metadata.x_post,
                 "hashtags": self.ai_social_metadata.hashtags,
                 "category": self.ai_social_metadata.category,
             },
@@ -4580,6 +4583,7 @@ class MainWindow(QMainWindow):
                 medium_title=str(metadata.get("medium_title", self.ai_social_metadata.medium_title)),
                 tiktok_subheading=str(metadata.get("tiktok_subheading", self.ai_social_metadata.tiktok_subheading)),
                 description=str(metadata.get("description", self.ai_social_metadata.description)),
+                x_post=str(metadata.get("x_post", self.ai_social_metadata.x_post)),
                 hashtags=[str(tag).strip().lstrip("#") for tag in hashtags if str(tag).strip()],
                 category=str(metadata.get("category", self.ai_social_metadata.category)),
             )
@@ -5858,11 +5862,12 @@ class MainWindow(QMainWindow):
             instruction = concept + " please turn this into a detailed 10 second prompt for grok imagine"
             system = "You are an expert prompt and social metadata generator for short-form AI videos. Return strict JSON only."
             user = (
-                "Generate JSON with keys: manual_prompt, title, medium_title, tiktok_subheading, description, hashtags, category. "
+                "Generate JSON with keys: manual_prompt, title, medium_title, tiktok_subheading, description, x_post, hashtags, category. "
                 "manual_prompt should be detailed and cinematic for a 10-second Grok Imagine clip. "
                 "title should be short and catchy. description should be 1-3 sentences. "
                 "medium_title should be a medium-length title fit for social display. "
                 "tiktok_subheading should be a slogan/subheading near 120 characters (roughly 100-140). "
+                "x_post should be a standalone X.com-ready post no longer than 275 characters total including spaces and hashtags. "
                 "hashtags should be an array of 5-12 hashtag strings without # prefixes. "
                 "category should be the best YouTube category id as a string (default 22 if unsure). "
                 f"Concept instruction: {instruction}"
@@ -5880,6 +5885,7 @@ class MainWindow(QMainWindow):
                 medium_title=str(parsed.get("medium_title", parsed.get("title", "AI Generated Video Clip"))).strip() or "AI Generated Video Clip",
                 tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")).strip() or "Swipe for more AI visuals.",
                 description=str(parsed.get("description", "")).strip(),
+                x_post=str(parsed.get("x_post", "")).strip(),
                 hashtags=cleaned_hashtags or ["grok", "ai", "generated-video"],
                 category=str(parsed.get("category", "22")).strip() or "22",
             )
@@ -6420,7 +6426,7 @@ class MainWindow(QMainWindow):
                     const desiredAspect = "{selected_aspect_ratio}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
-                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const clickableAncestor = (el) => {
                         if (!el) return null;
                         if (typeof el.closest === "function") {
@@ -6499,7 +6505,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const click = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
@@ -6541,7 +6547,7 @@ class MainWindow(QMainWindow):
                     const targetLabel = "{target_label}";
                     const optionType = "{option_type}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label, span, div";
                     const clickableAncestor = (el) => {
@@ -7709,7 +7715,7 @@ class MainWindow(QMainWindow):
                     const desiredAspect = "{selected_aspect_ratio}";
                     const desiredDuration = "{selected_duration_label}";
                     const fallbackQuality = desiredQuality === "720p" ? "480p" : desiredQuality;
-                    const cleanText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const cleanText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
 
                     const menuCandidates = [
                         ...document.querySelectorAll("[role='menu'][data-state='open']"),
@@ -8094,7 +8100,7 @@ class MainWindow(QMainWindow):
                     const targetLabel = "{target_label}";
                     const optionType = "{option_type}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const click = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
@@ -9881,7 +9887,7 @@ class MainWindow(QMainWindow):
                     parts.unshift(part);
                     break;
                   }
-                  const classes = (node.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0,2).join('.');
+                  const classes = (node.className || '').toString().trim().split(/\\s+/).filter(Boolean).slice(0,2).join('.');
                   if (classes) part += `.${classes}`;
                   const parent = node.parentElement;
                   if (parent) {
@@ -10880,7 +10886,7 @@ class MainWindow(QMainWindow):
             return
 
         video_path = self.videos[index]["video_file_path"]
-        title, description, hashtags, category_id, accepted = self._show_upload_dialog("YouTube")
+        title, description, hashtags, category_id, accepted, _ = self._show_upload_dialog("YouTube")
         if not accepted:
             return
 
@@ -10981,7 +10987,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        title, description, hashtags, _, accepted = self._show_upload_dialog("Facebook")
+        title, description, hashtags, _, accepted, _ = self._show_upload_dialog("Facebook")
         if not accepted:
             return
 
@@ -11005,7 +11011,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        _, caption, hashtags, _, accepted = self._show_upload_dialog("Instagram", title_enabled=False)
+        _, caption, hashtags, _, accepted, _ = self._show_upload_dialog("Instagram", title_enabled=False)
         if not accepted:
             return
 
@@ -11025,7 +11031,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        title, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=True)
+        title, caption, hashtags, _, accepted, _ = self._show_upload_dialog("TikTok", title_enabled=True)
         if not accepted:
             return
 
@@ -11050,14 +11056,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        _, description, hashtags, _, accepted = self._show_upload_dialog("X", title_enabled=False)
+        _, description, hashtags, _, accepted, x_post_preview = self._show_upload_dialog("X", title_enabled=False)
         if not accepted:
             return
+
+        caption_text = x_post_preview or self._compose_x_post_text(description, hashtags)
+        if not caption_text:
+            caption_text = self._compose_x_post_text(self.ai_social_metadata.x_post or self.ai_social_metadata.description, self.ai_social_metadata.hashtags)
 
         self._run_social_upload_via_mode(
             platform_name="X",
             video_path=video_path,
-            caption=self._compose_social_text(description, hashtags),
+            caption=caption_text,
             title="",
         )
 
@@ -11071,7 +11081,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        title, description, hashtags, _, accepted = self._show_upload_dialog("YouTube")
+        title, description, hashtags, _, accepted, _ = self._show_upload_dialog("YouTube")
         if not accepted:
             return
 
@@ -11089,7 +11099,7 @@ class MainWindow(QMainWindow):
             return
 
         video_path = self.videos[index]["video_file_path"]
-        title, description, hashtags, _, accepted = self._show_upload_dialog("Facebook")
+        title, description, hashtags, _, accepted, _ = self._show_upload_dialog("Facebook")
         if not accepted:
             return
         
@@ -11118,7 +11128,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        _, caption, hashtags, _, accepted = self._show_upload_dialog("Instagram", title_enabled=False)
+        _, caption, hashtags, _, accepted, _ = self._show_upload_dialog("Instagram", title_enabled=False)
         if not accepted:
             return
 
@@ -11142,7 +11152,7 @@ class MainWindow(QMainWindow):
             return
 
         video_path = self.videos[index]["video_file_path"]
-        _, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=False)
+        _, caption, hashtags, _, accepted, _ = self._show_upload_dialog("TikTok", title_enabled=False)
         if not accepted:
             return
 
@@ -11819,6 +11829,7 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     const youtubeState = uploadState.youtube = uploadState.youtube || {};
+                    const xState = uploadState.x = uploadState.x || {};
                     const tiktokNetworkState = uploadState.tiktokNetwork = uploadState.tiktokNetwork || {};
                     if (!tiktokNetworkState.hooksInstalled) {
                         tiktokNetworkState.hooksInstalled = true;
@@ -12099,9 +12110,9 @@ class MainWindow(QMainWindow):
                         }
                         return bySelectors(selectors);
                     };
-
                     let textFilled = false;
                     let captionReady = !captionRequired;
+                    let xRefreshTriggered = false;
                     if ((platform === "facebook" || platform === "x") && captionRequired) {
                         if (platform === "x") {
                             const normalizeForCompare = (value) => String(value || "")
@@ -12132,14 +12143,32 @@ class MainWindow(QMainWindow):
                                 || pasteTextIntoEditor(xComposer, captionText)
                                 || emulateTypingIntoEditor(xComposer, captionText);
                             textFilled = textFilled && draftTextMatches();
+
+                            const refreshKeyParts = [requestedVideoPath || "video", expectedCaption || "caption"];
+                            const refreshKey = `codex_x_refresh_after_caption:${refreshKeyParts.join("|").slice(0, 240)}`;
+                            let xRefreshAlreadyDone = false;
+                            try {
+                                xRefreshAlreadyDone = String(sessionStorage.getItem(refreshKey) || "") === "1";
+                            } catch (_) {}
+                            if (textFilled && !xRefreshAlreadyDone && !xState.refreshTriggered) {
+                                xState.refreshTriggered = true;
+                                xRefreshTriggered = true;
+                                try { sessionStorage.setItem(refreshKey, "1"); } catch (_) {}
+                                try { window.location.reload(); } catch (_) {}
+                                captionReady = false;
+                            } else {
+                                xState.refreshTriggered = false;
+                                captionReady = textFilled;
+                            }
                         } else {
                             const textTarget = findTextInputTarget();
                             textFilled = setTextValue(textTarget, captionText);
+                            captionReady = textFilled;
                         }
-                        captionReady = textFilled;
                     }
 
                     if (platform === "facebook" && captionReady && !facebookState.uploadChooserOpened) {
+
                         const facebookUploadButton = findClickableByHints([
                             "photo/video",
                             "photo or video",
@@ -12516,21 +12545,82 @@ class MainWindow(QMainWindow):
 
 
                     if (platform === "x" && fileReadySignal && captionReady) {
-                        const postButton = bySelectors([
+                        const xComposer = bySelectors([
+                            'div[data-testid="tweetTextarea_0"][contenteditable="true"]',
+                            'div[data-testid^="tweetTextarea"][contenteditable="true"]',
+                            'div[role="textbox"][contenteditable="true"][aria-label*="post text" i]',
+                        ]);
+                        const xForm = xComposer ? (xComposer.closest('form') || xComposer.parentElement && xComposer.parentElement.closest('form')) : null;
+
+                        // Re-attach local file metadata and payload right before submit (helps after refresh/re-render).
+                        const xUploadInput = pickVideoInput() || fileInput;
+                        if (xUploadInput) {
+                            try { xUploadInput.setAttribute("data-codex-video-path", requestedVideoPath || ""); } catch (_) {}
+                            try { xUploadInput.setAttribute("data-codex-video-name", videoName || "upload.mp4"); } catch (_) {}
+                            const hasXFile = Boolean(xUploadInput.files && xUploadInput.files.length > 0);
+                            if (!hasXFile && videoBase64) {
+                                try {
+                                    const binary = atob(videoBase64);
+                                    const bytes = new Uint8Array(binary.length);
+                                    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                                    const xFile = new File([bytes], videoName, { type: videoMime });
+                                    const xDt = new DataTransfer();
+                                    xDt.items.add(xFile);
+                                    if (setInputFiles(xUploadInput, xDt.files)) {
+                                        xUploadInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                        xUploadInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                        logActionAttempt('x_file_prepare', `injected=true name=${videoName}`);
+                                    }
+                                } catch (_) {
+                                    logActionAttempt('x_file_prepare', 'injected=false reason=exception');
+                                }
+                            } else {
+                                logActionAttempt('x_file_prepare', `injected=false already_has_file=${Boolean(hasXFile)}`);
+                            }
+                        } else {
+                            logActionAttempt('x_file_prepare', 'injected=false input_missing=true');
+                        }
+
+                        const xPostCandidates = [
                             'button[data-testid="tweetButtonInline"]',
                             'button[data-testid="tweetButton"]',
                             'div[data-testid="tweetButtonInline"]',
+                            'div[data-testid="tweetButton"]',
                             'button[aria-label*="post" i]',
-                        ]) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
+                            'div[role="button"][aria-label*="post" i]',
+                        ];
+                        const postButton = bySelectors(xPostCandidates) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
+
+                        const forceEnable = (node) => {
+                            if (!node) return;
+                            try { node.removeAttribute('disabled'); } catch (_) {}
+                            try { node.setAttribute('aria-disabled', 'false'); } catch (_) {}
+                            try { node.setAttribute('data-disabled', 'false'); } catch (_) {}
+                            try { node.setAttribute('tabindex', '0'); } catch (_) {}
+                            try { node.disabled = false; } catch (_) {}
+                        };
+                        const fireSubmitHotkeys = (node) => {
+                            if (!node) return false;
+                            let fired = false;
+                            const combos = [
+                                { key: 'Enter', code: 'Enter', ctrlKey: true, metaKey: false },
+                                { key: 'Enter', code: 'Enter', ctrlKey: false, metaKey: true },
+                                { key: 'Enter', code: 'Enter', ctrlKey: false, metaKey: false },
+                            ];
+                            try { node.focus(); } catch (_) {}
+                            for (const combo of combos) {
+                                try {
+                                    node.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, composed: true, ...combo }));
+                                    node.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, cancelable: true, composed: true, ...combo }));
+                                    node.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, composed: true, ...combo }));
+                                    fired = true;
+                                } catch (_) {}
+                            }
+                            return fired;
+                        };
+
+                        let clicked = false;
                         if (postButton) {
-                            const forceEnable = (node) => {
-                                if (!node) return;
-                                try { node.removeAttribute('disabled'); } catch (_) {}
-                                try { node.setAttribute('aria-disabled', 'false'); } catch (_) {}
-                                try { node.setAttribute('data-disabled', 'false'); } catch (_) {}
-                                try { node.setAttribute('tabindex', '0'); } catch (_) {}
-                                try { node.disabled = false; } catch (_) {}
-                            };
                             const postTarget = postButton.closest('button, [role="button"], div[data-testid]') || postButton;
                             forceEnable(postButton);
                             forceEnable(postTarget);
@@ -12539,7 +12629,6 @@ class MainWindow(QMainWindow):
                                 forceEnable(innerSpan);
                             } catch (_) {}
 
-                            let clicked = false;
                             clicked = clickNodeSingle(postTarget) || clicked;
                             clicked = clickNodeSingle(postButton) || clicked;
                             clicked = injectClickActions(postTarget) || clicked;
@@ -12555,8 +12644,44 @@ class MainWindow(QMainWindow):
                                     clicked = true;
                                 } catch (_) {}
                             }
-                            submitClicked = clicked || submitClicked;
+                            if (!clicked) {
+                                try {
+                                    const rect = postTarget.getBoundingClientRect();
+                                    if (rect && rect.width > 0 && rect.height > 0) {
+                                        const targetAtPoint = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                                        if (targetAtPoint) {
+                                            clicked = clickNodeOrAncestor(targetAtPoint) || clicked;
+                                        }
+                                    }
+                                } catch (_) {}
+                            }
                         }
+
+                        const hotkeySubmitted = fireSubmitHotkeys(xComposer);
+                        let formSubmitted = false;
+                        if (xForm) {
+                            try {
+                                if (typeof xForm.requestSubmit === 'function') {
+                                    xForm.requestSubmit();
+                                    formSubmitted = true;
+                                }
+                            } catch (_) {}
+                            if (!formSubmitted) {
+                                try {
+                                    xForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true, composed: true }));
+                                    formSubmitted = true;
+                                } catch (_) {}
+                            }
+                            if (!formSubmitted) {
+                                try {
+                                    xForm.submit();
+                                    formSubmitted = true;
+                                } catch (_) {}
+                            }
+                        }
+
+                        submitClicked = clicked || hotkeySubmitted || formSubmitted || submitClicked;
+                        logActionAttempt('x_submit', `clicked=${Boolean(clicked)} hotkey=${Boolean(hotkeySubmitted)} form=${Boolean(formSubmitted)} button_found=${Boolean(postButton)}`);
                     }
 
                     let tiktokPostEnabled = false;
@@ -13002,6 +13127,7 @@ class MainWindow(QMainWindow):
                         tiktokSaveDraftUiReady,
                         tiktokSubmitClickedEver: Boolean(tiktokState.submitClicked),
                         actionAttempts,
+                        xRefreshTriggered,
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
@@ -13035,6 +13161,7 @@ class MainWindow(QMainWindow):
             tiktok_network_ready_signal = bool(isinstance(result, dict) and result.get("tiktokNetworkReadySignal"))
             tiktok_save_draft_ui_ready = bool(isinstance(result, dict) and result.get("tiktokSaveDraftUiReady"))
             tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
+            x_refresh_triggered = bool(isinstance(result, dict) and result.get("xRefreshTriggered"))
             action_attempts = result.get("actionAttempts") if isinstance(result, dict) else None
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
@@ -13053,7 +13180,7 @@ class MainWindow(QMainWindow):
             )
             action_attempt_count = len(action_attempts) if isinstance(action_attempts, list) else 0
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked} action_attempts={action_attempt_count}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked} x_refreshed={x_refresh_triggered} action_attempts={action_attempt_count}"
             )
             if isinstance(action_attempts, list):
                 for action_attempt in action_attempts:
@@ -13222,12 +13349,39 @@ class MainWindow(QMainWindow):
         self.upload_youtube_btn.setEnabled(True)
         self.upload_worker = None
 
+    def _normalize_hashtag_tokens(self, hashtags: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for tag in hashtags:
+            cleaned = str(tag).strip().lstrip("#")
+            if cleaned:
+                normalized.append(f"#{cleaned}")
+        return normalized
+
     def _compose_social_text(self, base_text: str, hashtags: list[str]) -> str:
-        tag_text = " ".join(f"#{tag.lstrip('#')}" for tag in hashtags if tag.strip())
+        tag_text = " ".join(self._normalize_hashtag_tokens(hashtags))
         if not tag_text:
             return base_text.strip()
         combined = f"{base_text.strip()}\n\n{tag_text}" if base_text.strip() else tag_text
         return combined.strip()
+
+    def _compose_x_post_text(self, base_text: str, hashtags: list[str], max_chars: int = 275) -> str:
+        text = " ".join(str(base_text or "").split())
+        tag_tokens = self._normalize_hashtag_tokens(hashtags)
+
+        if not text and not tag_tokens:
+            return ""
+
+        if not tag_tokens:
+            return text[:max_chars].rstrip()
+
+        while tag_tokens:
+            tag_text = " ".join(tag_tokens)
+            combined = f"{text} {tag_text}".strip() if text else tag_text
+            if len(combined) <= max_chars:
+                return combined
+            tag_tokens.pop()
+
+        return text[:max_chars].rstrip()
 
     def _build_tiktok_filename_stem(self, title_text: str, slogan_text: str, hashtags: list[str], max_length: int) -> str:
         safe_title = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(title_text or "")).strip()
@@ -13292,7 +13446,7 @@ class MainWindow(QMainWindow):
         )
         return str(staged_path)
 
-    def _show_upload_dialog(self, platform_name: str, title_enabled: bool = True) -> tuple[str, str, list[str], str, bool]:
+    def _show_upload_dialog(self, platform_name: str, title_enabled: bool = True) -> tuple[str, str, list[str], str, bool, str]:
         dialog = QDialog(self)
         dialog.setWindowTitle(f"{platform_name} Upload Details")
         dialog_layout = QVBoxLayout(dialog)
@@ -13306,7 +13460,10 @@ class MainWindow(QMainWindow):
         dialog_layout.addWidget(QLabel(f"{platform_name} Description / Caption"))
         description_input = QPlainTextEdit()
         description_input.setPlaceholderText("Describe this upload...")
-        description_input.setPlainText(self.ai_social_metadata.description)
+        description_default = self.ai_social_metadata.description
+        if platform_name == "X" and self.ai_social_metadata.x_post.strip():
+            description_default = self.ai_social_metadata.x_post
+        description_input.setPlainText(description_default)
         dialog_layout.addWidget(description_input)
 
         dialog_layout.addWidget(QLabel("Hashtags (comma separated, no # needed)"))
@@ -13351,7 +13508,10 @@ class MainWindow(QMainWindow):
                 "audience": str(audience_input.currentData() or "not_kids"),
                 "category": category_value,
             }
-        return title_input.text().strip(), description_input.toPlainText().strip(), hashtags, category_value, accepted
+        x_preview = ""
+        if platform_name == "X":
+            x_preview = self._compose_x_post_text(description_input.toPlainText().strip(), hashtags)
+        return title_input.text().strip(), description_input.toPlainText().strip(), hashtags, category_value, accepted, x_preview
 
 
 if __name__ == "__main__":
