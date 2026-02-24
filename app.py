@@ -8165,8 +8165,9 @@ class MainWindow(QMainWindow):
                 current_url = str(location_result.get("href") or "")
             needs_nav = "grok.com/imagine/favorites" not in current_url.lower()
             if needs_nav:
-                self._append_log("Manual flow: current page is not grok.com/imagine/favorites; navigating there now.")
-                self.browser.setUrl(QUrl("https://grok.com/imagine/favorites"))
+                self._append_log(
+                    "Manual flow: current page is not grok.com/imagine/favorites; staying on the current page for automated flow."
+                )
                 QTimer.singleShot(2000, _open_options_then_steps)
             else:
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
