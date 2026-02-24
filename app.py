@@ -7078,35 +7078,103 @@ class MainWindow(QMainWindow):
                     pick_ready_probe_script = """
                         (() => {
                             try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                const emulateClick = (el) => {
+                                    if (!el || !isVisible(el) || el.disabled) return false;
+                                    try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                                    el.dispatchEvent(new MouseEvent("mousedown", common));
+                                    try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                                    el.dispatchEvent(new MouseEvent("mouseup", common));
+                                    el.dispatchEvent(new MouseEvent("click", common));
+                                    return true;
+                                };
+                                const rankByPosition = (a, b) => {
+                                    const ar = a.getBoundingClientRect();
+                                    const br = b.getBoundingClientRect();
+                                    const rowDelta = Math.abs(ar.top - br.top);
+                                    if (rowDelta > 20) return ar.top - br.top;
+                                    return ar.left - br.left;
+                                };
+                                const looksLikePreviewImage = (img) => {
+                                    if (!isVisible(img)) return false;
+                                    const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
+                                    const title = (img.getAttribute("title") || "").trim().toLowerCase();
+                                    const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
+                                    const descriptor = (alt + " " + title + " " + aria).trim();
+                                    if (/\\bedit\\s+image\\b/i.test(descriptor)) return false;
+                                    const width = img.naturalWidth || img.width || img.clientWidth || 0;
+                                    const height = img.naturalHeight || img.height || img.clientHeight || 0;
+                                    return width >= 220 && height >= 220;
+                                };
+
+                                const listItems = [...document.querySelectorAll("div[role='listitem'], [role='listitem']")]
+                                    .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                                    .filter((el) => isVisible(el));
+                                const makeVideoCandidates = listItems
+                                    .map((item) => {
+                                        const button = item.querySelector("button[aria-label='Make video']");
+                                        if (!button || !isVisible(button) || button.disabled) return null;
+                                        const tileImages = [...item.querySelectorAll("img")].filter(looksLikePreviewImage);
+                                        return { item, button, tileImages };
+                                    })
+                                    .filter((entry) => !!entry)
+                                    .sort((a, b) => rankByPosition(a.button, b.button));
+
+                                if (makeVideoCandidates.length) {
+                                    const target = makeVideoCandidates[0];
+                                    const image = (target.tileImages || []).sort(rankByPosition)[0] || null;
+                                    const clicked = emulateClick(image) || emulateClick(target.item) || emulateClick(target.button);
+                                    return {
+                                        ready: false,
+                                        picked: clicked,
+                                        status: clicked ? "generated-image-clicked" : "generated-image-click-failed",
+                                        listItemCount: listItems.length,
+                                        makeVideoVisibleCount: makeVideoCandidates.length,
+                                    };
+                                }
+
                                 const customizePromptVisible = !!document.querySelector(
                                     "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], " +
                                     "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                                 );
-                                const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i]")]
-                                    .find((btn) => !!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)));
                                 const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
                                     .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
                                 const path = String((window.location && window.location.pathname) || "").toLowerCase();
                                 const onPostView = path.includes("/imagine/post/");
-                                const ready = customizePromptVisible || (onPostView && (editImageVisible || makeVideoButtonVisible));
+                                const ready = customizePromptVisible || (onPostView && editImageVisible);
                                 return {
                                     ready,
+                                    picked: false,
+                                    status: listItems.length ? "waiting-for-make-video-button" : "waiting-for-generated-image",
                                     customizePromptVisible,
-                                    makeVideoButtonVisible,
                                     editImageVisible,
                                     onPostView,
+                                    listItemCount: listItems.length,
+                                    makeVideoVisibleCount: 0,
                                 };
                             } catch (_) {
-                                return { ready: false };
+                                return { ready: false, picked: false, status: "callback-empty" };
                             }
                         })()
                     """
 
                     def _after_pick_ready_probe(probe_result):
+                        if isinstance(probe_result, dict) and probe_result.get("picked"):
+                            self._append_log(
+                                f"Variant {current_variant}: callback-empty recovery found visible button[aria-label='Make video'] in listitems "
+                                f"(count={probe_result.get('makeVideoVisibleCount', 'unknown')}); clicked closest image and continuing."
+                            )
+                            self.manual_image_pick_clicked = True
+                            self.manual_image_pick_retry_count = 0
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            return
+
                         if isinstance(probe_result, dict) and probe_result.get("ready"):
                             ready_flags = (
                                 f"customizePrompt={bool(probe_result.get('customizePromptVisible'))}, "
-                                f"makeVideoBtn={bool(probe_result.get('makeVideoButtonVisible'))}, "
                                 f"editImage={bool(probe_result.get('editImageVisible'))}, "
                                 f"postView={bool(probe_result.get('onPostView'))}"
                             )
@@ -7120,7 +7188,9 @@ class MainWindow(QMainWindow):
                             self.manual_image_submit_retry_count = 0
                             QTimer.singleShot(700, self._poll_for_manual_image)
                             return
-                        _queue_pick_retry(status)
+
+                        next_status = probe_result.get("status") if isinstance(probe_result, dict) else status
+                        _queue_pick_retry(next_status)
 
                     self.browser.page().runJavaScript(pick_ready_probe_script, _after_pick_ready_probe)
                     return
