@@ -44,7 +44,6 @@ const POST_SELECTORS = {
 
 const DRAFT_SELECTORS = {
   tiktok: [
-    "div.Button__content.Button__content--shape-default.Button__content--size-large.Button__content--type-neutral.Button__content--loading-false",
     "button[data-e2e=\"save_draft_button\"] div.Button__content",
     "button[data-e2e=\"save_draft_button\"]",
     "button[aria-label*=\"Draft\"]",
@@ -138,6 +137,11 @@ async function handleCmd(msg) {
           const found = findCandidate();
           if (found && isEnabled(found.el) && (!opts.waitForUpload || hasUploadReadySignal())) {
             const clickTarget = found.el.closest("button, [role='button']") || found.el;
+            const clickText = String(clickTarget.textContent || "").trim().toLowerCase();
+            const clickE2E = String(clickTarget.getAttribute("data-e2e") || "").trim().toLowerCase();
+            if (opts.isDraft && (clickE2E === "discard_post_button" || clickText.includes("discard"))) {
+              return { clicked: false, reason: "blacklisted_discard", selector: found.selector };
+            }
             clickTarget.scrollIntoView({ block: "center", inline: "center" });
             ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
               clickTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
@@ -157,7 +161,7 @@ async function handleCmd(msg) {
         const requestedTimeoutMs = Number(payload.timeoutMs || 0);
         const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
         const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
-        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs };
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft };
       })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {

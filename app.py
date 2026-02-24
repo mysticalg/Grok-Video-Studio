@@ -12235,19 +12235,21 @@ class MainWindow(QMainWindow):
                             || (Date.now() - Number(tiktokState.lastSubmitAttemptAtMs)) >= configuredActionDelayMs;
 
                         const tiktokPostButton = bySelectors([
-                            'div.Button__content.Button__content--shape-default.Button__content--size-large.Button__content--type-neutral.Button__content--loading-false',
                             'button[data-e2e="save_draft_button"] div.Button__content',
                             'button[data-e2e="save_draft_button"]',
                             'button[aria-disabled="false"][data-e2e="save_draft_button"]',
                         ]);
                         if (tiktokPostButton) {
                             const tiktokPostTarget = tiktokPostButton.closest('button, [role="button"]') || tiktokPostButton;
+                            const targetText = normalizedNodeText(tiktokPostTarget);
+                            const targetE2E = String(tiktokPostTarget.getAttribute("data-e2e") || "").toLowerCase();
+                            const isDiscardButton = targetE2E === "discard_post_button" || targetText.includes("discard");
                             const ariaDisabled = String(tiktokPostTarget.getAttribute("aria-disabled") || "").toLowerCase();
                             const dataDisabled = String(tiktokPostTarget.getAttribute("data-disabled") || "").toLowerCase();
                             const nativeDisabled = Boolean(tiktokPostTarget.disabled);
                             const loading = String(tiktokPostTarget.getAttribute("data-loading") || "").toLowerCase() === "true";
                             const explicitEnabled = ariaDisabled === "false" || dataDisabled === "false";
-                            tiktokPostEnabled = explicitEnabled || (!nativeDisabled && ariaDisabled !== "true" && dataDisabled !== "true" && !loading);
+                            tiktokPostEnabled = !isDiscardButton && (explicitEnabled || (!nativeDisabled && ariaDisabled !== "true" && dataDisabled !== "true" && !loading));
                             const waitingForDraftAfterGesture = Boolean(tiktokState.awaitingDraftAfterUserGesture);
                             const canSubmitNormally = captionReady && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
                             const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled;
