@@ -6449,6 +6449,14 @@ class MainWindow(QMainWindow):
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
+                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label, span, div";
+                    const clickableAncestor = (el) => {
+                        if (!el) return null;
+                        if (typeof el.closest === "function") {
+                            return el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label") || el;
+                        }
+                        return el;
+                    };
                     const click = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
                         try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
@@ -6469,6 +6477,8 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("[role='menuitemradio']")
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx)
                       .filter((el) => isVisible(el) && !el.disabled);
+                    const textCandidates = [...document.querySelectorAll(interactiveSelector)]
+                        .filter((el) => isVisible(el) && clean(el.textContent));
 
                     const exactMatch = (el) => {
                         const aria = clean(el.getAttribute("aria-label"));
@@ -6485,11 +6495,14 @@ class MainWindow(QMainWindow):
                     };
 
                     const buttons = candidates.filter((el) => (el.tagName || "").toLowerCase() === "button");
+                    const textTarget = textCandidates.find(exactMatch) || textCandidates.find(fuzzyMatch) || null;
                     const target = ((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
                         ? (buttons.find(exactMatch) || buttons.find(fuzzyMatch))
                         : null)
+                        || ((optionType === "type") ? clickableAncestor(textTarget) : null)
                         || candidates.find(exactMatch)
                         || candidates.find(fuzzyMatch)
+                        || clickableAncestor(textTarget)
                         || null;
 
                     if (!target) return { ok: false, found: false, optionType, targetLabel };
