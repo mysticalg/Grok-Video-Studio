@@ -11405,6 +11405,80 @@ class MainWindow(QMainWindow):
             progress_bar.setVisible(False)
             progress_bar.setValue(0)
 
+    def _prepare_browser_upload_video_for_x(self, source_path: Path) -> Path:
+        """Normalize X uploads to H.264/AAC MP4 when ffmpeg is available."""
+        try:
+            source = source_path.expanduser().resolve()
+        except Exception:
+            source = source_path
+
+        if not source.exists() or not source.is_file():
+            return source_path
+
+        detected_mime = (mimetypes.guess_type(str(source))[0] or "").lower()
+        suffix = source.suffix.lower()
+        if detected_mime.startswith("image/"):
+            return source
+        if suffix == ".mp4" and detected_mime in {"", "video/mp4", "application/mp4"}:
+            return source
+
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            self._append_log("X upload: ffmpeg not found; using original media file without MP4 normalization.")
+            return source
+
+        staging_dir = DOWNLOAD_DIR / ".social_upload_staging"
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            stat = source.stat()
+            cache_key = f"{source.resolve()}::{int(stat.st_mtime)}::{stat.st_size}"
+        except Exception:
+            cache_key = str(source)
+        digest = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:12]
+        safe_stem = re.sub(r"[^a-zA-Z0-9._-]+", "-", source.stem).strip("-.") or "upload"
+        target_path = staging_dir / f"{safe_stem}-{digest}.mp4"
+        if target_path.exists() and target_path.stat().st_size > 0:
+            return target_path
+
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            str(source),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(target_path),
+        ]
+        self._append_log(f"X upload: converting '{source.name}' to codec-compatible MP4 via ffmpeg.")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except Exception as exc:
+            self._append_log(f"X upload: ffmpeg conversion failed to start ({exc}); using original file.")
+            return source
+
+        if result.returncode != 0 or not target_path.exists() or target_path.stat().st_size <= 0:
+            err_tail = (result.stderr or "").strip()[-400:]
+            self._append_log(
+                f"X upload: ffmpeg MP4 conversion failed (exit={result.returncode}); using original file. {err_tail}"
+            )
+            try:
+                if target_path.exists():
+                    target_path.unlink()
+            except Exception:
+                pass
+            return source
+
+        return target_path
+
     def _start_social_browser_upload(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         if not self._is_browser_tab_enabled(platform_name):
             QMessageBox.warning(self, "Social Upload", f"{platform_name} upload tab is disabled. Re-enable it from View → Browser Tabs.")
@@ -11424,6 +11498,8 @@ class MainWindow(QMainWindow):
             return
 
         video_file = Path(str(video_path))
+        if platform_name == "X":
+            video_file = self._prepare_browser_upload_video_for_x(video_file)
         encoded_video = ""
         guessed_mime = mimetypes.guess_type(str(video_file))[0] or "application/octet-stream"
         if video_file.exists() and video_file.is_file():
@@ -11447,7 +11523,7 @@ class MainWindow(QMainWindow):
 
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
-            "video_path": str(video_path),
+            "video_path": str(video_file),
             "caption": str(caption or ""),
             "title": str(title or ""),
             "attempts": 0,
@@ -11458,7 +11534,7 @@ class MainWindow(QMainWindow):
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
         self._append_log(
-            f"{platform_name}: queued browser upload video path={video_path} (exists={Path(str(video_path)).exists()})"
+            f"{platform_name}: queued browser upload video path={video_file} (exists={Path(str(video_file)).exists()})"
         )
 
         progress_bar.setVisible(True)
