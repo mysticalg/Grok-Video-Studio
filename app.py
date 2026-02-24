@@ -2314,8 +2314,8 @@ class MainWindow(QMainWindow):
         self.count.setValue(1)
 
         self.automation_action_delay_ms = QSpinBox()
-        self.automation_action_delay_ms.setRange(250, 10000)
-        self.automation_action_delay_ms.setSingleStep(250)
+        self.automation_action_delay_ms.setRange(50, 10000)
+        self.automation_action_delay_ms.setSingleStep(10)
         self.automation_action_delay_ms.setSuffix(" ms")
         self.automation_action_delay_ms.setValue(self.DEFAULT_AUTOMATION_ACTION_DELAY_MS)
 
@@ -6688,7 +6688,7 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            step_pause_ms = max(250, action_delay_ms)
+            step_pause_ms = max(50, action_delay_ms)
             option_steps = [
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
@@ -8104,7 +8104,7 @@ class MainWindow(QMainWindow):
                         f"WARNING: Manual submit script reported an issue for variant {variant}: {error_detail!r}. Continuing to download polling."
                     )
             self._append_log(
-                f"Submitted manual variant {variant} after configured options flow; waiting for generation to auto-download."
+                f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
             self._trigger_browser_video_download(variant)
 
@@ -8122,12 +8122,22 @@ class MainWindow(QMainWindow):
 
             self.browser.page().runJavaScript(script, _after_prompt_populate)
 
-        option_steps = [
-            ("resolution", selected_quality_label),
-            ("seconds", selected_duration_label),
-            ("ratio", selected_aspect_ratio),
-            ("type", "Image"),
-        ]
+        continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+        if continue_last_video_mode:
+            option_steps = [
+                ("resolution", selected_quality_label),
+                ("seconds", selected_duration_label),
+            ]
+            self._append_log(
+                f"Variant {variant}: continue-last-video mode detected; bypassing ratio/type selection and applying only resolution/duration."
+            )
+        else:
+            option_steps = [
+                ("resolution", selected_quality_label),
+                ("seconds", selected_duration_label),
+                ("ratio", selected_aspect_ratio),
+                ("type", "Image"),
+            ]
 
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
@@ -8165,8 +8175,9 @@ class MainWindow(QMainWindow):
                 current_url = str(location_result.get("href") or "")
             needs_nav = "grok.com/imagine/favorites" not in current_url.lower()
             if needs_nav:
-                self._append_log("Manual flow: current page is not grok.com/imagine/favorites; navigating there now.")
-                self.browser.setUrl(QUrl("https://grok.com/imagine/favorites"))
+                self._append_log(
+                    "Manual flow: current page is not grok.com/imagine/favorites; staying on the current page for automated flow."
+                )
                 QTimer.singleShot(2000, _open_options_then_steps)
             else:
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
@@ -8252,13 +8263,22 @@ class MainWindow(QMainWindow):
                     .find((btn) => isVisible(btn) && !btn.disabled && /cancel\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
 
                 const redoButton = [...document.querySelectorAll("button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /redo/i.test((btn.textContent || "").trim()));
+                    .find((btn) => {{
+                        if (!isVisible(btn) || btn.disabled) return false;
+                        const aria = (btn.getAttribute("aria-label") || "").trim();
+                        const txt = (btn.textContent || "").trim();
+                        return /redo/i.test(aria) || /redo/i.test(txt);
+                    }});
 
                 const makeVideoButton = [...document.querySelectorAll("button")]
                     .find((btn) => {{
                         if (!isVisible(btn) || btn.disabled) return false;
-                        const label = (btn.getAttribute("aria-label") || btn.textContent || "").trim();
-                        return /make\\s+video/i.test(label);
+                        const aria = (btn.getAttribute("aria-label") || "").trim();
+                        const txt = (btn.textContent || "").trim();
+                        const srOnly = (btn.querySelector(".sr-only")?.textContent || "").trim();
+                        const combined = `${{aria}} ${{txt}} ${{srOnly}}`.trim();
+                        if (/redo/i.test(combined)) return false;
+                        return /make\\s+video/i.test(combined);
                     }});
 
                 const video = document.querySelector("video");
@@ -8307,25 +8327,29 @@ class MainWindow(QMainWindow):
                 }}
                 if (!downloadButton) downloadButton = downloadCandidates[0] || null;
 
-                if (downloadButton && !cancelVideoButton) {{
-                    return {{
-                        status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
-                    }};
-                }}
-
                 if (cancelVideoButton) {{
                     return {{ status: "rendering-cancel-visible" }};
                 }}
 
                 if (makeVideoButton) {{
                     const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
-                    if (!allowMakeVideoClick) {{
-                        return {{ status: "make-video-awaiting-progress", buttonLabel }};
+                    if (allowMakeVideoClick) {{
+                        return {{
+                            status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
+                            buttonLabel,
+                        }};
                     }}
+                    return {{ status: "make-video-awaiting-progress", buttonLabel }};
+                }}
+
+                if (downloadButton) {{
                     return {{
-                        status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
-                        buttonLabel,
+                        status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
                     }};
+                }}
+
+                if (redoButton && !downloadButton && !src && !anchorUrl) {{
+                    return {{ status: "waiting-for-redo" }};
                 }}
 
                 if (!redoButton) {{
