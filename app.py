@@ -12047,6 +12047,10 @@ class MainWindow(QMainWindow):
                                 'div[data-testid^="tweetTextarea"][contenteditable="true"]',
                                 'div[role="textbox"][contenteditable="true"][aria-label*="post text" i]',
                             ]);
+                            if (xComposer) {
+                                clickNodeSingle(xComposer) || clickNodeOrAncestor(xComposer);
+                                try { xComposer.focus(); } catch (_) {}
+                            }
                             textFilled = emulateTypingIntoEditor(xComposer, captionText) || textFilled;
                             if (!textFilled && xComposer) {
                                 // Avoid raw textContent assignment for DraftEditor; it can render text but not update editor state.
