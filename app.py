@@ -698,6 +698,7 @@ class AISocialMetadata:
     medium_title: str
     tiktok_subheading: str
     description: str
+    x_post: str
     hashtags: list[str]
     category: str
 
@@ -2210,6 +2211,7 @@ class MainWindow(QMainWindow):
             medium_title="AI Generated Video Clip",
             tiktok_subheading="Swipe for more AI visuals.",
             description="",
+            x_post="",
             hashtags=["grok", "ai", "generated-video"],
             category="22",
         )
@@ -4466,6 +4468,7 @@ class MainWindow(QMainWindow):
                 "medium_title": self.ai_social_metadata.medium_title,
                 "tiktok_subheading": self.ai_social_metadata.tiktok_subheading,
                 "description": self.ai_social_metadata.description,
+                "x_post": self.ai_social_metadata.x_post,
                 "hashtags": self.ai_social_metadata.hashtags,
                 "category": self.ai_social_metadata.category,
             },
@@ -4580,6 +4583,7 @@ class MainWindow(QMainWindow):
                 medium_title=str(metadata.get("medium_title", self.ai_social_metadata.medium_title)),
                 tiktok_subheading=str(metadata.get("tiktok_subheading", self.ai_social_metadata.tiktok_subheading)),
                 description=str(metadata.get("description", self.ai_social_metadata.description)),
+                x_post=str(metadata.get("x_post", self.ai_social_metadata.x_post)),
                 hashtags=[str(tag).strip().lstrip("#") for tag in hashtags if str(tag).strip()],
                 category=str(metadata.get("category", self.ai_social_metadata.category)),
             )
@@ -5858,11 +5862,12 @@ class MainWindow(QMainWindow):
             instruction = concept + " please turn this into a detailed 10 second prompt for grok imagine"
             system = "You are an expert prompt and social metadata generator for short-form AI videos. Return strict JSON only."
             user = (
-                "Generate JSON with keys: manual_prompt, title, medium_title, tiktok_subheading, description, hashtags, category. "
+                "Generate JSON with keys: manual_prompt, title, medium_title, tiktok_subheading, description, x_post, hashtags, category. "
                 "manual_prompt should be detailed and cinematic for a 10-second Grok Imagine clip. "
                 "title should be short and catchy. description should be 1-3 sentences. "
                 "medium_title should be a medium-length title fit for social display. "
                 "tiktok_subheading should be a slogan/subheading near 120 characters (roughly 100-140). "
+                "x_post should be a standalone X.com-ready post no longer than 275 characters total including spaces and hashtags. "
                 "hashtags should be an array of 5-12 hashtag strings without # prefixes. "
                 "category should be the best YouTube category id as a string (default 22 if unsure). "
                 f"Concept instruction: {instruction}"
@@ -5880,6 +5885,7 @@ class MainWindow(QMainWindow):
                 medium_title=str(parsed.get("medium_title", parsed.get("title", "AI Generated Video Clip"))).strip() or "AI Generated Video Clip",
                 tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")).strip() or "Swipe for more AI visuals.",
                 description=str(parsed.get("description", "")).strip(),
+                x_post=str(parsed.get("x_post", "")).strip(),
                 hashtags=cleaned_hashtags or ["grok", "ai", "generated-video"],
                 category=str(parsed.get("category", "22")).strip() or "22",
             )
@@ -10880,7 +10886,7 @@ class MainWindow(QMainWindow):
             return
 
         video_path = self.videos[index]["video_file_path"]
-        title, description, hashtags, category_id, accepted = self._show_upload_dialog("YouTube")
+        title, description, hashtags, category_id, accepted, _ = self._show_upload_dialog("YouTube")
         if not accepted:
             return
 
@@ -10981,7 +10987,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        title, description, hashtags, _, accepted = self._show_upload_dialog("Facebook")
+        title, description, hashtags, _, accepted, _ = self._show_upload_dialog("Facebook")
         if not accepted:
             return
 
@@ -11005,7 +11011,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        _, caption, hashtags, _, accepted = self._show_upload_dialog("Instagram", title_enabled=False)
+        _, caption, hashtags, _, accepted, _ = self._show_upload_dialog("Instagram", title_enabled=False)
         if not accepted:
             return
 
@@ -11025,7 +11031,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        title, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=True)
+        title, caption, hashtags, _, accepted, _ = self._show_upload_dialog("TikTok", title_enabled=True)
         if not accepted:
             return
 
@@ -11050,14 +11056,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        _, description, hashtags, _, accepted = self._show_upload_dialog("X", title_enabled=False)
+        _, description, hashtags, _, accepted, x_post_preview = self._show_upload_dialog("X", title_enabled=False)
         if not accepted:
             return
+
+        caption_text = x_post_preview or self._compose_x_post_text(description, hashtags)
+        if not caption_text:
+            caption_text = self._compose_x_post_text(self.ai_social_metadata.x_post or self.ai_social_metadata.description, self.ai_social_metadata.hashtags)
 
         self._run_social_upload_via_mode(
             platform_name="X",
             video_path=video_path,
-            caption=self._compose_social_text(description, hashtags),
+            caption=caption_text,
             title="",
         )
 
@@ -11071,7 +11081,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        title, description, hashtags, _, accepted = self._show_upload_dialog("YouTube")
+        title, description, hashtags, _, accepted, _ = self._show_upload_dialog("YouTube")
         if not accepted:
             return
 
@@ -11089,7 +11099,7 @@ class MainWindow(QMainWindow):
             return
 
         video_path = self.videos[index]["video_file_path"]
-        title, description, hashtags, _, accepted = self._show_upload_dialog("Facebook")
+        title, description, hashtags, _, accepted, _ = self._show_upload_dialog("Facebook")
         if not accepted:
             return
         
@@ -11118,7 +11128,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        _, caption, hashtags, _, accepted = self._show_upload_dialog("Instagram", title_enabled=False)
+        _, caption, hashtags, _, accepted, _ = self._show_upload_dialog("Instagram", title_enabled=False)
         if not accepted:
             return
 
@@ -11142,7 +11152,7 @@ class MainWindow(QMainWindow):
             return
 
         video_path = self.videos[index]["video_file_path"]
-        _, caption, hashtags, _, accepted = self._show_upload_dialog("TikTok", title_enabled=False)
+        _, caption, hashtags, _, accepted, _ = self._show_upload_dialog("TikTok", title_enabled=False)
         if not accepted:
             return
 
@@ -13222,12 +13232,39 @@ class MainWindow(QMainWindow):
         self.upload_youtube_btn.setEnabled(True)
         self.upload_worker = None
 
+    def _normalize_hashtag_tokens(self, hashtags: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for tag in hashtags:
+            cleaned = str(tag).strip().lstrip("#")
+            if cleaned:
+                normalized.append(f"#{cleaned}")
+        return normalized
+
     def _compose_social_text(self, base_text: str, hashtags: list[str]) -> str:
-        tag_text = " ".join(f"#{tag.lstrip('#')}" for tag in hashtags if tag.strip())
+        tag_text = " ".join(self._normalize_hashtag_tokens(hashtags))
         if not tag_text:
             return base_text.strip()
         combined = f"{base_text.strip()}\n\n{tag_text}" if base_text.strip() else tag_text
         return combined.strip()
+
+    def _compose_x_post_text(self, base_text: str, hashtags: list[str], max_chars: int = 275) -> str:
+        text = " ".join(str(base_text or "").split())
+        tag_tokens = self._normalize_hashtag_tokens(hashtags)
+
+        if not text and not tag_tokens:
+            return ""
+
+        if not tag_tokens:
+            return text[:max_chars].rstrip()
+
+        while tag_tokens:
+            tag_text = " ".join(tag_tokens)
+            combined = f"{text} {tag_text}".strip() if text else tag_text
+            if len(combined) <= max_chars:
+                return combined
+            tag_tokens.pop()
+
+        return text[:max_chars].rstrip()
 
     def _build_tiktok_filename_stem(self, title_text: str, slogan_text: str, hashtags: list[str], max_length: int) -> str:
         safe_title = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(title_text or "")).strip()
@@ -13292,7 +13329,7 @@ class MainWindow(QMainWindow):
         )
         return str(staged_path)
 
-    def _show_upload_dialog(self, platform_name: str, title_enabled: bool = True) -> tuple[str, str, list[str], str, bool]:
+    def _show_upload_dialog(self, platform_name: str, title_enabled: bool = True) -> tuple[str, str, list[str], str, bool, str]:
         dialog = QDialog(self)
         dialog.setWindowTitle(f"{platform_name} Upload Details")
         dialog_layout = QVBoxLayout(dialog)
@@ -13306,7 +13343,10 @@ class MainWindow(QMainWindow):
         dialog_layout.addWidget(QLabel(f"{platform_name} Description / Caption"))
         description_input = QPlainTextEdit()
         description_input.setPlaceholderText("Describe this upload...")
-        description_input.setPlainText(self.ai_social_metadata.description)
+        description_default = self.ai_social_metadata.description
+        if platform_name == "X" and self.ai_social_metadata.x_post.strip():
+            description_default = self.ai_social_metadata.x_post
+        description_input.setPlainText(description_default)
         dialog_layout.addWidget(description_input)
 
         dialog_layout.addWidget(QLabel("Hashtags (comma separated, no # needed)"))
@@ -13351,7 +13391,10 @@ class MainWindow(QMainWindow):
                 "audience": str(audience_input.currentData() or "not_kids"),
                 "category": category_value,
             }
-        return title_input.text().strip(), description_input.toPlainText().strip(), hashtags, category_value, accepted
+        x_preview = ""
+        if platform_name == "X":
+            x_preview = self._compose_x_post_text(description_input.toPlainText().strip(), hashtags)
+        return title_input.text().strip(), description_input.toPlainText().strip(), hashtags, category_value, accepted, x_preview
 
 
 if __name__ == "__main__":
