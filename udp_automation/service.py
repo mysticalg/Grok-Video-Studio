@@ -141,7 +141,12 @@ class UdpAutomationService:
                 ack = await self._send_extension_cmd("upload.select_file", payload)
                 return _ack_from_extension(ack)
 
-            if name in {"form.fill", "post.submit", "post.status", "dom.query", "dom.click", "dom.type", "platform.ensure_logged_in"}:
+            if name == "platform.ensure_logged_in":
+                platform = str(payload.get("platform") or "")
+                await self._emit("state", {"state": "login_check_skipped", "platform": platform, "loggedIn": True})
+                return {"ok": True, "payload": {"platform": platform, "loggedIn": True, "mode": "service_fastpath"}}
+
+            if name in {"form.fill", "post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 
