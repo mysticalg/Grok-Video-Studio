@@ -8263,13 +8263,22 @@ class MainWindow(QMainWindow):
                     .find((btn) => isVisible(btn) && !btn.disabled && /cancel\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
 
                 const redoButton = [...document.querySelectorAll("button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /redo/i.test((btn.textContent || "").trim()));
+                    .find((btn) => {{
+                        if (!isVisible(btn) || btn.disabled) return false;
+                        const aria = (btn.getAttribute("aria-label") || "").trim();
+                        const txt = (btn.textContent || "").trim();
+                        return /redo/i.test(aria) || /redo/i.test(txt);
+                    }});
 
                 const makeVideoButton = [...document.querySelectorAll("button")]
                     .find((btn) => {{
                         if (!isVisible(btn) || btn.disabled) return false;
-                        const label = (btn.getAttribute("aria-label") || btn.textContent || "").trim();
-                        return /make\\s+video/i.test(label);
+                        const aria = (btn.getAttribute("aria-label") || "").trim();
+                        const txt = (btn.textContent || "").trim();
+                        const srOnly = (btn.querySelector(".sr-only")?.textContent || "").trim();
+                        const combined = `${{aria}} ${{txt}} ${{srOnly}}`.trim();
+                        if (/redo/i.test(combined)) return false;
+                        return /make\\s+video/i.test(combined);
                     }});
 
                 const video = document.querySelector("video");
@@ -8337,6 +8346,10 @@ class MainWindow(QMainWindow):
                     return {{
                         status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
                     }};
+                }}
+
+                if (redoButton && !downloadButton && !src && !anchorUrl) {{
+                    return {{ status: "waiting-for-redo" }};
                 }}
 
                 if (!redoButton) {{
