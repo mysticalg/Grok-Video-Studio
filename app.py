@@ -6426,7 +6426,7 @@ class MainWindow(QMainWindow):
                     const desiredAspect = "{selected_aspect_ratio}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
-                    const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                    const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const clickableAncestor = (el) => {
                         if (!el) return null;
                         if (typeof el.closest === "function") {
@@ -6505,7 +6505,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const click = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
@@ -6547,7 +6547,7 @@ class MainWindow(QMainWindow):
                     const targetLabel = "{target_label}";
                     const optionType = "{option_type}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label, span, div";
                     const clickableAncestor = (el) => {
@@ -7715,7 +7715,7 @@ class MainWindow(QMainWindow):
                     const desiredAspect = "{selected_aspect_ratio}";
                     const desiredDuration = "{selected_duration_label}";
                     const fallbackQuality = desiredQuality === "720p" ? "480p" : desiredQuality;
-                    const cleanText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const cleanText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
 
                     const menuCandidates = [
                         ...document.querySelectorAll("[role='menu'][data-state='open']"),
@@ -8100,7 +8100,7 @@ class MainWindow(QMainWindow):
                     const targetLabel = "{target_label}";
                     const optionType = "{option_type}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const click = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
@@ -9887,7 +9887,7 @@ class MainWindow(QMainWindow):
                     parts.unshift(part);
                     break;
                   }
-                  const classes = (node.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0,2).join('.');
+                  const classes = (node.className || '').toString().trim().split(/\\s+/).filter(Boolean).slice(0,2).join('.');
                   if (classes) part += `.${classes}`;
                   const parent = node.parentElement;
                   if (parent) {
@@ -11829,6 +11829,7 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     const youtubeState = uploadState.youtube = uploadState.youtube || {};
+                    const xState = uploadState.x = uploadState.x || {};
                     const tiktokNetworkState = uploadState.tiktokNetwork = uploadState.tiktokNetwork || {};
                     if (!tiktokNetworkState.hooksInstalled) {
                         tiktokNetworkState.hooksInstalled = true;
@@ -12109,9 +12110,9 @@ class MainWindow(QMainWindow):
                         }
                         return bySelectors(selectors);
                     };
-
                     let textFilled = false;
                     let captionReady = !captionRequired;
+                    let xRefreshTriggered = false;
                     if ((platform === "facebook" || platform === "x") && captionRequired) {
                         if (platform === "x") {
                             const normalizeForCompare = (value) => String(value || "")
@@ -12142,14 +12143,32 @@ class MainWindow(QMainWindow):
                                 || pasteTextIntoEditor(xComposer, captionText)
                                 || emulateTypingIntoEditor(xComposer, captionText);
                             textFilled = textFilled && draftTextMatches();
+
+                            const refreshKeyParts = [requestedVideoPath || "video", expectedCaption || "caption"];
+                            const refreshKey = `codex_x_refresh_after_caption:${refreshKeyParts.join("|").slice(0, 240)}`;
+                            let xRefreshAlreadyDone = false;
+                            try {
+                                xRefreshAlreadyDone = String(sessionStorage.getItem(refreshKey) || "") === "1";
+                            } catch (_) {}
+                            if (textFilled && !xRefreshAlreadyDone && !xState.refreshTriggered) {
+                                xState.refreshTriggered = true;
+                                xRefreshTriggered = true;
+                                try { sessionStorage.setItem(refreshKey, "1"); } catch (_) {}
+                                try { window.location.reload(); } catch (_) {}
+                                captionReady = false;
+                            } else {
+                                xState.refreshTriggered = false;
+                                captionReady = textFilled;
+                            }
                         } else {
                             const textTarget = findTextInputTarget();
                             textFilled = setTextValue(textTarget, captionText);
+                            captionReady = textFilled;
                         }
-                        captionReady = textFilled;
                     }
 
                     if (platform === "facebook" && captionReady && !facebookState.uploadChooserOpened) {
+
                         const facebookUploadButton = findClickableByHints([
                             "photo/video",
                             "photo or video",
@@ -13078,6 +13097,7 @@ class MainWindow(QMainWindow):
                         tiktokSaveDraftUiReady,
                         tiktokSubmitClickedEver: Boolean(tiktokState.submitClicked),
                         actionAttempts,
+                        xRefreshTriggered,
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
                         allowFileDialog,
@@ -13111,6 +13131,7 @@ class MainWindow(QMainWindow):
             tiktok_network_ready_signal = bool(isinstance(result, dict) and result.get("tiktokNetworkReadySignal"))
             tiktok_save_draft_ui_ready = bool(isinstance(result, dict) and result.get("tiktokSaveDraftUiReady"))
             tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
+            x_refresh_triggered = bool(isinstance(result, dict) and result.get("xRefreshTriggered"))
             action_attempts = result.get("actionAttempts") if isinstance(result, dict) else None
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
@@ -13129,7 +13150,7 @@ class MainWindow(QMainWindow):
             )
             action_attempt_count = len(action_attempts) if isinstance(action_attempts, list) else 0
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked} action_attempts={action_attempt_count}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked} x_refreshed={x_refresh_triggered} action_attempts={action_attempt_count}"
             )
             if isinstance(action_attempts, list):
                 for action_attempt in action_attempts:
