@@ -6802,8 +6802,12 @@ class MainWindow(QMainWindow):
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
 
-                    if (window.__grokManualPickObserverClicked) {{
-                        window.__grokManualPickObserverClicked = false;
+                    if (window.__grokManualPickObserverResult) {{
+                        const observerStatus = window.__grokManualPickObserverResult;
+                        window.__grokManualPickObserverResult = "";
+                        if (observerStatus === "video-submit-clicked") {{
+                            return {{ ok: true, status: "video-submit-clicked", buttonLabel: "Make video" }};
+                        }}
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
 
@@ -6820,9 +6824,15 @@ class MainWindow(QMainWindow):
                         }});
 
                         const firstButton = makeVideoButtons[0];
+                        const clickedSubmit = emulateClick(firstButton);
+                        if (clickedSubmit) {{
+                            await sleep(ACTION_DELAY_MS);
+                            return {{ ok: true, status: "video-submit-clicked", buttonLabel: "Make video" }};
+                        }}
+
                         const tile = listItemOf(firstButton) || firstButton.parentElement;
                         const tileImage = tile?.querySelector?.("img") || null;
-                        const clickedTile = emulateClick(tileImage) || emulateClick(tile) || emulateClick(firstButton);
+                        const clickedTile = emulateClick(tileImage) || emulateClick(tile);
                         if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
                         await sleep(ACTION_DELAY_MS);
                         return {{ ok: true, status: "generated-image-clicked" }};
@@ -6992,7 +7002,7 @@ class MainWindow(QMainWindow):
                             } catch (_) {}
                             window.__grokManualPickObserver = null;
                             window.__grokManualPickObserverDisconnected = true;
-                            window.__grokManualPickObserverClicked = false;
+                            window.__grokManualPickObserverResult = "";
                             return true;
                         })()
                     """)
@@ -7030,6 +7040,19 @@ class MainWindow(QMainWindow):
 
                     if not self.manual_image_video_submit_sent:
                         self._append_log(f"Variant {current_variant}: {message}.")
+                    self.browser.page().runJavaScript("""
+                        (() => {
+                            try {
+                                if (window.__grokManualPickObserver) {
+                                    window.__grokManualPickObserver.disconnect();
+                                }
+                            } catch (_) {}
+                            window.__grokManualPickObserver = null;
+                            window.__grokManualPickObserverDisconnected = true;
+                            window.__grokManualPickObserverResult = "";
+                            return true;
+                        })()
+                    """)
                     self.manual_image_video_submit_sent = True
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
@@ -7119,9 +7142,10 @@ class MainWindow(QMainWindow):
                                         });
 
                                         const firstButton = makeVideoButtons[0];
+                                        if (emulateClick(firstButton)) return "video-submit-clicked";
                                         const tile = listItemOf(firstButton) || firstButton.parentElement;
                                         const tileImage = tile?.querySelector?.("img") || null;
-                                        return emulateClick(tileImage) || emulateClick(tile) || emulateClick(firstButton);
+                                        return (emulateClick(tileImage) || emulateClick(tile)) ? "generated-image-clicked" : "";
                                     }
 
                                     const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
@@ -7137,7 +7161,7 @@ class MainWindow(QMainWindow):
                                             return width >= 220 && height >= 220;
                                         });
 
-                                    if (!listItemImages.length) return false;
+                                    if (!listItemImages.length) return "";
 
                                     listItemImages.sort((a, b) => {
                                         const ar = a.getBoundingClientRect();
@@ -7149,20 +7173,22 @@ class MainWindow(QMainWindow):
 
                                     const firstImage = listItemImages[0];
                                     const listItem = listItemOf(firstImage) || firstImage.closest("button, [role='button']") || firstImage.parentElement;
-                                    return emulateClick(firstImage) || emulateClick(listItem);
+                                    return (emulateClick(firstImage) || emulateClick(listItem)) ? "generated-image-clicked" : "";
                                 };
 
-                                if (tryClickFirstGeneratedTile()) {
-                                    window.__grokManualPickObserverClicked = true;
+                                const initialOutcome = tryClickFirstGeneratedTile();
+                                if (initialOutcome) {
+                                    window.__grokManualPickObserverResult = initialOutcome;
                                 } else {
                                     scrollBottom();
                                 }
 
                                 if (!window.__grokManualPickObserver || window.__grokManualPickObserverDisconnected) {
                                     const observer = new MutationObserver(() => {
-                                        if (window.__grokManualPickObserverClicked) return;
-                                        if (tryClickFirstGeneratedTile()) {
-                                            window.__grokManualPickObserverClicked = true;
+                                        if (window.__grokManualPickObserverResult) return;
+                                        const outcome = tryClickFirstGeneratedTile();
+                                        if (outcome) {
+                                            window.__grokManualPickObserverResult = outcome;
                                             try { observer.disconnect(); } catch (_) {}
                                             window.__grokManualPickObserverDisconnected = true;
                                             return;
