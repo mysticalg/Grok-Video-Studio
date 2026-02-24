@@ -44,6 +44,8 @@ const POST_SELECTORS = {
 
 const DRAFT_SELECTORS = {
   tiktok: [
+    "div.Button__content.Button__content--shape-default.Button__content--size-large.Button__content--type-neutral.Button__content--loading-false",
+    "button[data-e2e=\"save_draft_button\"] div.Button__content",
     "button[data-e2e=\"save_draft_button\"]",
     "button[aria-label*=\"Draft\"]",
     "button[class*=\"draft\"]"
@@ -135,10 +137,12 @@ async function handleCmd(msg) {
         while (Date.now() - started < timeoutMs) {
           const found = findCandidate();
           if (found && isEnabled(found.el) && (!opts.waitForUpload || hasUploadReadySignal())) {
-            found.el.scrollIntoView({ block: "center", inline: "center" });
+            const clickTarget = found.el.closest("button, [role='button']") || found.el;
+            clickTarget.scrollIntoView({ block: "center", inline: "center" });
             ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
-              found.el.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+              clickTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
             });
+            try { clickTarget.click?.(); } catch (_) {}
             return { clicked: true, selector: found.selector, waitedMs: Date.now() - started };
           }
           await new Promise((resolve) => setTimeout(resolve, 250));
