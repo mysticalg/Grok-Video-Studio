@@ -8106,7 +8106,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
-            self._trigger_browser_video_download(variant, allow_make_video_click=not continue_last_video_mode)
+            self._trigger_browser_video_download(variant)
 
         def _populate_prompt_then_submit() -> None:
             self._append_log(f"Variant {variant}: entering prompt text now.")
@@ -8322,23 +8322,21 @@ class MainWindow(QMainWindow):
                     return {{ status: "rendering-cancel-visible" }};
                 }}
 
-                if (makeVideoButton && allowMakeVideoClick) {{
+                if (makeVideoButton) {{
                     const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
-                    return {{
-                        status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
-                        buttonLabel,
-                    }};
+                    if (allowMakeVideoClick) {{
+                        return {{
+                            status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
+                            buttonLabel,
+                        }};
+                    }}
+                    return {{ status: "make-video-awaiting-progress", buttonLabel }};
                 }}
 
                 if (downloadButton) {{
                     return {{
                         status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
                     }};
-                }}
-
-                if (makeVideoButton) {{
-                    const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
-                    return {{ status: "make-video-awaiting-progress", buttonLabel }};
                 }}
 
                 if (!redoButton) {{
