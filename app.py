@@ -2083,8 +2083,8 @@ class FilteredWebEnginePage(QWebEnginePage):
 
 
 class MainWindow(QMainWindow):
-    MANUAL_IMAGE_PICK_RETRY_LIMIT = 3
-    MANUAL_IMAGE_SUBMIT_RETRY_LIMIT = 3
+    DEFAULT_AUTOMATION_ACTION_DELAY_MS = 1000
+    DEFAULT_AUTOMATION_RETRY_ATTEMPTS = 3
 
     def __init__(self):
         super().__init__()
@@ -2312,6 +2312,16 @@ class MainWindow(QMainWindow):
         self.count = QSpinBox()
         self.count.setRange(1, 10)
         self.count.setValue(1)
+
+        self.automation_action_delay_ms = QSpinBox()
+        self.automation_action_delay_ms.setRange(250, 10000)
+        self.automation_action_delay_ms.setSingleStep(250)
+        self.automation_action_delay_ms.setSuffix(" ms")
+        self.automation_action_delay_ms.setValue(self.DEFAULT_AUTOMATION_ACTION_DELAY_MS)
+
+        self.automation_retry_attempts = QSpinBox()
+        self.automation_retry_attempts.setRange(1, 20)
+        self.automation_retry_attempts.setValue(self.DEFAULT_AUTOMATION_RETRY_ATTEMPTS)
 
         left_layout.addWidget(prompt_group)
 
@@ -3954,6 +3964,12 @@ class MainWindow(QMainWindow):
         automation_layout.setContentsMargins(8, 4, 8, 4)
         automation_layout.addWidget(QLabel("Counter"))
         automation_layout.addWidget(self.count)
+        automation_layout.addSpacing(8)
+        automation_layout.addWidget(QLabel("Delay"))
+        automation_layout.addWidget(self.automation_action_delay_ms)
+        automation_layout.addSpacing(8)
+        automation_layout.addWidget(QLabel("Retries"))
+        automation_layout.addWidget(self.automation_retry_attempts)
         automation_layout.addStretch(1)
         self._add_widget_to_menu(self.automation_menu, automation_widget)
 
@@ -4330,6 +4346,8 @@ class MainWindow(QMainWindow):
             "quick_actions_toolbar_visible": self.quick_actions_toolbar.isVisible(),
             "automation_mode": self.automation_mode.currentData(),
             "counter": self.count.value(),
+            "automation_action_delay_ms": int(self.automation_action_delay_ms.value()),
+            "automation_retry_attempts": int(self.automation_retry_attempts.value()),
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
@@ -4507,6 +4525,16 @@ class MainWindow(QMainWindow):
         elif "count" in preferences:
             try:
                 self.count.setValue(int(preferences["count"]))
+            except (TypeError, ValueError):
+                pass
+        if "automation_action_delay_ms" in preferences:
+            try:
+                self.automation_action_delay_ms.setValue(int(preferences["automation_action_delay_ms"]))
+            except (TypeError, ValueError):
+                pass
+        if "automation_retry_attempts" in preferences:
+            try:
+                self.automation_retry_attempts.setValue(int(preferences["automation_retry_attempts"]))
             except (TypeError, ValueError):
                 pass
         if "video_resolution" in preferences:
@@ -6583,7 +6611,8 @@ class MainWindow(QMainWindow):
 
         def _retry_variant(reason: str) -> None:
             self._append_log(f"WARNING: Manual image variant {variant} attempt {attempts} failed: {reason}")
-            if attempts >= 4:
+            max_attempts = int(self.automation_retry_attempts.value())
+            if attempts >= max_attempts:
                 self._append_log(
                     f"ERROR: Could not prepare manual image variant {variant} after {attempts} attempts; skipping variant."
                 )
@@ -6593,12 +6622,13 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(1200, self._submit_next_manual_image_variant)
 
         submit_attempts = 0
+        max_submit_attempts = max(1, int(self.automation_retry_attempts.value()))
 
         def _run_submit_attempt() -> None:
             nonlocal submit_attempts
             submit_attempts += 1
             self._append_log(
-                f"Manual image variant {variant}: attempting submit click ({submit_attempts}/12)."
+                f"Manual image variant {variant}: attempting submit click ({submit_attempts}/{max_submit_attempts})."
             )
             self.browser.page().runJavaScript(submit_script, _after_submit)
 
@@ -6613,7 +6643,7 @@ class MainWindow(QMainWindow):
                 return
 
             if isinstance(result, dict) and result.get("waiting"):
-                if submit_attempts < 12:
+                if submit_attempts < max_submit_attempts:
                     self._append_log(
                         f"Manual image variant {variant}: submit button still disabled (attempt {submit_attempts}); retrying click..."
                     )
@@ -6658,7 +6688,7 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            step_pause_ms = 700
+            step_pause_ms = max(250, action_delay_ms)
             option_steps = [
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
@@ -6697,7 +6727,8 @@ class MainWindow(QMainWindow):
 
             QTimer.singleShot(step_pause_ms, lambda: _run_option_step(0))
 
-        submit_delay_ms = 2000
+        action_delay_ms = int(self.automation_action_delay_ms.value())
+        submit_delay_ms = action_delay_ms
 
         def _after_populate(result):
             if result in (None, ""):
@@ -6987,7 +7018,7 @@ class MainWindow(QMainWindow):
             if not self.manual_image_pick_clicked:
                 def _queue_pick_retry(current_status: str) -> None:
                     self.manual_image_pick_retry_count += 1
-                    if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
+                    if self.manual_image_pick_retry_count >= int(self.automation_retry_attempts.value()):
                         if current_status == "callback-empty":
                             self._append_log(
                                 "WARNING: Variant "
@@ -7068,7 +7099,7 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 self.manual_image_video_mode_retry_count += 1
-                if self.manual_image_video_mode_retry_count >= self.MANUAL_IMAGE_SUBMIT_RETRY_LIMIT:
+                if self.manual_image_video_mode_retry_count >= int(self.automation_retry_attempts.value()):
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: video-mode validation stayed in '{status}' for "
@@ -7083,7 +7114,7 @@ class MainWindow(QMainWindow):
                 return
 
             self.manual_image_submit_retry_count += 1
-            if self.manual_image_submit_retry_count >= self.MANUAL_IMAGE_SUBMIT_RETRY_LIMIT:
+            if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
                 self._append_log(
                     "WARNING: Variant "
                     f"{current_variant}: submit-stage validation stayed in '{status}' for "
@@ -7205,7 +7236,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_redirect_target = self._active_manual_browser_target()
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
-        action_delay_ms = 1000
+        action_delay_ms = int(self.automation_action_delay_ms.value())
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_duration_label = f"{selected_duration_seconds}s"
