@@ -11973,6 +11973,23 @@ class MainWindow(QMainWindow):
                     if ((platform === "facebook" || platform === "x") && captionRequired) {
                         const textTarget = findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
+                        if (!textFilled && platform === "x") {
+                            const xComposer = bySelectors([
+                                'div[data-testid="tweetTextarea_0"][contenteditable="true"]',
+                                'div[data-testid^="tweetTextarea"][contenteditable="true"]',
+                                'div[role="textbox"][contenteditable="true"][aria-label*="post text" i]',
+                            ]);
+                            textFilled = setTextValue(xComposer, captionText) || textFilled;
+                            if (!textFilled && xComposer) {
+                                try {
+                                    xComposer.focus();
+                                    xComposer.textContent = captionText;
+                                    xComposer.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: captionText, inputType: "insertText" }));
+                                    xComposer.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                                    textFilled = true;
+                                } catch (_) {}
+                            }
+                        }
                         captionReady = textFilled;
                     }
 
@@ -12360,16 +12377,39 @@ class MainWindow(QMainWindow):
                             'button[aria-label*="post" i]',
                         ]) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
                         if (postButton) {
-                            try { postButton.removeAttribute('disabled'); } catch (_) {}
-                            try { postButton.setAttribute('aria-disabled', 'false'); } catch (_) {}
-                            try { postButton.setAttribute('data-disabled', 'false'); } catch (_) {}
-                            try { postButton.disabled = false; } catch (_) {}
+                            const forceEnable = (node) => {
+                                if (!node) return;
+                                try { node.removeAttribute('disabled'); } catch (_) {}
+                                try { node.setAttribute('aria-disabled', 'false'); } catch (_) {}
+                                try { node.setAttribute('data-disabled', 'false'); } catch (_) {}
+                                try { node.setAttribute('tabindex', '0'); } catch (_) {}
+                                try { node.disabled = false; } catch (_) {}
+                            };
                             const postTarget = postButton.closest('button, [role="button"], div[data-testid]') || postButton;
-                            try { postTarget.removeAttribute('disabled'); } catch (_) {}
-                            try { postTarget.setAttribute('aria-disabled', 'false'); } catch (_) {}
-                            try { postTarget.setAttribute('data-disabled', 'false'); } catch (_) {}
-                            try { postTarget.disabled = false; } catch (_) {}
-                            submitClicked = clickNodeSingle(postTarget) || clickNodeOrAncestor(postButton) || submitClicked;
+                            forceEnable(postButton);
+                            forceEnable(postTarget);
+                            try {
+                                const innerSpan = postButton.querySelector('span');
+                                forceEnable(innerSpan);
+                            } catch (_) {}
+
+                            let clicked = false;
+                            clicked = clickNodeSingle(postTarget) || clicked;
+                            clicked = clickNodeSingle(postButton) || clicked;
+                            clicked = injectClickActions(postTarget) || clicked;
+                            clicked = injectClickActions(postButton) || clicked;
+                            clicked = clickNodeOrAncestor(postButton) || clicked;
+                            if (!clicked) {
+                                try {
+                                    const evDown = new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse', button: 0, buttons: 1 });
+                                    const evUp = new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse', button: 0, buttons: 0 });
+                                    postTarget.dispatchEvent(evDown);
+                                    postTarget.dispatchEvent(evUp);
+                                    postTarget.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 }));
+                                    clicked = true;
+                                } catch (_) {}
+                            }
+                            submitClicked = clicked || submitClicked;
                         }
                     }
 
