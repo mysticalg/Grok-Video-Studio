@@ -11513,7 +11513,7 @@ class MainWindow(QMainWindow):
         if platform_name == "Instagram":
             max_attempts = 6
         elif platform_name == "TikTok":
-            max_attempts = 12
+            max_attempts = 24
         elif platform_name == "Facebook":
             max_attempts = 8
         elif platform_name == "YouTube":
@@ -11704,6 +11704,50 @@ class MainWindow(QMainWindow):
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
                     const youtubeState = uploadState.youtube = uploadState.youtube || {};
+                    const tiktokNetworkState = uploadState.tiktokNetwork = uploadState.tiktokNetwork || {};
+                    if (!tiktokNetworkState.hooksInstalled) {
+                        tiktokNetworkState.hooksInstalled = true;
+                        tiktokNetworkState.lastReadySignalAtMs = Number(tiktokNetworkState.lastReadySignalAtMs || 0);
+                        const markReadyFromUrl = (urlValue) => {
+                            const url = norm(urlValue);
+                            if (!url || !url.includes("tiktok")) return;
+                            const looksUploadReady = (
+                                (url.includes("upload") || url.includes("editor_tool"))
+                                && (url.includes("complete") || url.includes("finish") || url.includes("success") || url.includes("ready"))
+                            );
+                            if (looksUploadReady) {
+                                tiktokNetworkState.lastReadySignalAtMs = Date.now();
+                            }
+                        };
+                        try {
+                            const origFetch = window.fetch;
+                            if (typeof origFetch === "function") {
+                                window.fetch = async (...args) => {
+                                    const reqUrl = args[0] && typeof args[0] === "object" ? String(args[0].url || "") : String(args[0] || "");
+                                    try { markReadyFromUrl(reqUrl); } catch (_) {}
+                                    const resp = await origFetch(...args);
+                                    try { markReadyFromUrl(reqUrl); } catch (_) {}
+                                    return resp;
+                                };
+                            }
+                        } catch (_) {}
+                        try {
+                            const origOpen = XMLHttpRequest.prototype.open;
+                            XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                                try { this.__codexReqUrl = String(url || ""); } catch (_) {}
+                                return origOpen.call(this, method, url, ...rest);
+                            };
+                            const origSend = XMLHttpRequest.prototype.send;
+                            XMLHttpRequest.prototype.send = function(...args) {
+                                try {
+                                    this.addEventListener("loadend", () => {
+                                        try { markReadyFromUrl(this.__codexReqUrl || ""); } catch (_) {}
+                                    }, { once: true });
+                                } catch (_) {}
+                                return origSend.apply(this, args);
+                            };
+                        } catch (_) {}
+                    }
                     if (platform === "instagram") {
                         const instagramDialog = bySelectors(['div[role="dialog"][aria-label*="create new post" i]']);
                         if (instagramDialog) {
@@ -12050,12 +12094,35 @@ class MainWindow(QMainWindow):
                         return false;
                     };
                     const tiktokUploadCompletionSignal = detectTikTokUploadCompletionSignal();
+                    const tiktokNetworkReadySignal = Boolean(
+                        platform === "tiktok"
+                        && Number(tiktokNetworkState.lastReadySignalAtMs || 0) > 0
+                        && (Date.now() - Number(tiktokNetworkState.lastReadySignalAtMs || 0)) <= 15 * 60 * 1000
+                    );
+                    const tiktokSaveDraftCandidate = bySelectors([
+                        'button[data-e2e="save_draft_button"]',
+                        'button[aria-label*="save draft" i]',
+                    ]) || findClickableByHints(["save draft"], { excludeHints: ["discard"] });
+                    const tiktokSaveDraftTarget = tiktokSaveDraftCandidate
+                        ? (tiktokSaveDraftCandidate.closest('button, [role="button"]') || tiktokSaveDraftCandidate)
+                        : null;
+                    const tiktokSaveDraftUiReady = Boolean(
+                        platform === "tiktok"
+                        && tiktokSaveDraftTarget
+                        && String(tiktokSaveDraftTarget.getAttribute("aria-disabled") || "").toLowerCase() !== "true"
+                        && String(tiktokSaveDraftTarget.getAttribute("data-disabled") || "").toLowerCase() !== "true"
+                        && !Boolean(tiktokSaveDraftTarget.disabled)
+                        && String(tiktokSaveDraftTarget.getAttribute("data-loading") || "").toLowerCase() !== "true"
+                        && !document.querySelector('[aria-label*="uploading" i], [aria-label*="processing" i]')
+                    );
 
                     const fileReadySignal = Boolean(
                         (fileInput && fileInput.files && fileInput.files.length > 0)
                         || document.querySelector('video')
                         || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
                         || tiktokUploadCompletionSignal
+                        || tiktokNetworkReadySignal
+                        || tiktokSaveDraftUiReady
                     );
 
                     if (platform === "facebook") {
@@ -12281,7 +12348,9 @@ class MainWindow(QMainWindow):
                             'button[data-e2e="save_draft_button"] div.Button__content',
                             'button[data-e2e="save_draft_button"]',
                             'button[aria-disabled="false"][data-e2e="save_draft_button"]',
-                        ]);
+                            'button[aria-label*="save draft" i] div.Button__content',
+                            'button[aria-label*="save draft" i]',
+                        ]) || findClickableByHints(["save draft"], { excludeHints: ["discard"] });
                         if (tiktokPostButton) {
                             const tiktokPostTarget = tiktokPostButton.closest('button, [role="button"]') || tiktokPostButton;
                             const targetText = normalizedNodeText(tiktokPostTarget);
@@ -12294,7 +12363,7 @@ class MainWindow(QMainWindow):
                             const explicitEnabled = ariaDisabled === "false" || dataDisabled === "false";
                             tiktokPostEnabled = !isDiscardButton && (explicitEnabled || (!nativeDisabled && ariaDisabled !== "true" && dataDisabled !== "true" && !loading));
                             const waitingForDraftAfterGesture = Boolean(tiktokState.awaitingDraftAfterUserGesture);
-                            const tiktokUploadReadyForDraft = fileReadySignal || tiktokUploadCompletionSignal;
+                            const tiktokUploadReadyForDraft = fileReadySignal || tiktokUploadCompletionSignal || tiktokNetworkReadySignal || tiktokSaveDraftUiReady;
                             const canSubmitNormally = captionReady && tiktokUploadReadyForDraft && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
                             const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled && tiktokUploadReadyForDraft;
                             if (!tiktokState.submitClicked && tiktokPostEnabled && (canSubmitNormally || canSubmitAfterGesture)) {
@@ -12557,6 +12626,8 @@ class MainWindow(QMainWindow):
                         submitClicked,
                         tiktokPostEnabled,
                         tiktokUploadCompletionSignal,
+                        tiktokNetworkReadySignal,
+                        tiktokSaveDraftUiReady,
                         tiktokSubmitClickedEver: Boolean(tiktokState.submitClicked),
                         videoPathQueued: Boolean(requestedVideoPath),
                         requestedVideoPath,
@@ -12588,6 +12659,8 @@ class MainWindow(QMainWindow):
             submit_clicked = bool(isinstance(result, dict) and result.get("submitClicked"))
             tiktok_post_enabled = bool(isinstance(result, dict) and result.get("tiktokPostEnabled"))
             tiktok_upload_completion_signal = bool(isinstance(result, dict) and result.get("tiktokUploadCompletionSignal"))
+            tiktok_network_ready_signal = bool(isinstance(result, dict) and result.get("tiktokNetworkReadySignal"))
+            tiktok_save_draft_ui_ready = bool(isinstance(result, dict) and result.get("tiktokSaveDraftUiReady"))
             tiktok_submit_clicked_ever = bool(isinstance(result, dict) and result.get("tiktokSubmitClickedEver"))
             video_path = str(self.social_upload_pending.get(platform_name, {}).get("video_path") or "").strip()
             video_path_exists = bool(video_path and Path(video_path).is_file())
@@ -12605,7 +12678,7 @@ class MainWindow(QMainWindow):
                 and "tab=draft" in current_url.lower()
             )
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
             )
             pending["allow_file_dialog"] = False
 
