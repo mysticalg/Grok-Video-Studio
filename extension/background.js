@@ -213,7 +213,12 @@ async function handleCmd(msg) {
           const text = String(value || "");
           const root = el.closest(".DraftEditor-root") || el;
           const editable = root.querySelector(".public-DraftEditor-content[contenteditable='true']") || el;
-          const textSpan = editable.querySelector("span[data-text='true']");
+          const block = editable.querySelector("div.public-DraftStyleDefault-block")
+            || editable.querySelector("[data-block='true'] .public-DraftStyleDefault-block")
+            || editable.querySelector("[data-block='true']");
+          const textSpan = block
+            ? (block.querySelector("span[data-offset-key]") || block.querySelector("span[data-text='true']"))
+            : (editable.querySelector("span[data-offset-key]") || editable.querySelector("span[data-text='true']"));
 
           editable.focus();
           editable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
@@ -242,6 +247,12 @@ async function handleCmd(msg) {
           if (!applied || String(editable.textContent || "").trim().length === 0) {
             if (textSpan) {
               textSpan.textContent = text;
+              const br = textSpan.querySelector("br[data-text='true']");
+              if (br) {
+                try { br.remove(); } catch (_) {}
+              }
+            } else if (block) {
+              block.textContent = text;
             } else {
               editable.textContent = text;
             }
@@ -253,7 +264,7 @@ async function handleCmd(msg) {
           }
           editable.dispatchEvent(new Event("change", { bubbles: true }));
           editable.dispatchEvent(new Event("blur", { bubbles: true }));
-          return true;
+          return String(editable.textContent || "").trim().length > 0;
         };
 
         const setContentEditableByPaste = (el, value) => {
