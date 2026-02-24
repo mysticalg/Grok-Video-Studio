@@ -8104,9 +8104,9 @@ class MainWindow(QMainWindow):
                         f"WARNING: Manual submit script reported an issue for variant {variant}: {error_detail!r}. Continuing to download polling."
                     )
             self._append_log(
-                f"Submitted manual variant {variant} after configured options flow; waiting for generation to auto-download."
+                f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
-            self._trigger_browser_video_download(variant)
+            self._trigger_browser_video_download(variant, allow_make_video_click=not continue_last_video_mode)
 
         def _populate_prompt_then_submit() -> None:
             self._append_log(f"Variant {variant}: entering prompt text now.")
