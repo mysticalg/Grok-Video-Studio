@@ -1986,19 +1986,20 @@ class UdpWorkflowWorker(QThread):
     finished_with_result = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, platform_name: str, video_path: str, title: str, caption: str):
+    def __init__(self, platform_name: str, video_path: str, title: str, caption: str, action_delay_ms: int = 0):
         super().__init__()
         self.platform_name = platform_name
         self.video_path = video_path
         self.title = title
         self.caption = caption
         self._stop_event = threading.Event()
+        self.action_delay_ms = max(0, int(action_delay_ms))
 
     def request_stop(self) -> None:
         self._stop_event.set()
 
     def run(self) -> None:
-        executor = UdpExecutor(stop_event=self._stop_event)
+        executor = UdpExecutor(stop_event=self._stop_event, action_delay_ms=self.action_delay_ms)
         try:
             platform = self.platform_name.lower()
             if platform == "youtube":
@@ -4936,8 +4937,9 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._append_automation_log(f"WARNING: Failed to stop previous UDP workflow cleanly: {exc}")
         self._append_automation_log("UDP action log file: logs/udp_automation.log")
-        self._append_automation_log(f"Starting UDP workflow for {platform_name}.")
-        worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption)
+        action_delay_ms = int(self.automation_action_delay_ms.value())
+        self._append_automation_log(f"Starting UDP workflow for {platform_name} with {action_delay_ms}ms inter-action delay.")
+        worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption, action_delay_ms=action_delay_ms)
         worker.finished_with_result.connect(lambda result: self._append_automation_log(f"{platform_name} UDP result: {result}"))
         worker.failed.connect(lambda err: self._append_automation_log(f"{platform_name} UDP failed: {err}"))
         worker.finished.connect(lambda: setattr(self, "udp_workflow_worker", None))
