@@ -8318,25 +8318,27 @@ class MainWindow(QMainWindow):
                 }}
                 if (!downloadButton) downloadButton = downloadCandidates[0] || null;
 
-                if (downloadButton && !cancelVideoButton) {{
+                if (cancelVideoButton) {{
+                    return {{ status: "rendering-cancel-visible" }};
+                }}
+
+                if (makeVideoButton && allowMakeVideoClick) {{
+                    const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
+                    return {{
+                        status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
+                        buttonLabel,
+                    }};
+                }}
+
+                if (downloadButton) {{
                     return {{
                         status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
                     }};
                 }}
 
-                if (cancelVideoButton) {{
-                    return {{ status: "rendering-cancel-visible" }};
-                }}
-
                 if (makeVideoButton) {{
                     const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
-                    if (!allowMakeVideoClick) {{
-                        return {{ status: "make-video-awaiting-progress", buttonLabel }};
-                    }}
-                    return {{
-                        status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
-                        buttonLabel,
-                    }};
+                    return {{ status: "make-video-awaiting-progress", buttonLabel }};
                 }}
 
                 if (!redoButton) {{
