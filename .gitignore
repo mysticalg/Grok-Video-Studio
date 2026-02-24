@@ -8,3 +8,5 @@ youtube_token_*.json
 preferences.json
 
 sessions/
+
+logs/

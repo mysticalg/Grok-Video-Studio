@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import threading
 import socket
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -32,13 +32,17 @@ class UdpExecutor(BaseExecutor):
         timeout_s: float = 60.0,
         retries: int = 2,
         stop_event: threading.Event | None = None,
+        action_delay_ms: int = 0,
     ):
         self.host = host
         self.port = port
         self.timeout_s = timeout_s
         self.retries = retries
         self.stop_event = stop_event or threading.Event()
+        self.action_delay_ms = max(0, int(action_delay_ms))
         self.log_path = self._resolve_log_path()
+        self._run_lock = threading.Lock()
+        self._action_counter = 0
 
     def _resolve_log_path(self) -> Path:
         logs_dir = Path(__file__).resolve().parents[1] / "logs"
@@ -56,40 +60,100 @@ class UdpExecutor(BaseExecutor):
     def request_stop(self) -> None:
         self.stop_event.set()
 
+    def _target_summary(self, payload: dict[str, Any]) -> str:
+        target_fields = {
+            "platform": payload.get("platform"),
+            "selector": payload.get("selector"),
+            "url": payload.get("url"),
+            "filePath": payload.get("filePath"),
+            "mode": payload.get("mode") or payload.get("publishMode"),
+            "value": payload.get("value"),
+        }
+        fields = [f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in target_fields.items() if v not in (None, "")]
+
+        fields_payload = payload.get("fields")
+        if isinstance(fields_payload, dict) and fields_payload:
+            field_keys = ",".join(sorted(str(k) for k in fields_payload.keys()))
+            fields.append(f"fields={field_keys}")
+
+        if not fields:
+            return "target=<none>"
+        return "target={" + ", ".join(fields) + "}"
+
     def run(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if self.stop_event.is_set():
-            raise RuntimeError("UDP workflow stopped by user")
-        message = cmd(action, payload)
-        self._log(action, "start", f"id={message['id']}")
-        for attempt in range(self.retries + 1):
+        with self._run_lock:
+            self._action_counter += 1
+            action_idx = self._action_counter
+
             if self.stop_event.is_set():
-                self._log(action, "stopped", f"attempt={attempt + 1}")
                 raise RuntimeError("UDP workflow stopped by user")
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.settimeout(min(0.5, self.timeout_s))
-                sock.sendto(json.dumps(message).encode("utf-8"), (self.host, self.port))
-                deadline = time.time() + self.timeout_s
-                self._log(action, "sent", f"attempt={attempt + 1}")
+
+            target_summary = self._target_summary(payload)
+
+            if action_idx > 1 and self.action_delay_ms > 0:
+                delay_s = self.action_delay_ms / 1000.0
+                self._log(action, "delay", f"sequence={action_idx} sleep_ms={self.action_delay_ms} {target_summary}")
+                deadline = time.time() + delay_s
                 while time.time() < deadline:
                     if self.stop_event.is_set():
-                        self._log(action, "stopped", f"attempt={attempt + 1}")
+                        self._log(action, "stopped", f"sequence={action_idx} during_delay=true {target_summary}")
                         raise RuntimeError("UDP workflow stopped by user")
-                    try:
-                        data, _ = sock.recvfrom(65535)
-                    except socket.timeout:
-                        continue
-                    response = json.loads(data.decode("utf-8"))
-                    if response.get("type") == "event":
-                        self._log(action, "event", json.dumps(response.get("payload") or {}, ensure_ascii=False))
-                        continue
-                    if response.get("id") == message["id"]:
-                        if response.get("ok"):
-                            self._log(action, "ok", json.dumps(response.get("payload") or {}, ensure_ascii=False))
-                            return response
-                        self._log(action, "error", str(response.get("error") or "command failed"))
-                        raise RuntimeError(response.get("error") or f"Command failed: {action}")
-            if attempt < self.retries:
-                self._log(action, "retry", f"attempt={attempt + 1}")
-                time.sleep(0.35)
-        self._log(action, "timeout", f"retries={self.retries}")
-        raise TimeoutError(f"No UDP cmd_ack for {action}")
+                    time.sleep(min(0.1, max(0.01, deadline - time.time())))
+
+            message = cmd(action, payload)
+            self._log(
+                action,
+                "start",
+                f"sequence={action_idx} id={message['id']} {target_summary} payload={json.dumps(payload, ensure_ascii=False)}",
+            )
+
+            for attempt in range(self.retries + 1):
+                if self.stop_event.is_set():
+                    self._log(action, "stopped", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
+                    raise RuntimeError("UDP workflow stopped by user")
+
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.settimeout(min(0.5, self.timeout_s))
+                    sock.sendto(json.dumps(message).encode("utf-8"), (self.host, self.port))
+                    deadline = time.time() + self.timeout_s
+                    self._log(action, "sent", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
+
+                    while time.time() < deadline:
+                        if self.stop_event.is_set():
+                            self._log(action, "stopped", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
+                            raise RuntimeError("UDP workflow stopped by user")
+                        try:
+                            data, _ = sock.recvfrom(65535)
+                        except socket.timeout:
+                            continue
+
+                        response = json.loads(data.decode("utf-8"))
+                        if response.get("type") == "event":
+                            self._log(
+                                action,
+                                "event",
+                                f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary} payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}",
+                            )
+                            continue
+
+                        if response.get("id") == message["id"]:
+                            if response.get("ok"):
+                                self._log(
+                                    action,
+                                    "ok",
+                                    f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary} payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}",
+                                )
+                                return response
+                            self._log(
+                                action,
+                                "error",
+                                f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary} error={str(response.get('error') or 'command failed')}",
+                            )
+                            raise RuntimeError(response.get("error") or f"Command failed: {action}")
+
+                if attempt < self.retries:
+                    self._log(action, "retry", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
+                    time.sleep(0.35)
+
+            self._log(action, "timeout", f"sequence={action_idx} retries={self.retries} {target_summary}")
+            raise TimeoutError(f"No UDP cmd_ack for {action}")
