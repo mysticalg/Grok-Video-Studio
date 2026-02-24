@@ -11833,6 +11833,24 @@ class MainWindow(QMainWindow):
                         }
                     }
 
+                    if (platform === "tiktok") {
+                        const tiktokUploadTrigger = bySelectors([
+                            'button[data-e2e*="upload"]',
+                            'div[data-e2e*="upload"][role="button"]',
+                            '[data-e2e*="upload"] button',
+                            'button[aria-label*="upload" i]',
+                        ]) || findClickableByHints([
+                            "select video",
+                            "upload video",
+                            "select file",
+                            "choose file",
+                        ]);
+                        if (tiktokUploadTrigger) {
+                            const clicked = clickNodeOrAncestor(tiktokUploadTrigger);
+                            openUploadClicked = clicked || openUploadClicked;
+                        }
+                    }
+
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
                         if (platform === "instagram") {
