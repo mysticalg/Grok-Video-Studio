@@ -7706,21 +7706,15 @@ class MainWindow(QMainWindow):
                         try { el.click(); fired = true; } catch (_) {}
                         return fired;
                     };
-                    const keyActivate = (el) => {
+                    const emulateActivate = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
-                        let fired = false;
-                        const target = (el.tabIndex >= 0) ? el : (el.closest("button, [role='button'], [role='menuitem'], [role='menuitemradio']") || el);
-                        try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                        try { target.focus({ preventScroll: true }); fired = true; } catch (_) {}
-                        const fireKey = (key, code) => {
-                            try { target.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
-                            try { target.dispatchEvent(new KeyboardEvent("keyup", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
-                        };
-                        fireKey("ArrowDown", "ArrowDown");
-                        fireKey("ArrowUp", "ArrowUp");
-                        fireKey("Enter", "Enter");
-                        fireKey(" ", "Space");
-                        fireKey("Spacebar", "Space");
+                        let fired = click(el);
+                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) {}
+                        try { el.click(); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); fired = true; } catch (_) {}
                         return fired;
                     };
 
@@ -7760,12 +7754,12 @@ class MainWindow(QMainWindow):
                         if (optionType === "ratio") {
                             const innerDiv = [...target.querySelectorAll("div")].find((el) => isVisible(el)) || null;
                             if (innerDiv) {
-                                clicked = keyActivate(innerDiv) || click(innerDiv);
+                                clicked = emulateActivate(innerDiv);
                                 clickedNodeTag = String(innerDiv.tagName || "").toLowerCase();
                             }
                         }
                         if (!clicked && (optionType === "ratio" || optionType === "resolution" || optionType === "seconds" || optionType === "type")) {
-                            clicked = keyActivate(target);
+                            clicked = emulateActivate(target);
                             clickedNodeTag = String(target.tagName || "").toLowerCase();
                         }
                         if (!clicked) {
