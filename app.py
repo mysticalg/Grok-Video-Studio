@@ -11418,18 +11418,20 @@ class MainWindow(QMainWindow):
             # Avoid embedding very large TikTok blobs into in-page JS payloads.
             # Large base64 payloads can freeze the browser process before upload starts.
             tiktok_inline_limit_bytes = 200 * 1024 * 1024
-            should_inline_video = (
-                platform_name != "TikTok"
-                or video_file.stat().st_size <= tiktok_inline_limit_bytes
-            )
+            if platform_name == "X":
+                should_inline_video = False
+            elif platform_name == "TikTok":
+                should_inline_video = video_file.stat().st_size <= tiktok_inline_limit_bytes
+            else:
+                should_inline_video = True
             if should_inline_video:
                 try:
                     encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
                 except Exception:
                     encoded_video = ""
             else:
-                # Keep a tiny payload available for lightweight synthetic input probes.
-                encoded_video = "AA=="
+                # Keep a tiny payload available for lightweight synthetic input probes (TikTok only).
+                encoded_video = "AA==" if platform_name == "TikTok" else ""
 
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
@@ -12094,7 +12096,7 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        const shouldInjectDirectly = platform !== "tiktok" || videoBase64 !== "AA==";
+                        const shouldInjectDirectly = platform !== "tiktok" && platform !== "x";
                         if (!alreadyHasFile && !alreadyStaged && videoBase64 && shouldInjectDirectly) {
                             try {
                                 const binary = atob(videoBase64);
