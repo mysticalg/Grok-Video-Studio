@@ -7815,10 +7815,10 @@ class MainWindow(QMainWindow):
             self.browser.page().runJavaScript(script, _after_prompt_populate)
 
         option_steps = [
-            ("type", "Image"),
-            ("ratio", selected_aspect_ratio),
             ("resolution", selected_quality_label),
             ("seconds", selected_duration_label),
+            ("ratio", selected_aspect_ratio),
+            ("type", "Image"),
         ]
 
         def _run_option_step(step_index: int) -> None:
