@@ -6052,12 +6052,12 @@ class MainWindow(QMainWindow):
                 try {
                     const desiredAspect = "{selected_aspect_ratio}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label, span, div";
+                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label, span, div";
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const clickableAncestor = (el) => {
                         if (!el) return null;
                         if (typeof el.closest === "function") {
-                            const ancestor = el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitemradio'], [role='radio'], label");
+                            const ancestor = el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label");
                             if (ancestor) return ancestor;
                         }
                         return el;
@@ -6193,6 +6193,21 @@ class MainWindow(QMainWindow):
                         return emulateActivate(button);
                     };
 
+
+                    let imageOptionClicked = false;
+                    const clickImageMenuItem = (root = document) => {
+                        const spans = [...root.querySelectorAll("span.font-semibold.text-sm.shrink-0.line-clamp-1, span")]
+                            .filter((el) => isVisible(el) && /^image$/i.test(textOf(el)));
+                        const item = spans
+                            .map((el) => clickableAncestor(el))
+                            .find((el) => !!el && isVisible(el) && (
+                                (el.getAttribute("role") || "").toLowerCase() === "menuitem"
+                                || el.hasAttribute("data-radix-collection-item")
+                            )) || null;
+                        if (!item) return false;
+                        return emulateActivate(item);
+                    };
+
                     const applyOption = (name, patterns, ariaLabel = null) => {
                         const alreadySelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
                             || hasSelectedByText(patterns, composer)
@@ -6202,7 +6217,11 @@ class MainWindow(QMainWindow):
                             return;
                         }
 
-                        const clicked = (ariaLabel && (
+                        const clicked = (name === "image" && (
+                                clickImageMenuItem(composer)
+                                || clickImageMenuItem(document)
+                            ))
+                            || (ariaLabel && (
                                 clickAspectButtonByAriaLabel(ariaLabel, composer)
                                 || clickAspectButtonByAriaLabel(ariaLabel)
                                 || clickVisibleButtonByAriaLabel(ariaLabel, composer)
@@ -6210,6 +6229,7 @@ class MainWindow(QMainWindow):
                             ))
                             || clickByText(patterns, composer)
                             || clickByText(patterns);
+                        if (name === "image" && clicked) imageOptionClicked = true;
                         if (clicked) optionsRequested.push(name);
 
                         const selected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
@@ -6223,7 +6243,7 @@ class MainWindow(QMainWindow):
                     applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
 
                     const missingOptions = [];
-                    if (!(hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
+                    if (!(imageOptionClicked || hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
                         missingOptions.push("image");
                     }
                     if (!(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
