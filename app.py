@@ -7738,41 +7738,23 @@ class MainWindow(QMainWindow):
             self.browser.page().runJavaScript(script, _after_prompt_populate)
 
         option_steps = [
+            ("type", "Image"),
+            ("ratio", selected_aspect_ratio),
             ("resolution", selected_quality_label),
             ("seconds", selected_duration_label),
-            ("ratio", selected_aspect_ratio),
-            ("type", "Image"),
         ]
 
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
-                self._append_log(f"Variant {variant}: re-clicking model select trigger to close options popup.")
-                close_via_trigger_script = r"""
-                    (() => {
-                        try {
-                            const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                            const common = { bubbles: true, cancelable: true, composed: true };
-                            const trigger = [...document.querySelectorAll('#model-select-trigger, button[aria-label="Model select"], button[aria-label*="model select" i]')]
-                                .find((el) => isVisible(el) && !el.disabled) || null;
-                            if (!trigger) return { ok: false, error: 'model-select-trigger not found' };
-                            try { trigger.dispatchEvent(new PointerEvent('pointerdown', common)); } catch (_) {}
-                            trigger.dispatchEvent(new MouseEvent('mousedown', common));
-                            try { trigger.dispatchEvent(new PointerEvent('pointerup', common)); } catch (_) {}
-                            trigger.dispatchEvent(new MouseEvent('mouseup', common));
-                            trigger.dispatchEvent(new MouseEvent('click', common));
-                            try { trigger.click(); } catch (_) {}
-                            return { ok: true };
-                        } catch (err) {
-                            return { ok: false, error: String(err && err.stack ? err.stack : err) };
-                        }
-                    })()
-                """
-                QTimer.singleShot(2000, lambda: self.browser.page().runJavaScript(close_via_trigger_script, lambda _r: QTimer.singleShot(2000, _populate_prompt_then_submit)))
+                self._append_log(f"Variant {variant}: all staged options attempted; continuing to prompt entry.")
+                QTimer.singleShot(2000, _populate_prompt_then_submit)
                 return
 
             step_name, label = option_steps[step_index]
             step_script = click_option_script_template.replace('"{target_label}"', json.dumps(str(label)))
-            self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
+            self._append_log(
+                f"Variant {variant}: opening options popup before {step_name} selection '{label}' (step {step_index + 1}/{len(option_steps)})."
+            )
 
             def _after_step(step_result):
                 if not isinstance(step_result, dict) or not step_result.get("ok"):
@@ -7781,15 +7763,15 @@ class MainWindow(QMainWindow):
                     )
                 QTimer.singleShot(2000, lambda: _run_option_step(step_index + 1))
 
-            self.browser.page().runJavaScript(step_script, _after_step)
-
-        def _open_options_then_steps() -> None:
-            self._append_log(f"Variant {variant}: opening options popup with model-select trigger.")
-
             def _after_open(_open_result):
-                QTimer.singleShot(2000, lambda: _run_option_step(0))
+                self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
+                self.browser.page().runJavaScript(step_script, _after_step)
 
             self.browser.page().runJavaScript(open_options_script, _after_open)
+
+        def _open_options_then_steps() -> None:
+            self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
+            QTimer.singleShot(2000, lambda: _run_option_step(0))
 
         def _after_location_check(location_result):
             current_url = ""
