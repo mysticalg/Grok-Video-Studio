@@ -6751,6 +6751,7 @@ class MainWindow(QMainWindow):
             )
             QTimer.singleShot(submit_delay_ms, _run_submit_attempt)
 
+        set_image_mode_script = set_image_mode_script.replace("%ACTION_DELAY_MS%", json.dumps(action_delay_ms))
         self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
 
     def _poll_for_manual_image(self) -> None:
@@ -6774,7 +6775,7 @@ class MainWindow(QMainWindow):
                 const prompt = {prompt!r};
                 const phase = {phase!r};
                 const submitToken = {self.manual_image_submit_token};
-                const ACTION_DELAY_MS = 200;
+                const ACTION_DELAY_MS = Math.max(50, Number(%ACTION_DELAY_MS%) || 200);
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
@@ -8123,6 +8124,8 @@ class MainWindow(QMainWindow):
             })()
         """
 
+        phase_delay_ms = max(50, action_delay_ms)
+
         def _run_flow_submit() -> None:
             self._append_log(f"Variant {variant}: submitting after prompt population delay.")
             self.browser.page().runJavaScript(submit_script, _after_final_submit)
@@ -8149,7 +8152,7 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing to submit."
                         )
-                QTimer.singleShot(2000, _run_flow_submit)
+                QTimer.singleShot(phase_delay_ms, _run_flow_submit)
 
             self.browser.page().runJavaScript(script, _after_prompt_populate)
 
@@ -8170,7 +8173,7 @@ class MainWindow(QMainWindow):
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
                 self._append_log(f"Variant {variant}: all staged options attempted; continuing to prompt entry.")
-                QTimer.singleShot(2000, _populate_prompt_then_submit)
+                QTimer.singleShot(phase_delay_ms, _populate_prompt_then_submit)
                 return
 
             step_name, label = option_steps[step_index]
@@ -8185,7 +8188,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"WARNING: Variant {variant}: could not confirm click for {step_name} option '{label}'. result={step_result!r}"
                     )
-                QTimer.singleShot(2000, lambda: _run_option_step(step_index + 1))
+                QTimer.singleShot(phase_delay_ms, lambda: _run_option_step(step_index + 1))
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
@@ -8195,7 +8198,7 @@ class MainWindow(QMainWindow):
 
         def _open_options_then_steps() -> None:
             self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
-            QTimer.singleShot(2000, lambda: _run_option_step(0))
+            QTimer.singleShot(phase_delay_ms, lambda: _run_option_step(0))
 
         def _after_location_check(location_result):
             current_url = ""
@@ -8206,10 +8209,10 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     "Manual flow: current page is not grok.com/imagine/favorites; staying on the current page for automated flow."
                 )
-                QTimer.singleShot(2000, _open_options_then_steps)
+                QTimer.singleShot(phase_delay_ms, _open_options_then_steps)
             else:
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
-                QTimer.singleShot(2000, _open_options_then_steps)
+                QTimer.singleShot(phase_delay_ms, _open_options_then_steps)
 
         self.browser.page().runJavaScript(
             "(() => ({ href: String((window.location && window.location.href) || '') }))()",
