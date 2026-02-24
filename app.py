@@ -8106,7 +8106,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"Submitted manual variant {variant} after configured options flow; waiting for generation to auto-download."
             )
-            self._trigger_browser_video_download(variant, allow_make_video_click=False)
+            self._trigger_browser_video_download(variant)
 
         def _populate_prompt_then_submit() -> None:
             self._append_log(f"Variant {variant}: entering prompt text now.")
