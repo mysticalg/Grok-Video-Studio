@@ -6401,6 +6401,127 @@ class MainWindow(QMainWindow):
         """
         verify_image_options_script = verify_image_options_script.replace('"{selected_aspect_ratio}"', json.dumps(selected_aspect_ratio))
 
+        open_options_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const click = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        try { el.click(); } catch (_) {}
+                        return true;
+                    };
+
+                    const triggerCandidates = [
+                        ...document.querySelectorAll("#model-select-trigger"),
+                        ...document.querySelectorAll("button[aria-label='Model select']"),
+                        ...document.querySelectorAll("button[aria-label*='model select' i]"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu']"),
+                        ...document.querySelectorAll("button[aria-haspopup='listbox']")
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                      .filter((el) => isVisible(el) && !el.disabled);
+
+                    let trigger = triggerCandidates.find((el) => /image|video|model|ratio|resolution|duration/i.test(clean(el.getAttribute("aria-label")) + " " + clean(el.textContent)))
+                        || triggerCandidates[0]
+                        || null;
+
+                    if (!trigger) return { ok: false, error: "options-trigger-not-found" };
+                    const clicked = click(trigger);
+                    return { ok: clicked, triggerText: clean(trigger.textContent), triggerAriaLabel: clean(trigger.getAttribute("aria-label")) };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        click_option_script_template = r"""
+            (() => {
+                try {
+                    const targetLabel = "{target_label}";
+                    const optionType = "{option_type}";
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label, span, div";
+                    const clickableAncestor = (el) => {
+                        if (!el) return null;
+                        if (typeof el.closest === "function") {
+                            return el.closest("button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label") || el;
+                        }
+                        return el;
+                    };
+                    const click = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        try { el.click(); } catch (_) {}
+                        return true;
+                    };
+
+                    const candidates = [
+                        ...document.querySelectorAll("button"),
+                        ...document.querySelectorAll("[role='button']"),
+                        ...document.querySelectorAll("[role='menuitem']"),
+                        ...document.querySelectorAll("[role='menuitemradio']")
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                      .filter((el) => isVisible(el) && !el.disabled);
+                    const textCandidates = [...document.querySelectorAll(interactiveSelector)]
+                        .filter((el) => isVisible(el) && clean(el.textContent));
+
+                    const exactMatch = (el) => {
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        return aria.toLowerCase() === targetLabel.toLowerCase() || txt.toLowerCase() === targetLabel.toLowerCase();
+                    };
+                    const fuzzyMatch = (el) => {
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        if (targetLabel.toLowerCase() === "image") {
+                            return /(^|\s)image(\s|$)/i.test(aria) || /(^|\s)image(\s|$)/i.test(txt);
+                        }
+                        return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
+                    };
+
+                    const buttons = candidates.filter((el) => (el.tagName || "").toLowerCase() === "button");
+                    const textTarget = textCandidates.find(exactMatch) || textCandidates.find(fuzzyMatch) || null;
+                    const target = ((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
+                        ? (buttons.find(exactMatch) || buttons.find(fuzzyMatch))
+                        : null)
+                        || ((optionType === "type") ? clickableAncestor(textTarget) : null)
+                        || candidates.find(exactMatch)
+                        || candidates.find(fuzzyMatch)
+                        || clickableAncestor(textTarget)
+                        || null;
+
+                    if (!target) return { ok: false, found: false, optionType, targetLabel };
+                    const clicked = click(target);
+                    return {
+                        ok: clicked,
+                        found: true,
+                        clicked,
+                        optionType,
+                        targetLabel,
+                        matchedText: clean(target.textContent),
+                        matchedAria: clean(target.getAttribute("aria-label")),
+                    };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err), targetLabel: "{target_label}", optionType: "{option_type}" };
+                }
+            })()
+        """
+
         submit_script = r"""
             (() => {
                 try {
@@ -6537,72 +6658,44 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            image_options_attempts = 0
+            step_pause_ms = 700
+            option_steps = [
+                ("resolution", selected_quality_label),
+                ("seconds", selected_duration_label),
+                ("ratio", selected_aspect_ratio),
+                ("type", "Image"),
+            ]
 
-            def _run_image_options() -> None:
-                nonlocal image_options_attempts
-                image_options_attempts += 1
-                self._append_log(
-                    f"Manual image variant {variant}: applying image options (attempt {image_options_attempts}/3) for resolution={selected_quality_label}, seconds={selected_duration_label}, aspect={selected_aspect_ratio}, type=Image."
-                )
-                self.browser.page().runJavaScript(set_image_options_script, _after_image_options)
-
-            def _after_image_options(options_result):
-                options_missing = []
-                if isinstance(options_result, dict) and options_result.get("ok"):
-                    requested_summary = ", ".join(options_result.get("optionsRequested") or []) or "none"
-                    applied_summary = ", ".join(options_result.get("optionsApplied") or []) or "none detected"
-                    options_missing = [str(name) for name in (options_result.get("missingOptions") or [])]
-                    missing_summary = ", ".join(options_missing) or "none"
+            def _run_option_step(step_index: int) -> None:
+                if step_index >= len(option_steps):
                     self._append_log(
-                        f"Manual image variant {variant}: image options requested: {requested_summary}; "
-                        f"applied markers: {applied_summary}; missing: {missing_summary}."
+                        f"Manual image variant {variant}: staged option flow complete; moving to prompt population."
                     )
-                elif options_result in (None, ""):
-                    self._append_log(
-                        f"WARNING: Manual image variant {variant}: image options callback returned empty result (attempt {image_options_attempts}/3); verifying state directly."
-                    )
-                    options_missing = ["image", selected_aspect_ratio]
-                else:
-                    self._append_log(
-                        f"WARNING: Manual image variant {variant}: image options script failed (attempt {image_options_attempts}/3). result={options_result!r}; verifying state directly."
-                    )
-                    options_missing = ["image", selected_aspect_ratio]
-
-                if options_missing:
-                    def _after_verify_options(verify_result):
-                        nonlocal options_missing
-                        if isinstance(verify_result, dict) and verify_result.get("ok"):
-                            verified_missing = [str(name) for name in (verify_result.get("missingOptions") or [])]
-                            if not verified_missing:
-                                options_missing = []
-                                self._append_log(
-                                    f"Manual image variant {variant}: option verification succeeded despite callback-empty/error."
-                                )
-                            else:
-                                options_missing = verified_missing
-                        elif verify_result not in (None, ""):
-                            self._append_log(
-                                f"WARNING: Manual image variant {variant}: option verification returned unexpected result={verify_result!r}."
-                            )
-
-                        if options_missing and image_options_attempts < 3:
-                            QTimer.singleShot(550, _run_image_options)
-                            return
-
-                        if options_missing:
-                            self._append_log(
-                                f"WARNING: Manual image variant {variant}: image options not confirmed after {image_options_attempts} attempts: missing={options_missing}; continuing to prompt+submit anyway."
-                            )
-
-                        QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
-
-                    self.browser.page().runJavaScript(verify_image_options_script, _after_verify_options)
+                    QTimer.singleShot(step_pause_ms, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
                     return
 
-                QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+                step_name, label = option_steps[step_index]
+                step_script = click_option_script_template.replace('"{target_label}"', json.dumps(str(label)))
+                step_script = step_script.replace('"{option_type}"', json.dumps(str(step_name)))
+                self._append_log(
+                    f"Manual image variant {variant}: open video options > set {step_name}='{label}' > pause "
+                    f"(step {step_index + 1}/{len(option_steps)})."
+                )
 
-            QTimer.singleShot(450, _run_image_options)
+                def _after_step(step_result):
+                    if not isinstance(step_result, dict) or not step_result.get("ok"):
+                        self._append_log(
+                            f"WARNING: Manual image variant {variant}: {step_name}='{label}' was not confirmed. "
+                            f"result={step_result!r}; continuing to next step."
+                        )
+                    QTimer.singleShot(step_pause_ms, lambda: _run_option_step(step_index + 1))
+
+                def _after_open(_open_result):
+                    self.browser.page().runJavaScript(step_script, _after_step)
+
+                self.browser.page().runJavaScript(open_options_script, _after_open)
+
+            QTimer.singleShot(step_pause_ms, lambda: _run_option_step(0))
 
         submit_delay_ms = 2000
 
