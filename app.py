@@ -2314,8 +2314,8 @@ class MainWindow(QMainWindow):
         self.count.setValue(1)
 
         self.automation_action_delay_ms = QSpinBox()
-        self.automation_action_delay_ms.setRange(250, 10000)
-        self.automation_action_delay_ms.setSingleStep(250)
+        self.automation_action_delay_ms.setRange(50, 10000)
+        self.automation_action_delay_ms.setSingleStep(10)
         self.automation_action_delay_ms.setSuffix(" ms")
         self.automation_action_delay_ms.setValue(self.DEFAULT_AUTOMATION_ACTION_DELAY_MS)
 
@@ -6688,7 +6688,7 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            step_pause_ms = max(250, action_delay_ms)
+            step_pause_ms = max(50, action_delay_ms)
             option_steps = [
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
