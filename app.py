@@ -2135,6 +2135,7 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
+        self.manual_image_pick_scroll_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token = 0
@@ -5924,6 +5925,7 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
+        self.manual_image_pick_scroll_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
@@ -6788,6 +6790,23 @@ class MainWindow(QMainWindow):
 
                 if (phase === "pick") {{
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
+                    const scrollers = () => {{
+                        const candidates = [
+                            ...document.querySelectorAll("main, [role='main'], [data-testid*='scroll' i], [class*='scroll' i], div")
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && el && el.scrollHeight > el.clientHeight + 40);
+                        return candidates.length ? candidates : [document.scrollingElement || document.documentElement || document.body].filter(Boolean);
+                    }};
+                    const nudgeForMoreResults = () => {{
+                        let moved = false;
+                        for (const el of scrollers()) {{
+                            const before = el.scrollTop || 0;
+                            const step = Math.max(220, Math.floor((el.clientHeight || 700) * 0.7));
+                            try {{ el.scrollBy({{ top: step, left: 0, behavior: "instant" }}); }} catch (_) {{ el.scrollTop = before + step; }}
+                            const after = el.scrollTop || 0;
+                            if (Math.abs(after - before) > 2) moved = true;
+                        }}
+                        return moved;
+                    }};
 
                     const customizePromptReady = !!document.querySelector(
                         "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
@@ -6831,7 +6850,10 @@ class MainWindow(QMainWindow):
                             return width >= 220 && height >= 220;
                         }});
 
-                    if (!listItemImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
+                    if (!listItemImages.length) {{
+                        const nudged = nudgeForMoreResults();
+                        return {{ ok: false, status: nudged ? "waiting-for-generated-image-after-scroll" : "waiting-for-generated-image" }};
+                    }}
 
                     listItemImages.sort((a, b) => {{
                         const ar = a.getBoundingClientRect();
@@ -6974,6 +6996,7 @@ class MainWindow(QMainWindow):
                         )
                     self.manual_image_pick_clicked = True
                     self.manual_image_pick_retry_count = 0
+                    self.manual_image_pick_scroll_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     QTimer.singleShot(1000, self._poll_for_manual_image)
@@ -7023,14 +7046,11 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 "WARNING: Variant "
                                 f"{current_variant}: image pick stayed callback-empty for "
-                                f"{self.manual_image_pick_retry_count} checks; assuming pick stage already completed and advancing."
+                                f"{self.manual_image_pick_retry_count} checks; staying in pick stage and continuing live DOM polling."
                             )
-                            self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = True
                             self.manual_image_pick_retry_count = 0
-                            self.manual_image_video_mode_retry_count = 0
-                            self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            self.manual_image_pick_scroll_count += 1
+                            QTimer.singleShot(1200, self._poll_for_manual_image)
                             return
                         self._append_log(
                             "WARNING: Variant "
@@ -7038,9 +7058,14 @@ class MainWindow(QMainWindow):
                             f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
                         )
                         self.manual_image_pick_retry_count = 0
-                    self._append_log(
-                        f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
-                    )
+                    if current_status == "waiting-for-generated-image-after-scroll":
+                        self._append_log(
+                            f"Variant {current_variant}: no visible generated image yet; scrolled feed to load fresher DOM content and retrying..."
+                        )
+                    else:
+                        self._append_log(
+                            f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
+                        )
                     QTimer.singleShot(3000, self._poll_for_manual_image)
 
                 if status == "callback-empty":
@@ -7083,8 +7108,9 @@ class MainWindow(QMainWindow):
                                 f"Variant {current_variant}: detected post/customize UI after empty callback ({ready_flags}); treating image pick as complete."
                             )
                             self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = True
+                            self.manual_image_video_mode_selected = False
                             self.manual_image_pick_retry_count = 0
+                            self.manual_image_pick_scroll_count = 0
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
                             QTimer.singleShot(700, self._poll_for_manual_image)
@@ -8314,6 +8340,7 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
+        self.manual_image_pick_scroll_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_download_click_sent = False
@@ -8378,6 +8405,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_selected = False
                     self.manual_image_video_submit_sent = False
                     self.manual_image_pick_retry_count = 0
+                    self.manual_image_pick_scroll_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
@@ -8416,6 +8444,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_selected = False
                     self.manual_image_video_submit_sent = False
                     self.manual_image_pick_retry_count = 0
+                    self.manual_image_pick_scroll_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
@@ -8446,6 +8475,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_video_mode_selected = False
                 self.manual_image_video_submit_sent = False
                 self.manual_image_pick_retry_count = 0
+                self.manual_image_pick_scroll_count = 0
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
                 self.manual_download_click_sent = False
@@ -8478,6 +8508,7 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
+        self.manual_image_pick_scroll_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
