@@ -5902,6 +5902,8 @@ class MainWindow(QMainWindow):
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+        selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
+        selected_duration_label = f"{int(self.video_duration.value())}s"
 
         populate_script = rf"""
             (() => {{
@@ -6051,6 +6053,8 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const desiredAspect = "{selected_aspect_ratio}";
+                    const desiredQuality = "{selected_quality_label}";
+                    const desiredDuration = "{selected_duration_label}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label, span, div";
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
@@ -6117,6 +6121,16 @@ class MainWindow(QMainWindow):
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
                     const composer = (promptInput && (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section"))) || document;
 
+                    const qualityPatterns = {
+                        "480p": [/^480\s*p$/i],
+                        "720p": [/^720\s*p$/i],
+                        "1080p": [/^1080\s*p$/i],
+                    };
+                    const durationPatterns = {
+                        "5s": [/^5\s*s$/i],
+                        "6s": [/^6\s*s$/i],
+                        "10s": [/^10\s*s$/i],
+                    };
                     const aspectPatterns = {
                         "2:3": [/^2\s*:\s*3$/i],
                         "3:2": [/^3\s*:\s*2$/i],
@@ -6126,6 +6140,8 @@ class MainWindow(QMainWindow):
                     };
                     const imagePatterns = [/(^|\s)image(\s|$)/i, /generate multiple images/i];
                     const desiredAspectPatterns = aspectPatterns[desiredAspect] || aspectPatterns["16:9"];
+                    const desiredQualityPatterns = qualityPatterns[desiredQuality] || [new RegExp(`^${String(desiredQuality).trim()}$`, "i")];
+                    const desiredDurationPatterns = durationPatterns[desiredDuration] || [new RegExp(`^${String(desiredDuration).trim()}$`, "i")];
 
                     const imageSelectedByTriggerLabel = () => {
                         const trigger = [...document.querySelectorAll("#model-select-trigger, button[aria-label='Model select'], button[aria-label*='model select' i]")]
@@ -6263,11 +6279,15 @@ class MainWindow(QMainWindow):
                         if (selected) optionsApplied.push(name);
                     };
 
+                    // Try resolution and duration first, then aspect and image type.
                     openModelOptionsPanel();
-                    applyOption("image", imagePatterns);
-                    // Grok often auto-closes the menu after each selection.
+                    applyOption(desiredQuality, desiredQualityPatterns, desiredQuality);
+                    openModelOptionsPanel();
+                    applyOption(desiredDuration, desiredDurationPatterns, desiredDuration);
                     openModelOptionsPanel();
                     applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
+                    openModelOptionsPanel();
+                    applyOption("image", imagePatterns);
 
                     const anyAspectButtonsVisible = () => {
                         const labels = ["2:3", "3:2", "1:1", "9:16", "16:9"];
@@ -6297,6 +6317,8 @@ class MainWindow(QMainWindow):
             })()
         """
         set_image_options_script = set_image_options_script.replace('"{selected_aspect_ratio}"', json.dumps(selected_aspect_ratio))
+        set_image_options_script = set_image_options_script.replace('"{selected_quality_label}"', json.dumps(selected_quality_label))
+        set_image_options_script = set_image_options_script.replace('"{selected_duration_label}"', json.dumps(selected_duration_label))
 
         verify_image_options_script = r"""
             (() => {
@@ -6521,7 +6543,7 @@ class MainWindow(QMainWindow):
                 nonlocal image_options_attempts
                 image_options_attempts += 1
                 self._append_log(
-                    f"Manual image variant {variant}: applying image options (attempt {image_options_attempts}/3)."
+                    f"Manual image variant {variant}: applying image options (attempt {image_options_attempts}/3) for resolution={selected_quality_label}, seconds={selected_duration_label}, aspect={selected_aspect_ratio}, type=Image."
                 )
                 self.browser.page().runJavaScript(set_image_options_script, _after_image_options)
 
