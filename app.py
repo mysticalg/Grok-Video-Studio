@@ -7043,23 +7043,10 @@ class MainWindow(QMainWindow):
                 def _queue_pick_retry(current_status: str) -> None:
                     self.manual_image_pick_retry_count += 1
                     if self.manual_image_pick_retry_count >= self.MANUAL_IMAGE_PICK_RETRY_LIMIT:
-                        if current_status == "callback-empty":
-                            self._append_log(
-                                "WARNING: Variant "
-                                f"{current_variant}: image pick stayed callback-empty for "
-                                f"{self.manual_image_pick_retry_count} checks; assuming pick stage already completed and advancing."
-                            )
-                            self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = True
-                            self.manual_image_pick_retry_count = 0
-                            self.manual_image_video_mode_retry_count = 0
-                            self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
-                            return
                         self._append_log(
                             "WARNING: Variant "
                             f"{current_variant}: image pick validation stayed in '{current_status}' for "
-                            f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
+                            f"{self.manual_image_pick_retry_count} checks; continuing to probe for Make video tiles."
                         )
                         self.manual_image_pick_retry_count = 0
                     if current_status == "waiting-for-make-video-button":
@@ -7081,7 +7068,6 @@ class MainWindow(QMainWindow):
                     pick_ready_probe_script = """
                         (() => {
                             try {
-                                const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                                 const common = { bubbles: true, cancelable: true, composed: true };
                                 const emulateClick = (el) => {
@@ -7128,62 +7114,33 @@ class MainWindow(QMainWindow):
                                     return { listItems, makeVideoCandidates };
                                 };
 
-                                const tryPickFromCandidates = (listItems, makeVideoCandidates) => {
-                                    if (!makeVideoCandidates.length) return { picked: false };
+                                let { listItems, makeVideoCandidates } = collectMakeVideoCandidates();
+                                if (!makeVideoCandidates.length) {
+                                    try { window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }); } catch (_) { window.scrollTo(0, document.body.scrollHeight); }
+                                    ({ listItems, makeVideoCandidates } = collectMakeVideoCandidates());
+                                }
+
+                                if (makeVideoCandidates.length) {
                                     const target = makeVideoCandidates[0];
                                     const image = (target.tileImages || []).sort(rankByPosition)[0] || null;
                                     const clicked = emulateClick(image) || emulateClick(target.item) || emulateClick(target.button);
                                     return {
+                                        ready: false,
                                         picked: clicked,
                                         status: clicked ? "generated-image-clicked" : "generated-image-click-failed",
                                         listItemCount: listItems.length,
                                         makeVideoVisibleCount: makeVideoCandidates.length,
+                                        probeStage: "continuous",
                                     };
-                                };
-
-                                let { listItems, makeVideoCandidates } = collectMakeVideoCandidates();
-                                let pickResult = tryPickFromCandidates(listItems, makeVideoCandidates);
-                                if (pickResult.picked) {
-                                    return { ready: false, ...pickResult, probeStage: "initial" };
                                 }
 
-                                await sleep(4000);
-                                try { window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }); } catch (_) { window.scrollTo(0, document.body.scrollHeight); }
-                                await sleep(350);
-                                ({ listItems, makeVideoCandidates } = collectMakeVideoCandidates());
-                                pickResult = tryPickFromCandidates(listItems, makeVideoCandidates);
-                                if (pickResult.picked) {
-                                    return { ready: false, ...pickResult, probeStage: "after-4s-scroll" };
-                                }
-
-                                await sleep(8000);
-                                try { window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }); } catch (_) { window.scrollTo(0, document.body.scrollHeight); }
-                                await sleep(350);
-                                ({ listItems, makeVideoCandidates } = collectMakeVideoCandidates());
-                                pickResult = tryPickFromCandidates(listItems, makeVideoCandidates);
-                                if (pickResult.picked) {
-                                    return { ready: false, ...pickResult, probeStage: "after-8s-scroll" };
-                                }
-
-                                const customizePromptVisible = !!document.querySelector(
-                                    "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], " +
-                                    "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
-                                );
-                                const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
-                                    .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
-                                const path = String((window.location && window.location.pathname) || "").toLowerCase();
-                                const onPostView = path.includes("/imagine/post/");
-                                const ready = customizePromptVisible || (onPostView && editImageVisible);
                                 return {
-                                    ready,
+                                    ready: false,
                                     picked: false,
                                     status: listItems.length ? "waiting-for-make-video-button" : "waiting-for-generated-image",
-                                    customizePromptVisible,
-                                    editImageVisible,
-                                    onPostView,
                                     listItemCount: listItems.length,
-                                    makeVideoVisibleCount: makeVideoCandidates.length,
-                                    probeStage: "after-scroll-reprobes",
+                                    makeVideoVisibleCount: 0,
+                                    probeStage: "continuous",
                                 };
                             } catch (_) {
                                 return { ready: false, picked: false, status: "callback-empty", probeStage: "error" };
