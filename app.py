@@ -11405,6 +11405,9 @@ class MainWindow(QMainWindow):
             progress_bar.setVisible(False)
             progress_bar.setValue(0)
 
+    def _x_upload_ffmpeg_normalization_enabled(self) -> bool:
+        return os.getenv("GROK_X_UPLOAD_USE_FFMPEG", "0").strip().lower() in {"1", "true", "yes", "on"}
+
     def _prepare_browser_upload_video_for_x(self, source_path: Path) -> Path:
         """Normalize X uploads to H.264/AAC MP4 when ffmpeg is available."""
         try:
@@ -11498,8 +11501,13 @@ class MainWindow(QMainWindow):
             return
 
         video_file = Path(str(video_path))
-        if platform_name == "X":
+        if platform_name == "X" and self._x_upload_ffmpeg_normalization_enabled():
             video_file = self._prepare_browser_upload_video_for_x(video_file)
+        elif platform_name == "X":
+            self._append_log(
+                "X upload: ffmpeg normalization disabled (set GROK_X_UPLOAD_USE_FFMPEG=1 to enable). "
+                "Using original file path for direct browser/relay staging."
+            )
         encoded_video = ""
         guessed_mime = mimetypes.guess_type(str(video_file))[0] or "application/octet-stream"
         if video_file.exists() and video_file.is_file():
