@@ -7618,171 +7618,162 @@ class MainWindow(QMainWindow):
             })()
         """
 
-        def _continue_after_options_set(result):
-            if not isinstance(result, dict) or not result.get("ok"):
-                options_error = result.get("error") if isinstance(result, dict) else result
-                self._append_log(
-                    f"WARNING: Option application script reported an error for variant {variant}: {options_error!r}. Continuing."
-                )
+        click_option_script_template = r"""
+            (() => {
+                try {
+                    const targetLabel = "{target_label}";
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const click = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        try { el.click(); } catch (_) {}
+                        return true;
+                    };
 
-            options_requested = result.get("optionsRequested") if isinstance(result, dict) else []
-            options_applied = result.get("optionsApplied") if isinstance(result, dict) else []
-            selected_quality = result.get("selectedQuality") if isinstance(result, dict) else None
-            fallback_used = bool(result.get("fallbackUsed")) if isinstance(result, dict) else False
-            requested_summary = ", ".join(options_requested) if options_requested else "none"
-            applied_summary = ", ".join(options_applied) if options_applied else "none detected"
-            self._append_log(
-                f"Options staged for variant {variant}; options requested: {requested_summary}; options applied markers: {applied_summary}."
-            )
-            if selected_quality:
-                if fallback_used:
-                    self._append_log(
-                        f"Variant {variant}: preferred quality {selected_quality_label} not confirmed in the panel; "
-                        f"falling back to {selected_quality}."
-                    )
-                else:
-                    self._append_log(f"Variant {variant}: confirmed quality selection {selected_quality}.")
+                    const candidates = [
+                        ...document.querySelectorAll("button"),
+                        ...document.querySelectorAll("[role='button']"),
+                        ...document.querySelectorAll("[role='menuitem']"),
+                        ...document.querySelectorAll("[role='menuitemradio']")
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                      .filter((el) => isVisible(el) && !el.disabled);
 
-
-            def _continue_after_options_close(close_result):
-                if not isinstance(close_result, dict) or not close_result.get("ok"):
-                    close_error = close_result.get("error") if isinstance(close_result, dict) else close_result
-                    self._append_log(
-                        f"WARNING: Closing options window reported an error for variant {variant}: {close_error!r}. Continuing."
-                    )
-
-                self._append_log(f"Options window closed for variant {variant}; submitting after {action_delay_ms}ms delay.")
-
-                def after_delayed_submit(submit_result):
-                    if not isinstance(submit_result, dict) or not submit_result.get("ok"):
-                        error_detail = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
-                        self._append_log(
-                            f"WARNING: Manual submit script reported an issue for variant {variant}: {error_detail!r}. Continuing to download polling."
-                        )
-
-                    self._append_log(
-                        "Submitted manual variant "
-                        f"{variant} after prompt/options staged delays (double-click submit); "
-                        "waiting for generation to auto-download."
-                    )
-                    self._trigger_browser_video_download(variant)
-
-                QTimer.singleShot(action_delay_ms, lambda: self.browser.page().runJavaScript(submit_script, after_delayed_submit))
-
-            QTimer.singleShot(
-                action_delay_ms,
-                lambda: self.browser.page().runJavaScript(close_options_script, _continue_after_options_close),
-            )
-
-        def _continue_after_options_open(open_result):
-            open_ok = isinstance(open_result, dict) and bool(open_result.get("ok"))
-            panel_visible = isinstance(open_result, dict) and bool(open_result.get("panelVisible"))
-            if not open_ok:
-                open_error = open_result.get("error") if isinstance(open_result, dict) else open_result
-                self._append_log(
-                    f"WARNING: Opening options window returned an error for variant {variant}: {open_error!r}. "
-                    "Continuing anyway."
-                )
-            elif panel_visible:
-                self._append_log(f"Options panel appears visible for variant {variant}; proceeding to option selection.")
-
-            self._append_log(f"Options window opened for variant {variant}; setting options after {action_delay_ms}ms delay.")
-            QTimer.singleShot(
-                action_delay_ms,
-                lambda: self.browser.page().runJavaScript(set_options_script, _continue_after_options_set),
-            )
-
-        def _run_continue_mode_submit() -> None:
-            continue_submit_script = r"""
-                (() => {
-                    try {
-                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                        const common = { bubbles: true, cancelable: true, composed: true };
-                        const emulateClick = (el) => {
-                            if (!el || !isVisible(el) || el.disabled) return false;
-                            try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                            el.dispatchEvent(new MouseEvent("mousedown", common));
-                            try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
-                            el.dispatchEvent(new MouseEvent("mouseup", common));
-                            el.dispatchEvent(new MouseEvent("click", common));
-                            return true;
-                        };
-
-                        const buttons = [...document.querySelectorAll("button, [role='button']")].filter((el) => isVisible(el));
-                        const matchers = [
-                            /make\s*video/i,
-                            /generate/i,
-                            /submit/i,
-                        ];
-                        let actionButton = null;
-                        for (const matcher of matchers) {
-                            actionButton = buttons.find((btn) => matcher.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
-                            if (actionButton) break;
+                    const target = candidates.find((el) => {
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        return aria.toLowerCase() === targetLabel.toLowerCase() || txt.toLowerCase() === targetLabel.toLowerCase();
+                    }) || candidates.find((el) => {
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        if (targetLabel.toLowerCase() === "image") {
+                            return /(^|\s)image(\s|$)/i.test(aria) || /(^|\s)image(\s|$)/i.test(txt);
                         }
-                        const clicked = actionButton ? emulateClick(actionButton) : false;
-                        return {
-                            ok: clicked,
-                            buttonText: actionButton ? (actionButton.textContent || "").trim() : "",
-                            buttonAriaLabel: actionButton ? (actionButton.getAttribute("aria-label") || "") : "",
-                            error: clicked ? "" : "Could not find/click Make video button",
-                        };
-                    } catch (err) {
-                        return { ok: false, error: String(err && err.stack ? err.stack : err) };
-                    }
-                })()
-            """
+                        return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
+                    }) || null;
 
-            def _after_continue_submit(submit_result):
-                if not isinstance(submit_result, dict) or not submit_result.get("ok"):
-                    error_detail = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
-                    if error_detail not in (None, "", "callback-empty"):
-                        self._append_log(
-                            f"Continue-mode submit for variant {variant} reported an issue: {error_detail!r}; continuing to video download polling."
-                        )
-                else:
-                    button_label = submit_result.get("buttonAriaLabel") or submit_result.get("buttonText") or "Make video"
-                    self._append_log(f"Continue-mode submit clicked '{button_label}' for variant {variant}.")
-                self._trigger_browser_video_download(variant, allow_make_video_click=False)
+                    return {
+                        ok: !!target && click(target),
+                        targetLabel,
+                        found: !!target,
+                        clicked: !!target,
+                        matchedAria: target ? clean(target.getAttribute("aria-label")) : "",
+                        matchedText: target ? clean(target.textContent) : "",
+                    };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err), targetLabel: "{target_label}" };
+                }
+            })()
+        """
 
-            QTimer.singleShot(action_delay_ms, lambda: self.browser.page().runJavaScript(continue_submit_script, _after_continue_submit))
+        def _run_flow_submit() -> None:
+            self._append_log(f"Variant {variant}: submitting after prompt population delay.")
+            self.browser.page().runJavaScript(submit_script, _after_final_submit)
 
-        def after_submit(result):
-            fill_ok = isinstance(result, dict) and bool(result.get("ok"))
-            if not fill_ok:
-                error_detail = result.get("error") if isinstance(result, dict) else result
+        def _after_final_submit(submit_result):
+            if not isinstance(submit_result, dict) or not submit_result.get("ok"):
+                error_detail = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
                 if error_detail not in (None, "", "callback-empty"):
                     self._append_log(
-                        f"Manual prompt fill reported an issue for variant {variant}: {error_detail!r}. "
-                        "Verifying current field content before continuing."
+                        f"WARNING: Manual submit script reported an issue for variant {variant}: {error_detail!r}. Continuing to download polling."
                     )
+            self._append_log(
+                f"Submitted manual variant {variant} after configured options flow; waiting for generation to auto-download."
+            )
+            self._trigger_browser_video_download(variant)
 
-            def _after_verify_prompt(verify_result):
-                verify_ok = isinstance(verify_result, dict) and bool(verify_result.get("ok"))
-                if not (fill_ok or verify_ok):
-                    verify_error = verify_result.get("error") if isinstance(verify_result, dict) else verify_result
-                    if verify_error not in (None, "", "callback-empty"):
+        def _populate_prompt_then_submit() -> None:
+            self._append_log(f"Variant {variant}: entering prompt text now.")
+
+            def _after_prompt_populate(result):
+                if not isinstance(result, dict) or not result.get("ok"):
+                    error_detail = result.get("error") if isinstance(result, dict) else result
+                    if error_detail not in (None, "", "callback-empty"):
                         self._append_log(
-                            f"Prompt fill verification did not confirm content for variant {variant}: {verify_error!r}. "
-                            "Continuing with option selection and forced submit anyway."
+                            f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing to submit."
                         )
-                if self.continue_from_frame_active:
-                    _run_continue_mode_submit()
-                else:
-                    QTimer.singleShot(
-                        action_delay_ms,
-                        lambda: self.browser.page().runJavaScript(open_options_script, _continue_after_options_open),
-                    )
+                QTimer.singleShot(2000, _run_flow_submit)
 
-            if fill_ok:
-                _after_verify_prompt({"ok": True})
+            self.browser.page().runJavaScript(script, _after_prompt_populate)
+
+        option_steps = [
+            ("resolution", selected_quality_label),
+            ("seconds", selected_duration_label),
+            ("ratio", selected_aspect_ratio),
+            ("type", "Image"),
+        ]
+
+        def _run_option_step(step_index: int) -> None:
+            if step_index >= len(option_steps):
+                self._append_log(f"Variant {variant}: re-clicking model select trigger to close options popup.")
+                close_via_trigger_script = r"""
+                    (() => {
+                        try {
+                            const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                            const common = { bubbles: true, cancelable: true, composed: true };
+                            const trigger = [...document.querySelectorAll('#model-select-trigger, button[aria-label="Model select"], button[aria-label*="model select" i]')]
+                                .find((el) => isVisible(el) && !el.disabled) || null;
+                            if (!trigger) return { ok: false, error: 'model-select-trigger not found' };
+                            try { trigger.dispatchEvent(new PointerEvent('pointerdown', common)); } catch (_) {}
+                            trigger.dispatchEvent(new MouseEvent('mousedown', common));
+                            try { trigger.dispatchEvent(new PointerEvent('pointerup', common)); } catch (_) {}
+                            trigger.dispatchEvent(new MouseEvent('mouseup', common));
+                            trigger.dispatchEvent(new MouseEvent('click', common));
+                            try { trigger.click(); } catch (_) {}
+                            return { ok: true };
+                        } catch (err) {
+                            return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                        }
+                    })()
+                """
+                QTimer.singleShot(2000, lambda: self.browser.page().runJavaScript(close_via_trigger_script, lambda _r: QTimer.singleShot(2000, _populate_prompt_then_submit)))
                 return
 
-            QTimer.singleShot(
-                250,
-                lambda: self.browser.page().runJavaScript(verify_prompt_script, _after_verify_prompt),
-            )
+            step_name, label = option_steps[step_index]
+            step_script = click_option_script_template.replace('"{target_label}"', json.dumps(str(label)))
+            self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
 
-        self.browser.page().runJavaScript(script, after_submit)
+            def _after_step(step_result):
+                if not isinstance(step_result, dict) or not step_result.get("ok"):
+                    self._append_log(
+                        f"WARNING: Variant {variant}: could not confirm click for {step_name} option '{label}'. result={step_result!r}"
+                    )
+                QTimer.singleShot(2000, lambda: _run_option_step(step_index + 1))
+
+            self.browser.page().runJavaScript(step_script, _after_step)
+
+        def _open_options_then_steps() -> None:
+            self._append_log(f"Variant {variant}: opening options popup with model-select trigger.")
+
+            def _after_open(_open_result):
+                QTimer.singleShot(2000, lambda: _run_option_step(0))
+
+            self.browser.page().runJavaScript(open_options_script, _after_open)
+
+        def _after_location_check(location_result):
+            current_url = ""
+            if isinstance(location_result, dict):
+                current_url = str(location_result.get("href") or "")
+            needs_nav = "grok.com/imagine/favorites" not in current_url.lower()
+            if needs_nav:
+                self._append_log("Manual flow: current page is not grok.com/imagine/favorites; navigating there now.")
+                self.browser.setUrl(QUrl("https://grok.com/imagine/favorites"))
+                QTimer.singleShot(2000, _open_options_then_steps)
+            else:
+                self._append_log("Manual flow: already on grok.com/imagine/favorites.")
+                QTimer.singleShot(2000, _open_options_then_steps)
+
+        self.browser.page().runJavaScript(
+            "(() => ({ href: String((window.location && window.location.href) || '') }))()",
+            _after_location_check,
+        )
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
