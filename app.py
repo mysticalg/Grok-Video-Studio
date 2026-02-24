@@ -1009,13 +1009,15 @@ class GenerateWorker(QThread):
                 request_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
                 data = {k: str(v) for k, v in payload.items() if k != "input_reference"}
                 with candidate_path.open("rb") as handle:
-                    return requests.post(
+                    response = requests.post(
                         endpoint,
                         headers=request_headers,
                         data=data,
                         files={"input_reference": (candidate_path.name, handle, "image/png")},
                         timeout=90,
                     )
+                self._remove_temp_last_frame_image(candidate_path, context="OpenAI Sora request uploaded")
+                return response
         return requests.post(endpoint, headers=headers, json=payload, timeout=90)
 
     def _start_openai_video_job(self, prompt: str) -> tuple[str | None, str | None, str]:
@@ -9334,6 +9336,29 @@ class MainWindow(QMainWindow):
 
         return "png" if download_type == "image" else "mp4"
 
+    def _is_temp_last_frame_image(self, image_path: Path) -> bool:
+        try:
+            resolved = image_path.resolve()
+            downloads_resolved = self.download_dir.resolve()
+        except Exception:
+            return False
+
+        if resolved.parent != downloads_resolved:
+            return False
+
+        return resolved.suffix.lower() == ".png" and (
+            resolved.name.startswith("last_frame_") or resolved.name.startswith("sora_last_frame_")
+        )
+
+    def _remove_temp_last_frame_image(self, image_path: Path, *, context: str) -> None:
+        if not self._is_temp_last_frame_image(image_path):
+            return
+        try:
+            image_path.unlink(missing_ok=True)
+            self._append_log(f"Removed temporary last-frame image ({context}): {image_path.name}")
+        except Exception as exc:
+            self._append_log(f"WARNING: Failed to remove temporary last-frame image {image_path}: {exc}")
+
     def _extract_last_frame(self, video_path: str) -> Path | None:
         self._append_log(f"Starting ffmpeg last-frame extraction from: {video_path}")
         extraction_attempts = ["-0", "-0.05", "-0.5", "-1.0"]
@@ -9417,6 +9442,7 @@ class MainWindow(QMainWindow):
         )
 
         frame_base64 = base64.b64encode(upload_file_path.read_bytes()).decode("ascii")
+        self._remove_temp_last_frame_image(upload_file_path, context="browser upload prepared")
         upload_script = r"""
             (() => {
                 const base64Data = __FRAME_BASE64__;
