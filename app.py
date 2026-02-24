@@ -6635,10 +6635,12 @@ class MainWindow(QMainWindow):
             _retry_variant(f"submit failed: {result!r}")
 
         def _after_set_mode(result):
+            mode_result = result
             if result in (None, ""):
+                mode_result = {"callbackEmpty": True, "assumedCurrentMode": True}
                 self._append_log(
                     f"Manual image variant {variant}: image-mode callback returned empty result; "
-                    "continuing with prompt population and assuming current mode is correct."
+                    "treating this as callback-only and assuming current mode is already correct."
                 )
             elif not isinstance(result, dict) or not result.get("ok"):
                 self._append_log(
@@ -6651,10 +6653,11 @@ class MainWindow(QMainWindow):
 
             self._append_log(
                 "Manual image variant "
-                f"{variant}: image mode selected={result.get('imageSelected') if isinstance(result, dict) else 'unknown'} "
-                f"(opened={result.get('optionsOpened') if isinstance(result, dict) else 'unknown'}, "
-                f"itemFound={result.get('imageItemFound') if isinstance(result, dict) else 'unknown'}, "
-                f"itemClicked={result.get('imageClicked') if isinstance(result, dict) else 'unknown'}); "
+                f"{variant}: image mode selected={mode_result.get('imageSelected') if isinstance(mode_result, dict) else 'unknown'} "
+                f"(opened={mode_result.get('optionsOpened') if isinstance(mode_result, dict) else 'unknown'}, "
+                f"itemFound={mode_result.get('imageItemFound') if isinstance(mode_result, dict) else 'unknown'}, "
+                f"itemClicked={mode_result.get('imageClicked') if isinstance(mode_result, dict) else 'unknown'}"
+                f"{'; callback empty, preserving current page state' if isinstance(mode_result, dict) and mode_result.get('callbackEmpty') else ''}); "
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
@@ -6683,7 +6686,12 @@ class MainWindow(QMainWindow):
                 )
 
                 def _after_step(step_result):
-                    if not isinstance(step_result, dict) or not step_result.get("ok"):
+                    if step_result in (None, ""):
+                        self._append_log(
+                            f"Manual image variant {variant}: {step_name}='{label}' callback returned empty result; "
+                            "assuming click dispatched and continuing to next step."
+                        )
+                    elif not isinstance(step_result, dict) or not step_result.get("ok"):
                         self._append_log(
                             f"WARNING: Manual image variant {variant}: {step_name}='{label}' was not confirmed. "
                             f"result={step_result!r}; continuing to next step."
@@ -7950,7 +7958,12 @@ class MainWindow(QMainWindow):
             )
 
             def _after_step(step_result):
-                if not isinstance(step_result, dict) or not step_result.get("ok"):
+                if step_result in (None, ""):
+                    self._append_log(
+                        f"Variant {variant}: callback returned empty result for {step_name} option '{label}'; "
+                        "assuming click dispatched and continuing."
+                    )
+                elif not isinstance(step_result, dict) or not step_result.get("ok"):
                     self._append_log(
                         f"WARNING: Variant {variant}: could not confirm click for {step_name} option '{label}'. result={step_result!r}"
                     )
