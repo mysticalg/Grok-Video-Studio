@@ -2185,6 +2185,7 @@ class MainWindow(QMainWindow):
             "Facebook": True,
             "Instagram": True,
             "TikTok": True,
+            "X": True,
             "YouTube": True,
             "Sora2Settings": True,
             "SeedanceSettings": True,
@@ -2786,6 +2787,10 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("TikTok", "https://www.tiktok.com/upload"),
             "TikTok Upload",
         )
+        self.social_upload_tab_indices["X"] = self.browser_tabs.addTab(
+            self._build_social_upload_tab("X", "https://x.com/home"),
+            "X Upload",
+        )
         self.social_upload_tab_indices["YouTube"] = self.browser_tabs.addTab(
             self._build_social_upload_tab("YouTube", "https://studio.youtube.com"),
             "YouTube Upload",
@@ -2917,6 +2922,10 @@ class MainWindow(QMainWindow):
         elif platform_name == "TikTok":
             api_btn.clicked.connect(self.upload_selected_to_tiktok)
             browser_btn.clicked.connect(self.start_tiktok_browser_upload)
+        elif platform_name == "X":
+            api_btn.setText("API upload unavailable for X")
+            api_btn.setEnabled(False)
+            browser_btn.clicked.connect(self.start_x_browser_upload)
         else:
             api_btn.clicked.connect(self.upload_selected_to_youtube)
             browser_btn.clicked.connect(self.start_youtube_browser_upload)
@@ -3008,6 +3017,7 @@ class MainWindow(QMainWindow):
             ("Facebook", ("facebook.com",)),
             ("Instagram", ("instagram.com",)),
             ("TikTok", ("tiktok.com",)),
+            ("X", ("x.com", "twitter.com")),
             ("YouTube", ("youtube.com", "studio.youtube.com")),
         ]
 
@@ -10951,6 +10961,27 @@ class MainWindow(QMainWindow):
         )
 
 
+    def start_x_browser_upload(self) -> None:
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
+            QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
+            return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
+
+        _, description, hashtags, _, accepted = self._show_upload_dialog("X", title_enabled=False)
+        if not accepted:
+            return
+
+        self._run_social_upload_via_mode(
+            platform_name="X",
+            video_path=video_path,
+            caption=self._compose_social_text(description, hashtags),
+            title="",
+        )
+
+
     def start_youtube_browser_upload(self) -> None:
         video_path = self._selected_video_path_for_upload()
         if not video_path:
@@ -11514,6 +11545,8 @@ class MainWindow(QMainWindow):
             max_attempts = 6
         elif platform_name == "TikTok":
             max_attempts = 24
+        elif platform_name == "X":
+            max_attempts = 14
         elif platform_name == "Facebook":
             max_attempts = 8
         elif platform_name == "YouTube":
@@ -11699,7 +11732,7 @@ class MainWindow(QMainWindow):
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const titleText = String(payload.title || "").trim();
                     const captionText = String(payload.caption || "").trim();
-                    const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
+                    const captionRequired = (platform === "facebook" || platform === "instagram" || platform === "x") && Boolean(captionText);
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
@@ -11855,7 +11888,7 @@ class MainWindow(QMainWindow):
 
                     let textFilled = false;
                     let captionReady = !captionRequired;
-                    if (platform === "facebook" && captionRequired) {
+                    if ((platform === "facebook" || platform === "x") && captionRequired) {
                         const textTarget = findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
                         captionReady = textFilled;
@@ -11928,6 +11961,18 @@ class MainWindow(QMainWindow):
                             if (byFacebookAccept) return byFacebookAccept;
                             const byFacebookClass = fileInputs.find((node) => norm(node.className).includes("x1s85apg"));
                             if (byFacebookClass) return byFacebookClass;
+                        }
+                        if (platform === "x") {
+                            const byXTestId = fileInputs.find((node) => {
+                                const testId = norm(node.getAttribute("data-testid"));
+                                return testId.includes("fileinput");
+                            });
+                            if (byXTestId) return byXTestId;
+                            const byXAccept = fileInputs.find((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                return accept.includes("video") || accept.includes("media");
+                            });
+                            if (byXAccept) return byXAccept;
                         }
                         const byExactInstagramAccept = fileInputs.find((node) => {
                             const accept = norm(node.getAttribute("accept"));
@@ -12220,6 +12265,25 @@ class MainWindow(QMainWindow):
                                         submitClicked = true;
                                     } catch (_) {}
                                 }
+                            }
+                        }
+                    }
+
+
+                    if (platform === "x" && fileReadySignal && captionReady) {
+                        const postButton = bySelectors([
+                            'button[data-testid="tweetButtonInline"]',
+                            'button[data-testid="tweetButton"]',
+                            'div[data-testid="tweetButtonInline"]',
+                        ]) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
+                        if (postButton) {
+                            const disabled = Boolean(
+                                postButton.disabled
+                                || String(postButton.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+                                || String(postButton.getAttribute('data-disabled') || '').toLowerCase() === 'true'
+                            );
+                            if (!disabled) {
+                                submitClicked = clickNodeOrAncestor(postButton) || submitClicked;
                             }
                         }
                     }
@@ -12792,6 +12856,7 @@ class MainWindow(QMainWindow):
 
             is_tiktok = platform_name == "TikTok"
             is_youtube = platform_name == "YouTube"
+            is_x = platform_name == "X"
             tiktok_upload_assumed = is_tiktok and attempts >= 3
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists) or tiktok_upload_assumed
             is_facebook = platform_name == "Facebook"
@@ -12800,17 +12865,17 @@ class MainWindow(QMainWindow):
             submit_ok = (
                 submit_clicked
                 or (is_tiktok and (tiktok_submit_clicked_ever or tiktok_draft_landed))
-            ) if (is_facebook or is_instagram or is_tiktok or is_youtube) else True
-            completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok or is_youtube) else (attempts >= 2)
+            ) if (is_facebook or is_instagram or is_tiktok or is_youtube or is_x) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok or is_youtube or is_x) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
                 status_label.setText(
                     "Status: post submitted."
-                    if (is_facebook or is_instagram or is_youtube)
+                    if (is_facebook or is_instagram or is_youtube or is_x)
                     else "Status: staged. Confirm/finalize post in this tab if needed."
                 )
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram or is_youtube) else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram or is_youtube or is_x) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
