@@ -6090,12 +6090,17 @@ class MainWindow(QMainWindow):
                     const emulateActivate = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
                         let fired = emulateClick(el);
-                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) {}
                         try { el.click(); fired = true; } catch (_) {}
-                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
-                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
-                        try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
-                        try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                        const fireKey = (key, code) => {
+                            try { el.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
+                            try { el.dispatchEvent(new KeyboardEvent("keyup", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
+                        };
+                        fireKey("ArrowDown", "ArrowDown");
+                        fireKey("ArrowUp", "ArrowUp");
+                        fireKey("Enter", "Enter");
+                        fireKey(" ", "Space");
                         return fired;
                     };
 
@@ -7647,15 +7652,24 @@ class MainWindow(QMainWindow):
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const click = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = false;
                         try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                        try { el.focus({ preventScroll: true }); } catch (_) {}
-                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); fired = true; } catch (_) {}
                         el.dispatchEvent(new MouseEvent("mousedown", common));
-                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); fired = true; } catch (_) {}
                         el.dispatchEvent(new MouseEvent("mouseup", common));
                         el.dispatchEvent(new MouseEvent("click", common));
-                        try { el.click(); } catch (_) {}
-                        return true;
+                        try { el.click(); fired = true; } catch (_) {}
+                        const fireKey = (key, code) => {
+                            try { el.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
+                            try { el.dispatchEvent(new KeyboardEvent("keyup", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
+                        };
+                        fireKey("ArrowDown", "ArrowDown");
+                        fireKey("ArrowUp", "ArrowUp");
+                        fireKey("Enter", "Enter");
+                        fireKey(" ", "Space");
+                        return fired;
                     };
 
                     const candidates = [
