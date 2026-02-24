@@ -1009,13 +1009,15 @@ class GenerateWorker(QThread):
                 request_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
                 data = {k: str(v) for k, v in payload.items() if k != "input_reference"}
                 with candidate_path.open("rb") as handle:
-                    return requests.post(
+                    response = requests.post(
                         endpoint,
                         headers=request_headers,
                         data=data,
                         files={"input_reference": (candidate_path.name, handle, "image/png")},
                         timeout=90,
                     )
+                self._remove_temp_last_frame_image(candidate_path, context="OpenAI Sora request uploaded")
+                return response
         return requests.post(endpoint, headers=headers, json=payload, timeout=90)
 
     def _start_openai_video_job(self, prompt: str) -> tuple[str | None, str | None, str]:
@@ -8540,7 +8542,13 @@ class MainWindow(QMainWindow):
 
         download_type = self.pending_manual_download_type or "video"
         extension = self._resolve_download_extension(download, download_type)
-        filename = self._build_session_download_filename(download_type, variant, extension)
+        browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+        filename = self._build_session_download_filename(
+            download_type,
+            variant,
+            extension,
+            provider_override=browser_provider,
+        )
         download.setDownloadDirectory(str(self.download_dir))
         download.setDownloadFileName(filename)
         self.manual_download_click_sent = True
@@ -8808,8 +8816,17 @@ class MainWindow(QMainWindow):
                 + (" ..." if len(missing_paths) > 5 else "")
             )
 
-    def _build_session_download_filename(self, download_type: str, variant: int | None, extension: str) -> str:
-        provider = _slugify_filename_part(str(self.video_provider.currentData() or "grok") if hasattr(self, "video_provider") else "grok")
+    def _build_session_download_filename(
+        self,
+        download_type: str,
+        variant: int | None,
+        extension: str,
+        provider_override: str | None = None,
+    ) -> str:
+        provider_source = provider_override
+        if provider_source is None:
+            provider_source = str(self.video_provider.currentData() or "grok") if hasattr(self, "video_provider") else "grok"
+        provider = _slugify_filename_part(provider_source)
         resolution = _slugify_filename_part(self.video_resolution.currentData() if hasattr(self, "video_resolution") else "auto")
         aspect = _slugify_filename_part(self.video_aspect_ratio.currentData() if hasattr(self, "video_aspect_ratio") else "na")
         item_variant = int(variant or 0)
@@ -8823,7 +8840,16 @@ class MainWindow(QMainWindow):
         if not source_path.exists():
             return QIcon()
 
-        safe_name = f"thumb_{source_path.stem}_{abs(hash(str(source_path.resolve()))) % 10**10}.jpg"
+        try:
+            source_stat = source_path.stat()
+        except Exception:
+            return QIcon()
+
+        source_fingerprint = hashlib.sha1(str(source_path.resolve()).encode("utf-8")).hexdigest()[:12]
+        safe_name = (
+            f"thumb_{source_path.stem}_{source_fingerprint}_"
+            f"{source_stat.st_mtime_ns}_{source_stat.st_size}.jpg"
+        )
         thumb_path = THUMBNAILS_DIR / safe_name
         if not thumb_path.exists():
             try:
@@ -9325,6 +9351,29 @@ class MainWindow(QMainWindow):
 
         return "png" if download_type == "image" else "mp4"
 
+    def _is_temp_last_frame_image(self, image_path: Path) -> bool:
+        try:
+            resolved = image_path.resolve()
+            downloads_resolved = self.download_dir.resolve()
+        except Exception:
+            return False
+
+        if resolved.parent != downloads_resolved:
+            return False
+
+        return resolved.suffix.lower() == ".png" and (
+            resolved.name.startswith("last_frame_") or resolved.name.startswith("sora_last_frame_")
+        )
+
+    def _remove_temp_last_frame_image(self, image_path: Path, *, context: str) -> None:
+        if not self._is_temp_last_frame_image(image_path):
+            return
+        try:
+            image_path.unlink(missing_ok=True)
+            self._append_log(f"Removed temporary last-frame image ({context}): {image_path.name}")
+        except Exception as exc:
+            self._append_log(f"WARNING: Failed to remove temporary last-frame image {image_path}: {exc}")
+
     def _extract_last_frame(self, video_path: str) -> Path | None:
         self._append_log(f"Starting ffmpeg last-frame extraction from: {video_path}")
         extraction_attempts = ["-0", "-0.05", "-0.5", "-1.0"]
@@ -9408,6 +9457,7 @@ class MainWindow(QMainWindow):
         )
 
         frame_base64 = base64.b64encode(upload_file_path.read_bytes()).decode("ascii")
+        self._remove_temp_last_frame_image(upload_file_path, context="browser upload prepared")
         upload_script = r"""
             (() => {
                 const base64Data = __FRAME_BASE64__;
