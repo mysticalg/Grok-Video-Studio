@@ -11946,9 +11946,19 @@ class MainWindow(QMainWindow):
                     const emulateTypingIntoEditor = (node, value) => {
                         if (!node) return false;
                         const text = String(value || "");
-                        try {
-                            node.focus();
-                        } catch (_) {}
+                        const ensureFocusAndSelection = () => {
+                            try { node.focus(); } catch (_) {}
+                            try {
+                                const range = document.createRange();
+                                range.selectNodeContents(node);
+                                range.collapse(false);
+                                const sel = window.getSelection();
+                                if (sel) {
+                                    sel.removeAllRanges();
+                                    sel.addRange(range);
+                                }
+                            } catch (_) {}
+                        };
                         try {
                             if (!(node.isContentEditable || node.getAttribute("contenteditable") === "true")) {
                                 return setTextValue(node, text);
@@ -11956,45 +11966,49 @@ class MainWindow(QMainWindow):
                         } catch (_) {
                             return setTextValue(node, text);
                         }
+
+                        ensureFocusAndSelection();
                         try {
-                            node.textContent = "";
+                            if (typeof document.execCommand === "function") {
+                                document.execCommand("selectAll", false);
+                                document.execCommand("delete", false);
+                            }
+                        } catch (_) {}
+                        try {
+                            node.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
                             node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
                         } catch (_) {}
 
-                        let typedAny = false;
-                        for (const ch of Array.from(text)) {
+                        let inserted = false;
+                        const chunks = text.split(/(\n)/);
+                        for (const part of chunks) {
+                            if (!part) continue;
+                            ensureFocusAndSelection();
+                            const isNewline = part === "\n";
+                            const payload = isNewline ? "\n" : part;
                             try {
-                                node.dispatchEvent(new KeyboardEvent("keydown", { key: ch, bubbles: true, cancelable: true, composed: true }));
-                            } catch (_) {}
-                            try {
-                                node.dispatchEvent(new KeyboardEvent("keypress", { key: ch, bubbles: true, cancelable: true, composed: true }));
+                                node.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: payload, inputType: "insertText" }));
                             } catch (_) {}
                             try {
                                 if (typeof document.execCommand === "function") {
-                                    const inserted = document.execCommand("insertText", false, ch);
-                                    if (inserted) typedAny = true;
+                                    const ok = document.execCommand("insertText", false, payload);
+                                    inserted = inserted || Boolean(ok);
                                 }
                             } catch (_) {}
-                            if (!typedAny) {
-                                try {
-                                    node.textContent = String(node.textContent || "") + ch;
-                                } catch (_) {}
-                            }
                             try {
-                                node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: ch, inputType: "insertText" }));
+                                node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: payload, inputType: "insertText" }));
                             } catch (_) {
-                                try {
-                                    node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-                                } catch (_) {}
+                                try { node.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
                             }
-                            try {
-                                node.dispatchEvent(new KeyboardEvent("keyup", { key: ch, bubbles: true, cancelable: true, composed: true }));
-                            } catch (_) {}
                         }
-                        try {
-                            node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                        } catch (_) {}
-                        const finalText = String(node.textContent || "").trim();
+
+                        if (!inserted) {
+                            // Last resort: one-shot setter for non-Draft editors.
+                            return setTextValue(node, text);
+                        }
+
+                        try { node.dispatchEvent(new Event("change", { bubbles: true, composed: true })); } catch (_) {}
+                        const finalText = String(node.innerText || node.textContent || "").trim();
                         return finalText.length > 0;
                     };
                     const findTextInputTarget = () => {
@@ -12033,15 +12047,10 @@ class MainWindow(QMainWindow):
                                 'div[data-testid^="tweetTextarea"][contenteditable="true"]',
                                 'div[role="textbox"][contenteditable="true"][aria-label*="post text" i]',
                             ]);
-                            textFilled = emulateTypingIntoEditor(xComposer, captionText) || setTextValue(xComposer, captionText) || textFilled;
+                            textFilled = emulateTypingIntoEditor(xComposer, captionText) || textFilled;
                             if (!textFilled && xComposer) {
-                                try {
-                                    xComposer.focus();
-                                    xComposer.textContent = captionText;
-                                    xComposer.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: captionText, inputType: "insertText" }));
-                                    xComposer.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-                                    textFilled = true;
-                                } catch (_) {}
+                                // Avoid raw textContent assignment for DraftEditor; it can render text but not update editor state.
+                                textFilled = false;
                             }
                         }
                         captionReady = textFilled;
