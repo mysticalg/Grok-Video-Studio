@@ -7704,14 +7704,23 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("mouseup", common));
                         el.dispatchEvent(new MouseEvent("click", common));
                         try { el.click(); fired = true; } catch (_) {}
+                        return fired;
+                    };
+                    const keyActivate = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = false;
+                        const target = (el.tabIndex >= 0) ? el : (el.closest("button, [role='button'], [role='menuitem'], [role='menuitemradio']") || el);
+                        try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { target.focus({ preventScroll: true }); fired = true; } catch (_) {}
                         const fireKey = (key, code) => {
-                            try { el.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
-                            try { el.dispatchEvent(new KeyboardEvent("keyup", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
+                            try { target.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
+                            try { target.dispatchEvent(new KeyboardEvent("keyup", { key, code, bubbles: true, cancelable: true })); fired = true; } catch (_) {}
                         };
                         fireKey("ArrowDown", "ArrowDown");
                         fireKey("ArrowUp", "ArrowUp");
                         fireKey("Enter", "Enter");
                         fireKey(" ", "Space");
+                        fireKey("Spacebar", "Space");
                         return fired;
                     };
 
@@ -7751,9 +7760,13 @@ class MainWindow(QMainWindow):
                         if (optionType === "ratio") {
                             const innerDiv = [...target.querySelectorAll("div")].find((el) => isVisible(el)) || null;
                             if (innerDiv) {
-                                clicked = click(innerDiv);
+                                clicked = keyActivate(innerDiv) || click(innerDiv);
                                 clickedNodeTag = String(innerDiv.tagName || "").toLowerCase();
                             }
+                        }
+                        if (!clicked && (optionType === "ratio" || optionType === "resolution" || optionType === "seconds" || optionType === "type")) {
+                            clicked = keyActivate(target);
+                            clickedNodeTag = String(target.tagName || "").toLowerCase();
                         }
                         if (!clicked) {
                             clicked = click(target);
