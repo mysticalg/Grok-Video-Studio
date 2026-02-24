@@ -11943,6 +11943,70 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                         return false;
                     };
+                    const pasteTextIntoEditor = (node, value) => {
+                        if (!node) return false;
+                        const text = String(value || "");
+                        if (!text) return true;
+                        try {
+                            if (!(node.isContentEditable || node.getAttribute("contenteditable") === "true")) {
+                                return setTextValue(node, text);
+                            }
+                        } catch (_) {
+                            return setTextValue(node, text);
+                        }
+                        try { node.focus(); } catch (_) {}
+                        try {
+                            const range = document.createRange();
+                            range.selectNodeContents(node);
+                            range.collapse(false);
+                            const sel = window.getSelection();
+                            if (sel) {
+                                sel.removeAllRanges();
+                                sel.addRange(range);
+                            }
+                        } catch (_) {}
+
+                        try {
+                            if (typeof document.execCommand === "function") {
+                                document.execCommand("selectAll", false);
+                                document.execCommand("delete", false);
+                            }
+                        } catch (_) {}
+
+                        const clipboardData = {
+                            getData: (type) => (String(type || "").toLowerCase() === "text/plain" ? text : ""),
+                            types: ["text/plain"],
+                        };
+                        try {
+                            const pasteEvent = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData });
+                            node.dispatchEvent(pasteEvent);
+                        } catch (_) {
+                            try {
+                                const fallbackPaste = new Event("paste", { bubbles: true, cancelable: true });
+                                fallbackPaste.clipboardData = clipboardData;
+                                node.dispatchEvent(fallbackPaste);
+                            } catch (_) {}
+                        }
+
+                        let inserted = false;
+                        try {
+                            if (typeof document.execCommand === "function") {
+                                inserted = Boolean(document.execCommand("insertText", false, text));
+                            }
+                        } catch (_) {}
+                        if (!inserted) {
+                            inserted = setTextValue(node, text);
+                        }
+                        try {
+                            node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" }));
+                        } catch (_) {
+                            try { node.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
+                        }
+                        try { node.dispatchEvent(new Event("change", { bubbles: true, composed: true })); } catch (_) {}
+                        const finalText = String(node.innerText || node.textContent || "").trim();
+                        return inserted || finalText.length > 0;
+                    };
+
                     const emulateTypingIntoEditor = (node, value) => {
                         if (!node) return false;
                         const text = String(value || "");
@@ -12051,7 +12115,9 @@ class MainWindow(QMainWindow):
                                 clickNodeSingle(xComposer) || clickNodeOrAncestor(xComposer);
                                 try { xComposer.focus(); } catch (_) {}
                             }
-                            textFilled = emulateTypingIntoEditor(xComposer, captionText) || textFilled;
+                            textFilled = pasteTextIntoEditor(xComposer, captionText)
+                                || emulateTypingIntoEditor(xComposer, captionText)
+                                || textFilled;
                             if (!textFilled && xComposer) {
                                 // Avoid raw textContent assignment for DraftEditor; it can render text but not update editor state.
                                 textFilled = false;
