@@ -11980,12 +11980,12 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
 
                         let inserted = false;
-                        const chunks = text.split(/(\n)/);
+                        const chunks = text.split(/(\\n)/);
                         for (const part of chunks) {
                             if (!part) continue;
                             ensureFocusAndSelection();
-                            const isNewline = part === "\n";
-                            const payload = isNewline ? "\n" : part;
+                            const isNewline = part === "\\n";
+                            const payload = isNewline ? "\\n" : part;
                             try {
                                 node.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: payload, inputType: "insertText" }));
                             } catch (_) {}
