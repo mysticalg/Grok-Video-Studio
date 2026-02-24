@@ -7041,6 +7041,37 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
                     )
+
+                    scroll_to_bottom_script = """
+                        (() => {
+                            try {
+                                const scrollTargets = [
+                                    document.scrollingElement,
+                                    document.documentElement,
+                                    document.body,
+                                    ...document.querySelectorAll("[data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
+                                ].filter((el, idx, arr) => el && arr.indexOf(el) === idx);
+
+                                let scrolled = false;
+                                for (const target of scrollTargets) {
+                                    const maxTop = Math.max(0, (target.scrollHeight || 0) - (target.clientHeight || 0));
+                                    if (typeof target.scrollTo === "function") {
+                                        target.scrollTo({ top: maxTop, left: 0, behavior: "instant" });
+                                        scrolled = true;
+                                    } else if ("scrollTop" in target) {
+                                        target.scrollTop = maxTop;
+                                        scrolled = true;
+                                    }
+                                }
+
+                                window.scrollTo({ top: document.body?.scrollHeight || 999999, left: 0, behavior: "instant" });
+                                return { scrolled };
+                            } catch (_) {
+                                return { scrolled: false };
+                            }
+                        })()
+                    """
+                    self.browser.page().runJavaScript(scroll_to_bottom_script)
                     QTimer.singleShot(3000, self._poll_for_manual_image)
 
                 if status == "callback-empty":
