@@ -142,6 +142,32 @@ async function handleCmd(msg) {
           return false;
         };
 
+        const tryXFormSubmitFallback = () => {
+          if (String(opts.platform || "").toLowerCase() !== "x" || opts.isDraft) return { clicked: false };
+          const composer = document.querySelector("div[data-testid='tweetTextarea_0'][contenteditable='true']")
+            || document.querySelector("div[data-testid^='tweetTextarea'][contenteditable='true']")
+            || document.querySelector("div[role='textbox'][contenteditable='true'][aria-label*='post text' i]");
+          const form = composer ? (composer.closest("form") || composer.parentElement?.closest("form")) : document.querySelector("form");
+
+          const tweetButton = (form && (form.querySelector("button[data-testid='tweetButton']") || form.querySelector("button[data-testid='tweetButtonInline']")))
+            || document.querySelector("button[data-testid='tweetButton']")
+            || document.querySelector("button[data-testid='tweetButtonInline']");
+          if (tweetButton && isEnabled(tweetButton)) {
+            try { tweetButton.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+              try { tweetButton.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            });
+            try { tweetButton.click?.(); } catch (_) {}
+            return { clicked: true, selector: "button[data-testid='tweetButton']", mode: "x_button_fallback" };
+          }
+
+          if (form) {
+            try { form.requestSubmit?.(); return { clicked: true, selector: "form", mode: "x_request_submit" }; } catch (_) {}
+            try { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); return { clicked: true, selector: "form", mode: "x_submit_event" }; } catch (_) {}
+          }
+          return { clicked: false };
+        };
+
         const findCandidate = () => {
           for (const sel of selectors) {
             const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
@@ -171,6 +197,11 @@ async function handleCmd(msg) {
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
 
+        const fallbackResult = tryXFormSubmitFallback();
+        if (fallbackResult.clicked) {
+          return { ...fallbackResult, waitedMs: Date.now() - started };
+        }
+
         const found = findCandidate();
         if (!found) return { clicked: false, reason: "not_found", selectors };
         if (!isEnabled(found.el)) return { clicked: false, reason: "disabled", selector: found.selector };
@@ -180,7 +211,7 @@ async function handleCmd(msg) {
         const requestedTimeoutMs = Number(payload.timeoutMs || 0);
         const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
         const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
-        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft };
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform };
       })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
