@@ -7083,8 +7083,10 @@ class MainWindow(QMainWindow):
                                 const path = String((window.location && window.location.pathname) || "").toLowerCase();
                                 const onPostView = path.includes("/imagine/post/");
                                 const ready = customizePromptVisible || (onPostView && (editImageVisible || makeVideoButtonVisible));
+                                const postTransitionLikely = onPostView;
                                 return {
                                     ready,
+                                    postTransitionLikely,
                                     customizePromptVisible,
                                     makeVideoButtonVisible,
                                     editImageVisible,
@@ -7097,24 +7099,39 @@ class MainWindow(QMainWindow):
                     """
 
                     def _after_pick_ready_probe(probe_result):
-                        if isinstance(probe_result, dict) and probe_result.get("ready"):
-                            ready_flags = (
-                                f"customizePrompt={bool(probe_result.get('customizePromptVisible'))}, "
-                                f"makeVideoBtn={bool(probe_result.get('makeVideoButtonVisible'))}, "
-                                f"editImage={bool(probe_result.get('editImageVisible'))}, "
-                                f"postView={bool(probe_result.get('onPostView'))}"
-                            )
-                            self._append_log(
-                                f"Variant {current_variant}: detected post/customize UI after empty callback ({ready_flags}); treating image pick as complete."
-                            )
-                            self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = False
-                            self.manual_image_pick_retry_count = 0
-                            self.manual_image_pick_scroll_count = 0
-                            self.manual_image_video_mode_retry_count = 0
-                            self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
-                            return
+                        if isinstance(probe_result, dict):
+                            if probe_result.get("ready"):
+                                ready_flags = (
+                                    f"customizePrompt={bool(probe_result.get('customizePromptVisible'))}, "
+                                    f"makeVideoBtn={bool(probe_result.get('makeVideoButtonVisible'))}, "
+                                    f"editImage={bool(probe_result.get('editImageVisible'))}, "
+                                    f"postView={bool(probe_result.get('onPostView'))}"
+                                )
+                                self._append_log(
+                                    f"Variant {current_variant}: detected post/customize UI after empty callback ({ready_flags}); treating image pick as complete."
+                                )
+                                self.manual_image_pick_clicked = True
+                                self.manual_image_video_mode_selected = False
+                                self.manual_image_pick_retry_count = 0
+                                self.manual_image_pick_scroll_count = 0
+                                self.manual_image_video_mode_retry_count = 0
+                                self.manual_image_submit_retry_count = 0
+                                QTimer.singleShot(700, self._poll_for_manual_image)
+                                return
+
+                            if probe_result.get("postTransitionLikely"):
+                                self._append_log(
+                                    f"Variant {current_variant}: callback-empty but URL indicates post view transition; treating image pick as complete and waiting for video controls."
+                                )
+                                self.manual_image_pick_clicked = True
+                                self.manual_image_video_mode_selected = False
+                                self.manual_image_pick_retry_count = 0
+                                self.manual_image_pick_scroll_count = 0
+                                self.manual_image_video_mode_retry_count = 0
+                                self.manual_image_submit_retry_count = 0
+                                QTimer.singleShot(900, self._poll_for_manual_image)
+                                return
+
                         _queue_pick_retry(status)
 
                     self.browser.page().runJavaScript(pick_ready_probe_script, _after_pick_ready_probe)
