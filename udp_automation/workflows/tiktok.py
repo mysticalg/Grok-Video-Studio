@@ -23,4 +23,52 @@ def run(executor: BaseExecutor, video_path: str, caption: str) -> dict[str, Any]
     if submit_payload and submit_payload.get("clicked") is False:
         raise RuntimeError("TikTok post button was not found/clicked")
 
+    draft_open_result = executor.run(
+        "dom.click",
+        {
+            "platform": "tiktok",
+            "selector": "button[data-tt='components_DraftCells_Clickable']",
+            "timeoutMs": 120000,
+        },
+    )
+    draft_open_payload = draft_open_result.get("payload") or {}
+    if draft_open_payload.get("clicked") is False:
+        raise RuntimeError("TikTok draft entry button was not found/clicked")
+
+    edit_video_result = executor.run(
+        "dom.click",
+        {
+            "platform": "tiktok",
+            "selector": "button.TUXButton.TUXButton--default.TUXButton--medium.TUXButton--secondary",
+            "timeoutMs": 120000,
+        },
+    )
+    edit_video_payload = edit_video_result.get("payload") or {}
+    if edit_video_payload.get("clicked") is False:
+        raise RuntimeError("TikTok 'Edit video' button was not found/clicked")
+
+    search_fill_result = executor.run(
+        "dom.type",
+        {
+            "platform": "tiktok",
+            "selector": "input.search-bar-input",
+            "value": "Infinite Dimensions",
+        },
+    )
+    search_fill_payload = search_fill_result.get("payload") or {}
+    if search_fill_payload.get("typed") is False:
+        raise RuntimeError("TikTok search input was not found/typed")
+
+    search_submit_result = executor.run(
+        "dom.click",
+        {
+            "platform": "tiktok",
+            "selector": ".search-bar-container .search-icon",
+            "timeoutMs": 30000,
+        },
+    )
+    search_submit_payload = search_submit_result.get("payload") or {}
+    if search_submit_payload.get("clicked") is False:
+        raise RuntimeError("TikTok search submit button was not found/clicked")
+
     return executor.run("post.status", {"platform": "tiktok"})
