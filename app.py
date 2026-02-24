@@ -11419,7 +11419,7 @@ class MainWindow(QMainWindow):
             # Large base64 payloads can freeze the browser process before upload starts.
             tiktok_inline_limit_bytes = 200 * 1024 * 1024
             if platform_name == "X":
-                should_inline_video = False
+                should_inline_video = True
             elif platform_name == "TikTok":
                 should_inline_video = video_file.stat().st_size <= tiktok_inline_limit_bytes
             else:
@@ -12096,7 +12096,7 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        const shouldInjectDirectly = platform !== "tiktok" && platform !== "x";
+                        const shouldInjectDirectly = platform !== "tiktok";
                         if (!alreadyHasFile && !alreadyStaged && videoBase64 && shouldInjectDirectly) {
                             try {
                                 const binary = atob(videoBase64);
@@ -12357,16 +12357,19 @@ class MainWindow(QMainWindow):
                             'button[data-testid="tweetButtonInline"]',
                             'button[data-testid="tweetButton"]',
                             'div[data-testid="tweetButtonInline"]',
+                            'button[aria-label*="post" i]',
                         ]) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
                         if (postButton) {
-                            const disabled = Boolean(
-                                postButton.disabled
-                                || String(postButton.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
-                                || String(postButton.getAttribute('data-disabled') || '').toLowerCase() === 'true'
-                            );
-                            if (!disabled) {
-                                submitClicked = clickNodeOrAncestor(postButton) || submitClicked;
-                            }
+                            try { postButton.removeAttribute('disabled'); } catch (_) {}
+                            try { postButton.setAttribute('aria-disabled', 'false'); } catch (_) {}
+                            try { postButton.setAttribute('data-disabled', 'false'); } catch (_) {}
+                            try { postButton.disabled = false; } catch (_) {}
+                            const postTarget = postButton.closest('button, [role="button"], div[data-testid]') || postButton;
+                            try { postTarget.removeAttribute('disabled'); } catch (_) {}
+                            try { postTarget.setAttribute('aria-disabled', 'false'); } catch (_) {}
+                            try { postTarget.setAttribute('data-disabled', 'false'); } catch (_) {}
+                            try { postTarget.disabled = false; } catch (_) {}
+                            submitClicked = clickNodeSingle(postTarget) || clickNodeOrAncestor(postButton) || submitClicked;
                         }
                     }
 
