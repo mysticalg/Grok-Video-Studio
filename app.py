@@ -8261,6 +8261,32 @@ class MainWindow(QMainWindow):
         script = f"""
             (() => {{
                 const allowMakeVideoClick = {allow_make_video_click};
+                const ensureImaginePublicFetchCompat = () => {{
+                    try {{
+                        if (window.__gvsImaginePublicFetchCompatInstalled) return;
+                        const originalFetch = window.fetch;
+                        if (typeof originalFetch !== "function") return;
+                        window.fetch = (input, init) => {{
+                            try {{
+                                const baseInit = init && typeof init === "object" ? {{ ...init }} : {{}};
+                                const requestUrl = (() => {{
+                                    if (typeof input === "string") return input;
+                                    if (input && typeof input.url === "string") return input.url;
+                                    return "";
+                                }})();
+                                if (/^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(String(requestUrl || ""))) {{
+                                    baseInit.credentials = "omit";
+                                    if (!baseInit.mode) baseInit.mode = "cors";
+                                }}
+                                return originalFetch.call(window, input, baseInit);
+                            }} catch (_) {{
+                                return originalFetch.call(window, input, init);
+                            }}
+                        }};
+                        window.__gvsImaginePublicFetchCompatInstalled = true;
+                    }} catch (_) {{}}
+                }};
+                ensureImaginePublicFetchCompat();
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
                 const emulateClick = (el) => {{
