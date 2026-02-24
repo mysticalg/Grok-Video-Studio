@@ -424,23 +424,16 @@ async function handleCmd(msg) {
 
         const findXComposerField = () => {
           const selectors = [
-            "div.public-DraftEditor-content[data-testid='tweetTextarea_0'][contenteditable='true'][role='textbox']",
-            "div.public-DraftEditor-content[data-testid^='tweetTextarea'][contenteditable='true'][role='textbox']",
-            ".DraftEditor-root .public-DraftEditor-content[data-testid='tweetTextarea_0'][contenteditable='true']",
-            ".DraftEditor-root .public-DraftEditor-content[data-testid^='tweetTextarea'][contenteditable='true']",
-            "div[data-testid='tweetTextarea_0'][contenteditable='true'][aria-label*='Post text' i]",
-            "div[data-testid^='tweetTextarea'][contenteditable='true'][aria-label*='Post text' i]",
             "div[data-testid='tweetTextarea_0'][contenteditable='true']",
             "div[data-testid^='tweetTextarea'][contenteditable='true']",
-            "div[aria-label*='Post text' i][contenteditable='true'][role='textbox']",
-            "div[aria-label*='What’s happening' i][contenteditable='true'][role='textbox']",
-            "div[aria-label*='What is happening' i][contenteditable='true'][role='textbox']",
+            "div[role='textbox'][contenteditable='true'][aria-label*='post text' i]",
           ];
 
           const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
 
           for (const sel of selectors) {
-            const editable = Array.from(document.querySelectorAll(sel)).find((node) => isVisible(node));
+            const editable = Array.from(document.querySelectorAll(sel)).find((node) => isVisible(node))
+              || document.querySelector(sel);
             if (!editable) continue;
             try { editable.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
             try { editable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
@@ -563,7 +556,7 @@ async function handleCmd(msg) {
           } else if (currentPlatform === "x" && canonicalKey === "description") {
             const xEl = findXComposerField() || el;
             const normalizeForCompare = (value) => String(value || "")
-              .replace(/​/g, "")
+              .replace(/\u200B/g, "")
               .replace(/\s+/g, " ")
               .trim();
             const expected = normalizeForCompare(text);
@@ -572,7 +565,10 @@ async function handleCmd(msg) {
               if (!current || !expected) return false;
               return current === expected || current.includes(expected) || expected.includes(current);
             };
-            const filled = draftTextMatches() || setValue(xEl, text) || await typeTextIntoEditable(xEl, text);
+
+            const filled = draftTextMatches()
+              || setValue(xEl, text)
+              || await typeTextIntoEditable(xEl, text);
             out[rawKey] = Boolean(filled) && draftTextMatches();
           } else if (currentPlatform === "instagram" && canonicalKey === "description") {
             out[rawKey] = setValue(el, text);
