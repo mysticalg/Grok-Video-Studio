@@ -12103,9 +12103,12 @@ class MainWindow(QMainWindow):
                     let textFilled = false;
                     let captionReady = !captionRequired;
                     if ((platform === "facebook" || platform === "x") && captionRequired) {
-                        const textTarget = findTextInputTarget();
-                        textFilled = setTextValue(textTarget, captionText);
-                        if (!textFilled && platform === "x") {
+                        if (platform === "x") {
+                            const normalizeForCompare = (value) => String(value || "")
+                                .replace(/\u200B/g, "")
+                                .replace(/\\s+/g, " ")
+                                .trim();
+                            const expectedCaption = normalizeForCompare(captionText);
                             const xComposer = bySelectors([
                                 'div[data-testid="tweetTextarea_0"][contenteditable="true"]',
                                 'div[data-testid^="tweetTextarea"][contenteditable="true"]',
@@ -12115,13 +12118,23 @@ class MainWindow(QMainWindow):
                                 clickNodeSingle(xComposer) || clickNodeOrAncestor(xComposer);
                                 try { xComposer.focus(); } catch (_) {}
                             }
-                            textFilled = pasteTextIntoEditor(xComposer, captionText)
-                                || emulateTypingIntoEditor(xComposer, captionText)
-                                || textFilled;
-                            if (!textFilled && xComposer) {
-                                // Avoid raw textContent assignment for DraftEditor; it can render text but not update editor state.
-                                textFilled = false;
-                            }
+
+                            const draftTextMatches = () => {
+                                if (!xComposer) return false;
+                                const currentText = normalizeForCompare(xComposer.innerText || xComposer.textContent || "");
+                                if (!currentText || !expectedCaption) return false;
+                                return currentText === expectedCaption
+                                    || currentText.includes(expectedCaption)
+                                    || expectedCaption.includes(currentText);
+                            };
+
+                            textFilled = draftTextMatches()
+                                || pasteTextIntoEditor(xComposer, captionText)
+                                || emulateTypingIntoEditor(xComposer, captionText);
+                            textFilled = textFilled && draftTextMatches();
+                        } else {
+                            const textTarget = findTextInputTarget();
+                            textFilled = setTextValue(textTarget, captionText);
                         }
                         captionReady = textFilled;
                     }
