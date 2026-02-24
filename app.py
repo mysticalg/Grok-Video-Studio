@@ -6320,23 +6320,49 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
+            image_options_attempts = 0
+
+            def _run_image_options() -> None:
+                nonlocal image_options_attempts
+                image_options_attempts += 1
+                self._append_log(
+                    f"Manual image variant {variant}: applying image options (attempt {image_options_attempts}/3)."
+                )
+                self.browser.page().runJavaScript(set_image_options_script, _after_image_options)
+
             def _after_image_options(options_result):
-                if not isinstance(options_result, dict) or not options_result.get("ok"):
-                    self._append_log(
-                        f"WARNING: Manual image variant {variant}: image options script failed; continuing. result={options_result!r}"
-                    )
-                else:
+                options_missing = []
+                if isinstance(options_result, dict) and options_result.get("ok"):
                     requested_summary = ", ".join(options_result.get("optionsRequested") or []) or "none"
                     applied_summary = ", ".join(options_result.get("optionsApplied") or []) or "none detected"
-                    missing_summary = ", ".join(options_result.get("missingOptions") or []) or "none"
+                    options_missing = [str(name) for name in (options_result.get("missingOptions") or [])]
+                    missing_summary = ", ".join(options_missing) or "none"
                     self._append_log(
                         f"Manual image variant {variant}: image options requested: {requested_summary}; "
                         f"applied markers: {applied_summary}; missing: {missing_summary}."
                     )
+                elif options_result in (None, ""):
+                    self._append_log(
+                        f"WARNING: Manual image variant {variant}: image options callback returned empty result (attempt {image_options_attempts}/3)."
+                    )
+                    options_missing = ["image", selected_aspect_ratio]
+                else:
+                    self._append_log(
+                        f"WARNING: Manual image variant {variant}: image options script failed (attempt {image_options_attempts}/3). result={options_result!r}"
+                    )
+                    options_missing = ["image", selected_aspect_ratio]
+
+                if options_missing and image_options_attempts < 3:
+                    QTimer.singleShot(550, _run_image_options)
+                    return
+
+                if options_missing:
+                    _retry_variant(f"image options not confirmed after {image_options_attempts} attempts: missing={options_missing}")
+                    return
 
                 QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
 
-            QTimer.singleShot(450, lambda: self.browser.page().runJavaScript(set_image_options_script, _after_image_options))
+            QTimer.singleShot(450, _run_image_options)
 
         submit_delay_ms = 2000
 
