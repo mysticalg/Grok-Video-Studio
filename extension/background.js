@@ -425,9 +425,13 @@ async function handleCmd(msg) {
         const findXComposerField = () => {
           const selectors = [
             "div.public-DraftEditor-content[data-testid='tweetTextarea_0'][contenteditable='true'][role='textbox']",
+            "div.public-DraftEditor-content[data-testid^='tweetTextarea'][contenteditable='true'][role='textbox']",
             ".DraftEditor-root .public-DraftEditor-content[data-testid='tweetTextarea_0'][contenteditable='true']",
+            ".DraftEditor-root .public-DraftEditor-content[data-testid^='tweetTextarea'][contenteditable='true']",
             "div[data-testid='tweetTextarea_0'][contenteditable='true'][aria-label*='Post text' i]",
+            "div[data-testid^='tweetTextarea'][contenteditable='true'][aria-label*='Post text' i]",
             "div[data-testid='tweetTextarea_0'][contenteditable='true']",
+            "div[data-testid^='tweetTextarea'][contenteditable='true']",
             "div[aria-label*='Post text' i][contenteditable='true'][role='textbox']",
             "div[aria-label*='What’s happening' i][contenteditable='true'][role='textbox']",
             "div[aria-label*='What is happening' i][contenteditable='true'][role='textbox']",
@@ -558,10 +562,18 @@ async function handleCmd(msg) {
             out[rawKey] = setValue(facebookEl, text);
           } else if (currentPlatform === "x" && canonicalKey === "description") {
             const xEl = findXComposerField() || el;
-            const typed = await typeTextIntoEditable(xEl, text);
-            const normalized = text.trim();
-            const matches = normalized.length === 0 || getEditableText(xEl).includes(normalized);
-            out[rawKey] = typed && matches;
+            const normalizeForCompare = (value) => String(value || "")
+              .replace(/​/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            const expected = normalizeForCompare(text);
+            const draftTextMatches = () => {
+              const current = normalizeForCompare(getEditableText(xEl));
+              if (!current || !expected) return false;
+              return current === expected || current.includes(expected) || expected.includes(current);
+            };
+            const filled = draftTextMatches() || setValue(xEl, text) || await typeTextIntoEditable(xEl, text);
+            out[rawKey] = Boolean(filled) && draftTextMatches();
           } else if (currentPlatform === "instagram" && canonicalKey === "description") {
             out[rawKey] = setValue(el, text);
           } else {
