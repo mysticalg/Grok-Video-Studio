@@ -8542,7 +8542,13 @@ class MainWindow(QMainWindow):
 
         download_type = self.pending_manual_download_type or "video"
         extension = self._resolve_download_extension(download, download_type)
-        filename = self._build_session_download_filename(download_type, variant, extension)
+        browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+        filename = self._build_session_download_filename(
+            download_type,
+            variant,
+            extension,
+            provider_override=browser_provider,
+        )
         download.setDownloadDirectory(str(self.download_dir))
         download.setDownloadFileName(filename)
         self.manual_download_click_sent = True
@@ -8810,8 +8816,17 @@ class MainWindow(QMainWindow):
                 + (" ..." if len(missing_paths) > 5 else "")
             )
 
-    def _build_session_download_filename(self, download_type: str, variant: int | None, extension: str) -> str:
-        provider = _slugify_filename_part(str(self.video_provider.currentData() or "grok") if hasattr(self, "video_provider") else "grok")
+    def _build_session_download_filename(
+        self,
+        download_type: str,
+        variant: int | None,
+        extension: str,
+        provider_override: str | None = None,
+    ) -> str:
+        provider_source = provider_override
+        if provider_source is None:
+            provider_source = str(self.video_provider.currentData() or "grok") if hasattr(self, "video_provider") else "grok"
+        provider = _slugify_filename_part(provider_source)
         resolution = _slugify_filename_part(self.video_resolution.currentData() if hasattr(self, "video_resolution") else "auto")
         aspect = _slugify_filename_part(self.video_aspect_ratio.currentData() if hasattr(self, "video_aspect_ratio") else "na")
         item_variant = int(variant or 0)
