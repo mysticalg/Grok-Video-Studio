@@ -2032,6 +2032,7 @@ class FilteredWebEnginePage(QWebEnginePage):
         profile: QWebEngineProfile | None = None,
         parent=None,
         auto_file_selector: Callable[[str, object, list[str], list[str]], list[str]] | None = None,
+        popup_handler: Callable[[QWebEnginePage, QWebEnginePage.WebWindowType], QWebEnginePage | None] | None = None,
     ):
         if profile is not None:
             super().__init__(profile, parent)
@@ -2039,7 +2040,18 @@ class FilteredWebEnginePage(QWebEnginePage):
             super().__init__(parent)
         self._on_console_message = on_console_message
         self._auto_file_selector = auto_file_selector
+        self._popup_handler = popup_handler
 
+    def createWindow(self, window_type):  # type: ignore[override]
+        if self._popup_handler:
+            try:
+                popup_page = self._popup_handler(self, window_type)
+                if popup_page is not None:
+                    return popup_page
+            except Exception as exc:
+                if self._on_console_message:
+                    self._on_console_message(f"Browser popup handler error: {exc}")
+        return super().createWindow(window_type)
 
     def chooseFiles(self, mode, old_files, accepted_mime_types):  # type: ignore[override]
         if self._auto_file_selector:
@@ -2108,6 +2120,7 @@ class MainWindow(QMainWindow):
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
         self.browser_devtools_windows: dict[QWebEngineView, QMainWindow] = {}
+        self.browser_popup_windows: list[QMainWindow] = []
         self.social_upload_status_labels: dict[str, QLabel] = {}
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
@@ -2185,6 +2198,7 @@ class MainWindow(QMainWindow):
             "Facebook": True,
             "Instagram": True,
             "TikTok": True,
+            "X": True,
             "YouTube": True,
             "Sora2Settings": True,
             "SeedanceSettings": True,
@@ -2609,8 +2623,22 @@ class MainWindow(QMainWindow):
             # Off-the-record profile avoids startup cache/quota errors on locked folders (common on synced drives).
             self.browser_profile = QWebEngineProfile(self)
 
-        self.grok_browser_view.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.grok_browser_view))
-        self.sora_browser.setPage(FilteredWebEnginePage(self._append_log, self.browser_profile, self.sora_browser))
+        self.grok_browser_view.setPage(
+            FilteredWebEnginePage(
+                self._append_log,
+                self.browser_profile,
+                self.grok_browser_view,
+                popup_handler=self._open_popup_browser_window,
+            )
+        )
+        self.sora_browser.setPage(
+            FilteredWebEnginePage(
+                self._append_log,
+                self.browser_profile,
+                self.sora_browser,
+                popup_handler=self._open_popup_browser_window,
+            )
+        )
         browser_profile = self.browser_profile
         if QTWEBENGINE_USE_DISK_CACHE:
             (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
@@ -2630,6 +2658,9 @@ class MainWindow(QMainWindow):
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+            js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
+            if js_popups_attr is not None:
+                browser_settings.setAttribute(js_popups_attr, True)
             developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
             if developer_extras_attr is not None:
                 browser_settings.setAttribute(developer_extras_attr, True)
@@ -2786,6 +2817,10 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("TikTok", "https://www.tiktok.com/upload"),
             "TikTok Upload",
         )
+        self.social_upload_tab_indices["X"] = self.browser_tabs.addTab(
+            self._build_social_upload_tab("X", "https://x.com/home"),
+            "X Upload",
+        )
         self.social_upload_tab_indices["YouTube"] = self.browser_tabs.addTab(
             self._build_social_upload_tab("YouTube", "https://studio.youtube.com"),
             "YouTube Upload",
@@ -2917,6 +2952,10 @@ class MainWindow(QMainWindow):
         elif platform_name == "TikTok":
             api_btn.clicked.connect(self.upload_selected_to_tiktok)
             browser_btn.clicked.connect(self.start_tiktok_browser_upload)
+        elif platform_name == "X":
+            api_btn.setText("API upload unavailable for X")
+            api_btn.setEnabled(False)
+            browser_btn.clicked.connect(self.start_x_browser_upload)
         else:
             api_btn.clicked.connect(self.upload_selected_to_youtube)
             browser_btn.clicked.connect(self.start_youtube_browser_upload)
@@ -2945,10 +2984,14 @@ class MainWindow(QMainWindow):
                 self.browser_profile,
                 browser,
                 auto_file_selector=self._resolve_social_auto_file_selection,
+                popup_handler=self._open_popup_browser_window,
             )
         )
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+        js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
+        if js_popups_attr is not None:
+            browser.settings().setAttribute(js_popups_attr, True)
         developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
         if developer_extras_attr is not None:
             browser.settings().setAttribute(developer_extras_attr, True)
@@ -3008,6 +3051,7 @@ class MainWindow(QMainWindow):
             ("Facebook", ("facebook.com",)),
             ("Instagram", ("instagram.com",)),
             ("TikTok", ("tiktok.com",)),
+            ("X", ("x.com", "twitter.com")),
             ("YouTube", ("youtube.com", "studio.youtube.com")),
         ]
 
@@ -10221,6 +10265,52 @@ class MainWindow(QMainWindow):
         devtools_window.show()
         self._append_log(f"{label}: DevTools opened.")
 
+    def _open_popup_browser_window(
+        self,
+        source_page: QWebEnginePage,
+        _window_type: QWebEnginePage.WebWindowType,
+    ) -> QWebEnginePage | None:
+        popup_window = QMainWindow(self)
+        popup_window.setWindowTitle("Browser Login Popup")
+        popup_window.resize(980, 760)
+
+        popup_view = QWebEngineView(popup_window)
+        popup_page = FilteredWebEnginePage(
+            self._append_log,
+            self.browser_profile,
+            popup_view,
+            auto_file_selector=self._resolve_social_auto_file_selection,
+            popup_handler=self._open_popup_browser_window,
+        )
+        popup_view.setPage(popup_page)
+        popup_window.setCentralWidget(popup_view)
+
+        popup_settings = popup_view.settings()
+        popup_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        popup_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+        js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
+        if js_popups_attr is not None:
+            popup_settings.setAttribute(js_popups_attr, True)
+        developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
+        if developer_extras_attr is not None:
+            popup_settings.setAttribute(developer_extras_attr, True)
+
+        self._apply_browser_zoom(popup_view)
+
+        def _remove_closed_popup(_obj=None):
+            try:
+                self.browser_popup_windows.remove(popup_window)
+            except ValueError:
+                pass
+
+        popup_window.destroyed.connect(_remove_closed_popup)
+        self.browser_popup_windows.append(popup_window)
+        popup_window.show()
+        popup_window.raise_()
+        popup_window.activateWindow()
+        self._append_log("Opened browser popup window for login/authorization flow.")
+        return popup_page
+
     def open_current_browser_devtools(self) -> None:
         index = self.browser_tabs.currentIndex()
         target_browser = self._browser_for_tab_index(index)
@@ -10951,6 +11041,27 @@ class MainWindow(QMainWindow):
         )
 
 
+    def start_x_browser_upload(self) -> None:
+        video_path = self._selected_video_path_for_upload()
+        if not video_path:
+            QMessageBox.warning(self, "No Video Selected", "Select a video to upload first.")
+            return
+        if not Path(video_path).exists():
+            QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
+            return
+
+        _, description, hashtags, _, accepted = self._show_upload_dialog("X", title_enabled=False)
+        if not accepted:
+            return
+
+        self._run_social_upload_via_mode(
+            platform_name="X",
+            video_path=video_path,
+            caption=self._compose_social_text(description, hashtags),
+            title="",
+        )
+
+
     def start_youtube_browser_upload(self) -> None:
         video_path = self._selected_video_path_for_upload()
         if not video_path:
@@ -11307,18 +11418,20 @@ class MainWindow(QMainWindow):
             # Avoid embedding very large TikTok blobs into in-page JS payloads.
             # Large base64 payloads can freeze the browser process before upload starts.
             tiktok_inline_limit_bytes = 200 * 1024 * 1024
-            should_inline_video = (
-                platform_name != "TikTok"
-                or video_file.stat().st_size <= tiktok_inline_limit_bytes
-            )
+            if platform_name == "X":
+                should_inline_video = True
+            elif platform_name == "TikTok":
+                should_inline_video = video_file.stat().st_size <= tiktok_inline_limit_bytes
+            else:
+                should_inline_video = True
             if should_inline_video:
                 try:
                     encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
                 except Exception:
                     encoded_video = ""
             else:
-                # Keep a tiny payload available for lightweight synthetic input probes.
-                encoded_video = "AA=="
+                # Keep a tiny payload available for lightweight synthetic input probes (TikTok only).
+                encoded_video = "AA==" if platform_name == "TikTok" else ""
 
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
@@ -11514,6 +11627,8 @@ class MainWindow(QMainWindow):
             max_attempts = 6
         elif platform_name == "TikTok":
             max_attempts = 24
+        elif platform_name == "X":
+            max_attempts = 14
         elif platform_name == "Facebook":
             max_attempts = 8
         elif platform_name == "YouTube":
@@ -11699,7 +11814,7 @@ class MainWindow(QMainWindow):
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const titleText = String(payload.title || "").trim();
                     const captionText = String(payload.caption || "").trim();
-                    const captionRequired = (platform === "facebook" || platform === "instagram") && Boolean(captionText);
+                    const captionRequired = (platform === "facebook" || platform === "instagram" || platform === "x") && Boolean(captionText);
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
                     const facebookState = uploadState.facebook = uploadState.facebook || {};
@@ -11828,6 +11943,138 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                         return false;
                     };
+                    const pasteTextIntoEditor = (node, value) => {
+                        if (!node) return false;
+                        const text = String(value || "");
+                        if (!text) return true;
+                        try {
+                            if (!(node.isContentEditable || node.getAttribute("contenteditable") === "true")) {
+                                return setTextValue(node, text);
+                            }
+                        } catch (_) {
+                            return setTextValue(node, text);
+                        }
+                        try { node.focus(); } catch (_) {}
+                        try {
+                            const range = document.createRange();
+                            range.selectNodeContents(node);
+                            range.collapse(false);
+                            const sel = window.getSelection();
+                            if (sel) {
+                                sel.removeAllRanges();
+                                sel.addRange(range);
+                            }
+                        } catch (_) {}
+
+                        try {
+                            if (typeof document.execCommand === "function") {
+                                document.execCommand("selectAll", false);
+                                document.execCommand("delete", false);
+                            }
+                        } catch (_) {}
+
+                        const clipboardData = {
+                            getData: (type) => (String(type || "").toLowerCase() === "text/plain" ? text : ""),
+                            types: ["text/plain"],
+                        };
+                        try {
+                            const pasteEvent = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData });
+                            node.dispatchEvent(pasteEvent);
+                        } catch (_) {
+                            try {
+                                const fallbackPaste = new Event("paste", { bubbles: true, cancelable: true });
+                                fallbackPaste.clipboardData = clipboardData;
+                                node.dispatchEvent(fallbackPaste);
+                            } catch (_) {}
+                        }
+
+                        let inserted = false;
+                        try {
+                            if (typeof document.execCommand === "function") {
+                                inserted = Boolean(document.execCommand("insertText", false, text));
+                            }
+                        } catch (_) {}
+                        if (!inserted) {
+                            inserted = setTextValue(node, text);
+                        }
+                        try {
+                            node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertFromPaste" }));
+                        } catch (_) {
+                            try { node.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
+                        }
+                        try { node.dispatchEvent(new Event("change", { bubbles: true, composed: true })); } catch (_) {}
+                        const finalText = String(node.innerText || node.textContent || "").trim();
+                        return inserted || finalText.length > 0;
+                    };
+
+                    const emulateTypingIntoEditor = (node, value) => {
+                        if (!node) return false;
+                        const text = String(value || "");
+                        const ensureFocusAndSelection = () => {
+                            try { node.focus(); } catch (_) {}
+                            try {
+                                const range = document.createRange();
+                                range.selectNodeContents(node);
+                                range.collapse(false);
+                                const sel = window.getSelection();
+                                if (sel) {
+                                    sel.removeAllRanges();
+                                    sel.addRange(range);
+                                }
+                            } catch (_) {}
+                        };
+                        try {
+                            if (!(node.isContentEditable || node.getAttribute("contenteditable") === "true")) {
+                                return setTextValue(node, text);
+                            }
+                        } catch (_) {
+                            return setTextValue(node, text);
+                        }
+
+                        ensureFocusAndSelection();
+                        try {
+                            if (typeof document.execCommand === "function") {
+                                document.execCommand("selectAll", false);
+                                document.execCommand("delete", false);
+                            }
+                        } catch (_) {}
+                        try {
+                            node.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
+                            node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
+                        } catch (_) {}
+
+                        let inserted = false;
+                        const chunks = text.split(/(\\n)/);
+                        for (const part of chunks) {
+                            if (!part) continue;
+                            ensureFocusAndSelection();
+                            const isNewline = part === "\\n";
+                            const payload = isNewline ? "\\n" : part;
+                            try {
+                                node.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: payload, inputType: "insertText" }));
+                            } catch (_) {}
+                            try {
+                                if (typeof document.execCommand === "function") {
+                                    const ok = document.execCommand("insertText", false, payload);
+                                    inserted = inserted || Boolean(ok);
+                                }
+                            } catch (_) {}
+                            try {
+                                node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: payload, inputType: "insertText" }));
+                            } catch (_) {
+                                try { node.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
+                            }
+                        }
+
+                        if (!inserted) {
+                            // Last resort: one-shot setter for non-Draft editors.
+                            return setTextValue(node, text);
+                        }
+
+                        try { node.dispatchEvent(new Event("change", { bubbles: true, composed: true })); } catch (_) {}
+                        const finalText = String(node.innerText || node.textContent || "").trim();
+                        return finalText.length > 0;
+                    };
                     const findTextInputTarget = () => {
                         const selectors = [
                             'textarea[aria-label*="caption" i]',
@@ -11855,9 +12102,27 @@ class MainWindow(QMainWindow):
 
                     let textFilled = false;
                     let captionReady = !captionRequired;
-                    if (platform === "facebook" && captionRequired) {
+                    if ((platform === "facebook" || platform === "x") && captionRequired) {
                         const textTarget = findTextInputTarget();
                         textFilled = setTextValue(textTarget, captionText);
+                        if (!textFilled && platform === "x") {
+                            const xComposer = bySelectors([
+                                'div[data-testid="tweetTextarea_0"][contenteditable="true"]',
+                                'div[data-testid^="tweetTextarea"][contenteditable="true"]',
+                                'div[role="textbox"][contenteditable="true"][aria-label*="post text" i]',
+                            ]);
+                            if (xComposer) {
+                                clickNodeSingle(xComposer) || clickNodeOrAncestor(xComposer);
+                                try { xComposer.focus(); } catch (_) {}
+                            }
+                            textFilled = pasteTextIntoEditor(xComposer, captionText)
+                                || emulateTypingIntoEditor(xComposer, captionText)
+                                || textFilled;
+                            if (!textFilled && xComposer) {
+                                // Avoid raw textContent assignment for DraftEditor; it can render text but not update editor state.
+                                textFilled = false;
+                            }
+                        }
                         captionReady = textFilled;
                     }
 
@@ -11929,6 +12194,18 @@ class MainWindow(QMainWindow):
                             const byFacebookClass = fileInputs.find((node) => norm(node.className).includes("x1s85apg"));
                             if (byFacebookClass) return byFacebookClass;
                         }
+                        if (platform === "x") {
+                            const byXTestId = fileInputs.find((node) => {
+                                const testId = norm(node.getAttribute("data-testid"));
+                                return testId.includes("fileinput");
+                            });
+                            if (byXTestId) return byXTestId;
+                            const byXAccept = fileInputs.find((node) => {
+                                const accept = norm(node.getAttribute("accept"));
+                                return accept.includes("video") || accept.includes("media");
+                            });
+                            if (byXAccept) return byXAccept;
+                        }
                         const byExactInstagramAccept = fileInputs.find((node) => {
                             const accept = norm(node.getAttribute("accept"));
                             return accept.includes("video/mp4") || accept.includes("video/quicktime") || accept.includes("video/*");
@@ -11969,7 +12246,7 @@ class MainWindow(QMainWindow):
 
                         const alreadyHasFile = Boolean(fileInput.files && fileInput.files.length > 0);
                         const alreadyStaged = platform === "facebook" ? Boolean(facebookState.fileStaged) : false;
-                        const shouldInjectDirectly = platform !== "tiktok" || videoBase64 !== "AA==";
+                        const shouldInjectDirectly = platform !== "tiktok";
                         if (!alreadyHasFile && !alreadyStaged && videoBase64 && shouldInjectDirectly) {
                             try {
                                 const binary = atob(videoBase64);
@@ -12221,6 +12498,51 @@ class MainWindow(QMainWindow):
                                     } catch (_) {}
                                 }
                             }
+                        }
+                    }
+
+
+                    if (platform === "x" && fileReadySignal && captionReady) {
+                        const postButton = bySelectors([
+                            'button[data-testid="tweetButtonInline"]',
+                            'button[data-testid="tweetButton"]',
+                            'div[data-testid="tweetButtonInline"]',
+                            'button[aria-label*="post" i]',
+                        ]) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
+                        if (postButton) {
+                            const forceEnable = (node) => {
+                                if (!node) return;
+                                try { node.removeAttribute('disabled'); } catch (_) {}
+                                try { node.setAttribute('aria-disabled', 'false'); } catch (_) {}
+                                try { node.setAttribute('data-disabled', 'false'); } catch (_) {}
+                                try { node.setAttribute('tabindex', '0'); } catch (_) {}
+                                try { node.disabled = false; } catch (_) {}
+                            };
+                            const postTarget = postButton.closest('button, [role="button"], div[data-testid]') || postButton;
+                            forceEnable(postButton);
+                            forceEnable(postTarget);
+                            try {
+                                const innerSpan = postButton.querySelector('span');
+                                forceEnable(innerSpan);
+                            } catch (_) {}
+
+                            let clicked = false;
+                            clicked = clickNodeSingle(postTarget) || clicked;
+                            clicked = clickNodeSingle(postButton) || clicked;
+                            clicked = injectClickActions(postTarget) || clicked;
+                            clicked = injectClickActions(postButton) || clicked;
+                            clicked = clickNodeOrAncestor(postButton) || clicked;
+                            if (!clicked) {
+                                try {
+                                    const evDown = new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse', button: 0, buttons: 1 });
+                                    const evUp = new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse', button: 0, buttons: 0 });
+                                    postTarget.dispatchEvent(evDown);
+                                    postTarget.dispatchEvent(evUp);
+                                    postTarget.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 }));
+                                    clicked = true;
+                                } catch (_) {}
+                            }
+                            submitClicked = clicked || submitClicked;
                         }
                     }
 
@@ -12792,6 +13114,7 @@ class MainWindow(QMainWindow):
 
             is_tiktok = platform_name == "TikTok"
             is_youtube = platform_name == "YouTube"
+            is_x = platform_name == "X"
             tiktok_upload_assumed = is_tiktok and attempts >= 3
             file_stage_ok = file_ready_signal or (file_found and file_dialog_triggered and video_path_exists) or tiktok_upload_assumed
             is_facebook = platform_name == "Facebook"
@@ -12800,17 +13123,17 @@ class MainWindow(QMainWindow):
             submit_ok = (
                 submit_clicked
                 or (is_tiktok and (tiktok_submit_clicked_ever or tiktok_draft_landed))
-            ) if (is_facebook or is_instagram or is_tiktok or is_youtube) else True
-            completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok or is_youtube) else (attempts >= 2)
+            ) if (is_facebook or is_instagram or is_tiktok or is_youtube or is_x) else True
+            completion_attempt_ready = submit_ok if (is_facebook or is_instagram or is_tiktok or is_youtube or is_x) else (attempts >= 2)
             if completion_attempt_ready and file_stage_ok and caption_ok and submit_ok:
                 status_label.setText(
                     "Status: post submitted."
-                    if (is_facebook or is_instagram or is_youtube)
+                    if (is_facebook or is_instagram or is_youtube or is_x)
                     else "Status: staged. Confirm/finalize post in this tab if needed."
                 )
                 progress_bar.setValue(100)
                 self._append_log(
-                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram or is_youtube) else 'staged successfully'} in its tab."
+                    f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram or is_youtube or is_x) else 'staged successfully'} in its tab."
                 )
                 self.social_upload_pending.pop(platform_name, None)
                 return
