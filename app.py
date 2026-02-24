@@ -7075,6 +7075,9 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(3000, self._poll_for_manual_image)
 
                 if status == "callback-empty":
+                    self._append_log(
+                        f"Variant {current_variant}: submit callback returned empty; probing current page listitems for visible button[aria-label='Make video'] before generic retry."
+                    )
                     pick_ready_probe_script = """
                         (() => {
                             try {
@@ -7190,6 +7193,12 @@ class MainWindow(QMainWindow):
                             return
 
                         next_status = probe_result.get("status") if isinstance(probe_result, dict) else status
+                        if isinstance(probe_result, dict):
+                            self._append_log(
+                                f"Variant {current_variant}: callback-empty probe result status='{next_status}' "
+                                f"(listitems={probe_result.get('listItemCount', 'unknown')}, "
+                                f"makeVideoButtons={probe_result.get('makeVideoVisibleCount', 'unknown')}); continuing poll."
+                            )
                         _queue_pick_retry(next_status)
 
                     self.browser.page().runJavaScript(pick_ready_probe_script, _after_pick_ready_probe)
