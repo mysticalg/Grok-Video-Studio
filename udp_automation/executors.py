@@ -25,6 +25,10 @@ class EmbeddedExecutor(BaseExecutor):
 
 
 class UdpExecutor(BaseExecutor):
+    ACTION_TIMEOUT_OVERRIDES_S = {
+        "form.fill": 4.0,
+    }
+
     def __init__(
         self,
         host: str = "127.0.0.1",
@@ -89,6 +93,7 @@ class UdpExecutor(BaseExecutor):
                 raise RuntimeError("UDP workflow stopped by user")
 
             target_summary = self._target_summary(payload)
+            action_timeout_s = float(self.ACTION_TIMEOUT_OVERRIDES_S.get(action, self.timeout_s))
 
             if action_idx > 1 and self.action_delay_ms > 0:
                 delay_s = self.action_delay_ms / 1000.0
@@ -113,9 +118,9 @@ class UdpExecutor(BaseExecutor):
                     raise RuntimeError("UDP workflow stopped by user")
 
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                    sock.settimeout(min(0.5, self.timeout_s))
+                    sock.settimeout(min(0.5, action_timeout_s))
                     sock.sendto(json.dumps(message).encode("utf-8"), (self.host, self.port))
-                    deadline = time.time() + self.timeout_s
+                    deadline = time.time() + action_timeout_s
                     self._log(action, "sent", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
 
                     while time.time() < deadline:
