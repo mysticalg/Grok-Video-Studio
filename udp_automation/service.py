@@ -40,6 +40,33 @@ class UdpAutomationService:
         self._transport = None
         self._clients: set[tuple[str, int]] = set()
 
+    @staticmethod
+    def _is_connection_closed_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "connection closed" in text or "target page, context or browser has been closed" in text
+
+    async def _connect_cdp(self) -> None:
+        if self.chrome_instance is None:
+            raise RuntimeError("Chrome instance is not available")
+        if self.cdp is not None:
+            await self.cdp.close()
+        self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
+
+    async def _open_platform_page(self, url: str, reuse_tab: bool) -> Any:
+        if self.cdp is None:
+            await self._connect_cdp()
+        try:
+            page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
+            await page.bring_to_front()
+            return page
+        except Exception as exc:
+            if not self._is_connection_closed_error(exc):
+                raise
+            await self._connect_cdp()
+            page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
+            await page.bring_to_front()
+            return page
+
     async def start(self) -> None:
         if self._start_bus:
             await self.bus.start()
@@ -73,11 +100,8 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 url = str(payload.get("url") or PLATFORM_URLS.get(platform) or "https://example.com")
                 self.chrome_instance = self.chrome_manager.launch_or_reuse()
-                if self.cdp is None:
-                    self.cdp = await CDPController.connect(self.chrome_instance.ws_endpoint)
                 reuse_tab = bool(payload.get("reuseTab", False))
-                page = await self.cdp.get_or_create_page(url, reuse_tab=reuse_tab)
-                await page.bring_to_front()
+                page = await self._open_platform_page(url, reuse_tab=reuse_tab)
                 await self._emit("state", {"state": "page_opened", "platform": platform, "url": page.url})
                 return {"ok": True, "payload": {"url": page.url}}
 
@@ -178,8 +202,14 @@ class UdpAutomationService:
         if self._transport is None:
             return
         message = json.dumps(event(name, payload)).encode("utf-8")
+        dead_clients: list[tuple[str, int]] = []
         for addr in self._clients:
-            self._transport.sendto(message, addr)
+            try:
+                self._transport.sendto(message, addr)
+            except OSError:
+                dead_clients.append(addr)
+        for addr in dead_clients:
+            self._clients.discard(addr)
 
 
 class _UdpProtocol(asyncio.DatagramProtocol):
@@ -196,7 +226,12 @@ class _UdpProtocol(asyncio.DatagramProtocol):
                 msg = json.loads(data.decode("utf-8"))
             except Exception:
                 return
-            result = await self.service.handle_command(msg, addr)
+
+            try:
+                result = await self.service.handle_command(msg, addr)
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc), "payload": {}}
+
             response = {
                 "v": 1,
                 "type": "cmd_ack",
@@ -205,6 +240,9 @@ class _UdpProtocol(asyncio.DatagramProtocol):
                 **result,
             }
             if self.transport is not None:
-                self.transport.sendto(json.dumps(response).encode("utf-8"), addr)
+                try:
+                    self.transport.sendto(json.dumps(response).encode("utf-8"), addr)
+                except OSError:
+                    return
 
         asyncio.create_task(_handle())
