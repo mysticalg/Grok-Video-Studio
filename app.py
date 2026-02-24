@@ -12100,7 +12100,10 @@ class MainWindow(QMainWindow):
                         && (Date.now() - Number(tiktokNetworkState.lastReadySignalAtMs || 0)) <= 15 * 60 * 1000
                     );
                     const tiktokSaveDraftCandidate = bySelectors([
+                        'button[data-e2e="save_draft_button"] div.Button__content',
                         'button[data-e2e="save_draft_button"]',
+                        'div.Button__content.Button__content--shape-default.Button__content--size-large.Button__content--type-neutral.Button__content--loading-false',
+                        'button[aria-label*="save draft" i] div.Button__content',
                         'button[aria-label*="save draft" i]',
                     ]) || findClickableByHints(["save draft"], { excludeHints: ["discard"] });
                     const tiktokSaveDraftTarget = tiktokSaveDraftCandidate
@@ -12326,10 +12329,18 @@ class MainWindow(QMainWindow):
                                 return current === norm(nextText);
                             };
 
-                            const captionAlreadyPresent = draftEditable
-                                ? normalizedNodeText(draftEditable) === norm(captionText)
-                                : false;
-                            if (captionAlreadyPresent) {
+                            const currentDraftText = draftEditable ? normalizedNodeText(draftEditable) : "";
+                            const normalizedCaption = norm(captionText);
+                            const captionAlreadyPresent = Boolean(
+                                currentDraftText
+                                && (
+                                    currentDraftText === normalizedCaption
+                                    || currentDraftText.includes(normalizedCaption)
+                                    || normalizedCaption.includes(currentDraftText)
+                                )
+                            );
+                            const captionNonEmpty = Boolean(currentDraftText && currentDraftText.length > 0);
+                            if (captionAlreadyPresent || captionNonEmpty) {
                                 textFilled = true;
                             } else if (actionSpacingElapsed && (draftEditable || draftSpan)) {
                                 try {
@@ -12705,8 +12716,9 @@ class MainWindow(QMainWindow):
                 and "tiktokstudio/content" in current_url.lower()
                 and "tab=draft" in current_url.lower()
             )
+            action_attempt_count = len(action_attempts) if isinstance(action_attempts, list) else 0
             self._append_log(
-                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked}"
+                f"{platform_name}: attempt {attempts} url={current_url or 'empty'} video_source={'set' if video_path_exists else 'missing'} allow_file_dialog={allow_file_dialog} results file_input={file_found} open_clicked={open_upload_clicked} file_picker={file_dialog_triggered} file_ready={file_ready_signal} tiktok_upload_complete={tiktok_upload_completion_signal} tiktok_network_ready={tiktok_network_ready_signal} tiktok_ui_ready={tiktok_save_draft_ui_ready} caption_filled={text_filled} next_clicked={next_clicked} tiktok_post_enabled={tiktok_post_enabled} submit_clicked={submit_clicked} action_attempts={action_attempt_count}"
             )
             if isinstance(action_attempts, list):
                 for action_attempt in action_attempts:
@@ -12716,6 +12728,8 @@ class MainWindow(QMainWindow):
                         action_text = ""
                     if action_text:
                         self._append_log(f"{platform_name}: action {action_text}")
+            else:
+                self._append_log(f"{platform_name}: action unavailable reason=script_result_missing_action_attempts")
             pending["allow_file_dialog"] = False
 
             is_tiktok = platform_name == "TikTok"
