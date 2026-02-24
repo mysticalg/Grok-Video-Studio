@@ -2313,6 +2313,13 @@ class MainWindow(QMainWindow):
         self.count.setRange(1, 10)
         self.count.setValue(1)
 
+        self.automation_action_delay = QSpinBox()
+        self.automation_action_delay.setRange(100, 5000)
+        self.automation_action_delay.setSingleStep(100)
+        self.automation_action_delay.setSuffix(" ms")
+        self.automation_action_delay.setValue(700)
+        self.automation_action_delay.setToolTip("Delay between manual browser automation actions.")
+
         left_layout.addWidget(prompt_group)
 
         self.generate_image_btn = QPushButton("🎬 Create New Video")
@@ -3652,6 +3659,11 @@ class MainWindow(QMainWindow):
         self.automation_counter_total = 0
         self.automation_counter_completed = 0
 
+    def _manual_action_delay_ms(self) -> int:
+        if hasattr(self, "automation_action_delay") and self.automation_action_delay is not None:
+            return max(100, int(self.automation_action_delay.value()))
+        return 700
+
     def _refresh_status_bar_visibility(self) -> None:
         status_bar = self.statusBar()
         should_show = self._status_bar_has_active_content()
@@ -3954,6 +3966,9 @@ class MainWindow(QMainWindow):
         automation_layout.setContentsMargins(8, 4, 8, 4)
         automation_layout.addWidget(QLabel("Counter"))
         automation_layout.addWidget(self.count)
+        automation_layout.addSpacing(12)
+        automation_layout.addWidget(QLabel("Action Delay"))
+        automation_layout.addWidget(self.automation_action_delay)
         automation_layout.addStretch(1)
         self._add_widget_to_menu(self.automation_menu, automation_widget)
 
@@ -4330,6 +4345,7 @@ class MainWindow(QMainWindow):
             "quick_actions_toolbar_visible": self.quick_actions_toolbar.isVisible(),
             "automation_mode": self.automation_mode.currentData(),
             "counter": self.count.value(),
+            "automation_action_delay_ms": int(self._manual_action_delay_ms()),
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
@@ -4507,6 +4523,11 @@ class MainWindow(QMainWindow):
         elif "count" in preferences:
             try:
                 self.count.setValue(int(preferences["count"]))
+            except (TypeError, ValueError):
+                pass
+        if "automation_action_delay_ms" in preferences:
+            try:
+                self.automation_action_delay.setValue(int(preferences["automation_action_delay_ms"]))
             except (TypeError, ValueError):
                 pass
         if "video_resolution" in preferences:
@@ -6661,7 +6682,7 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            step_pause_ms = 700
+            step_pause_ms = self._manual_action_delay_ms()
             option_steps = [
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
@@ -6705,7 +6726,7 @@ class MainWindow(QMainWindow):
 
             QTimer.singleShot(step_pause_ms, lambda: _run_option_step(0))
 
-        submit_delay_ms = 2000
+        submit_delay_ms = self._manual_action_delay_ms()
 
         def _after_populate(result):
             if result in (None, ""):
@@ -6749,7 +6770,7 @@ class MainWindow(QMainWindow):
                 const prompt = {prompt!r};
                 const phase = {phase!r};
                 const submitToken = {self.manual_image_submit_token};
-                const ACTION_DELAY_MS = 200;
+                const ACTION_DELAY_MS = {self._manual_action_delay_ms()};
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
@@ -7228,7 +7249,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_redirect_target = self._active_manual_browser_target()
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
-        action_delay_ms = 1000
+        action_delay_ms = self._manual_action_delay_ms()
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_duration_label = f"{selected_duration_seconds}s"
@@ -7948,7 +7969,7 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing to submit."
                         )
-                QTimer.singleShot(2000, _run_flow_submit)
+                QTimer.singleShot(action_delay_ms, _run_flow_submit)
 
             self.browser.page().runJavaScript(script, _after_prompt_populate)
 
@@ -7962,7 +7983,7 @@ class MainWindow(QMainWindow):
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
                 self._append_log(f"Variant {variant}: all staged options attempted; continuing to prompt entry.")
-                QTimer.singleShot(2000, _populate_prompt_then_submit)
+                QTimer.singleShot(action_delay_ms, _populate_prompt_then_submit)
                 return
 
             step_name, label = option_steps[step_index]
@@ -7982,7 +8003,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"WARNING: Variant {variant}: could not confirm click for {step_name} option '{label}'. result={step_result!r}"
                     )
-                QTimer.singleShot(2000, lambda: _run_option_step(step_index + 1))
+                QTimer.singleShot(action_delay_ms, lambda: _run_option_step(step_index + 1))
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
@@ -7992,7 +8013,7 @@ class MainWindow(QMainWindow):
 
         def _open_options_then_steps() -> None:
             self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
-            QTimer.singleShot(2000, lambda: _run_option_step(0))
+            QTimer.singleShot(action_delay_ms, lambda: _run_option_step(0))
 
         def _after_location_check(location_result):
             current_url = ""
@@ -8002,10 +8023,10 @@ class MainWindow(QMainWindow):
             if needs_nav:
                 self._append_log("Manual flow: current page is not grok.com/imagine/favorites; navigating there now.")
                 self.browser.setUrl(QUrl("https://grok.com/imagine/favorites"))
-                QTimer.singleShot(2000, _open_options_then_steps)
+                QTimer.singleShot(action_delay_ms, _open_options_then_steps)
             else:
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
-                QTimer.singleShot(2000, _open_options_then_steps)
+                QTimer.singleShot(action_delay_ms, _open_options_then_steps)
 
         self.browser.page().runJavaScript(
             "(() => ({ href: String((window.location && window.location.href) || '') }))()",
