@@ -422,6 +422,43 @@ async function handleCmd(msg) {
           return null;
         };
 
+        const findXComposerField = () => {
+          const selectors = [
+            "div[data-testid='tweetTextarea_0'] div[contenteditable='true']",
+            "div[data-testid='tweetTextarea_0'][contenteditable='true']",
+            "div[data-testid='tweetTextarea_0']",
+            "div[aria-label*='Post text' i][contenteditable='true']",
+            "div[aria-label*='What is happening' i][contenteditable='true']",
+            "div[role='textbox'][data-testid='tweetTextarea_0']",
+            "div[role='textbox'][contenteditable='true'][aria-label*='post' i]",
+          ];
+
+          const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+
+          for (const sel of selectors) {
+            const nodes = Array.from(document.querySelectorAll(sel));
+            const candidate = nodes.find((node) => {
+              if (!isVisible(node)) return false;
+              if (String(node.getAttribute("contenteditable") || "").toLowerCase() === "true") return true;
+              const editableChild = node.querySelector("[contenteditable='true']");
+              return Boolean(editableChild && isVisible(editableChild));
+            });
+            if (!candidate) continue;
+            const editable = String(candidate.getAttribute("contenteditable") || "").toLowerCase() === "true"
+              ? candidate
+              : candidate.querySelector("[contenteditable='true']");
+            if (!editable) continue;
+            try { editable.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            try { editable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { editable.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { editable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { editable.focus(); } catch (_) {}
+            return editable;
+          }
+
+          return null;
+        };
+
         const findYouTubeContainerField = (key) => {
           const titleCandidates = [
             "#textbox[contenteditable='true'][aria-label*='add a title' i]",
@@ -529,7 +566,13 @@ async function handleCmd(msg) {
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
             out[rawKey] = setValue(facebookEl, text);
-          } else if ((currentPlatform === "instagram" || currentPlatform === "x") && canonicalKey === "description") {
+          } else if (currentPlatform === "x" && canonicalKey === "description") {
+            const xEl = findXComposerField() || el;
+            const pasteOk = setValue(xEl, text);
+            const normalized = text.trim();
+            const matches = normalized.length === 0 || getEditableText(xEl).includes(normalized);
+            out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(xEl, text);
+          } else if (currentPlatform === "instagram" && canonicalKey === "description") {
             out[rawKey] = setValue(el, text);
           } else {
             out[rawKey] = setValue(el, text);
