@@ -424,29 +424,19 @@ async function handleCmd(msg) {
 
         const findXComposerField = () => {
           const selectors = [
-            "div[data-testid='tweetTextarea_0'] div[contenteditable='true']",
+            "div.public-DraftEditor-content[data-testid='tweetTextarea_0'][contenteditable='true'][role='textbox']",
+            ".DraftEditor-root .public-DraftEditor-content[data-testid='tweetTextarea_0'][contenteditable='true']",
+            "div[data-testid='tweetTextarea_0'][contenteditable='true'][aria-label*='Post text' i]",
             "div[data-testid='tweetTextarea_0'][contenteditable='true']",
-            "div[data-testid='tweetTextarea_0']",
-            "div[aria-label*='Post text' i][contenteditable='true']",
-            "div[aria-label*='What is happening' i][contenteditable='true']",
-            "div[role='textbox'][data-testid='tweetTextarea_0']",
-            "div[role='textbox'][contenteditable='true'][aria-label*='post' i]",
+            "div[aria-label*='Post text' i][contenteditable='true'][role='textbox']",
+            "div[aria-label*='What’s happening' i][contenteditable='true'][role='textbox']",
+            "div[aria-label*='What is happening' i][contenteditable='true'][role='textbox']",
           ];
 
           const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
 
           for (const sel of selectors) {
-            const nodes = Array.from(document.querySelectorAll(sel));
-            const candidate = nodes.find((node) => {
-              if (!isVisible(node)) return false;
-              if (String(node.getAttribute("contenteditable") || "").toLowerCase() === "true") return true;
-              const editableChild = node.querySelector("[contenteditable='true']");
-              return Boolean(editableChild && isVisible(editableChild));
-            });
-            if (!candidate) continue;
-            const editable = String(candidate.getAttribute("contenteditable") || "").toLowerCase() === "true"
-              ? candidate
-              : candidate.querySelector("[contenteditable='true']");
+            const editable = Array.from(document.querySelectorAll(sel)).find((node) => isVisible(node));
             if (!editable) continue;
             try { editable.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
             try { editable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
@@ -568,10 +558,10 @@ async function handleCmd(msg) {
             out[rawKey] = setValue(facebookEl, text);
           } else if (currentPlatform === "x" && canonicalKey === "description") {
             const xEl = findXComposerField() || el;
-            const pasteOk = setValue(xEl, text);
+            const typed = await typeTextIntoEditable(xEl, text);
             const normalized = text.trim();
             const matches = normalized.length === 0 || getEditableText(xEl).includes(normalized);
-            out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(xEl, text);
+            out[rawKey] = typed && matches;
           } else if (currentPlatform === "instagram" && canonicalKey === "description") {
             out[rawKey] = setValue(el, text);
           } else {
