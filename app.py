@@ -12526,21 +12526,52 @@ class MainWindow(QMainWindow):
 
 
                     if (platform === "x" && fileReadySignal && captionReady) {
-                        const postButton = bySelectors([
+                        const xComposer = bySelectors([
+                            'div[data-testid="tweetTextarea_0"][contenteditable="true"]',
+                            'div[data-testid^="tweetTextarea"][contenteditable="true"]',
+                            'div[role="textbox"][contenteditable="true"][aria-label*="post text" i]',
+                        ]);
+                        const xForm = xComposer ? (xComposer.closest('form') || xComposer.parentElement && xComposer.parentElement.closest('form')) : null;
+                        const xPostCandidates = [
                             'button[data-testid="tweetButtonInline"]',
                             'button[data-testid="tweetButton"]',
                             'div[data-testid="tweetButtonInline"]',
+                            'div[data-testid="tweetButton"]',
                             'button[aria-label*="post" i]',
-                        ]) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
+                            'div[role="button"][aria-label*="post" i]',
+                        ];
+                        const postButton = bySelectors(xPostCandidates) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
+
+                        const forceEnable = (node) => {
+                            if (!node) return;
+                            try { node.removeAttribute('disabled'); } catch (_) {}
+                            try { node.setAttribute('aria-disabled', 'false'); } catch (_) {}
+                            try { node.setAttribute('data-disabled', 'false'); } catch (_) {}
+                            try { node.setAttribute('tabindex', '0'); } catch (_) {}
+                            try { node.disabled = false; } catch (_) {}
+                        };
+                        const fireSubmitHotkeys = (node) => {
+                            if (!node) return false;
+                            let fired = false;
+                            const combos = [
+                                { key: 'Enter', code: 'Enter', ctrlKey: true, metaKey: false },
+                                { key: 'Enter', code: 'Enter', ctrlKey: false, metaKey: true },
+                                { key: 'Enter', code: 'Enter', ctrlKey: false, metaKey: false },
+                            ];
+                            try { node.focus(); } catch (_) {}
+                            for (const combo of combos) {
+                                try {
+                                    node.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, composed: true, ...combo }));
+                                    node.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, cancelable: true, composed: true, ...combo }));
+                                    node.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, composed: true, ...combo }));
+                                    fired = true;
+                                } catch (_) {}
+                            }
+                            return fired;
+                        };
+
+                        let clicked = false;
                         if (postButton) {
-                            const forceEnable = (node) => {
-                                if (!node) return;
-                                try { node.removeAttribute('disabled'); } catch (_) {}
-                                try { node.setAttribute('aria-disabled', 'false'); } catch (_) {}
-                                try { node.setAttribute('data-disabled', 'false'); } catch (_) {}
-                                try { node.setAttribute('tabindex', '0'); } catch (_) {}
-                                try { node.disabled = false; } catch (_) {}
-                            };
                             const postTarget = postButton.closest('button, [role="button"], div[data-testid]') || postButton;
                             forceEnable(postButton);
                             forceEnable(postTarget);
@@ -12549,7 +12580,6 @@ class MainWindow(QMainWindow):
                                 forceEnable(innerSpan);
                             } catch (_) {}
 
-                            let clicked = false;
                             clicked = clickNodeSingle(postTarget) || clicked;
                             clicked = clickNodeSingle(postButton) || clicked;
                             clicked = injectClickActions(postTarget) || clicked;
@@ -12565,8 +12595,44 @@ class MainWindow(QMainWindow):
                                     clicked = true;
                                 } catch (_) {}
                             }
-                            submitClicked = clicked || submitClicked;
+                            if (!clicked) {
+                                try {
+                                    const rect = postTarget.getBoundingClientRect();
+                                    if (rect && rect.width > 0 && rect.height > 0) {
+                                        const targetAtPoint = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                                        if (targetAtPoint) {
+                                            clicked = clickNodeOrAncestor(targetAtPoint) || clicked;
+                                        }
+                                    }
+                                } catch (_) {}
+                            }
                         }
+
+                        const hotkeySubmitted = fireSubmitHotkeys(xComposer);
+                        let formSubmitted = false;
+                        if (xForm) {
+                            try {
+                                if (typeof xForm.requestSubmit === 'function') {
+                                    xForm.requestSubmit();
+                                    formSubmitted = true;
+                                }
+                            } catch (_) {}
+                            if (!formSubmitted) {
+                                try {
+                                    xForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true, composed: true }));
+                                    formSubmitted = true;
+                                } catch (_) {}
+                            }
+                            if (!formSubmitted) {
+                                try {
+                                    xForm.submit();
+                                    formSubmitted = true;
+                                } catch (_) {}
+                            }
+                        }
+
+                        submitClicked = clicked || hotkeySubmitted || formSubmitted || submitClicked;
+                        logActionAttempt('x_submit', `clicked=${Boolean(clicked)} hotkey=${Boolean(hotkeySubmitted)} form=${Boolean(formSubmitted)} button_found=${Boolean(postButton)}`);
                     }
 
                     let tiktokPostEnabled = false;
