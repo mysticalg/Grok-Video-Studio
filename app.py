@@ -6206,6 +6206,14 @@ class MainWindow(QMainWindow):
                         if (!button) return false;
                         return emulateActivate(button);
                     };
+                    const clickAspectInnerDivByAriaLabel = (ariaLabel, root = document) => {
+                        const escaped = String(ariaLabel).replace(/"/g, '\"');
+                        const candidates = [...root.querySelectorAll(`button[aria-label="${escaped}"]`)];
+                        const button = candidates.find((el) => isVisible(el) && !el.disabled) || null;
+                        if (!button) return false;
+                        const innerDiv = [...button.querySelectorAll("div")].find((el) => isVisible(el)) || null;
+                        return innerDiv ? emulateActivate(innerDiv) : false;
+                    };
 
 
                     let imageOptionClicked = false;
@@ -6237,7 +6245,9 @@ class MainWindow(QMainWindow):
                                 || clickImageMenuItem(document)
                             ))
                             || (ariaLabel && (
-                                clickAspectButtonByAriaLabel(ariaLabel, composer)
+                                clickAspectInnerDivByAriaLabel(ariaLabel, composer)
+                                || clickAspectInnerDivByAriaLabel(ariaLabel)
+                                || clickAspectButtonByAriaLabel(ariaLabel, composer)
                                 || clickAspectButtonByAriaLabel(ariaLabel)
                                 || clickVisibleButtonByAriaLabel(ariaLabel, composer)
                                 || clickVisibleButtonByAriaLabel(ariaLabel)
@@ -7679,6 +7689,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const targetLabel = "{target_label}";
+                    const optionType = "{option_type}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
@@ -7712,29 +7723,56 @@ class MainWindow(QMainWindow):
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx)
                       .filter((el) => isVisible(el) && !el.disabled);
 
-                    const target = candidates.find((el) => {
+                    const buttonCandidates = candidates.filter((el) => (el.tagName || "").toLowerCase() === "button");
+                    const exactMatch = (el) => {
                         const aria = clean(el.getAttribute("aria-label"));
                         const txt = clean(el.textContent);
                         return aria.toLowerCase() === targetLabel.toLowerCase() || txt.toLowerCase() === targetLabel.toLowerCase();
-                    }) || candidates.find((el) => {
+                    };
+                    const fuzzyMatch = (el) => {
                         const aria = clean(el.getAttribute("aria-label"));
                         const txt = clean(el.textContent);
                         if (targetLabel.toLowerCase() === "image") {
                             return /(^|\s)image(\s|$)/i.test(aria) || /(^|\s)image(\s|$)/i.test(txt);
                         }
                         return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
-                    }) || null;
+                    };
+
+                    const target = ((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
+                        ? (buttonCandidates.find(exactMatch) || buttonCandidates.find(fuzzyMatch))
+                        : null)
+                        || candidates.find(exactMatch)
+                        || candidates.find(fuzzyMatch)
+                        || null;
+
+                    let clicked = false;
+                    let clickedNodeTag = "";
+                    if (target) {
+                        if (optionType === "ratio") {
+                            const innerDiv = [...target.querySelectorAll("div")].find((el) => isVisible(el)) || null;
+                            if (innerDiv) {
+                                clicked = click(innerDiv);
+                                clickedNodeTag = String(innerDiv.tagName || "").toLowerCase();
+                            }
+                        }
+                        if (!clicked) {
+                            clicked = click(target);
+                            clickedNodeTag = String(target.tagName || "").toLowerCase();
+                        }
+                    }
 
                     return {
-                        ok: !!target && click(target),
+                        ok: !!target && clicked,
                         targetLabel,
+                        optionType,
                         found: !!target,
-                        clicked: !!target,
+                        clicked,
+                        clickedNodeTag,
                         matchedAria: target ? clean(target.getAttribute("aria-label")) : "",
                         matchedText: target ? clean(target.textContent) : "",
                     };
                 } catch (err) {
-                    return { ok: false, error: String(err && err.stack ? err.stack : err), targetLabel: "{target_label}" };
+                    return { ok: false, error: String(err && err.stack ? err.stack : err), targetLabel: "{target_label}", optionType: "{option_type}" };
                 }
             })()
         """
@@ -7784,6 +7822,7 @@ class MainWindow(QMainWindow):
 
             step_name, label = option_steps[step_index]
             step_script = click_option_script_template.replace('"{target_label}"', json.dumps(str(label)))
+            step_script = step_script.replace('"{option_type}"', json.dumps(str(step_name)))
             self._append_log(
                 f"Variant {variant}: opening options popup before {step_name} selection '{label}' (step {step_index + 1}/{len(option_steps)})."
             )
