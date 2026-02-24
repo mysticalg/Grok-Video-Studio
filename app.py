@@ -7081,6 +7081,7 @@ class MainWindow(QMainWindow):
                     pick_ready_probe_script = """
                         (() => {
                             try {
+                                const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                                 const common = { bubbles: true, cancelable: true, composed: true };
                                 const emulateClick = (el) => {
@@ -7111,30 +7112,57 @@ class MainWindow(QMainWindow):
                                     return width >= 220 && height >= 220;
                                 };
 
-                                const listItems = [...document.querySelectorAll("div[role='listitem'], [role='listitem']")]
-                                    .filter((el, idx, arr) => arr.indexOf(el) === idx)
-                                    .filter((el) => isVisible(el));
-                                const makeVideoCandidates = listItems
-                                    .map((item) => {
-                                        const button = item.querySelector("button[aria-label='Make video']");
-                                        if (!button || !isVisible(button) || button.disabled) return null;
-                                        const tileImages = [...item.querySelectorAll("img")].filter(looksLikePreviewImage);
-                                        return { item, button, tileImages };
-                                    })
-                                    .filter((entry) => !!entry)
-                                    .sort((a, b) => rankByPosition(a.button, b.button));
+                                const collectMakeVideoCandidates = () => {
+                                    const listItems = [...document.querySelectorAll("div[role='listitem'], [role='listitem']")]
+                                        .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                                        .filter((el) => isVisible(el));
+                                    const makeVideoCandidates = listItems
+                                        .map((item) => {
+                                            const button = item.querySelector("button[aria-label='Make video']");
+                                            if (!button || !isVisible(button) || button.disabled) return null;
+                                            const tileImages = [...item.querySelectorAll("img")].filter(looksLikePreviewImage);
+                                            return { item, button, tileImages };
+                                        })
+                                        .filter((entry) => !!entry)
+                                        .sort((a, b) => rankByPosition(a.button, b.button));
+                                    return { listItems, makeVideoCandidates };
+                                };
 
-                                if (makeVideoCandidates.length) {
+                                const tryPickFromCandidates = (listItems, makeVideoCandidates) => {
+                                    if (!makeVideoCandidates.length) return { picked: false };
                                     const target = makeVideoCandidates[0];
                                     const image = (target.tileImages || []).sort(rankByPosition)[0] || null;
                                     const clicked = emulateClick(image) || emulateClick(target.item) || emulateClick(target.button);
                                     return {
-                                        ready: false,
                                         picked: clicked,
                                         status: clicked ? "generated-image-clicked" : "generated-image-click-failed",
                                         listItemCount: listItems.length,
                                         makeVideoVisibleCount: makeVideoCandidates.length,
                                     };
+                                };
+
+                                let { listItems, makeVideoCandidates } = collectMakeVideoCandidates();
+                                let pickResult = tryPickFromCandidates(listItems, makeVideoCandidates);
+                                if (pickResult.picked) {
+                                    return { ready: false, ...pickResult, probeStage: "initial" };
+                                }
+
+                                await sleep(4000);
+                                try { window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }); } catch (_) { window.scrollTo(0, document.body.scrollHeight); }
+                                await sleep(350);
+                                ({ listItems, makeVideoCandidates } = collectMakeVideoCandidates());
+                                pickResult = tryPickFromCandidates(listItems, makeVideoCandidates);
+                                if (pickResult.picked) {
+                                    return { ready: false, ...pickResult, probeStage: "after-4s-scroll" };
+                                }
+
+                                await sleep(8000);
+                                try { window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }); } catch (_) { window.scrollTo(0, document.body.scrollHeight); }
+                                await sleep(350);
+                                ({ listItems, makeVideoCandidates } = collectMakeVideoCandidates());
+                                pickResult = tryPickFromCandidates(listItems, makeVideoCandidates);
+                                if (pickResult.picked) {
+                                    return { ready: false, ...pickResult, probeStage: "after-8s-scroll" };
                                 }
 
                                 const customizePromptVisible = !!document.querySelector(
@@ -7154,10 +7182,11 @@ class MainWindow(QMainWindow):
                                     editImageVisible,
                                     onPostView,
                                     listItemCount: listItems.length,
-                                    makeVideoVisibleCount: 0,
+                                    makeVideoVisibleCount: makeVideoCandidates.length,
+                                    probeStage: "after-scroll-reprobes",
                                 };
                             } catch (_) {
-                                return { ready: false, picked: false, status: "callback-empty" };
+                                return { ready: false, picked: false, status: "callback-empty", probeStage: "error" };
                             }
                         })()
                     """
@@ -7166,7 +7195,7 @@ class MainWindow(QMainWindow):
                         if isinstance(probe_result, dict) and probe_result.get("picked"):
                             self._append_log(
                                 f"Variant {current_variant}: callback-empty recovery found visible button[aria-label='Make video'] in listitems "
-                                f"(count={probe_result.get('makeVideoVisibleCount', 'unknown')}); clicked closest image and continuing."
+                                f"(count={probe_result.get('makeVideoVisibleCount', 'unknown')}, stage={probe_result.get('probeStage', 'unknown')}); clicked closest image and continuing."
                             )
                             self.manual_image_pick_clicked = True
                             self.manual_image_pick_retry_count = 0
@@ -7197,7 +7226,7 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 f"Variant {current_variant}: callback-empty probe result status='{next_status}' "
                                 f"(listitems={probe_result.get('listItemCount', 'unknown')}, "
-                                f"makeVideoButtons={probe_result.get('makeVideoVisibleCount', 'unknown')}); continuing poll."
+                                f"makeVideoButtons={probe_result.get('makeVideoVisibleCount', 'unknown')}, stage={probe_result.get('probeStage', 'unknown')}); continuing poll."
                             )
                         _queue_pick_retry(next_status)
 
