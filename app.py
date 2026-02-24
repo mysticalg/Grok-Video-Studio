@@ -6127,6 +6127,15 @@ class MainWindow(QMainWindow):
                     const imagePatterns = [/(^|\s)image(\s|$)/i, /generate multiple images/i];
                     const desiredAspectPatterns = aspectPatterns[desiredAspect] || aspectPatterns["16:9"];
 
+                    const imageSelectedByTriggerLabel = () => {
+                        const trigger = [...document.querySelectorAll("#model-select-trigger, button[aria-label='Model select'], button[aria-label*='model select' i]")]
+                            .find((el) => isVisible(el));
+                        if (!trigger) return false;
+                        const aria = textOf(trigger.getAttribute("aria-label") || "");
+                        const txt = textOf(trigger);
+                        return /(^|\s)image(\s|$)/i.test(aria) || /(^|\s)image(\s|$)/i.test(txt);
+                    };
+
                     const optionsRequested = [];
                     const optionsApplied = [];
 
@@ -6214,7 +6223,8 @@ class MainWindow(QMainWindow):
                     };
 
                     const applyOption = (name, patterns, ariaLabel = null) => {
-                        const alreadySelected = (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
+                        const alreadySelected = (name === "image" && imageSelectedByTriggerLabel())
+                            || (ariaLabel && (hasSelectedByAriaLabel(ariaLabel, composer) || hasSelectedByAriaLabel(ariaLabel)))
                             || hasSelectedByText(patterns, composer)
                             || hasSelectedByText(patterns);
                         if (alreadySelected) {
@@ -6248,7 +6258,7 @@ class MainWindow(QMainWindow):
                     applyOption(desiredAspect, desiredAspectPatterns, desiredAspect);
 
                     const missingOptions = [];
-                    if (!(imageOptionClicked || hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
+                    if (!(imageOptionClicked || imageSelectedByTriggerLabel() || hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) {
                         missingOptions.push("image");
                     }
                     if (!(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
@@ -6326,8 +6336,16 @@ class MainWindow(QMainWindow):
                     };
                     const imagePatterns = [/(^|\s)image(\s|$)/i, /generate multiple images/i];
                     const desiredAspectPatterns = aspectPatterns[desiredAspect] || aspectPatterns["16:9"];
+                    const imageSelectedByTriggerLabel = () => {
+                        const trigger = [...document.querySelectorAll("#model-select-trigger, button[aria-label='Model select'], button[aria-label*='model select' i]")]
+                            .find((el) => isVisible(el));
+                        if (!trigger) return false;
+                        const aria = textOf(trigger.getAttribute("aria-label") || "");
+                        const txt = textOf(trigger);
+                        return /(^|\s)image(\s|$)/i.test(aria) || /(^|\s)image(\s|$)/i.test(txt);
+                    };
                     const missingOptions = [];
-                    if (!(hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) missingOptions.push("image");
+                    if (!(imageSelectedByTriggerLabel() || hasSelectedByText(imagePatterns, composer) || hasSelectedByText(imagePatterns))) missingOptions.push("image");
                     if (!(hasSelectedByAriaLabel(desiredAspect, composer) || hasSelectedByAriaLabel(desiredAspect)
                         || hasSelectedByText(desiredAspectPatterns, composer) || hasSelectedByText(desiredAspectPatterns))) {
                         missingOptions.push(desiredAspect);
