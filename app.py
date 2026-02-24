@@ -11943,6 +11943,60 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                         return false;
                     };
+                    const emulateTypingIntoEditor = (node, value) => {
+                        if (!node) return false;
+                        const text = String(value || "");
+                        try {
+                            node.focus();
+                        } catch (_) {}
+                        try {
+                            if (!(node.isContentEditable || node.getAttribute("contenteditable") === "true")) {
+                                return setTextValue(node, text);
+                            }
+                        } catch (_) {
+                            return setTextValue(node, text);
+                        }
+                        try {
+                            node.textContent = "";
+                            node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
+                        } catch (_) {}
+
+                        let typedAny = false;
+                        for (const ch of Array.from(text)) {
+                            try {
+                                node.dispatchEvent(new KeyboardEvent("keydown", { key: ch, bubbles: true, cancelable: true, composed: true }));
+                            } catch (_) {}
+                            try {
+                                node.dispatchEvent(new KeyboardEvent("keypress", { key: ch, bubbles: true, cancelable: true, composed: true }));
+                            } catch (_) {}
+                            try {
+                                if (typeof document.execCommand === "function") {
+                                    const inserted = document.execCommand("insertText", false, ch);
+                                    if (inserted) typedAny = true;
+                                }
+                            } catch (_) {}
+                            if (!typedAny) {
+                                try {
+                                    node.textContent = String(node.textContent || "") + ch;
+                                } catch (_) {}
+                            }
+                            try {
+                                node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: ch, inputType: "insertText" }));
+                            } catch (_) {
+                                try {
+                                    node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                                } catch (_) {}
+                            }
+                            try {
+                                node.dispatchEvent(new KeyboardEvent("keyup", { key: ch, bubbles: true, cancelable: true, composed: true }));
+                            } catch (_) {}
+                        }
+                        try {
+                            node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                        } catch (_) {}
+                        const finalText = String(node.textContent || "").trim();
+                        return finalText.length > 0;
+                    };
                     const findTextInputTarget = () => {
                         const selectors = [
                             'textarea[aria-label*="caption" i]',
@@ -11979,7 +12033,7 @@ class MainWindow(QMainWindow):
                                 'div[data-testid^="tweetTextarea"][contenteditable="true"]',
                                 'div[role="textbox"][contenteditable="true"][aria-label*="post text" i]',
                             ]);
-                            textFilled = setTextValue(xComposer, captionText) || textFilled;
+                            textFilled = emulateTypingIntoEditor(xComposer, captionText) || setTextValue(xComposer, captionText) || textFilled;
                             if (!textFilled && xComposer) {
                                 try {
                                     xComposer.focus();
