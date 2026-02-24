@@ -11375,6 +11375,7 @@ class MainWindow(QMainWindow):
                 "caption": str(pending.get("caption") or ""),
                 "title": str(pending.get("title") or ""),
                 "platform": platform_name.lower(),
+                "action_delay_ms": int(self.automation_action_delay_ms.value()),
                 "video_path": str(pending.get("video_path") or ""),
                 "video_base64": str(pending.get("video_base64") or ""),
                 "video_name": str(pending.get("video_name") or "upload.mp4"),
@@ -11391,6 +11392,7 @@ class MainWindow(QMainWindow):
                     const payload = JSON.parse(atob("__PAYLOAD_B64__"));
                     const norm = (s) => String(s || "").toLowerCase();
                     const platform = norm(payload.platform);
+                    const configuredActionDelayMs = Math.max(50, Number(payload.action_delay_ms) || 1000);
                     const pick = (arr) => arr.find(Boolean) || null;
                     const collectDeep = (selector) => {
                         const results = [];
@@ -11844,7 +11846,7 @@ class MainWindow(QMainWindow):
                         }
                     }
                     const facebookSubmitDelayElapsed = platform !== "facebook"
-                        || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= 2000);
+                        || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= configuredActionDelayMs);
 
                     let nextClicked = false;
                     let submitClicked = false;
@@ -11937,7 +11939,7 @@ class MainWindow(QMainWindow):
                             tiktokState.awaitingDraftAfterUserGesture = false;
                         }
                         const nowMs = Date.now();
-                        const minTikTokActionGapMs = 900;
+                        const minTikTokActionGapMs = configuredActionDelayMs;
                         const actionSpacingElapsed = !tiktokState.lastActionAtMs
                             || (nowMs - Number(tiktokState.lastActionAtMs)) >= minTikTokActionGapMs;
 
@@ -12047,9 +12049,9 @@ class MainWindow(QMainWindow):
 
                         captionReady = !captionText || textFilled;
                         const tiktokSubmitDelayElapsed = !captionText
-                            || Boolean(tiktokState.captionSetAtMs && (Date.now() - Number(tiktokState.captionSetAtMs)) >= 1200);
+                            || Boolean(tiktokState.captionSetAtMs && (Date.now() - Number(tiktokState.captionSetAtMs)) >= configuredActionDelayMs);
                         const tiktokSubmitSpacingElapsed = !tiktokState.lastSubmitAttemptAtMs
-                            || (Date.now() - Number(tiktokState.lastSubmitAttemptAtMs)) >= 1500;
+                            || (Date.now() - Number(tiktokState.lastSubmitAttemptAtMs)) >= configuredActionDelayMs;
 
                         const tiktokPostButton = bySelectors([
                             'button[data-e2e="save_draft_button"]',
@@ -12081,7 +12083,7 @@ class MainWindow(QMainWindow):
                         const visibility = String(youtubeOptions.visibility || "public").toLowerCase();
                         const audience = String(youtubeOptions.audience || "not_kids").toLowerCase();
                         const nowMs = Date.now();
-                        const actionSpacingElapsed = !youtubeState.lastActionAtMs || (nowMs - Number(youtubeState.lastActionAtMs)) >= 700;
+                        const actionSpacingElapsed = !youtubeState.lastActionAtMs || (nowMs - Number(youtubeState.lastActionAtMs)) >= configuredActionDelayMs;
                         const findYouTubeTextboxByLabel = (labelHint) => {
                             const hint = norm(labelHint);
                             const containers = collectDeep('ytcp-form-input-container, ytcp-mention-input, ytcp-social-suggestion-input');
