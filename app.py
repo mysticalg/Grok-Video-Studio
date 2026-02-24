@@ -2136,6 +2136,7 @@ class MainWindow(QMainWindow):
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
         self.manual_image_pick_scroll_count = 0
+        self.manual_image_pick_callback_empty_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token = 0
@@ -5926,6 +5927,7 @@ class MainWindow(QMainWindow):
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
         self.manual_image_pick_scroll_count = 0
+        self.manual_image_pick_callback_empty_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
@@ -6997,6 +6999,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_pick_clicked = True
                     self.manual_image_pick_retry_count = 0
                     self.manual_image_pick_scroll_count = 0
+                    self.manual_image_pick_callback_empty_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     QTimer.singleShot(1000, self._poll_for_manual_image)
@@ -7012,6 +7015,7 @@ class MainWindow(QMainWindow):
                             f"(opened={opened}, itemFound={item_found}, itemClicked={clicked}); refilling prompt."
                         )
                     self.manual_image_video_mode_selected = True
+                    self.manual_image_pick_callback_empty_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     QTimer.singleShot(700, self._poll_for_manual_image)
@@ -7038,6 +7042,11 @@ class MainWindow(QMainWindow):
                     return
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
+            if status == "callback-empty":
+                self.manual_image_pick_callback_empty_count += 1
+            else:
+                self.manual_image_pick_callback_empty_count = 0
+
             if not self.manual_image_pick_clicked:
                 def _queue_pick_retry(current_status: str) -> None:
                     self.manual_image_pick_retry_count += 1
@@ -7046,7 +7055,7 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 "WARNING: Variant "
                                 f"{current_variant}: image pick stayed callback-empty for "
-                                f"{self.manual_image_pick_retry_count} checks; staying in pick stage and continuing live DOM polling."
+                                f"{self.manual_image_pick_retry_count} checks (callback-empty count={self.manual_image_pick_callback_empty_count}); staying in pick stage and continuing live DOM polling."
                             )
                             self.manual_image_pick_retry_count = 0
                             self.manual_image_pick_scroll_count += 1
@@ -7114,6 +7123,7 @@ class MainWindow(QMainWindow):
                                 self.manual_image_video_mode_selected = False
                                 self.manual_image_pick_retry_count = 0
                                 self.manual_image_pick_scroll_count = 0
+                                self.manual_image_pick_callback_empty_count = 0
                                 self.manual_image_video_mode_retry_count = 0
                                 self.manual_image_submit_retry_count = 0
                                 QTimer.singleShot(700, self._poll_for_manual_image)
@@ -7127,10 +7137,25 @@ class MainWindow(QMainWindow):
                                 self.manual_image_video_mode_selected = False
                                 self.manual_image_pick_retry_count = 0
                                 self.manual_image_pick_scroll_count = 0
+                                self.manual_image_pick_callback_empty_count = 0
                                 self.manual_image_video_mode_retry_count = 0
                                 self.manual_image_submit_retry_count = 0
                                 QTimer.singleShot(900, self._poll_for_manual_image)
                                 return
+
+                        if self.manual_image_pick_callback_empty_count >= 2:
+                            self._append_log(
+                                f"Variant {current_variant}: callback-empty repeated {self.manual_image_pick_callback_empty_count} times; inferring image pick/navigation is in-flight and advancing to video-mode checks."
+                            )
+                            self.manual_image_pick_clicked = True
+                            self.manual_image_video_mode_selected = False
+                            self.manual_image_pick_retry_count = 0
+                            self.manual_image_pick_scroll_count = 0
+                            self.manual_image_pick_callback_empty_count = 0
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            QTimer.singleShot(900, self._poll_for_manual_image)
+                            return
 
                         _queue_pick_retry(status)
 
@@ -8358,6 +8383,7 @@ class MainWindow(QMainWindow):
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
         self.manual_image_pick_scroll_count = 0
+        self.manual_image_pick_callback_empty_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_download_click_sent = False
@@ -8423,6 +8449,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_submit_sent = False
                     self.manual_image_pick_retry_count = 0
                     self.manual_image_pick_scroll_count = 0
+                    self.manual_image_pick_callback_empty_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
@@ -8462,6 +8489,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_submit_sent = False
                     self.manual_image_pick_retry_count = 0
                     self.manual_image_pick_scroll_count = 0
+                    self.manual_image_pick_callback_empty_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.manual_download_click_sent = False
@@ -8493,6 +8521,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_video_submit_sent = False
                 self.manual_image_pick_retry_count = 0
                 self.manual_image_pick_scroll_count = 0
+                self.manual_image_pick_callback_empty_count = 0
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
                 self.manual_download_click_sent = False
@@ -8526,6 +8555,7 @@ class MainWindow(QMainWindow):
         self.manual_image_video_submit_sent = False
         self.manual_image_pick_retry_count = 0
         self.manual_image_pick_scroll_count = 0
+        self.manual_image_pick_callback_empty_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
