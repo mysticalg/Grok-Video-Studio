@@ -6788,6 +6788,11 @@ class MainWindow(QMainWindow):
 
                 if (phase === "pick") {{
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
+                    const listItemReady = (el) => {{
+                        const listItem = listItemOf(el);
+                        if (!listItem) return true;
+                        return !listItem.querySelector("div.invisible");
+                    }};
 
                     const customizePromptReady = !!document.querySelector(
                         "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
@@ -6797,8 +6802,13 @@ class MainWindow(QMainWindow):
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
 
-                    const makeVideoButtons = [...document.querySelectorAll("[role='listitem'] button[aria-label*='make video' i]")]
-                        .filter((btn) => isVisible(btn) && !btn.disabled);
+                    if (window.__grokManualPickObserverResult) {{
+                        window.__grokManualPickObserverResult = "";
+                        return {{ ok: true, status: "generated-image-clicked" }};
+                    }}
+
+                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
+                        .filter((btn) => isVisible(btn) && !btn.disabled && listItemReady(btn));
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -6812,7 +6822,7 @@ class MainWindow(QMainWindow):
                         const firstButton = makeVideoButtons[0];
                         const tile = listItemOf(firstButton) || firstButton.parentElement;
                         const tileImage = tile?.querySelector?.("img") || null;
-                        const clickedTile = emulateClick(tileImage) || emulateClick(tile) || emulateClick(firstButton);
+                        const clickedTile = emulateClick(tileImage) || emulateClick(tile);
                         if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
                         await sleep(ACTION_DELAY_MS);
                         return {{ ok: true, status: "generated-image-clicked" }};
@@ -6820,7 +6830,7 @@ class MainWindow(QMainWindow):
 
                     const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
                         .filter((img) => {{
-                            if (!isVisible(img)) return false;
+                            if (!isVisible(img) || !listItemReady(img)) return false;
                             const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
                             const title = (img.getAttribute("title") || "").trim().toLowerCase();
                             const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
@@ -6973,6 +6983,19 @@ class MainWindow(QMainWindow):
                             f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
                         )
                     self.manual_image_pick_clicked = True
+                    self.browser.page().runJavaScript("""
+                        (() => {
+                            try {
+                                if (window.__grokManualPickObserver) {
+                                    window.__grokManualPickObserver.disconnect();
+                                }
+                            } catch (_) {}
+                            window.__grokManualPickObserver = null;
+                            window.__grokManualPickObserverDisconnected = true;
+                            window.__grokManualPickObserverResult = "";
+                            return true;
+                        })()
+                    """)
                     self.manual_image_pick_retry_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
@@ -7007,6 +7030,19 @@ class MainWindow(QMainWindow):
 
                     if not self.manual_image_video_submit_sent:
                         self._append_log(f"Variant {current_variant}: {message}.")
+                    self.browser.page().runJavaScript("""
+                        (() => {
+                            try {
+                                if (window.__grokManualPickObserver) {
+                                    window.__grokManualPickObserver.disconnect();
+                                }
+                            } catch (_) {}
+                            window.__grokManualPickObserver = null;
+                            window.__grokManualPickObserverDisconnected = true;
+                            window.__grokManualPickObserverResult = "";
+                            return true;
+                        })()
+                    """)
                     self.manual_image_video_submit_sent = True
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
@@ -7041,6 +7077,132 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
                     )
+
+                    scroll_to_bottom_script = """
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                const emulateClick = (el) => {
+                                    if (!el || !isVisible(el) || el.disabled) return false;
+                                    try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                                    el.dispatchEvent(new MouseEvent("mousedown", common));
+                                    try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                                    el.dispatchEvent(new MouseEvent("mouseup", common));
+                                    el.dispatchEvent(new MouseEvent("click", common));
+                                    return true;
+                                };
+                                const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
+                                const listItemReady = (el) => {
+                                    const listItem = listItemOf(el);
+                                    if (!listItem) return true;
+                                    return !listItem.querySelector("div.invisible");
+                                };
+
+                                const scrollBottom = () => {
+                                    const scrollTargets = [
+                                        document.scrollingElement,
+                                        document.documentElement,
+                                        document.body,
+                                        ...document.querySelectorAll(".w-full, [data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
+                                    ].filter((el, idx, arr) => el && arr.indexOf(el) === idx);
+
+                                    for (const target of scrollTargets) {
+                                        const maxTop = Math.max(0, (target.scrollHeight || 0) - (target.clientHeight || 0));
+                                        if (typeof target.scrollTo === "function") {
+                                            target.scrollTo({ top: maxTop, left: 0, behavior: "instant" });
+                                        } else if ("scrollTop" in target) {
+                                            target.scrollTop = maxTop;
+                                        }
+                                    }
+                                    window.scrollTo({ top: document.body?.scrollHeight || 999999, left: 0, behavior: "instant" });
+                                };
+
+                                const tryClickFirstGeneratedTile = () => {
+                                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
+                                        .filter((btn) => isVisible(btn) && !btn.disabled && listItemReady(btn));
+
+                                    if (makeVideoButtons.length) {
+                                        makeVideoButtons.sort((a, b) => {
+                                            const ar = a.getBoundingClientRect();
+                                            const br = b.getBoundingClientRect();
+                                            const rowDelta = Math.abs(ar.top - br.top);
+                                            if (rowDelta > 20) return ar.top - br.top;
+                                            return ar.left - br.left;
+                                        });
+
+                                        const firstButton = makeVideoButtons[0];
+                                        const tile = listItemOf(firstButton) || firstButton.parentElement;
+                                        const tileImage = tile?.querySelector?.("img") || null;
+                                        return (emulateClick(tileImage) || emulateClick(tile)) ? "generated-image-clicked" : "";
+                                    }
+
+                                    const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
+                                        .filter((img) => {
+                                            if (!isVisible(img) || !listItemReady(img)) return false;
+                                            const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
+                                            const title = (img.getAttribute("title") || "").trim().toLowerCase();
+                                            const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
+                                            const descriptor = (alt + " " + title + " " + aria).trim();
+                                            if (/\\bedit\\s+image\\b/i.test(descriptor)) return false;
+                                            const width = img.naturalWidth || img.width || img.clientWidth || 0;
+                                            const height = img.naturalHeight || img.height || img.clientHeight || 0;
+                                            return width >= 220 && height >= 220;
+                                        });
+
+                                    if (!listItemImages.length) return "";
+
+                                    listItemImages.sort((a, b) => {
+                                        const ar = a.getBoundingClientRect();
+                                        const br = b.getBoundingClientRect();
+                                        const rowDelta = Math.abs(ar.top - br.top);
+                                        if (rowDelta > 20) return ar.top - br.top;
+                                        return ar.left - br.left;
+                                    });
+
+                                    const firstImage = listItemImages[0];
+                                    const listItem = listItemOf(firstImage) || firstImage.closest("button, [role='button']") || firstImage.parentElement;
+                                    return (emulateClick(firstImage) || emulateClick(listItem)) ? "generated-image-clicked" : "";
+                                };
+
+                                const initialOutcome = tryClickFirstGeneratedTile();
+                                if (initialOutcome) {
+                                    window.__grokManualPickObserverResult = initialOutcome;
+                                } else {
+                                    scrollBottom();
+                                }
+
+                                if (!window.__grokManualPickObserver || window.__grokManualPickObserverDisconnected) {
+                                    const observer = new MutationObserver(() => {
+                                        if (window.__grokManualPickObserverResult) return;
+                                        const outcome = tryClickFirstGeneratedTile();
+                                        if (outcome) {
+                                            window.__grokManualPickObserverResult = outcome;
+                                            try { observer.disconnect(); } catch (_) {}
+                                            window.__grokManualPickObserverDisconnected = true;
+                                            return;
+                                        }
+                                        scrollBottom();
+                                    });
+                                    observer.observe(document.body || document.documentElement, {
+                                        childList: true,
+                                        subtree: true,
+                                        attributes: true,
+                                    });
+                                    window.__grokManualPickObserver = observer;
+                                    window.__grokManualPickObserverDisconnected = false;
+                                }
+
+                                return {
+                                    scrolled: true,
+                                    observerActive: !!window.__grokManualPickObserver,
+                                };
+                            } catch (_) {
+                                return { scrolled: false, observerActive: false };
+                            }
+                        })()
+                    """
+                    self.browser.page().runJavaScript(scroll_to_bottom_script)
                     QTimer.singleShot(3000, self._poll_for_manual_image)
 
                 if status == "callback-empty":
