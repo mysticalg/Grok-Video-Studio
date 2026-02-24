@@ -12730,6 +12730,64 @@ class MainWindow(QMainWindow):
                         self._append_log(f"{platform_name}: action {action_text}")
             else:
                 self._append_log(f"{platform_name}: action unavailable reason=script_result_missing_action_attempts")
+                if platform_name == "TikTok":
+                    probe_script = """
+                        (() => {
+                            try {
+                                const norm = (s) => String(s || "").toLowerCase();
+                                const selectors = [
+                                    'button[data-e2e="save_draft_button"] div.Button__content',
+                                    'button[data-e2e="save_draft_button"]',
+                                    'button[aria-label*="save draft" i] div.Button__content',
+                                    'button[aria-label*="save draft" i]',
+                                ];
+                                let candidate = null;
+                                for (const sel of selectors) {
+                                    const nodes = Array.from(document.querySelectorAll(sel));
+                                    candidate = nodes.find((node) => (node.offsetWidth || node.offsetHeight || node.getClientRects().length)) || nodes[0] || null;
+                                    if (candidate) break;
+                                }
+                                const target = candidate ? (candidate.closest('button, [role="button"]') || candidate) : null;
+                                const text = target ? norm(target.innerText || target.textContent || target.getAttribute('aria-label')) : "";
+                                const e2e = target ? norm(target.getAttribute('data-e2e')) : "";
+                                const discard = e2e === 'discard_post_button' || text.includes('discard');
+                                const ariaDisabled = target ? norm(target.getAttribute('aria-disabled')) : "";
+                                const dataDisabled = target ? norm(target.getAttribute('data-disabled')) : "";
+                                const loading = target ? norm(target.getAttribute('data-loading')) === 'true' : false;
+                                const enabled = Boolean(target && !discard && ariaDisabled !== 'true' && dataDisabled !== 'true' && !target.disabled && !loading);
+                                let clicked = false;
+                                if (enabled) {
+                                    try { target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (_) {}
+                                    try { target.focus({ preventScroll: true }); } catch (_) {}
+                                    try { target.click(); clicked = true; } catch (_) {}
+                                }
+                                return {
+                                    found: Boolean(target),
+                                    enabled,
+                                    discard,
+                                    clicked,
+                                    ariaDisabled,
+                                    dataDisabled,
+                                    loading,
+                                };
+                            } catch (err) {
+                                return { error: String(err && err.stack ? err.stack : err) };
+                            }
+                        })();
+                    """
+
+                    def _after_probe(probe_result):
+                        if platform_name not in self.social_upload_pending:
+                            return
+                        if isinstance(probe_result, dict) and probe_result.get("error"):
+                            self._append_log(f"{platform_name}: action probe error={probe_result.get('error')}")
+                            return
+                        if isinstance(probe_result, dict):
+                            self._append_log(
+                                f"{platform_name}: action probe found={bool(probe_result.get('found'))} enabled={bool(probe_result.get('enabled'))} discard={bool(probe_result.get('discard'))} clicked={bool(probe_result.get('clicked'))} aria_disabled={probe_result.get('ariaDisabled')} data_disabled={probe_result.get('dataDisabled')} loading={bool(probe_result.get('loading'))}"
+                            )
+
+                    browser.page().runJavaScript(probe_script, _after_probe)
             pending["allow_file_dialog"] = False
 
             is_tiktok = platform_name == "TikTok"
