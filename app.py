@@ -6774,56 +6774,71 @@ class MainWindow(QMainWindow):
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
 
-                    const makeVideoButtons = [...document.querySelectorAll("[role='listitem'] button[aria-label*='make video' i]")]
-                        .filter((btn) => isVisible(btn) && !btn.disabled);
-
-                    if (makeVideoButtons.length) {{
-                        makeVideoButtons.sort((a, b) => {{
-                            const ar = a.getBoundingClientRect();
-                            const br = b.getBoundingClientRect();
-                            const rowDelta = Math.abs(ar.top - br.top);
-                            if (rowDelta > 20) return ar.top - br.top;
-                            return ar.left - br.left;
-                        }});
-
-                        const firstButton = makeVideoButtons[0];
-                        const tile = listItemOf(firstButton) || firstButton.parentElement;
-                        const tileImage = tile?.querySelector?.("img") || null;
-                        const clickedTile = emulateClick(tileImage) || emulateClick(tile) || emulateClick(firstButton);
-                        if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
-                        await sleep(ACTION_DELAY_MS);
-                        return {{ ok: true, status: "generated-image-clicked" }};
-                    }}
-
-                    const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
-                        .filter((img) => {{
-                            if (!isVisible(img)) return false;
-                            const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
-                            const title = (img.getAttribute("title") || "").trim().toLowerCase();
-                            const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
-                            const descriptor = (alt + " " + title + " " + aria).trim();
-                            if (/\bedit\\s+image\b/i.test(descriptor)) return false;
-                            const width = img.naturalWidth || img.width || img.clientWidth || 0;
-                            const height = img.naturalHeight || img.height || img.clientHeight || 0;
-                            return width >= 220 && height >= 220;
-                        }});
-
-                    if (!listItemImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
-
-                    listItemImages.sort((a, b) => {{
+                    const rankByPosition = (a, b) => {{
                         const ar = a.getBoundingClientRect();
                         const br = b.getBoundingClientRect();
                         const rowDelta = Math.abs(ar.top - br.top);
                         if (rowDelta > 20) return ar.top - br.top;
                         return ar.left - br.left;
-                    }});
+                    }};
 
-                    const firstImage = listItemImages[0];
+                    const looksLikePreviewImage = (img) => {{
+                        if (!isVisible(img)) return false;
+                        const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
+                        const title = (img.getAttribute("title") || "").trim().toLowerCase();
+                        const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
+                        const descriptor = (alt + " " + title + " " + aria).trim();
+                        if (/\\bedit\\s+image\\b/i.test(descriptor)) return false;
+                        const width = img.naturalWidth || img.width || img.clientWidth || 0;
+                        const height = img.naturalHeight || img.height || img.clientHeight || 0;
+                        return width >= 220 && height >= 220;
+                    }};
+
+                    const allPreviewImages = [...document.querySelectorAll("[role='listitem'] img, li img, article img, figure img")]
+                        .filter(looksLikePreviewImage);
+
+                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label='Make video']")]
+                        .filter((btn) => isVisible(btn) && !btn.disabled);
+
+                    if (makeVideoButtons.length) {{
+                        makeVideoButtons.sort(rankByPosition);
+                        const firstButton = makeVideoButtons[0];
+                        const tile = listItemOf(firstButton) || firstButton.closest("article, figure, li") || firstButton.parentElement;
+
+                        const tileImages = tile
+                            ? [...tile.querySelectorAll("img")].filter(looksLikePreviewImage)
+                            : [];
+                        const nearestTileImage = tileImages.sort(rankByPosition)[0] || null;
+
+                        let nearestGlobalImage = null;
+                        if (!nearestTileImage && allPreviewImages.length) {{
+                            const br = firstButton.getBoundingClientRect();
+                            nearestGlobalImage = allPreviewImages
+                                .map((img) => {{
+                                    const ir = img.getBoundingClientRect();
+                                    const dx = (ir.left + ir.width / 2) - (br.left + br.width / 2);
+                                    const dy = (ir.top + ir.height / 2) - (br.top + br.height / 2);
+                                    return {{ img, distance: Math.hypot(dx, dy) }};
+                                }})
+                                .sort((a, b) => a.distance - b.distance)[0]?.img || null;
+                        }}
+
+                        const imageToClick = nearestTileImage || nearestGlobalImage;
+                        const clickedTile = emulateClick(imageToClick) || emulateClick(tile) || emulateClick(firstButton);
+                        if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
+                        await sleep(ACTION_DELAY_MS);
+                        return {{ ok: true, status: "generated-image-clicked", pickedViaMakeVideo: true }};
+                    }}
+
+                    if (!allPreviewImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
+
+                    allPreviewImages.sort(rankByPosition);
+                    const firstImage = allPreviewImages[0];
                     const listItem = listItemOf(firstImage) || firstImage.closest("button, [role='button']") || firstImage.parentElement;
                     const clickedImage = emulateClick(firstImage) || emulateClick(listItem);
                     if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
                     await sleep(ACTION_DELAY_MS);
-                    return {{ ok: true, status: "generated-image-clicked" }};
+                    return {{ ok: true, status: "generated-image-clicked", pickedViaMakeVideo: false }};
                 }}
 
                 if (phase === "video-mode") {{
