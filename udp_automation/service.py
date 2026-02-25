@@ -99,8 +99,13 @@ class UdpAutomationService:
 
     async def _fill_youtube_fields_via_cdp(self, fields: dict[str, Any]) -> dict[str, bool] | None:
         if self.cdp is None:
+            await self._connect_cdp()
+        if self.cdp is None:
             return None
-        page = await self.cdp.get_most_recent_page()
+
+        page = await self.cdp.find_page_by_url_contains("studio.youtube.com")
+        if page is None:
+            page = await self.cdp.get_most_recent_page()
         if page is None:
             return None
 
@@ -109,109 +114,91 @@ class UdpAutomationService:
         if not title and not description:
             return {}
 
-        script = r"""
-(value) => {
-  const normalize = (text) => String(text || "").replace(/\u200B/g, "").replace(/\s+/g, " ").trim();
-  const getEditableText = (el) => normalize(el?.innerText || el?.textContent || "");
-  const focusOnly = (el) => {
-    if (!el) return null;
-    const outer = el.closest('#outer, #child-input, #container-content') || el.parentElement;
-    try { outer?.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
-    try { el.focus(); } catch (_) {}
-    return el;
-  };
-  const findField = (key) => {
-    const titleCandidates = [
-      "#textbox[contenteditable='true'][aria-label*='add a title' i]",
-      "#textbox[contenteditable='true'][aria-required='true'][aria-label*='title' i]",
-      "#title-textarea #textbox[contenteditable='true']",
-    ];
-    const descriptionCandidates = [
-      "#textbox[contenteditable='true'][aria-label*='tell viewers about your video' i]",
-      "#description #textbox[contenteditable='true']",
-      "#textbox[contenteditable='true'][aria-label*='description' i]",
-    ];
-    const candidates = key === 'title' ? titleCandidates : descriptionCandidates;
-    for (const sel of candidates) {
-      const found = document.querySelector(sel);
-      if (found) return focusOnly(found);
-    }
-    const containers = Array.from(document.querySelectorAll('ytcp-form-input-container#container, ytcp-form-input-container'));
-    for (const container of containers) {
-      const root = container.closest('ytcp-form-input-container') || container;
-      const label = String(root.querySelector('#label-text')?.textContent || '').toLowerCase();
-      if (key === 'title' && !label.includes('title')) continue;
-      if (key === 'description' && !label.includes('description')) continue;
-      const textbox = root.querySelector("#textbox[contenteditable='true'], textarea#textbox");
-      if (textbox) return focusOnly(textbox);
-    }
-    return null;
-  };
-  const setField = (el, text) => {
-    if (!el) return false;
-    const val = String(text || '');
-    try { el.focus(); } catch (_) {}
-    try {
-      const sel = window.getSelection?.();
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      range.collapse(false);
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    } catch (_) {}
-    let inserted = false;
-    try {
-      document.execCommand('selectAll', false, null);
-      document.execCommand('delete', false, null);
-      inserted = Boolean(document.execCommand('insertText', false, val));
-    } catch (_) {
-      inserted = false;
-    }
-    if (!inserted) {
-      try { el.textContent = val; } catch (_) {}
-    }
-    try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: val, inputType: 'insertText' })); } catch (_) {}
-    try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: val, inputType: 'insertText' })); } catch (_) {
-      try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-    }
-    try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
-    return true;
-  };
-
-  const out = {};
-  for (const [key, text] of Object.entries(value || {})) {
-    if (key !== 'title' && key !== 'description') continue;
-    const el = findField(key);
-    if (!el) {
-      out[key] = false;
-      continue;
-    }
-    setField(el, text);
-    const expected = normalize(text);
-    const current = getEditableText(el);
-    out[key] = expected ? (current === expected || current.includes(expected) || expected.includes(current)) : current.length === 0;
-  }
-  return out;
-}
-"""
-
-        last: dict[str, bool] = {}
-        for _ in range(5):
+        async def _set_rich_text(locator, value: str) -> bool:
+            text = str(value or "")
+            if await locator.count() == 0:
+                return False
+            target = locator.first
             try:
-                payload = await page.evaluate(script, {"title": title, "description": description})
-                if isinstance(payload, dict):
-                    last = {str(k): bool(v) for k, v in payload.items()}
-            except Exception:
-                last = {}
-            title_ok = (not title) or bool(last.get("title", False))
-            description_ok = (not description) or bool(last.get("description", False))
-            if title_ok and description_ok:
-                return {"title": title_ok, "description": description_ok}
-            try:
-                await page.wait_for_timeout(300)
+                await target.scroll_into_view_if_needed(timeout=2000)
             except Exception:
                 pass
-        return last or {"title": False, "description": False}
+
+            script = """
+(el, value) => {
+  const normalize = (text) => String(text || '').replace(/\\u200B/g, '').replace(/\\s+/g, ' ').trim();
+  const expected = normalize(value);
+  try { el.focus(); } catch (_) {}
+  let inserted = false;
+  try {
+    const sel = window.getSelection?.();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  } catch (_) {}
+  try {
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+    inserted = Boolean(document.execCommand('insertText', false, String(value || '')));
+  } catch (_) {
+    inserted = false;
+  }
+  if (!inserted) {
+    try { el.textContent = String(value || ''); } catch (_) {}
+  }
+  try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: String(value || ''), inputType: 'insertText' })); } catch (_) {}
+  try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: String(value || ''), inputType: 'insertText' })); } catch (_) {
+    try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+  }
+  try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+  const current = normalize(el?.innerText || el?.textContent || '');
+  if (!expected) return current.length === 0;
+  return current === expected || current.includes(expected) || expected.includes(current);
+}
+"""
+            try:
+                return bool(await target.evaluate(script, text))
+            except Exception:
+                return False
+
+        title_locator = page.locator(
+            "#title-textarea #textbox[contenteditable='true'], "
+            "div#textbox[contenteditable='true'][aria-label*='Add a title' i], "
+            "div#textbox[contenteditable='true'][aria-label*='title' i][aria-required='true']"
+        )
+        description_locator = page.locator(
+            "#description #textbox[contenteditable='true'], "
+            "div#textbox[contenteditable='true'][aria-label*='Tell viewers about your video' i], "
+            "div#textbox[contenteditable='true'][aria-label*='description' i][aria-required='false']"
+        )
+
+        async def _run() -> dict[str, bool]:
+            result = {"title": False, "description": False}
+            for _ in range(6):
+                if title:
+                    result["title"] = await _set_rich_text(title_locator, title)
+                else:
+                    result["title"] = True
+
+                if description:
+                    result["description"] = await _set_rich_text(description_locator, description)
+                else:
+                    result["description"] = True
+
+                if result["title"] and result["description"]:
+                    return result
+                try:
+                    await page.wait_for_timeout(250)
+                except Exception:
+                    pass
+            return result
+
+        try:
+            return await asyncio.wait_for(_run(), timeout=8.0)
+        except Exception:
+            return {"title": False if title else True, "description": False if description else True}
 
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
