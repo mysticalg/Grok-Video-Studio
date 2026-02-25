@@ -79,7 +79,7 @@ from grok_web_automation import build_trained_process, run_trained_process, trai
 from automation.chrome_manager import AutomationChromeManager, ChromeInstance
 from automation.cdp_controller import CDPController
 from automation.control_bus import ControlBusServer
-from udp_automation.executors import UdpExecutor
+from udp_automation.executors import LocalServiceExecutor, UdpExecutor
 from udp_automation.service import UdpAutomationService
 from udp_automation.workflows import facebook as udp_facebook_workflow
 from udp_automation.workflows import instagram as udp_instagram_workflow
@@ -1927,6 +1927,29 @@ class AutomationRuntimeWorker(QThread):
         self.log.emit(f"CDP connected. Smoke test title: {title}")
         return title
 
+    def ensure_cdp_connected(self) -> str:
+        if self.cdp_controller is not None:
+            return "already-connected"
+        return self.connect_cdp()
+
+    def open_url_in_automation_chrome(self, url: str) -> str:
+        target_url = str(url or "").strip()
+        if not target_url:
+            raise ValueError("URL is required")
+        if self.chrome_instance is None:
+            self.start_chrome()
+
+        async def _open() -> str:
+            if self.cdp_controller is None:
+                self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+            page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=True)
+            await self.cdp_controller.navigate(page, target_url)
+            return page.url or target_url
+
+        opened_url = self._run_coro(_open())
+        self.log.emit(f"Automation Chrome opened URL: {opened_url}")
+        return opened_url
+
     def dom_ping(self) -> dict[str, Any]:
         if self.bus is None:
             raise RuntimeError("Control bus is not running")
@@ -1959,6 +1982,31 @@ class AutomationRuntimeWorker(QThread):
         self._run_coro(_start_udp())
         self.log.emit("UDP automation service listening on udp://127.0.0.1:18793")
 
+    def execute_local_automation_command(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.bus is None:
+            raise RuntimeError("Control bus is not running")
+        if self.udp_service is None:
+            self.udp_service = UdpAutomationService(
+                extension_dir=self.extension_dir,
+                bus=self.bus,
+                start_bus=False,
+            )
+
+        async def _run() -> dict[str, Any]:
+            result = await self.udp_service.handle_command(
+                {"id": f"local-{int(time.time() * 1000)}", "name": action, "payload": payload},
+                ("127.0.0.1", 0),
+            )
+            return {
+                "v": 1,
+                "type": "cmd_ack",
+                "id": f"local-{int(time.time() * 1000)}",
+                "name": action,
+                **result,
+            }
+
+        return self._run_coro(_run())
+
     def stop_runtime(self) -> None:
         if self.loop is None:
             return
@@ -1986,7 +2034,16 @@ class UdpWorkflowWorker(QThread):
     finished_with_result = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, platform_name: str, video_path: str, title: str, caption: str, action_delay_ms: int = 0):
+    def __init__(
+        self,
+        platform_name: str,
+        video_path: str,
+        title: str,
+        caption: str,
+        action_delay_ms: int = 0,
+        executor_mode: str = "udp",
+        local_command_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+    ):
         super().__init__()
         self.platform_name = platform_name
         self.video_path = video_path
@@ -1994,12 +2051,25 @@ class UdpWorkflowWorker(QThread):
         self.caption = caption
         self._stop_event = threading.Event()
         self.action_delay_ms = max(0, int(action_delay_ms))
+        self.executor_mode = str(executor_mode or "udp").lower()
+        self.local_command_handler = local_command_handler
 
     def request_stop(self) -> None:
         self._stop_event.set()
 
     def run(self) -> None:
-        executor = UdpExecutor(stop_event=self._stop_event, action_delay_ms=self.action_delay_ms)
+        if self.executor_mode == "local":
+            if self.local_command_handler is None:
+                self.failed.emit("Local automation executor is not configured")
+                return
+            executor = LocalServiceExecutor(
+                handler=self.local_command_handler,
+                stop_event=self._stop_event,
+                action_delay_ms=self.action_delay_ms,
+            )
+        else:
+            executor = UdpExecutor(stop_event=self._stop_event, action_delay_ms=self.action_delay_ms)
+
         try:
             platform = self.platform_name.lower()
             if platform == "youtube":
@@ -2305,8 +2375,11 @@ class MainWindow(QMainWindow):
 
         self.automation_mode = QComboBox()
         self.automation_mode.addItem("Embedded", "embedded")
-        self.automation_mode.addItem("UDP", "udp")
-        self.automation_mode.setCurrentIndex(1)
+        self.automation_mode.addItem("External Browser", "external")
+        self.automation_mode.setCurrentIndex(0)
+        self.automation_mode.setToolTip(
+            "Embedded: run DOM automation in the in-app upload tab. External Browser: run automation only in Automation Chrome (external window)."
+        )
         automation_buttons.addWidget(self.automation_mode)
 
         automation_layout.addLayout(automation_buttons)
@@ -2389,6 +2462,13 @@ class MainWindow(QMainWindow):
         self.browser_home_btn.setCheckable(True)
         self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
 
+        self.browser_external_btn = QPushButton("🌐 External")
+        self.browser_external_btn.setToolTip("Open the current browser tab URL in your system default browser.")
+        self.browser_external_btn.setCheckable(True)
+        self.browser_external_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.browser_external_btn, self.open_current_browser_in_external_browser)
+        )
+
         self.browser_devtools_btn = QPushButton("🛠 DevTools")
         self.browser_devtools_btn.setToolTip("Open Chromium DevTools for the Grok browser tab.")
         self.browser_devtools_btn.setCheckable(True)
@@ -2424,6 +2504,13 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.sora_browser_home_btn, self.show_sora_browser_page)
         )
 
+        self.sora_browser_external_btn = QPushButton("🌐 External")
+        self.sora_browser_external_btn.setToolTip("Open the current browser tab URL in your system default browser.")
+        self.sora_browser_external_btn.setCheckable(True)
+        self.sora_browser_external_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_browser_external_btn, self.open_current_browser_in_external_browser)
+        )
+
         self.sora_browser_devtools_btn = QPushButton("🛠 DevTools")
         self.sora_browser_devtools_btn.setToolTip("Open Chromium DevTools for the Sora browser tab.")
         self.sora_browser_devtools_btn.setCheckable(True)
@@ -2435,11 +2522,13 @@ class MainWindow(QMainWindow):
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
         self.browser_home_btn.setMaximumWidth(170)
+        self.browser_external_btn.setMaximumWidth(170)
         self.browser_devtools_btn.setMaximumWidth(170)
         self.sora_generate_image_btn.setMaximumWidth(170)
         self.sora_continue_frame_btn.setMaximumWidth(170)
         self.sora_continue_image_btn.setMaximumWidth(170)
         self.sora_browser_home_btn.setMaximumWidth(170)
+        self.sora_browser_external_btn.setMaximumWidth(170)
         self.sora_browser_devtools_btn.setMaximumWidth(170)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
@@ -2779,7 +2868,8 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
         grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
         grok_browser_controls.addWidget(self.browser_home_btn, 0, 3)
-        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 4)
+        grok_browser_controls.addWidget(self.browser_external_btn, 0, 4)
+        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 5)
 
         self.sora_browser_tab = QWidget()
         sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
@@ -2788,7 +2878,8 @@ class MainWindow(QMainWindow):
         sora_browser_controls.addWidget(self.sora_continue_frame_btn, 0, 1)
         sora_browser_controls.addWidget(self.sora_continue_image_btn, 0, 2)
         sora_browser_controls.addWidget(self.sora_browser_home_btn, 0, 3)
-        sora_browser_controls.addWidget(self.sora_browser_devtools_btn, 0, 4)
+        sora_browser_controls.addWidget(self.sora_browser_external_btn, 0, 4)
+        sora_browser_controls.addWidget(self.sora_browser_devtools_btn, 0, 5)
 
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
@@ -2951,6 +3042,7 @@ class MainWindow(QMainWindow):
         api_btn = QPushButton(f"Upload to {platform_name} via API")
         browser_btn = QPushButton(f"Automate {platform_name} in Browser")
         open_btn = QPushButton("Open Upload Page")
+        external_btn = QPushButton("Open in External Browser")
 
         if platform_name == "Facebook":
             api_btn.clicked.connect(self.upload_selected_to_facebook)
@@ -2971,9 +3063,15 @@ class MainWindow(QMainWindow):
             self.upload_youtube_btn = api_btn
 
         open_btn.clicked.connect(lambda _=False, p=platform_name, u=upload_url: self._open_social_upload_page(p, self._social_upload_url_for_platform(p, u)))
+        external_btn.clicked.connect(
+            lambda _=False, p=platform_name, u=upload_url: self._open_social_upload_page_external(
+                p, self._social_upload_url_for_platform(p, u)
+            )
+        )
         controls.addWidget(api_btn)
         controls.addWidget(browser_btn)
         controls.addWidget(open_btn)
+        controls.addWidget(external_btn)
         layout.addLayout(controls)
 
         status_label = QLabel("Status: idle")
@@ -3025,10 +3123,22 @@ class MainWindow(QMainWindow):
             return configured
         return "https://www.facebook.com/"
 
-    def _social_upload_url_for_platform(self, platform_name: str, fallback_url: str) -> str:
+    def _default_social_upload_url_for_platform(self, platform_name: str) -> str:
         if platform_name == "Facebook":
             return self._facebook_upload_home_url()
-        return fallback_url
+        if platform_name == "Instagram":
+            return self._instagram_reels_create_url()
+        if platform_name == "TikTok":
+            return "https://www.tiktok.com/upload"
+        if platform_name == "X":
+            return "https://x.com/home"
+        if platform_name == "YouTube":
+            return "https://studio.youtube.com"
+        return ""
+
+    def _social_upload_url_for_platform(self, platform_name: str, fallback_url: str) -> str:
+        preferred = self._default_social_upload_url_for_platform(platform_name)
+        return preferred or fallback_url
 
     def _open_social_upload_page(self, platform_name: str, upload_url: str) -> None:
         if not self._is_browser_tab_enabled(platform_name):
@@ -3039,6 +3149,19 @@ class MainWindow(QMainWindow):
             return
         browser.setUrl(QUrl(upload_url))
         self._append_log(f"Opened {platform_name} upload page in dedicated tab.")
+
+    def _open_social_upload_page_external(self, platform_name: str, fallback_url: str) -> None:
+        browser = self.social_upload_browsers.get(platform_name)
+        candidate_url = browser.url().toString().strip() if browser is not None else ""
+        target_url = candidate_url or fallback_url
+        if not target_url:
+            self._append_log(f"{platform_name}: no URL available for external browser launch.")
+            return
+
+        if QDesktopServices.openUrl(QUrl(target_url)):
+            self._append_log(f"Opened {platform_name} upload page in external browser: {target_url}")
+        else:
+            self._append_log(f"Failed to open external browser for {platform_name} URL: {target_url}")
 
     def _on_social_browser_load_finished(self, platform_name: str, ok: bool) -> None:
         if not ok:
@@ -4916,35 +5039,77 @@ class MainWindow(QMainWindow):
 
     def _run_social_upload_via_mode(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded")
-        if mode != "udp":
-            self._start_social_browser_upload(platform_name=platform_name, video_path=video_path, caption=caption, title=title)
+        target_url = self._social_upload_url_for_platform(platform_name, self._default_social_upload_url_for_platform(platform_name))
+
+        if mode == "external":
+            self._append_automation_log(
+                f"External browser mode selected for {platform_name}; using Automation Chrome only (no embedded browser automation)."
+            )
+            self._cancel_social_upload_run(platform_name, reason="switching to external automation")
+
+            if not getattr(self, "cdp_enabled", False):
+                self._set_cdp_enabled(True)
+                self._append_automation_log("CDP mode was disabled in UI; enabled automatically for external automation.")
+
+            runtime = self._ensure_automation_runtime()
+            try:
+                runtime.start_chrome()
+                cdp_state = runtime.ensure_cdp_connected()
+                self._append_automation_log(f"CDP readiness check: {cdp_state}")
+                ping_result = runtime.dom_ping()
+                self._append_automation_log(f"Extension readiness check: {json.dumps(ping_result, ensure_ascii=False)}")
+                runtime.open_url_in_automation_chrome(target_url)
+            except Exception as exc:
+                self._append_automation_log(f"External automation preparation failed: {exc}")
+                QMessageBox.warning(
+                    self,
+                    "External Automation Failed",
+                    "Could not prepare Automation Chrome/CDP/extension for external mode.\n\n"
+                    f"{exc}\n\n"
+                    "Tips:\n"
+                    "1) Keep Automation Chrome running with the bundled extension loaded.\n"
+                    "2) Leave at least one automation tab open in that Chrome window.\n"
+                    "3) Use the 'Connect CDP' and 'Extension DOM Ping' buttons to verify readiness.",
+                )
+                return
+
+            if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
+                self._append_automation_log("Stopping previous automation workflow before starting a new external run.")
+                try:
+                    self.udp_workflow_worker.request_stop()
+                    if not self.udp_workflow_worker.wait(2500):
+                        self.udp_workflow_worker.requestInterruption()
+                        if not self.udp_workflow_worker.wait(1500):
+                            self.udp_workflow_worker.terminate()
+                            self.udp_workflow_worker.wait(800)
+                except Exception as exc:
+                    self._append_automation_log(f"WARNING: Failed to stop previous workflow cleanly: {exc}")
+
+            action_delay_ms = int(self.automation_action_delay_ms.value())
+            worker = UdpWorkflowWorker(
+                platform_name=platform_name,
+                video_path=video_path,
+                title=title,
+                caption=caption,
+                action_delay_ms=action_delay_ms,
+                executor_mode="local",
+                local_command_handler=runtime.execute_local_automation_command,
+            )
+            worker.finished_with_result.connect(
+                lambda result: self._append_automation_log(f"{platform_name} external automation result: {result}")
+            )
+            worker.failed.connect(lambda err: self._append_automation_log(f"{platform_name} external automation failed: {err}"))
+            worker.finished.connect(lambda: setattr(self, "udp_workflow_worker", None))
+            self.udp_workflow_worker = worker
+            worker.start()
             return
 
-        self._cancel_social_upload_run(platform_name, reason="switching to UDP automation")
-        self._ensure_udp_service()
-        if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
-            self._append_automation_log("Stopping previous UDP workflow before starting a new one.")
-            try:
-                self.udp_workflow_worker.request_stop()
-                if not self.udp_workflow_worker.wait(2000):
-                    self.udp_workflow_worker.requestInterruption()
-                    if not self.udp_workflow_worker.wait(1500):
-                        self._append_automation_log(
-                            "WARNING: Previous UDP workflow did not stop in time; forcing thread termination."
-                        )
-                        self.udp_workflow_worker.terminate()
-                        self.udp_workflow_worker.wait(800)
-            except Exception as exc:
-                self._append_automation_log(f"WARNING: Failed to stop previous UDP workflow cleanly: {exc}")
-        self._append_automation_log("UDP action log file: logs/udp_automation.log")
-        action_delay_ms = int(self.automation_action_delay_ms.value())
-        self._append_automation_log(f"Starting UDP workflow for {platform_name} with {action_delay_ms}ms inter-action delay.")
-        worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption, action_delay_ms=action_delay_ms)
-        worker.finished_with_result.connect(lambda result: self._append_automation_log(f"{platform_name} UDP result: {result}"))
-        worker.failed.connect(lambda err: self._append_automation_log(f"{platform_name} UDP failed: {err}"))
-        worker.finished.connect(lambda: setattr(self, "udp_workflow_worker", None))
-        self.udp_workflow_worker = worker
-        worker.start()
+        if mode != "embedded":
+            self._append_automation_log(
+                f"Automation mode '{mode}' is deprecated; falling back to embedded DOM automation."
+            )
+
+        self._start_social_browser_upload(platform_name=platform_name, video_path=video_path, caption=caption, title=title)
 
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -10347,6 +10512,23 @@ class MainWindow(QMainWindow):
     def open_sora_browser_devtools(self) -> None:
         self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
         self._open_devtools_for_browser(self.sora_browser, "Sora Browser")
+
+    def open_current_browser_in_external_browser(self) -> None:
+        index = self.browser_tabs.currentIndex()
+        target_browser = self._browser_for_tab_index(index)
+        if target_browser is None:
+            self._append_log("Current tab does not host an embedded browser; external launch skipped.")
+            return
+
+        url = target_browser.url().toString().strip()
+        if not url:
+            self._append_log("Current browser tab has no URL to open externally.")
+            return
+
+        if QDesktopServices.openUrl(QUrl(url)):
+            self._append_log(f"Opened external browser: {url}")
+        else:
+            self._append_log(f"Failed to open external browser for URL: {url}")
 
     def show_browser_page(self) -> None:
         if not self._is_browser_tab_enabled("Grok"):

@@ -574,17 +574,26 @@ class UdpAutomationService:
                                 break
 
                 if not mode:
-                    # For remote CDP file-transfer limits, use extension-side debugger injection on the browser host.
-                    if "Cannot transfer files larger than 50Mb" in last_err:
+                    # CDP file-input access is brittle across upload UIs; always try extension debugger fallback.
+                    extension_err = ""
+                    try:
                         ack = await self._send_extension_cmd("upload.select_file", payload)
                         ack_payload = _ack_from_extension(ack)
                         if bool(ack_payload.get("ok")):
                             mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
                             await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
                             return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                        extension_err = str(ack_payload.get("error") or "")
+                    except Exception as exc:
+                        extension_err = str(exc)
+
+                    reason_parts = [last_err or "file input not found"]
+                    if extension_err:
+                        reason_parts.append(f"extension fallback failed: {extension_err}")
+                    reason = "; ".join(part for part in reason_parts if part)
                     raise RuntimeError(
                         "Automatic upload over remote CDP failed to set the file input"
-                        f" (sizeMb={round(file_size_mb, 2)}): {last_err or 'file input not found'}"
+                        f" (sizeMb={round(file_size_mb, 2)}): {reason}"
                     )
 
                 await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
