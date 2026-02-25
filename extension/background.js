@@ -474,9 +474,19 @@ async function handleCmd(msg) {
         };
 
         if (name === "dom.type") {
-          const el = document.querySelector(p.selector || "");
-          if (!el) return { typed: false, selector: p.selector || "" };
-          return { typed: setValue(el, p.value ?? p.text ?? ""), selector: p.selector || "" };
+          const requestedSelector = p.selector || "";
+          const root = document.querySelector(requestedSelector);
+          if (!root) return { typed: false, selector: requestedSelector };
+
+          const resolveTypeTarget = (node) => {
+            if (!node) return null;
+            if (node.matches?.("input, textarea, [contenteditable='true']")) return node;
+            return node.querySelector?.("#textbox[contenteditable='true'], [contenteditable='true'], textarea, input") || null;
+          };
+
+          const target = resolveTypeTarget(root);
+          if (!target) return { typed: false, selector: requestedSelector, reason: "type_target_not_found" };
+          return { typed: setValue(target, p.value ?? p.text ?? ""), selector: requestedSelector };
         }
 
         const fields = p.fields || {};

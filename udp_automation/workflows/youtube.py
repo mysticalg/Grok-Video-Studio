@@ -60,6 +60,8 @@ def run(executor: BaseExecutor, video_path: str, title: str, description: str) -
         executor,
         "youtube",
         [
+            "ytcp-form-input-container#container",
+            "ytcp-form-input-container#container #textbox[contenteditable='true']",
             "#title-textarea #textbox[contenteditable='true']",
             "div#textbox[contenteditable='true'][aria-label*='Add a title' i]",
             "div#textbox[contenteditable='true'][aria-required='true'][aria-label*='title' i]",
