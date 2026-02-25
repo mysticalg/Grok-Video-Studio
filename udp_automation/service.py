@@ -43,6 +43,33 @@ class UdpAutomationService:
         self._clients: set[tuple[str, int]] = set()
 
     @staticmethod
+    def _load_preferences() -> dict[str, Any]:
+        pref_path = Path.cwd() / "preferences.json"
+        if not pref_path.exists():
+            return {}
+        try:
+            payload = json.loads(pref_path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _resolve_openai_settings(self) -> tuple[str, str]:
+        preferences = self._load_preferences()
+        credential = (
+            os.environ.get("OPENAI_API_KEY", "").strip()
+            or os.environ.get("OPENAI_ACCESS_TOKEN", "").strip()
+            or str(preferences.get("openai_api_key") or "").strip()
+            or str(preferences.get("openai_access_token") or "").strip()
+        )
+        model = (
+            os.environ.get("OPENAI_MODEL", "").strip()
+            or os.environ.get("OPENAI_CHAT_MODEL", "").strip()
+            or str(preferences.get("openai_chat_model") or "").strip()
+            or "gpt-5.1-codex"
+        )
+        return credential, model
+
+    @staticmethod
     def _is_connection_closed_error(exc: Exception) -> bool:
         text = str(exc).lower()
         return "connection closed" in text or "target page, context or browser has been closed" in text
@@ -207,11 +234,10 @@ class UdpAutomationService:
 
 
     def _openai_fill_plan(self, html_fragment: str, title: str, description: str, timeout_s: float) -> dict[str, list[str]]:
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if not api_key:
+        credential, model = self._resolve_openai_settings()
+        if not credential:
             return {"title": [], "description": []}
 
-        model = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
         payload = {
             "model": model,
             "temperature": 0,
@@ -240,7 +266,7 @@ class UdpAutomationService:
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {credential}",
             },
             method="POST",
         )
@@ -270,9 +296,9 @@ class UdpAutomationService:
         title = str((fields or {}).get("title") or "")
         description = str((fields or {}).get("description") or "")
 
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            await self._emit("state", {"state": "youtube_openai_skipped", "reason": "missing_openai_api_key"})
+        credential, _ = self._resolve_openai_settings()
+        if not credential:
+            await self._emit("state", {"state": "youtube_openai_skipped", "reason": "missing_openai_credentials"})
             return None
 
         await self._emit("state", {"state": "youtube_openai_plan_start"})
@@ -599,12 +625,13 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 fields = payload.get("fields") or {}
                 if platform == "youtube" and isinstance(fields, dict):
+                    openai_credential, openai_model = self._resolve_openai_settings()
                     await self._emit(
                         "state",
                         {
                             "state": "youtube_form_fill_start",
-                            "openaiKeyPresent": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
-                            "openaiModel": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+                            "openaiKeyPresent": bool(openai_credential),
+                            "openaiModel": openai_model,
                         },
                     )
 
