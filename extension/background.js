@@ -438,6 +438,19 @@ async function handleCmd(msg) {
           return true;
         };
 
+        const setYouTubeTextboxTextContent = (el, value) => {
+          if (!el) return false;
+          const text = String(value || "");
+          try { el.focus(); } catch (_) {}
+          try { el.textContent = text; } catch (_) { return false; }
+          try { el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertText" })); } catch (_) {}
+          try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" })); } catch (_) {
+            try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+          }
+          try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+          return true;
+        };
+
         const clickHashtagSuggestion = async () => {
           const selectors = [
             "[data-e2e*='hashtag'] li",
@@ -664,7 +677,7 @@ async function handleCmd(msg) {
 
             const filled = youtubeTextMatches()
               || setYouTubeRichTextboxValue(el, text)
-              || await typeTextIntoEditable(el, text);
+              || setYouTubeTextboxTextContent(el, text);
             out[rawKey] = Boolean(filled) && youtubeTextMatches();
           } else {
             out[rawKey] = setValue(el, text);
