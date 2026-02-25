@@ -26,7 +26,9 @@ class EmbeddedExecutor(BaseExecutor):
 
 class UdpExecutor(BaseExecutor):
     ACTION_TIMEOUT_OVERRIDES_S = {
-        "form.fill": 4.0,
+        # Rich-text editors (notably YouTube Studio) can take several seconds
+        # to acknowledge synthetic input events before the extension replies.
+        "form.fill": 30.0,
     }
     ACTION_RETRY_OVERRIDES = {
         ("form.fill", "x"): 0,
