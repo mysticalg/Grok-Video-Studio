@@ -2969,6 +2969,7 @@ class MainWindow(QMainWindow):
         api_btn = QPushButton(f"Upload to {platform_name} via API")
         browser_btn = QPushButton(f"Automate {platform_name} in Browser")
         open_btn = QPushButton("Open Upload Page")
+        external_btn = QPushButton("Open in External Browser")
 
         if platform_name == "Facebook":
             api_btn.clicked.connect(self.upload_selected_to_facebook)
@@ -2989,9 +2990,15 @@ class MainWindow(QMainWindow):
             self.upload_youtube_btn = api_btn
 
         open_btn.clicked.connect(lambda _=False, p=platform_name, u=upload_url: self._open_social_upload_page(p, self._social_upload_url_for_platform(p, u)))
+        external_btn.clicked.connect(
+            lambda _=False, p=platform_name, u=upload_url: self._open_social_upload_page_external(
+                p, self._social_upload_url_for_platform(p, u)
+            )
+        )
         controls.addWidget(api_btn)
         controls.addWidget(browser_btn)
         controls.addWidget(open_btn)
+        controls.addWidget(external_btn)
         layout.addLayout(controls)
 
         status_label = QLabel("Status: idle")
@@ -3057,6 +3064,19 @@ class MainWindow(QMainWindow):
             return
         browser.setUrl(QUrl(upload_url))
         self._append_log(f"Opened {platform_name} upload page in dedicated tab.")
+
+    def _open_social_upload_page_external(self, platform_name: str, fallback_url: str) -> None:
+        browser = self.social_upload_browsers.get(platform_name)
+        candidate_url = browser.url().toString().strip() if browser is not None else ""
+        target_url = candidate_url or fallback_url
+        if not target_url:
+            self._append_log(f"{platform_name}: no URL available for external browser launch.")
+            return
+
+        if QDesktopServices.openUrl(QUrl(target_url)):
+            self._append_log(f"Opened {platform_name} upload page in external browser: {target_url}")
+        else:
+            self._append_log(f"Failed to open external browser for {platform_name} URL: {target_url}")
 
     def _on_social_browser_load_finished(self, platform_name: str, ok: bool) -> None:
         if not ok:
