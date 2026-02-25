@@ -36,7 +36,7 @@ class UdpExecutor(BaseExecutor):
     }
     ACTION_RETRY_OVERRIDES = {
         ("form.fill", "x"): 0,
-        ("form.fill", "youtube"): 0,
+        ("form.fill", "youtube"): 2,
     }
 
     def __init__(

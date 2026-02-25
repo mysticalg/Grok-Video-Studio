@@ -852,6 +852,14 @@ class UdpAutomationService:
             if name == "form.fill":
                 platform = str(payload.get("platform") or "").lower()
                 fields = payload.get("fields") or {}
+                await self._emit(
+                    "state",
+                    {
+                        "state": "form_fill_received",
+                        "platform": platform,
+                        "fieldKeys": sorted([str(k) for k in fields.keys()]) if isinstance(fields, dict) else [],
+                    },
+                )
                 if platform == "youtube" and isinstance(fields, dict):
                     await self._emit(
                         "state",
