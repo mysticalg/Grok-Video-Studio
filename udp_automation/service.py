@@ -206,7 +206,7 @@ class UdpAutomationService:
             return {"title": False if title else True, "description": False if description else True}
 
 
-    def _openai_fill_plan(self, html_fragment: str, title: str, description: str) -> dict[str, list[str]]:
+    def _openai_fill_plan(self, html_fragment: str, title: str, description: str, timeout_s: float) -> dict[str, list[str]]:
         api_key = os.environ.get("OPENAI_API_KEY", "").strip()
         if not api_key:
             return {"title": [], "description": []}
@@ -245,7 +245,7 @@ class UdpAutomationService:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=12) as resp:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             content = (((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "{}")
             parsed = json.loads(content)
@@ -270,6 +270,12 @@ class UdpAutomationService:
         title = str((fields or {}).get("title") or "")
         description = str((fields or {}).get("description") or "")
 
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            await self._emit("state", {"state": "youtube_openai_skipped", "reason": "missing_openai_api_key"})
+            return None
+
+        await self._emit("state", {"state": "youtube_openai_plan_start"})
         html_fragment = await page.evaluate(
             """() => {
                 const dialog = document.querySelector('ytcp-uploads-dialog');
@@ -277,7 +283,16 @@ class UdpAutomationService:
                 return String(root?.outerHTML || document.body?.outerHTML || '').slice(0, 200000);
             }"""
         )
-        plan = await asyncio.to_thread(self._openai_fill_plan, str(html_fragment or ""), title, description)
+        openai_timeout_s = float(os.environ.get("OPENAI_TIMEOUT_S", "6"))
+        plan = await asyncio.to_thread(self._openai_fill_plan, str(html_fragment or ""), title, description, openai_timeout_s)
+        await self._emit(
+            "state",
+            {
+                "state": "youtube_openai_plan_result",
+                "titleSelectors": len(plan.get("title") or []),
+                "descriptionSelectors": len(plan.get("description") or []),
+            },
+        )
 
         base_title = [
             "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Add a title' i]",
@@ -334,6 +349,7 @@ class UdpAutomationService:
         if description:
             res = await page.evaluate(script, {"selectors": selectors["description"], "value": description})
             out["description"] = bool((res or {}).get("ok"))
+        await self._emit("state", {"state": "youtube_openai_fill_result", **out})
         return out
 
     async def _fill_youtube_fields_via_cdp_replace(self, fields: dict[str, Any]) -> dict[str, bool] | None:
@@ -584,14 +600,16 @@ class UdpAutomationService:
                 fields = payload.get("fields") or {}
                 if platform == "youtube" and isinstance(fields, dict):
                     dom_result = await self._fill_youtube_fields_via_openai(fields)
+                    mode = "youtube_openai_fill"
                     if not isinstance(dom_result, dict):
+                        mode = "youtube_cdp_replace_fallback"
                         dom_result = await self._fill_youtube_fields_via_cdp_replace(fields)
                     title_requested = bool(str(fields.get("title") or ""))
                     description_requested = bool(str(fields.get("description") or ""))
                     title_ok = (not title_requested) or bool(dom_result.get("title", False))
                     description_ok = (not description_requested) or bool(dom_result.get("description", False))
                     if title_ok and description_ok:
-                        return {"ok": True, "payload": {**dom_result, "mode": "youtube_openai_fill"}}
+                        return {"ok": True, "payload": {**dom_result, "mode": mode}}
                     return {
                         "ok": False,
                         "error": "YouTube form.fill could not set all requested fields",

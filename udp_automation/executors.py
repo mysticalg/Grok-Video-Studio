@@ -32,7 +32,7 @@ class UdpExecutor(BaseExecutor):
     }
     ACTION_TIMEOUT_PLATFORM_OVERRIDES_S = {
         # For YouTube, form.fill is best-effort; fail fast so workflow can continue.
-        ("form.fill", "youtube"): 15.0,
+        ("form.fill", "youtube"): 30.0,
     }
     ACTION_RETRY_OVERRIDES = {
         ("form.fill", "x"): 0,
