@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -203,6 +205,136 @@ class UdpAutomationService:
         except Exception:
             return {"title": False if title else True, "description": False if description else True}
 
+
+    def _openai_fill_plan(self, html_fragment: str, title: str, description: str) -> dict[str, list[str]]:
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            return {"title": [], "description": []}
+
+        model = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+        payload = {
+            "model": model,
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are analyzing YouTube Studio upload dialog HTML. Return strict JSON only: "
+                        "{\"title\":[selector...],\"description\":[selector...]} with best CSS selectors "
+                        "for title and description contenteditable fields."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Title value: {title}\nDescription value: {description}\n"
+                        f"HTML:\n{html_fragment[:120000]}"
+                    ),
+                },
+            ],
+            "response_format": {"type": "json_object"},
+        }
+
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            content = (((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "{}")
+            parsed = json.loads(content)
+            title_sels = [str(x) for x in (parsed.get("title") or []) if str(x).strip()]
+            desc_sels = [str(x) for x in (parsed.get("description") or []) if str(x).strip()]
+            return {"title": title_sels[:12], "description": desc_sels[:12]}
+        except Exception:
+            return {"title": [], "description": []}
+
+    async def _fill_youtube_fields_via_openai(self, fields: dict[str, Any]) -> dict[str, bool] | None:
+        if self.cdp is None:
+            await self._connect_cdp()
+        if self.cdp is None:
+            return None
+
+        page = await self.cdp.find_page_by_url_contains("studio.youtube.com")
+        if page is None:
+            page = await self.cdp.get_most_recent_page()
+        if page is None:
+            return None
+
+        title = str((fields or {}).get("title") or "")
+        description = str((fields or {}).get("description") or "")
+
+        html_fragment = await page.evaluate(
+            """() => {
+                const dialog = document.querySelector('ytcp-uploads-dialog');
+                const root = dialog || document.body;
+                return String(root?.outerHTML || document.body?.outerHTML || '').slice(0, 200000);
+            }"""
+        )
+        plan = await asyncio.to_thread(self._openai_fill_plan, str(html_fragment or ""), title, description)
+
+        base_title = [
+            "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Add a title' i]",
+            "#title-textarea #textbox[contenteditable='true']",
+            "div#textbox[contenteditable='true'][aria-required='true']",
+        ]
+        base_desc = [
+            "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Tell viewers about your video' i]",
+            "#description #textbox[contenteditable='true']",
+            "div#textbox[contenteditable='true'][aria-label*='description' i]",
+        ]
+
+        selectors = {
+            "title": (plan.get("title") or []) + base_title,
+            "description": (plan.get("description") or []) + base_desc,
+        }
+
+        script = """
+(payload) => {
+  const normalize = (text) => String(text || '').replace(/\\u200B/g, '').replace(/\\s+/g, ' ').trim();
+  const value = String(payload.value || '');
+  for (const selector of payload.selectors || []) {
+    const el = document.querySelector(selector);
+    if (!el) continue;
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+    try { el.focus(); } catch (_) {}
+    let ok = false;
+    try {
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      ok = Boolean(document.execCommand('insertText', false, value));
+    } catch (_) {}
+    if (!ok) {
+      try { el.textContent = value; } catch (_) {}
+    }
+    try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: value, inputType: 'insertText' })); } catch (_) {
+      try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+    }
+    try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    const current = normalize(el.innerText || el.textContent || '');
+    const expected = normalize(value);
+    if (!expected || current === expected || current.includes(expected) || expected.includes(current)) {
+      return { ok: true, selector };
+    }
+  }
+  return { ok: false };
+}
+"""
+
+        out = {"title": not bool(title), "description": not bool(description)}
+        if title:
+            res = await page.evaluate(script, {"selectors": selectors["title"], "value": title})
+            out["title"] = bool((res or {}).get("ok"))
+        if description:
+            res = await page.evaluate(script, {"selectors": selectors["description"], "value": description})
+            out["description"] = bool((res or {}).get("ok"))
+        return out
 
     async def _fill_youtube_fields_via_cdp_replace(self, fields: dict[str, Any]) -> dict[str, bool] | None:
         if self.cdp is None:
@@ -451,13 +583,15 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 fields = payload.get("fields") or {}
                 if platform == "youtube" and isinstance(fields, dict):
-                    dom_result = await self._fill_youtube_fields_via_cdp_replace(fields)
+                    dom_result = await self._fill_youtube_fields_via_openai(fields)
+                    if not isinstance(dom_result, dict):
+                        dom_result = await self._fill_youtube_fields_via_cdp_replace(fields)
                     title_requested = bool(str(fields.get("title") or ""))
                     description_requested = bool(str(fields.get("description") or ""))
                     title_ok = (not title_requested) or bool(dom_result.get("title", False))
                     description_ok = (not description_requested) or bool(dom_result.get("description", False))
                     if title_ok and description_ok:
-                        return {"ok": True, "payload": {**dom_result, "mode": "youtube_cdp_replace"}}
+                        return {"ok": True, "payload": {**dom_result, "mode": "youtube_openai_fill"}}
                     return {
                         "ok": False,
                         "error": "YouTube form.fill could not set all requested fields",
