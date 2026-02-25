@@ -2378,7 +2378,7 @@ class MainWindow(QMainWindow):
         self.automation_mode.addItem("External Browser", "external")
         self.automation_mode.setCurrentIndex(0)
         self.automation_mode.setToolTip(
-            "Embedded: run DOM automation in the in-app upload tab. External Browser: open the same page externally while using the embedded DOM automation engine."
+            "Embedded: run DOM automation in the in-app upload tab. External Browser: run automation only in Automation Chrome (external window)."
         )
         automation_buttons.addWidget(self.automation_mode)
 
@@ -5043,14 +5043,55 @@ class MainWindow(QMainWindow):
 
         if mode == "external":
             self._append_automation_log(
-                f"External browser mode selected for {platform_name}; opening external page and running embedded DOM automation in-app."
+                f"External browser mode selected for {platform_name}; using Automation Chrome only (no embedded browser automation)."
             )
-            self._open_social_upload_page_external(platform_name, target_url)
-            self._open_social_upload_page(platform_name, target_url)
-            self._start_social_browser_upload(platform_name=platform_name, video_path=video_path, caption=caption, title=title)
+            self._cancel_social_upload_run(platform_name, reason="switching to external automation")
+
+            runtime = self._ensure_automation_runtime()
+            try:
+                runtime.start_chrome()
+                runtime.open_url_in_automation_chrome(target_url)
+            except Exception as exc:
+                self._append_automation_log(f"External automation preparation failed: {exc}")
+                QMessageBox.warning(
+                    self,
+                    "External Automation Failed",
+                    f"Could not prepare Automation Chrome for external mode.\n\n{exc}",
+                )
+                return
+
+            if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
+                self._append_automation_log("Stopping previous automation workflow before starting a new external run.")
+                try:
+                    self.udp_workflow_worker.request_stop()
+                    if not self.udp_workflow_worker.wait(2500):
+                        self.udp_workflow_worker.requestInterruption()
+                        if not self.udp_workflow_worker.wait(1500):
+                            self.udp_workflow_worker.terminate()
+                            self.udp_workflow_worker.wait(800)
+                except Exception as exc:
+                    self._append_automation_log(f"WARNING: Failed to stop previous workflow cleanly: {exc}")
+
+            action_delay_ms = int(self.automation_action_delay_ms.value())
+            worker = UdpWorkflowWorker(
+                platform_name=platform_name,
+                video_path=video_path,
+                title=title,
+                caption=caption,
+                action_delay_ms=action_delay_ms,
+                executor_mode="local",
+                local_command_handler=runtime.execute_local_automation_command,
+            )
+            worker.finished_with_result.connect(
+                lambda result: self._append_automation_log(f"{platform_name} external automation result: {result}")
+            )
+            worker.failed.connect(lambda err: self._append_automation_log(f"{platform_name} external automation failed: {err}"))
+            worker.finished.connect(lambda: setattr(self, "udp_workflow_worker", None))
+            self.udp_workflow_worker = worker
+            worker.start()
             return
 
-        if mode not in {"embedded", "external"}:
+        if mode != "embedded":
             self._append_automation_log(
                 f"Automation mode '{mode}' is deprecated; falling back to embedded DOM automation."
             )
