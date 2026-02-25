@@ -229,58 +229,80 @@ class UdpAutomationService:
                     raise RuntimeError("filePath is required")
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
-                page = await self.cdp.get_most_recent_page()
+                page = await self.cdp.find_page_by_url_contains("studio.youtube.com") if platform.lower() == "youtube" else await self.cdp.get_most_recent_page()
                 if page is None:
                     page = await self.cdp.get_or_create_page(
                         PLATFORM_URLS.get(platform.lower(), "https://example.com"),
                         reuse_tab=True,
                     )
-                input_el = page.locator("input[type='file']").first
-                try:
-                    await input_el.wait_for(state="attached", timeout=15000)
-                except Exception:
-                    input_el = None
-                if input_el is not None and await input_el.count() > 0:
-                    file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
-                    try:
-                        await input_el.set_input_files(file_path)
-                        mode = "cdp_set_input_files"
-                    except Exception as exc:
-                        err_text = str(exc)
-                        extension_used = False
-                        # For remote CDP file-transfer limits, use extension-side debugger injection on the browser host.
-                        if "Cannot transfer files larger than 50Mb" in err_text:
-                            try:
-                                ack = await self._send_extension_cmd("upload.select_file", payload)
-                                ack_payload = _ack_from_extension(ack)
-                                if bool(ack_payload.get("ok")):
-                                    mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
-                                    extension_used = True
-                            except Exception:
-                                extension_used = False
 
-                        if not extension_used:
-                            used_dom_fallback = False
-                            if self.cdp is not None:
-                                for _ in range(3):
-                                    used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, "input[type='file']", file_path)
-                                    if used_dom_fallback:
-                                        break
-                                    try:
-                                        await page.wait_for_timeout(250)
-                                    except Exception:
-                                        pass
+                file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+                input_locators = [
+                    page.locator("input[type='file']"),
+                    page.locator("ytcp-uploads-dialog input[type='file']"),
+                    page.locator("input[type='file'][accept*='video']"),
+                ]
+
+                mode = None
+                last_err = ""
+                for _ in range(20):
+                    for locator in input_locators:
+                        try:
+                            count = await locator.count()
+                        except Exception:
+                            count = 0
+                        if count <= 0:
+                            continue
+                        for idx in range(count):
+                            target = locator.nth(idx)
+                            try:
+                                await target.set_input_files(file_path)
+                                mode = "cdp_set_input_files"
+                                break
+                            except Exception as exc:
+                                last_err = str(exc)
+                                continue
+                        if mode:
+                            break
+                    if mode:
+                        break
+                    try:
+                        await page.wait_for_timeout(300)
+                    except Exception:
+                        pass
+
+                if not mode:
+                    used_dom_fallback = False
+                    if self.cdp is not None:
+                        for selector in ["ytcp-uploads-dialog input[type='file']", "input[type='file'][accept*='video']", "input[type='file']"]:
+                            for _ in range(4):
+                                used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, selector, file_path)
+                                if used_dom_fallback:
+                                    mode = "cdp_dom_set_file_input_files"
+                                    break
+                                try:
+                                    await page.wait_for_timeout(250)
+                                except Exception:
+                                    pass
                             if used_dom_fallback:
-                                mode = "cdp_dom_set_file_input_files"
-                            else:
-                                raise RuntimeError(
-                                    "Automatic upload over remote CDP failed to set the file input"
-                                    f" (sizeMb={round(file_size_mb, 2)}): {err_text}"
-                                )
-                    await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
-                    return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
-                ack = await self._send_extension_cmd("upload.select_file", payload)
-                return _ack_from_extension(ack)
+                                break
+
+                if not mode:
+                    # For remote CDP file-transfer limits, use extension-side debugger injection on the browser host.
+                    if "Cannot transfer files larger than 50Mb" in last_err:
+                        ack = await self._send_extension_cmd("upload.select_file", payload)
+                        ack_payload = _ack_from_extension(ack)
+                        if bool(ack_payload.get("ok")):
+                            mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
+                            await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
+                            return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                    raise RuntimeError(
+                        "Automatic upload over remote CDP failed to set the file input"
+                        f" (sizeMb={round(file_size_mb, 2)}): {last_err or 'file input not found'}"
+                    )
+
+                await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
+                return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
 
             if name == "platform.ensure_logged_in":
                 platform = str(payload.get("platform") or "")
