@@ -647,7 +647,11 @@ class UdpAutomationService:
 
                 for _ in range(3):
                     try:
-                        await _try_click("button[aria-label='Next']", "next")
+                        await _try_click("ytcp-button#next-button button[aria-label='Next']", "next")
+                        if clicks["next"] == 0:
+                            await _try_click("ytcp-button#next-button button", "next")
+                        if clicks["next"] == 0:
+                            await _try_click("button[aria-label='Next']", "next")
                         if clicks["next"] == 0:
                             await _try_click("button[aria-label*='Next' i]", "next")
                     except Exception:

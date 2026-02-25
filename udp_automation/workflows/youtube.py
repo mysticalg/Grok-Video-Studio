@@ -79,6 +79,8 @@ def run(executor: BaseExecutor, video_path: str, title: str, description: str) -
 
     # Keep publish progression DOM-based (same style as embedded/browser-driven flows).
     for _ in range(3):
+        _best_effort_click(executor, "youtube", "ytcp-button#next-button button[aria-label='Next']")
+        _best_effort_click(executor, "youtube", "ytcp-button#next-button button")
         _best_effort_click(executor, "youtube", "button[aria-label='Next']")
         _best_effort_click(executor, "youtube", "button[aria-label*='Next' i]")
 
