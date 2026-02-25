@@ -12,6 +12,13 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str) -> 
         return
 
 
+def _best_effort_type(executor: BaseExecutor, platform: str, selector: str, value: str) -> bool:
+    try:
+        resp = executor.run("dom.type", {"platform": platform, "selector": selector, "value": value})
+        payload = (resp or {}).get("payload") or {}
+        return bool(payload.get("typed"))
+    except Exception:
+        return False
 
 
 def _best_effort_log_note(executor: BaseExecutor, note: str) -> None:
@@ -35,21 +42,31 @@ def run(executor: BaseExecutor, video_path: str, title: str, description: str) -
 
     executor.run("upload.select_file", {"platform": "youtube", "filePath": video_path})
 
-    try:
-        executor.run("form.fill", {"platform": "youtube", "fields": {"title": title, "description": description}})
-    except Exception as exc:
-        _best_effort_log_note(executor, f"youtube form.fill skipped due to error: {exc}")
+    # Prefer explicit textbox typing over generic form.fill to avoid long UDP waits.
+    title_ok = True
+    desc_ok = True
+    if title:
+        title_ok = _best_effort_type(
+            executor,
+            "youtube",
+            "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Add a title' i]",
+            title,
+        )
+    if description:
+        desc_ok = _best_effort_type(
+            executor,
+            "youtube",
+            "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Tell viewers about your video' i]",
+            description,
+        )
+
+    if not (title_ok and desc_ok):
+        _best_effort_log_note(executor, f"youtube dom.type fill partial title_ok={title_ok} description_ok={desc_ok}")
 
     # Prefer service-side CDP sequence to avoid extension dom.click hangs.
     try:
         executor.run("youtube.publish_steps", {"platform": "youtube"})
-    except Exception:
-        # Fallback to extension clicks if CDP publish sequence is unavailable.
-        for _ in range(3):
-            _best_effort_click(executor, "youtube", "button[aria-label='Next']")
-            _best_effort_click(executor, "youtube", "button[aria-label*='Next' i]")
-
-        _best_effort_click(executor, "youtube", "button[aria-label='Save']")
-        _best_effort_click(executor, "youtube", "button[aria-label*='Save' i]")
+    except Exception as exc:
+        _best_effort_log_note(executor, f"youtube.publish_steps failed: {exc}")
 
     return executor.run("post.status", {"platform": "youtube"})
