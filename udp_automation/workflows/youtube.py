@@ -14,10 +14,11 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str) -> 
 
 
 
-def _best_effort_log_note(executor: BaseExecutor, platform: str, note: str) -> None:
+def _best_effort_log_note(executor: BaseExecutor, note: str) -> None:
     try:
-        # Reuse a cheap command so executor logs contain an explicit note.
-        executor.run("dom.query", {"platform": platform, "selector": "body", "note": note})
+        logger = getattr(executor, "_log", None)
+        if callable(logger):
+            logger("form.fill", "warning", note)
     except Exception:
         return
 
@@ -37,7 +38,7 @@ def run(executor: BaseExecutor, video_path: str, title: str, description: str) -
     try:
         executor.run("form.fill", {"platform": "youtube", "fields": {"title": title, "description": description}})
     except Exception as exc:
-        _best_effort_log_note(executor, "youtube", f"form.fill skipped due to error: {exc}")
+        _best_effort_log_note(executor, f"youtube form.fill skipped due to error: {exc}")
 
     executor.run("post.submit", {"platform": "youtube"})
     return executor.run("post.status", {"platform": "youtube"})
