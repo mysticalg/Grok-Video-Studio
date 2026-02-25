@@ -204,36 +204,93 @@ class UdpAutomationService:
             return {"title": False if title else True, "description": False if description else True}
 
 
-    async def _fill_youtube_fields_via_dom_type(self, fields: dict[str, Any]) -> dict[str, bool]:
+    async def _fill_youtube_fields_via_cdp_replace(self, fields: dict[str, Any]) -> dict[str, bool] | None:
+        if self.cdp is None:
+            await self._connect_cdp()
+        if self.cdp is None:
+            return None
+
+        page = await self.cdp.find_page_by_url_contains("studio.youtube.com")
+        if page is None:
+            page = await self.cdp.get_most_recent_page()
+        if page is None:
+            return None
+
         title = str((fields or {}).get("title") or "")
         description = str((fields or {}).get("description") or "")
-        result = {"title": not bool(title), "description": not bool(description)}
 
-        if title:
-            ack = await self._send_extension_cmd(
-                "dom.type",
-                {
-                    "platform": "youtube",
-                    "selector": "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Add a title' i]",
-                    "value": title,
-                },
-            )
-            payload = (ack or {}).get("payload") or {}
-            result["title"] = bool(payload.get("typed"))
+        script = """
+(data) => {
+  const normalize = (text) => String(text || '').replace(/\\u200B/g, '').replace(/\\s+/g, ' ').trim();
+  const result = { title: true, description: true };
 
-        if description:
-            ack = await self._send_extension_cmd(
-                "dom.type",
-                {
-                    "platform": "youtube",
-                    "selector": "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Tell viewers about your video' i]",
-                    "value": description,
-                },
-            )
-            payload = (ack or {}).get("payload") or {}
-            result["description"] = bool(payload.get("typed"))
+  const titleEl = document.querySelector("div#textbox[contenteditable='true'][role='textbox'][aria-required='true']")
+    || document.querySelector("#title-textarea #textbox[contenteditable='true']");
+  const descEl = document.querySelector("div#textbox[contenteditable='true'][role='textbox'][aria-label*='Tell viewers about your video' i]")
+    || document.querySelector("#description #textbox[contenteditable='true']");
 
-        return result
+  const setField = (el, value) => {
+    if (!el) return false;
+    const text = String(value || '');
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+    try { el.focus(); } catch (_) {}
+    let applied = false;
+    try {
+      const sel = window.getSelection?.();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      applied = Boolean(document.execCommand('insertText', false, text));
+    } catch (_) {
+      applied = false;
+    }
+    if (!applied) {
+      try { el.textContent = text; } catch (_) {}
+    }
+    try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: text, inputType: 'insertText' })); } catch (_) {}
+    try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertText' })); } catch (_) {
+      try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+    }
+    try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (_) {}
+
+    const expected = normalize(text);
+    const current = normalize(el.innerText || el.textContent || '');
+    if (!expected) return current.length === 0;
+    return current === expected || current.includes(expected) || expected.includes(current);
+  };
+
+  if (String(data.title || '').length > 0) {
+    const current = normalize(titleEl?.innerText || titleEl?.textContent || '');
+    const incoming = normalize(data.title);
+    // Replace current auto-filled filename title with requested title.
+    if (titleEl && current !== incoming) {
+      result.title = setField(titleEl, data.title);
+    } else {
+      result.title = Boolean(titleEl);
+    }
+  }
+
+  if (String(data.description || '').length > 0) {
+    // Explicitly target YouTube description textbox (aria-label starts with Tell viewers...).
+    result.description = setField(descEl, data.description);
+  }
+
+  return result;
+}
+"""
+        try:
+            payload = await asyncio.wait_for(page.evaluate(script, {"title": title, "description": description}), timeout=8.0)
+        except Exception:
+            return {"title": False if title else True, "description": False if description else True}
+
+        if not isinstance(payload, dict):
+            return {"title": False if title else True, "description": False if description else True}
+        return {"title": bool(payload.get("title", not bool(title))), "description": bool(payload.get("description", not bool(description)))}
 
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
@@ -348,16 +405,16 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 fields = payload.get("fields") or {}
                 if platform == "youtube" and isinstance(fields, dict):
-                    dom_result = await self._fill_youtube_fields_via_dom_type(fields)
+                    dom_result = await self._fill_youtube_fields_via_cdp_replace(fields)
                     title_requested = bool(str(fields.get("title") or ""))
                     description_requested = bool(str(fields.get("description") or ""))
                     title_ok = (not title_requested) or bool(dom_result.get("title", False))
                     description_ok = (not description_requested) or bool(dom_result.get("description", False))
                     if title_ok and description_ok:
-                        return {"ok": True, "payload": {**dom_result, "mode": "extension_dom_type"}}
+                        return {"ok": True, "payload": {**dom_result, "mode": "youtube_cdp_replace"}}
                     return {
                         "ok": False,
-                        "error": "YouTube dom.type form.fill could not set all requested fields",
+                        "error": "YouTube form.fill could not set all requested fields",
                         "payload": dom_result,
                     }
                 ack = await self._send_extension_cmd(name, payload)
