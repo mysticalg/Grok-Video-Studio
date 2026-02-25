@@ -57,10 +57,10 @@ class UdpAutomationService:
     def _resolve_openai_settings(self) -> tuple[str, str]:
         preferences = self._load_preferences()
         credential = (
-            os.environ.get("OPENAI_API_KEY", "").strip()
-            or os.environ.get("OPENAI_ACCESS_TOKEN", "").strip()
-            or str(preferences.get("openai_api_key") or "").strip()
+            os.environ.get("OPENAI_ACCESS_TOKEN", "").strip()
+            or os.environ.get("OPENAI_API_KEY", "").strip()
             or str(preferences.get("openai_access_token") or "").strip()
+            or str(preferences.get("openai_api_key") or "").strip()
         )
         model = (
             os.environ.get("OPENAI_MODEL", "").strip()
@@ -251,6 +251,67 @@ class UdpAutomationService:
             return {"title": False if title else True, "description": False if description else True}
 
 
+    def _openai_form_packets(self, html_fragment: str, title: str, description: str, timeout_s: float) -> list[dict[str, str]]:
+        credential, model = self._resolve_openai_settings()
+        if not credential:
+            return []
+
+        payload = {
+            "model": model,
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You control YouTube Studio form editing. Return strict JSON only with shape "
+                        "{\"commands\":[{\"field\":\"title|description\",\"selector\":\"...\",\"value\":\"...\"}]}. "
+                        "Only include commands for title/description contenteditable fields."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Desired title: {title}\nDesired description: {description}\n"
+                        f"HTML:\n{html_fragment[:120000]}"
+                    ),
+                },
+            ],
+            "response_format": {"type": "json_object"},
+        }
+
+        self._log_service_event("openai.packet_request", {"model": model, "htmlChars": len(html_fragment or "")})
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {credential}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            content = (((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "{}")
+            parsed = json.loads(content)
+            cmds = []
+            for item in (parsed.get("commands") or []):
+                if not isinstance(item, dict):
+                    continue
+                field = str(item.get("field") or "").strip().lower()
+                selector = str(item.get("selector") or "").strip()
+                value = str(item.get("value") or "").strip()
+                if field not in {"title", "description"}:
+                    continue
+                if not selector:
+                    continue
+                cmds.append({"field": field, "selector": selector, "value": value})
+            self._log_service_event("openai.packet_response", {"commands": len(cmds)})
+            return cmds[:12]
+        except Exception as exc:
+            self._log_service_event("openai.packet_error", {"error": str(exc)})
+            return []
+
     def _openai_fill_plan(self, html_fragment: str, title: str, description: str, timeout_s: float) -> dict[str, list[str]]:
         credential, model = self._resolve_openai_settings()
         if not credential:
@@ -337,6 +398,67 @@ class UdpAutomationService:
             }"""
         )
         openai_timeout_s = float(os.environ.get("OPENAI_TIMEOUT_S", "4"))
+
+        await self._emit(
+            "state",
+            {
+                "state": "youtube_openai_packet_tx",
+                "phase": "commands",
+                "htmlChars": len(str(html_fragment or "")),
+                "requested": {
+                    "title": bool(title),
+                    "description": bool(description),
+                },
+            },
+        )
+        packets = await asyncio.to_thread(self._openai_form_packets, str(html_fragment or ""), title, description, openai_timeout_s)
+        await self._emit("state", {"state": "youtube_openai_packet_rx", "phase": "commands", "commands": len(packets)})
+
+        packet_script = """
+(payload) => {
+  const normalize = (text) => String(text || '').replace(/\\u200B/g, '').replace(/\\s+/g, ' ').trim();
+  const selector = String(payload.selector || '');
+  const value = String(payload.value || '');
+  const el = document.querySelector(selector);
+  if (!el) return { ok: false, reason: 'selector_not_found' };
+  try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+  try { el.focus(); } catch (_) {}
+  let ok = false;
+  try {
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+    ok = Boolean(document.execCommand('insertText', false, value));
+  } catch (_) {}
+  if (!ok) {
+    try { el.textContent = value; ok = true; } catch (_) {}
+  }
+  try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: value, inputType: 'insertText' })); } catch (_) {
+    try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+  }
+  try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+  const current = normalize(el.innerText || el.textContent || '');
+  const expected = normalize(value);
+  return { ok: !expected || current === expected || current.includes(expected) || expected.includes(current) };
+}
+"""
+
+        packet_out = {"title": False, "description": False}
+        for idx, command in enumerate(packets, start=1):
+            field = str(command.get("field") or "")
+            value = str(command.get("value") or "")
+            if field == "title" and title and not value:
+                value = title
+            if field == "description" and description and not value:
+                value = description
+            try:
+                res = await page.evaluate(packet_script, {"selector": str(command.get("selector") or ""), "value": value})
+                ok = bool((res or {}).get("ok"))
+            except Exception:
+                ok = False
+            if field in packet_out:
+                packet_out[field] = packet_out[field] or ok
+            await self._emit("state", {"state": "youtube_openai_packet_apply", "index": idx, "field": field, "ok": ok})
+
         plan = await asyncio.to_thread(self._openai_fill_plan, str(html_fragment or ""), title, description, openai_timeout_s)
         await self._emit(
             "state",
@@ -395,7 +517,10 @@ class UdpAutomationService:
 }
 """
 
-        out = {"title": not bool(title), "description": not bool(description)}
+        out = {
+            "title": (not bool(title)) or bool(packet_out.get("title", False)),
+            "description": (not bool(description)) or bool(packet_out.get("description", False)),
+        }
         if title:
             res = await page.evaluate(script, {"selectors": selectors["title"], "value": title})
             out["title"] = bool((res or {}).get("ok"))
