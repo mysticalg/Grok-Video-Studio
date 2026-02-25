@@ -236,7 +236,7 @@ async function handleCmd(msg) {
       return;
     }
 
-    if (msg.name === "dom.type" || msg.name === "form.fill") {
+    if (msg.name === "dom.type" || msg.name === "dom.paste" || msg.name === "dom.emulate_type" || msg.name === "dom.replace_text" || msg.name === "form.fill") {
       const platform = String(payload.platform || "").toLowerCase();
       const result = await Promise.race([
         executeInTab(async (p, name, currentPlatform) => {
@@ -473,7 +473,7 @@ async function handleCmd(msg) {
           return false;
         };
 
-        if (name === "dom.type") {
+        if (name === "dom.type" || name === "dom.paste" || name === "dom.emulate_type" || name === "dom.replace_text") {
           const requestedSelector = p.selector || "";
           const root = document.querySelector(requestedSelector);
           if (!root) return { typed: false, selector: requestedSelector };
@@ -486,7 +486,27 @@ async function handleCmd(msg) {
 
           const target = resolveTypeTarget(root);
           if (!target) return { typed: false, selector: requestedSelector, reason: "type_target_not_found" };
-          return { typed: setValue(target, p.value ?? p.text ?? ""), selector: requestedSelector };
+
+          const rawValue = p.value ?? p.text ?? "";
+          const literalFind = String(p.find ?? "");
+          const literalReplace = String(p.replace ?? "");
+          const currentText = (target.isContentEditable || String(target.getAttribute("contenteditable") || "").toLowerCase() === "true")
+            ? getEditableText(target)
+            : String(target.value ?? target.textContent ?? "");
+          const finalValue = (name === "dom.replace_text" && literalFind)
+            ? String(currentText).split(literalFind).join(literalReplace)
+            : String(rawValue);
+
+          if (name === "dom.emulate_type") {
+            const typed = await typeTextIntoEditable(target, finalValue);
+            return { typed, selector: requestedSelector, mode: "emulate_type" };
+          }
+          if (name === "dom.paste") {
+            const typed = setContentEditableByPaste(target, finalValue) || setValue(target, finalValue);
+            return { typed: Boolean(typed), selector: requestedSelector, mode: "paste" };
+          }
+
+          return { typed: setValue(target, finalValue), selector: requestedSelector, mode: name === "dom.replace_text" ? "replace_text" : "type" };
         }
 
         const fields = p.fields || {};

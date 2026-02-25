@@ -675,7 +675,7 @@ class UdpAutomationService:
                 }
                 return {"ok": bool(result.get("ok", False)), "payload": result}
 
-            if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
+            if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.type", "dom.paste", "dom.emulate_type", "dom.replace_text"}:
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 

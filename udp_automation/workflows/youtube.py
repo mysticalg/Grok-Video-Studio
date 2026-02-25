@@ -17,20 +17,21 @@ def _best_effort_type(executor: BaseExecutor, platform: str, selectors: list[str
     if not text.strip():
         return
     for selector in selectors:
-        try:
-            result = executor.run(
-                "dom.type",
-                {
-                    "platform": platform,
-                    "selector": selector,
-                    "value": text,
-                },
-            )
-            payload = (result or {}).get("payload") or {}
-            if bool(payload.get("typed", False)):
-                return
-        except Exception:
-            continue
+        for action in ("dom.type", "dom.emulate_type", "dom.paste"):
+            try:
+                result = executor.run(
+                    action,
+                    {
+                        "platform": platform,
+                        "selector": selector,
+                        "value": text,
+                    },
+                )
+                payload = (result or {}).get("payload") or {}
+                if bool(payload.get("typed", False)):
+                    return
+            except Exception:
+                continue
 
 
 
