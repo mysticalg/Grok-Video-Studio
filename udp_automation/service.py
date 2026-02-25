@@ -487,87 +487,12 @@ class UdpAutomationService:
         return {"ok": clicked_save > 0 or clicked_next > 0, "clicked": {"next": clicked_next, "save": clicked_save}, "mode": "cdp_publish_steps"}
 
     async def _handle_form_fill(self, payload: dict[str, Any]) -> dict[str, Any]:
-        platform = str(payload.get("platform") or "").lower()
-        fields = payload.get("fields") or {}
-        if platform != "youtube" or not isinstance(fields, dict):
-            ack = await self._send_extension_cmd("form.fill", payload)
-            response = {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {})}
-            if ack.get("error"):
-                response["error"] = ack.get("error")
-            return response
-
-        await self._emit(
-            "state",
-            {
-                "state": "youtube_form_fill_start",
-                "openaiKeyPresent": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
-                "openaiModel": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
-            },
-        )
-
-        title_requested = bool(str(fields.get("title") or ""))
-        description_requested = bool(str(fields.get("description") or ""))
-        result = {"title": not title_requested, "description": not description_requested}
-
-        async def _try_cdp_replace() -> str:
-            timeout_s = float(os.environ.get("YOUTUBE_FORM_FILL_CDP_TIMEOUT_S", "8"))
-            filled = await asyncio.wait_for(self._fill_youtube_fields_via_cdp_replace(fields), timeout=timeout_s)
-            if isinstance(filled, dict):
-                result["title"] = bool(result["title"] or filled.get("title", False))
-                result["description"] = bool(result["description"] or filled.get("description", False))
-            return "youtube_cdp_replace"
-
-        async def _try_openai() -> str:
-            timeout_s = float(os.environ.get("YOUTUBE_FORM_FILL_OPENAI_TIMEOUT_S", "8"))
-            filled = await asyncio.wait_for(self._fill_youtube_fields_via_openai(fields), timeout=timeout_s)
-            if isinstance(filled, dict):
-                result["title"] = bool(result["title"] or filled.get("title", False))
-                result["description"] = bool(result["description"] or filled.get("description", False))
-            return "youtube_openai_fill"
-
-        async def _try_extension_fill() -> str:
-            timeout_s = float(os.environ.get("YOUTUBE_FORM_FILL_EXTENSION_TIMEOUT_S", "10"))
-            ack = await asyncio.wait_for(self._send_extension_cmd("form.fill", payload), timeout=timeout_s)
-            payload_out = ack.get("payload") or {}
-            if isinstance(payload_out, dict):
-                result["title"] = bool(result["title"] or payload_out.get("title", False))
-                result["description"] = bool(result["description"] or payload_out.get("description", False))
-            return "youtube_extension_form_fill"
-
-        attempts: list[tuple[str, Any]] = [("youtube_cdp_replace", _try_cdp_replace)]
-        use_openai = bool(os.environ.get("YOUTUBE_FORM_FILL_USE_OPENAI", "").strip())
-        if use_openai:
-            attempts.append(("youtube_openai_fill", _try_openai))
-        attempts.append(("youtube_extension_form_fill", _try_extension_fill))
-
-        last_mode = "youtube_cdp_replace"
-        for mode, runner in attempts:
-            last_mode = mode
-            try:
-                await runner()
-            except Exception:
-                pass
-            if result["title"] and result["description"]:
-                break
-
-        await self._emit(
-            "state",
-            {
-                "state": "youtube_form_fill_done",
-                "mode": last_mode,
-                "title": bool(result["title"]),
-                "description": bool(result["description"]),
-            },
-        )
-
-        if bool(result["title"]) and bool(result["description"]):
-            return {"ok": True, "payload": {**result, "mode": last_mode}}
-
-        return {
-            "ok": False,
-            "error": "YouTube form.fill could not set all requested fields",
-            "payload": {**result, "mode": last_mode},
-        }
+        # Keep form handling DOM-first via extension for all platforms, including YouTube.
+        ack = await self._send_extension_cmd("form.fill", payload)
+        response = {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {})}
+        if ack.get("error"):
+            response["error"] = ack.get("error")
+        return response
 
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
@@ -692,15 +617,42 @@ class UdpAutomationService:
                     }
 
             if name == "youtube.publish_steps":
-                timeout_s = float(os.environ.get("UDP_YOUTUBE_PUBLISH_STEPS_TIMEOUT_S", "15"))
+                # Use extension DOM clicks instead of CDP publish steps.
+                clicks = {"next": 0, "save": 0}
+
+                async def _try_click(selector: str, role: str) -> None:
+                    ack = await self._send_extension_cmd(
+                        "dom.click",
+                        {"platform": "youtube", "selector": selector, "timeoutMs": 8000},
+                    )
+                    payload_out = ack.get("payload") or {}
+                    if bool(ack.get("ok", False)) and bool((payload_out or {}).get("clicked", False)):
+                        clicks[role] += 1
+
+                for _ in range(3):
+                    try:
+                        await _try_click("button[aria-label='Next']", "next")
+                        if clicks["next"] == 0:
+                            await _try_click("button[aria-label*='Next' i]", "next")
+                    except Exception:
+                        pass
+                    try:
+                        await asyncio.sleep(0.45)
+                    except Exception:
+                        pass
+
                 try:
-                    result = await asyncio.wait_for(self._youtube_publish_steps_via_cdp(), timeout=timeout_s)
-                except asyncio.TimeoutError:
-                    return {
-                        "ok": False,
-                        "error": f"youtube.publish_steps timed out in service after {int(timeout_s)}s",
-                        "payload": {},
-                    }
+                    await _try_click("button[aria-label='Save']", "save")
+                    if clicks["save"] == 0:
+                        await _try_click("button[aria-label*='Save' i]", "save")
+                except Exception:
+                    pass
+
+                result = {
+                    "ok": (clicks["next"] > 0 or clicks["save"] > 0),
+                    "clicked": clicks,
+                    "mode": "extension_dom_publish_steps",
+                }
                 return {"ok": bool(result.get("ok", False)), "payload": result}
 
             if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
