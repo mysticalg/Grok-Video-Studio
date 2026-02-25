@@ -305,14 +305,18 @@ class UdpAutomationService:
             return {"title": [], "description": []}
 
     async def _fill_youtube_fields_via_openai(self, fields: dict[str, Any]) -> dict[str, bool] | None:
+        await self._emit("state", {"state": "youtube_openai_enter"})
         if self.cdp is None:
+            await self._emit("state", {"state": "youtube_openai_connect_cdp_start"})
             await self._connect_cdp()
+            await self._emit("state", {"state": "youtube_openai_connect_cdp_done", "connected": self.cdp is not None})
         if self.cdp is None:
             return None
 
         page = await self.cdp.find_page_by_url_contains("studio.youtube.com")
         if page is None:
             page = await self.cdp.get_most_recent_page()
+        await self._emit("state", {"state": "youtube_openai_page_lookup", "hasPage": page is not None})
         if page is None:
             return None
 
@@ -648,6 +652,15 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 fields = payload.get("fields") or {}
                 if platform == "youtube" and isinstance(fields, dict):
+                    await self._emit(
+                        "state",
+                        {
+                            "state": "youtube_form_fill_received",
+                            "platform": platform,
+                            "fieldKeys": sorted([str(k) for k in fields.keys()]),
+                        },
+                    )
+
                     async def _run_youtube_form_fill() -> dict[str, Any]:
                         openai_credential, openai_model = self._resolve_openai_settings()
                         await self._emit(
@@ -767,6 +780,15 @@ class _UdpProtocol(asyncio.DatagramProtocol):
             except Exception:
                 return
 
+            self.service._log_service_event(
+                "cmd_received",
+                {
+                    "name": msg.get("name"),
+                    "id": msg.get("id"),
+                    "from": f"{addr[0]}:{addr[1]}",
+                },
+            )
+
             try:
                 result = await self.service.handle_command(msg, addr)
             except Exception as exc:
@@ -779,6 +801,15 @@ class _UdpProtocol(asyncio.DatagramProtocol):
                 "name": msg.get("name"),
                 **result,
             }
+            self.service._log_service_event(
+                "cmd_ack",
+                {
+                    "name": msg.get("name"),
+                    "id": msg.get("id"),
+                    "ok": bool(response.get("ok")),
+                    "error": str(response.get("error") or ""),
+                },
+            )
             if self.transport is not None:
                 try:
                     self.transport.sendto(json.dumps(response).encode("utf-8"), addr)
