@@ -1927,6 +1927,29 @@ class AutomationRuntimeWorker(QThread):
         self.log.emit(f"CDP connected. Smoke test title: {title}")
         return title
 
+    def ensure_cdp_connected(self) -> str:
+        if self.cdp_controller is not None:
+            return "already-connected"
+        return self.connect_cdp()
+
+    def open_url_in_automation_chrome(self, url: str) -> str:
+        target_url = str(url or "").strip()
+        if not target_url:
+            raise ValueError("URL is required")
+        if self.chrome_instance is None:
+            self.start_chrome()
+
+        async def _open() -> str:
+            if self.cdp_controller is None:
+                self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+            page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=True)
+            await self.cdp_controller.navigate(page, target_url)
+            return page.url or target_url
+
+        opened_url = self._run_coro(_open())
+        self.log.emit(f"Automation Chrome opened URL: {opened_url}")
+        return opened_url
+
     def dom_ping(self) -> dict[str, Any]:
         if self.bus is None:
             raise RuntimeError("Control bus is not running")
@@ -4961,10 +4984,21 @@ class MainWindow(QMainWindow):
 
         if mode == "external":
             self._append_automation_log(
-                f"External browser mode selected for {platform_name}; launching upload page and running UDP automation."
+                f"External browser mode selected for {platform_name}; opening Automation Chrome and running UDP automation."
             )
             current_url = self._social_upload_url_for_platform(platform_name, "")
-            self._open_social_upload_page_external(platform_name, current_url)
+            try:
+                runtime = self._ensure_automation_runtime()
+                runtime.start_chrome()
+                runtime.open_url_in_automation_chrome(current_url)
+            except Exception as exc:
+                self._append_automation_log(f"External automation preparation failed: {exc}")
+                QMessageBox.warning(
+                    self,
+                    "External Automation Failed",
+                    f"Could not prepare Automation Chrome for external mode.\n\n{exc}",
+                )
+                return
 
         self._cancel_social_upload_run(platform_name, reason="switching to UDP automation")
         self._ensure_udp_service()
