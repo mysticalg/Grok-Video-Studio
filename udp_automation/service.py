@@ -114,78 +114,81 @@ class UdpAutomationService:
         if not title and not description:
             return {}
 
-        async def _set_rich_text(locator, value: str) -> bool:
-            text = str(value or "")
-            if await locator.count() == 0:
-                return False
-            target = locator.first
-            try:
-                await target.scroll_into_view_if_needed(timeout=2000)
-            except Exception:
-                pass
-
-            script = """
-(el, value) => {
+        script = """
+(value) => {
   const normalize = (text) => String(text || '').replace(/\\u200B/g, '').replace(/\\s+/g, ' ').trim();
-  const expected = normalize(value);
-  try { el.focus(); } catch (_) {}
-  let inserted = false;
-  try {
-    const sel = window.getSelection?.();
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-  } catch (_) {}
-  try {
-    document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
-    inserted = Boolean(document.execCommand('insertText', false, String(value || '')));
-  } catch (_) {
-    inserted = false;
+  const byRoleTextbox = Array.from(document.querySelectorAll("div#textbox[contenteditable='true'][role='textbox']"));
+
+  const findField = (key) => {
+    if (key === 'title') {
+      return byRoleTextbox.find((el) => /add a title|describes your video|title/i.test(String(el.getAttribute('aria-label') || '')))
+        || document.querySelector("#title-textarea #textbox[contenteditable='true']")
+        || null;
+    }
+    return byRoleTextbox.find((el) => /tell viewers about your video|description/i.test(String(el.getAttribute('aria-label') || '')))
+      || document.querySelector("#description #textbox[contenteditable='true']")
+      || null;
+  };
+
+  const setField = (el, text) => {
+    if (!el) return false;
+    const val = String(text || '');
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+    try { el.focus(); } catch (_) {}
+
+    let applied = false;
+    try {
+      const sel = window.getSelection?.();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      applied = Boolean(document.execCommand('insertText', false, val));
+    } catch (_) {
+      applied = false;
+    }
+
+    if (!applied) {
+      try { el.textContent = val; } catch (_) {}
+    }
+
+    try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: val, inputType: 'insertText' })); } catch (_) {}
+    try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: val, inputType: 'insertText' })); } catch (_) {
+      try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+    }
+    try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (_) {}
+
+    const expected = normalize(val);
+    const current = normalize(el.innerText || el.textContent || '');
+    if (!expected) return current.length === 0;
+    return current === expected || current.includes(expected) || expected.includes(current);
+  };
+
+  const out = { title: true, description: true };
+  if (Object.prototype.hasOwnProperty.call(value, 'title')) {
+    out.title = setField(findField('title'), value.title);
   }
-  if (!inserted) {
-    try { el.textContent = String(value || ''); } catch (_) {}
+  if (Object.prototype.hasOwnProperty.call(value, 'description')) {
+    out.description = setField(findField('description'), value.description);
   }
-  try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: String(value || ''), inputType: 'insertText' })); } catch (_) {}
-  try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: String(value || ''), inputType: 'insertText' })); } catch (_) {
-    try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-  }
-  try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
-  const current = normalize(el?.innerText || el?.textContent || '');
-  if (!expected) return current.length === 0;
-  return current === expected || current.includes(expected) || expected.includes(current);
+  return out;
 }
 """
-            try:
-                return bool(await target.evaluate(script, text))
-            except Exception:
-                return False
-
-        title_locator = page.locator(
-            "#title-textarea #textbox[contenteditable='true'], "
-            "div#textbox[contenteditable='true'][aria-label*='Add a title' i], "
-            "div#textbox[contenteditable='true'][aria-label*='title' i][aria-required='true']"
-        )
-        description_locator = page.locator(
-            "#description #textbox[contenteditable='true'], "
-            "div#textbox[contenteditable='true'][aria-label*='Tell viewers about your video' i], "
-            "div#textbox[contenteditable='true'][aria-label*='description' i][aria-required='false']"
-        )
 
         async def _run() -> dict[str, bool]:
-            result = {"title": False, "description": False}
+            result = {"title": not bool(title), "description": not bool(description)}
             for _ in range(6):
-                if title:
-                    result["title"] = await _set_rich_text(title_locator, title)
-                else:
-                    result["title"] = True
-
-                if description:
-                    result["description"] = await _set_rich_text(description_locator, description)
-                else:
-                    result["description"] = True
+                try:
+                    payload = await page.evaluate(script, {"title": title, "description": description})
+                    if isinstance(payload, dict):
+                        result["title"] = bool(payload.get("title", result["title"]))
+                        result["description"] = bool(payload.get("description", result["description"]))
+                except Exception:
+                    pass
 
                 if result["title"] and result["description"]:
                     return result
@@ -196,7 +199,7 @@ class UdpAutomationService:
             return result
 
         try:
-            return await asyncio.wait_for(_run(), timeout=8.0)
+            return await asyncio.wait_for(_run(), timeout=6.0)
         except Exception:
             return {"title": False if title else True, "description": False if description else True}
 
@@ -321,6 +324,12 @@ class UdpAutomationService:
                         description_ok = (not description_requested) or bool(cdp_result.get("description", False))
                         if title_ok and description_ok:
                             return {"ok": True, "payload": cdp_result}
+                        return {
+                            "ok": False,
+                            "error": "YouTube CDP form.fill could not set all requested fields",
+                            "payload": cdp_result,
+                        }
+                    return {"ok": False, "error": "YouTube CDP form.fill returned no result", "payload": {}}
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 
