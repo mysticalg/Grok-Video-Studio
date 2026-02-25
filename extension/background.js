@@ -404,6 +404,40 @@ async function handleCmd(msg) {
           return getEditableText(el).length > 0;
         };
 
+        const setYouTubeRichTextboxValue = (el, value) => {
+          if (!el) return false;
+          const text = String(value || "");
+          try { el.focus(); } catch (_) {}
+          try {
+            const sel = window.getSelection?.();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          } catch (_) {}
+
+          let inserted = false;
+          try {
+            document.execCommand("selectAll", false, null);
+            document.execCommand("delete", false, null);
+            inserted = Boolean(document.execCommand("insertText", false, text));
+          } catch (_) {
+            inserted = false;
+          }
+
+          if (!inserted) {
+            try { el.textContent = text; } catch (_) {}
+          }
+
+          try { el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertText" })); } catch (_) {}
+          try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" })); } catch (_) {
+            try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+          }
+          try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+          return true;
+        };
+
         const clickHashtagSuggestion = async () => {
           const selectors = [
             "[data-e2e*='hashtag'] li",
@@ -438,10 +472,10 @@ async function handleCmd(msg) {
           const outer = textbox.closest("#outer, #child-input, #container-content") || textbox.parentElement;
           if (outer) {
             try { outer.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-            try { outer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
-            try { outer.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
-            try { outer.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
           }
+          // Avoid synthetic mouse clicks here: YouTube may call
+          // requestStorageAccessFor() in click handlers which requires a trusted
+          // user gesture and logs console errors when triggered programmatically.
           try { textbox.focus(); } catch (_) {}
           return textbox;
         };
@@ -629,7 +663,7 @@ async function handleCmd(msg) {
             };
 
             const filled = youtubeTextMatches()
-              || setValue(el, text)
+              || setYouTubeRichTextboxValue(el, text)
               || await typeTextIntoEditable(el, text);
             out[rawKey] = Boolean(filled) && youtubeTextMatches();
           } else {
