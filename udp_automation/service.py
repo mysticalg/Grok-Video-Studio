@@ -692,7 +692,15 @@ class UdpAutomationService:
                     }
 
             if name == "youtube.publish_steps":
-                result = await self._youtube_publish_steps_via_cdp()
+                timeout_s = float(os.environ.get("UDP_YOUTUBE_PUBLISH_STEPS_TIMEOUT_S", "15"))
+                try:
+                    result = await asyncio.wait_for(self._youtube_publish_steps_via_cdp(), timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    return {
+                        "ok": False,
+                        "error": f"youtube.publish_steps timed out in service after {int(timeout_s)}s",
+                        "payload": {},
+                    }
                 return {"ok": bool(result.get("ok", False)), "payload": result}
 
             if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
@@ -742,6 +750,15 @@ class _UdpProtocol(asyncio.DatagramProtocol):
         self.service = service
         self.transport: asyncio.DatagramTransport | None = None
 
+    @staticmethod
+    def _ack_timeout_for(name: str) -> float:
+        cmd_name = str(name or "")
+        if cmd_name == "form.fill":
+            return float(os.environ.get("UDP_FORM_FILL_TIMEOUT_S", "12"))
+        if cmd_name == "youtube.publish_steps":
+            return float(os.environ.get("UDP_YOUTUBE_PUBLISH_STEPS_TIMEOUT_S", "15"))
+        return float(os.environ.get("UDP_CMD_ACK_TIMEOUT_S", "20"))
+
     def connection_made(self, transport):
         self.transport = transport
 
@@ -752,8 +769,15 @@ class _UdpProtocol(asyncio.DatagramProtocol):
             except Exception:
                 return
 
+            timeout_s = self._ack_timeout_for(str(msg.get("name") or ""))
             try:
-                result = await self.service.handle_command(msg, addr)
+                result = await asyncio.wait_for(self.service.handle_command(msg, addr), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                result = {
+                    "ok": False,
+                    "error": f"{str(msg.get('name') or 'command')} timed out in service after {int(timeout_s)}s",
+                    "payload": {},
+                }
             except Exception as exc:
                 result = {"ok": False, "error": str(exc), "payload": {}}
 
