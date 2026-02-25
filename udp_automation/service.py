@@ -315,7 +315,12 @@ class UdpAutomationService:
                 if platform == "youtube" and isinstance(fields, dict):
                     cdp_result = await self._fill_youtube_fields_via_cdp(fields)
                     if isinstance(cdp_result, dict) and cdp_result:
-                        return {"ok": True, "payload": cdp_result}
+                        title_requested = bool(str(fields.get("title") or ""))
+                        description_requested = bool(str(fields.get("description") or ""))
+                        title_ok = (not title_requested) or bool(cdp_result.get("title", False))
+                        description_ok = (not description_requested) or bool(cdp_result.get("description", False))
+                        if title_ok and description_ok:
+                            return {"ok": True, "payload": cdp_result}
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 
