@@ -72,6 +72,9 @@ def run(executor: BaseExecutor, video_path: str, title: str, description: str) -
         executor,
         "youtube",
         [
+            "ytcp-social-suggestions-textbox#description-textarea",
+            "ytcp-social-suggestions-textbox#description-textarea ytcp-form-input-container#container",
+            "ytcp-social-suggestions-textbox#description-textarea #textbox[contenteditable='true']",
             "#description #textbox[contenteditable='true']",
             "div#textbox[contenteditable='true'][aria-label*='Tell viewers about your video' i]",
             "div#textbox[contenteditable='true'][aria-label*='description' i]",

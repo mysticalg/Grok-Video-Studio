@@ -554,6 +554,9 @@ async function handleCmd(msg) {
             "#title-textarea #textbox[contenteditable='true']",
           ];
           const descriptionCandidates = [
+            "ytcp-social-suggestions-textbox#description-textarea #textbox[contenteditable='true']",
+            "ytcp-social-suggestions-textbox#description-textarea ytcp-form-input-container#container #textbox[contenteditable='true']",
+            "ytcp-social-suggestions-textbox#description-textarea ytcp-form-input-container#container",
             "#textbox[contenteditable='true'][aria-label*='tell viewers about your video' i]",
             "#description #textbox[contenteditable='true']",
             "#textbox[contenteditable='true'][aria-label*='description' i]",
