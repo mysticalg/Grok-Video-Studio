@@ -8,7 +8,9 @@ async function findTargetTab(platform = "") {
   const normalized = String(platform || "").toLowerCase();
   const matchByPlatform = {
     tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
-    youtube: ["studio.youtube.com", "youtube.com"],
+    // Keep YouTube matching scoped to Studio so a regular watch tab doesn't
+    // accidentally receive form.fill commands meant for the upload dialog.
+    youtube: ["studio.youtube.com/channel", "studio.youtube.com"],
     facebook: ["facebook.com/reels/create", "facebook.com"],
     instagram: ["instagram.com/create/reel", "instagram.com"],
     x: ["x.com/compose/post", "x.com/compose", "x.com"]
@@ -614,6 +616,22 @@ async function handleCmd(msg) {
             out[rawKey] = Boolean(filled) && draftTextMatches();
           } else if (currentPlatform === "instagram" && canonicalKey === "description") {
             out[rawKey] = setValue(el, text);
+          } else if (currentPlatform === "youtube" && (canonicalKey === "title" || canonicalKey === "description")) {
+            const normalizeForCompare = (value) => String(value || "")
+              .replace(/\u200B/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            const expected = normalizeForCompare(text);
+            const youtubeTextMatches = () => {
+              const current = normalizeForCompare(getEditableText(el));
+              if (!expected) return current.length === 0;
+              return current === expected || current.includes(expected) || expected.includes(current);
+            };
+
+            const filled = youtubeTextMatches()
+              || setValue(el, text)
+              || await typeTextIntoEditable(el, text);
+            out[rawKey] = Boolean(filled) && youtubeTextMatches();
           } else {
             out[rawKey] = setValue(el, text);
           }
