@@ -162,7 +162,9 @@ class UdpExecutor(BaseExecutor):
                             self._log(
                                 action,
                                 "event",
-                                f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary} payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}",
+                                f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary} "
+                                f"event={json.dumps(response.get('name') or '', ensure_ascii=False)} "
+                                f"payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}",
                             )
                             continue
 

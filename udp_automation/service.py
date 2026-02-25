@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,23 @@ class UdpAutomationService:
             or "gpt-5.1-codex"
         )
         return credential, model
+
+
+    def _service_log_path(self) -> Path:
+        logs_dir = self.extension_dir.parent / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        return logs_dir / "udp_automation.log"
+
+    def _log_service_event(self, label: str, payload: dict[str, Any]) -> None:
+        try:
+            line = (
+                f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"action=service.{label} status=event detail=payload={json.dumps(payload, ensure_ascii=False)}\n"
+            )
+            with self._service_log_path().open("a", encoding="utf-8") as fp:
+                fp.write(line)
+        except Exception:
+            return
 
     @staticmethod
     def _is_connection_closed_error(exc: Exception) -> bool:
@@ -261,6 +279,8 @@ class UdpAutomationService:
             "response_format": {"type": "json_object"},
         }
 
+        self._log_service_event("openai.plan_request", {"model": model, "htmlChars": len(html_fragment or "")})
+
         req = urllib.request.Request(
             "https://api.openai.com/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -277,8 +297,11 @@ class UdpAutomationService:
             parsed = json.loads(content)
             title_sels = [str(x) for x in (parsed.get("title") or []) if str(x).strip()]
             desc_sels = [str(x) for x in (parsed.get("description") or []) if str(x).strip()]
-            return {"title": title_sels[:12], "description": desc_sels[:12]}
-        except Exception:
+            out = {"title": title_sels[:12], "description": desc_sels[:12]}
+            self._log_service_event("openai.plan_response", {"titleSelectors": len(out["title"]), "descriptionSelectors": len(out["description"])})
+            return out
+        except Exception as exc:
+            self._log_service_event("openai.plan_error", {"error": str(exc)})
             return {"title": [], "description": []}
 
     async def _fill_youtube_fields_via_openai(self, fields: dict[str, Any]) -> dict[str, bool] | None:
@@ -715,6 +738,7 @@ class UdpAutomationService:
         raise RuntimeError(str(last_error) if last_error else "No extension client connected")
 
     async def _emit(self, name: str, payload: dict[str, Any]) -> None:
+        self._log_service_event(name, payload)
         if self._transport is None:
             return
         message = json.dumps(event(name, payload)).encode("utf-8")
