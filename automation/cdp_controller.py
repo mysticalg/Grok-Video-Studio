@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Browser, Dialog, Page, async_playwright
 
 
 class CDPController:
     def __init__(self, browser: Browser, playwright_instance):
         self.browser = browser
         self._playwright = playwright_instance
+        self._dialog_guard_pages: set[int] = set()
+        self._attach_dialog_guards()
 
     @classmethod
     async def connect(cls, ws_endpoint: str) -> "CDPController":
@@ -19,6 +22,30 @@ class CDPController:
             await pw.stop()
             raise
         return cls(browser=browser, playwright_instance=pw)
+
+    async def _safe_dismiss_dialog(self, dialog: Dialog) -> None:
+        try:
+            await dialog.dismiss()
+        except Exception:
+            # Dialog may already be handled by the page/app; ignore protocol races.
+            return
+
+    def _wire_page_dialog_guard(self, page: Page) -> None:
+        page_key = id(page)
+        if page_key in self._dialog_guard_pages:
+            return
+
+        def _on_dialog(dialog: Dialog) -> None:
+            asyncio.create_task(self._safe_dismiss_dialog(dialog))
+
+        page.on("dialog", _on_dialog)
+        self._dialog_guard_pages.add(page_key)
+
+    def _attach_dialog_guards(self) -> None:
+        for context in self.browser.contexts:
+            for page in context.pages:
+                self._wire_page_dialog_guard(page)
+            context.on("page", self._wire_page_dialog_guard)
 
     async def close(self) -> None:
         await self.browser.close()
@@ -58,6 +85,7 @@ class CDPController:
 
         context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         page = await context.new_page()
+        self._wire_page_dialog_guard(page)
         await self._goto_best_effort(page, url)
         return page
 
