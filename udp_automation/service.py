@@ -521,6 +521,22 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "")
                 if not file_path:
                     raise RuntimeError("filePath is required")
+
+                # Prefer extension-side file input handling to mirror popup DOM flows.
+                use_extension_first = str(os.environ.get("UDP_UPLOAD_USE_EXTENSION_FIRST", "1")).strip().lower() not in {"0", "false", "no"}
+                if use_extension_first:
+                    try:
+                        ack = await self._send_extension_cmd("upload.select_file", payload)
+                        ack_payload = _ack_from_extension(ack)
+                        if bool(ack_payload.get("ok")):
+                            mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
+                            await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
+                            file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+                            return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                    except Exception:
+                        # Fall back to CDP path below.
+                        pass
+
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
                 page = await self.cdp.find_page_by_url_contains("studio.youtube.com") if platform.lower() == "youtube" else await self.cdp.get_most_recent_page()

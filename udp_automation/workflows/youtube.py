@@ -39,10 +39,12 @@ def run(executor: BaseExecutor, video_path: str, title: str, description: str) -
     except Exception as exc:
         _best_effort_log_note(executor, f"youtube form.fill skipped due to error: {exc}")
 
-    # Prefer service-side CDP sequence to avoid extension dom.click hangs.
-    try:
-        executor.run("youtube.publish_steps", {"platform": "youtube"})
-    except Exception as exc:
-        _best_effort_log_note(executor, f"youtube.publish_steps failed: {exc}")
+    # Keep publish progression DOM-based (same style as embedded/browser-driven flows).
+    for _ in range(3):
+        _best_effort_click(executor, "youtube", "button[aria-label='Next']")
+        _best_effort_click(executor, "youtube", "button[aria-label*='Next' i]")
+
+    _best_effort_click(executor, "youtube", "button[aria-label='Save']")
+    _best_effort_click(executor, "youtube", "button[aria-label*='Save' i]")
 
     return executor.run("post.status", {"platform": "youtube"})
