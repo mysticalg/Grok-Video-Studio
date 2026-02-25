@@ -25,6 +25,13 @@ class EmbeddedExecutor(BaseExecutor):
 
 
 class UdpExecutor(BaseExecutor):
+    ACTION_TIMEOUT_OVERRIDES_S = {
+        "form.fill": 4.0,
+    }
+    ACTION_RETRY_OVERRIDES = {
+        ("form.fill", "x"): 0,
+    }
+
     def __init__(
         self,
         host: str = "127.0.0.1",
@@ -80,6 +87,13 @@ class UdpExecutor(BaseExecutor):
             return "target=<none>"
         return "target={" + ", ".join(fields) + "}"
 
+    def _effective_retries(self, action: str, payload: dict[str, Any]) -> int:
+        platform = str(payload.get("platform") or "").lower()
+        override = self.ACTION_RETRY_OVERRIDES.get((action, platform))
+        if override is None:
+            return self.retries
+        return max(0, int(override))
+
     def run(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         with self._run_lock:
             self._action_counter += 1
@@ -89,6 +103,9 @@ class UdpExecutor(BaseExecutor):
                 raise RuntimeError("UDP workflow stopped by user")
 
             target_summary = self._target_summary(payload)
+            action_timeout_s = float(self.ACTION_TIMEOUT_OVERRIDES_S.get(action, self.timeout_s))
+            action_retries = self._effective_retries(action, payload)
+            total_attempts = action_retries + 1
 
             if action_idx > 1 and self.action_delay_ms > 0:
                 delay_s = self.action_delay_ms / 1000.0
@@ -107,20 +124,20 @@ class UdpExecutor(BaseExecutor):
                 f"sequence={action_idx} id={message['id']} {target_summary} payload={json.dumps(payload, ensure_ascii=False)}",
             )
 
-            for attempt in range(self.retries + 1):
+            for attempt in range(total_attempts):
                 if self.stop_event.is_set():
-                    self._log(action, "stopped", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
+                    self._log(action, "stopped", f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary}")
                     raise RuntimeError("UDP workflow stopped by user")
 
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                    sock.settimeout(min(0.5, self.timeout_s))
+                    sock.settimeout(min(0.5, action_timeout_s))
                     sock.sendto(json.dumps(message).encode("utf-8"), (self.host, self.port))
-                    deadline = time.time() + self.timeout_s
-                    self._log(action, "sent", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
+                    deadline = time.time() + action_timeout_s
+                    self._log(action, "sent", f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary}")
 
                     while time.time() < deadline:
                         if self.stop_event.is_set():
-                            self._log(action, "stopped", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
+                            self._log(action, "stopped", f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary}")
                             raise RuntimeError("UDP workflow stopped by user")
                         try:
                             data, _ = sock.recvfrom(65535)
@@ -132,7 +149,7 @@ class UdpExecutor(BaseExecutor):
                             self._log(
                                 action,
                                 "event",
-                                f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary} payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}",
+                                f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary} payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}",
                             )
                             continue
 
@@ -141,19 +158,19 @@ class UdpExecutor(BaseExecutor):
                                 self._log(
                                     action,
                                     "ok",
-                                    f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary} payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}",
+                                    f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary} payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}",
                                 )
                                 return response
                             self._log(
                                 action,
                                 "error",
-                                f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary} error={str(response.get('error') or 'command failed')}",
+                                f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary} error={str(response.get('error') or 'command failed')}",
                             )
                             raise RuntimeError(response.get("error") or f"Command failed: {action}")
 
-                if attempt < self.retries:
-                    self._log(action, "retry", f"sequence={action_idx} attempt={attempt + 1}/{self.retries + 1} {target_summary}")
+                if attempt < action_retries:
+                    self._log(action, "retry", f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary}")
                     time.sleep(0.35)
 
-            self._log(action, "timeout", f"sequence={action_idx} retries={self.retries} {target_summary}")
+            self._log(action, "timeout", f"sequence={action_idx} retries={action_retries} {target_summary}")
             raise TimeoutError(f"No UDP cmd_ack for {action}")

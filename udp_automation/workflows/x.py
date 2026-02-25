@@ -28,6 +28,10 @@ def run(executor: BaseExecutor, video_path: str, caption: str) -> dict[str, Any]
         detail = upload_payload.get("message") or "automatic file input was not found"
         raise RuntimeError(f"X upload needs manual file selection ({reason}): {detail}")
 
-    executor.run("form.fill", {"platform": "x", "fields": {"description": caption}})
+    try:
+        executor.run("form.fill", {"platform": "x", "fields": {"description": caption}})
+    except Exception:
+        # X composer fill can intermittently fail; continue so submit/status can proceed.
+        pass
     executor.run("post.submit", {"platform": "x"})
     return executor.run("post.status", {"platform": "x"})

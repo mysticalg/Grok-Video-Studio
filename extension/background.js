@@ -142,6 +142,32 @@ async function handleCmd(msg) {
           return false;
         };
 
+        const tryXFormSubmitFallback = () => {
+          if (String(opts.platform || "").toLowerCase() !== "x" || opts.isDraft) return { clicked: false };
+          const composer = document.querySelector("div[data-testid='tweetTextarea_0'][contenteditable='true']")
+            || document.querySelector("div[data-testid^='tweetTextarea'][contenteditable='true']")
+            || document.querySelector("div[role='textbox'][contenteditable='true'][aria-label*='post text' i]");
+          const form = composer ? (composer.closest("form") || composer.parentElement?.closest("form")) : document.querySelector("form");
+
+          const tweetButton = (form && (form.querySelector("button[data-testid='tweetButton']") || form.querySelector("button[data-testid='tweetButtonInline']")))
+            || document.querySelector("button[data-testid='tweetButton']")
+            || document.querySelector("button[data-testid='tweetButtonInline']");
+          if (tweetButton && isEnabled(tweetButton)) {
+            try { tweetButton.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+              try { tweetButton.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            });
+            try { tweetButton.click?.(); } catch (_) {}
+            return { clicked: true, selector: "button[data-testid='tweetButton']", mode: "x_button_fallback" };
+          }
+
+          if (form) {
+            try { form.requestSubmit?.(); return { clicked: true, selector: "form", mode: "x_request_submit" }; } catch (_) {}
+            try { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); return { clicked: true, selector: "form", mode: "x_submit_event" }; } catch (_) {}
+          }
+          return { clicked: false };
+        };
+
         const findCandidate = () => {
           for (const sel of selectors) {
             const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
@@ -171,6 +197,11 @@ async function handleCmd(msg) {
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
 
+        const fallbackResult = tryXFormSubmitFallback();
+        if (fallbackResult.clicked) {
+          return { ...fallbackResult, waitedMs: Date.now() - started };
+        }
+
         const found = findCandidate();
         if (!found) return { clicked: false, reason: "not_found", selectors };
         if (!isEnabled(found.el)) return { clicked: false, reason: "disabled", selector: found.selector };
@@ -180,7 +211,7 @@ async function handleCmd(msg) {
         const requestedTimeoutMs = Number(payload.timeoutMs || 0);
         const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
         const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
-        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft };
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform };
       })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
@@ -213,7 +244,12 @@ async function handleCmd(msg) {
           const text = String(value || "");
           const root = el.closest(".DraftEditor-root") || el;
           const editable = root.querySelector(".public-DraftEditor-content[contenteditable='true']") || el;
-          const textSpan = editable.querySelector("span[data-text='true']");
+          const block = editable.querySelector("div.public-DraftStyleDefault-block")
+            || editable.querySelector("[data-block='true'] .public-DraftStyleDefault-block")
+            || editable.querySelector("[data-block='true']");
+          const textSpan = block
+            ? (block.querySelector("span[data-offset-key]") || block.querySelector("span[data-text='true']"))
+            : (editable.querySelector("span[data-offset-key]") || editable.querySelector("span[data-text='true']"));
 
           editable.focus();
           editable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
@@ -242,6 +278,12 @@ async function handleCmd(msg) {
           if (!applied || String(editable.textContent || "").trim().length === 0) {
             if (textSpan) {
               textSpan.textContent = text;
+              const br = textSpan.querySelector("br[data-text='true']");
+              if (br) {
+                try { br.remove(); } catch (_) {}
+              }
+            } else if (block) {
+              block.textContent = text;
             } else {
               editable.textContent = text;
             }
@@ -253,7 +295,7 @@ async function handleCmd(msg) {
           }
           editable.dispatchEvent(new Event("change", { bubbles: true }));
           editable.dispatchEvent(new Event("blur", { bubbles: true }));
-          return true;
+          return String(editable.textContent || "").trim().length > 0;
         };
 
         const setContentEditableByPaste = (el, value) => {
@@ -422,6 +464,30 @@ async function handleCmd(msg) {
           return null;
         };
 
+        const findXComposerField = () => {
+          const selectors = [
+            "div[data-testid='tweetTextarea_0'][contenteditable='true']",
+            "div[data-testid^='tweetTextarea'][contenteditable='true']",
+            "div[role='textbox'][contenteditable='true'][aria-label*='post text' i]",
+          ];
+
+          const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+
+          for (const sel of selectors) {
+            const editable = Array.from(document.querySelectorAll(sel)).find((node) => isVisible(node))
+              || document.querySelector(sel);
+            if (!editable) continue;
+            try { editable.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            try { editable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { editable.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { editable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            try { editable.focus(); } catch (_) {}
+            return editable;
+          }
+
+          return null;
+        };
+
         const findYouTubeContainerField = (key) => {
           const titleCandidates = [
             "#textbox[contenteditable='true'][aria-label*='add a title' i]",
@@ -529,7 +595,24 @@ async function handleCmd(msg) {
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
             out[rawKey] = setValue(facebookEl, text);
-          } else if ((currentPlatform === "instagram" || currentPlatform === "x") && canonicalKey === "description") {
+          } else if (currentPlatform === "x" && canonicalKey === "description") {
+            const xEl = findXComposerField() || el;
+            const normalizeForCompare = (value) => String(value || "")
+              .replace(/\u200B/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            const expected = normalizeForCompare(text);
+            const draftTextMatches = () => {
+              const current = normalizeForCompare(getEditableText(xEl));
+              if (!current || !expected) return false;
+              return current === expected || current.includes(expected) || expected.includes(current);
+            };
+
+            const filled = draftTextMatches()
+              || setValue(xEl, text)
+              || await typeTextIntoEditable(xEl, text);
+            out[rawKey] = Boolean(filled) && draftTextMatches();
+          } else if (currentPlatform === "instagram" && canonicalKey === "description") {
             out[rawKey] = setValue(el, text);
           } else {
             out[rawKey] = setValue(el, text);
