@@ -599,21 +599,48 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 fields = payload.get("fields") or {}
                 if platform == "youtube" and isinstance(fields, dict):
-                    dom_result = await self._fill_youtube_fields_via_openai(fields)
+                    await self._emit(
+                        "state",
+                        {
+                            "state": "youtube_form_fill_start",
+                            "openaiKeyPresent": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
+                            "openaiModel": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+                        },
+                    )
+
                     mode = "youtube_openai_fill"
+                    try:
+                        dom_result = await asyncio.wait_for(self._fill_youtube_fields_via_openai(fields), timeout=12.0)
+                    except Exception:
+                        dom_result = None
+
                     if not isinstance(dom_result, dict):
                         mode = "youtube_cdp_replace_fallback"
-                        dom_result = await self._fill_youtube_fields_via_cdp_replace(fields)
+                        await self._emit("state", {"state": "youtube_form_fill_fallback", "mode": mode})
+                        try:
+                            dom_result = await asyncio.wait_for(self._fill_youtube_fields_via_cdp_replace(fields), timeout=12.0)
+                        except Exception:
+                            dom_result = {"title": False, "description": False}
+
                     title_requested = bool(str(fields.get("title") or ""))
                     description_requested = bool(str(fields.get("description") or ""))
-                    title_ok = (not title_requested) or bool(dom_result.get("title", False))
-                    description_ok = (not description_requested) or bool(dom_result.get("description", False))
+                    title_ok = (not title_requested) or bool((dom_result or {}).get("title", False))
+                    description_ok = (not description_requested) or bool((dom_result or {}).get("description", False))
+                    await self._emit(
+                        "state",
+                        {
+                            "state": "youtube_form_fill_done",
+                            "mode": mode,
+                            "title": title_ok,
+                            "description": description_ok,
+                        },
+                    )
                     if title_ok and description_ok:
-                        return {"ok": True, "payload": {**dom_result, "mode": mode}}
+                        return {"ok": True, "payload": {**(dom_result or {}), "mode": mode}}
                     return {
                         "ok": False,
                         "error": "YouTube form.fill could not set all requested fields",
-                        "payload": dom_result,
+                        "payload": {**(dom_result or {}), "mode": mode},
                     }
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
