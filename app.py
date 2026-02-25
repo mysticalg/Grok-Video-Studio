@@ -2306,6 +2306,7 @@ class MainWindow(QMainWindow):
         self.automation_mode = QComboBox()
         self.automation_mode.addItem("Embedded", "embedded")
         self.automation_mode.addItem("UDP", "udp")
+        self.automation_mode.addItem("External Browser (UDP)", "external")
         self.automation_mode.setCurrentIndex(1)
         automation_buttons.addWidget(self.automation_mode)
 
@@ -4954,9 +4955,16 @@ class MainWindow(QMainWindow):
 
     def _run_social_upload_via_mode(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded")
-        if mode != "udp":
+        if mode == "embedded":
             self._start_social_browser_upload(platform_name=platform_name, video_path=video_path, caption=caption, title=title)
             return
+
+        if mode == "external":
+            self._append_automation_log(
+                f"External browser mode selected for {platform_name}; launching upload page and running UDP automation."
+            )
+            current_url = self._social_upload_url_for_platform(platform_name, "")
+            self._open_social_upload_page_external(platform_name, current_url)
 
         self._cancel_social_upload_run(platform_name, reason="switching to UDP automation")
         self._ensure_udp_service()
