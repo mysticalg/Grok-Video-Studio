@@ -203,6 +203,38 @@ class UdpAutomationService:
         except Exception:
             return {"title": False if title else True, "description": False if description else True}
 
+
+    async def _fill_youtube_fields_via_dom_type(self, fields: dict[str, Any]) -> dict[str, bool]:
+        title = str((fields or {}).get("title") or "")
+        description = str((fields or {}).get("description") or "")
+        result = {"title": not bool(title), "description": not bool(description)}
+
+        if title:
+            ack = await self._send_extension_cmd(
+                "dom.type",
+                {
+                    "platform": "youtube",
+                    "selector": "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Add a title' i]",
+                    "value": title,
+                },
+            )
+            payload = (ack or {}).get("payload") or {}
+            result["title"] = bool(payload.get("typed"))
+
+        if description:
+            ack = await self._send_extension_cmd(
+                "dom.type",
+                {
+                    "platform": "youtube",
+                    "selector": "div#textbox[contenteditable='true'][role='textbox'][aria-label*='Tell viewers about your video' i]",
+                    "value": description,
+                },
+            )
+            payload = (ack or {}).get("payload") or {}
+            result["description"] = bool(payload.get("typed"))
+
+        return result
+
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
         name = msg.get("name")
@@ -316,20 +348,18 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 fields = payload.get("fields") or {}
                 if platform == "youtube" and isinstance(fields, dict):
-                    cdp_result = await self._fill_youtube_fields_via_cdp(fields)
-                    if isinstance(cdp_result, dict) and cdp_result:
-                        title_requested = bool(str(fields.get("title") or ""))
-                        description_requested = bool(str(fields.get("description") or ""))
-                        title_ok = (not title_requested) or bool(cdp_result.get("title", False))
-                        description_ok = (not description_requested) or bool(cdp_result.get("description", False))
-                        if title_ok and description_ok:
-                            return {"ok": True, "payload": cdp_result}
-                        return {
-                            "ok": False,
-                            "error": "YouTube CDP form.fill could not set all requested fields",
-                            "payload": cdp_result,
-                        }
-                    return {"ok": False, "error": "YouTube CDP form.fill returned no result", "payload": {}}
+                    dom_result = await self._fill_youtube_fields_via_dom_type(fields)
+                    title_requested = bool(str(fields.get("title") or ""))
+                    description_requested = bool(str(fields.get("description") or ""))
+                    title_ok = (not title_requested) or bool(dom_result.get("title", False))
+                    description_ok = (not description_requested) or bool(dom_result.get("description", False))
+                    if title_ok and description_ok:
+                        return {"ok": True, "payload": {**dom_result, "mode": "extension_dom_type"}}
+                    return {
+                        "ok": False,
+                        "error": "YouTube dom.type form.fill could not set all requested fields",
+                        "payload": dom_result,
+                    }
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 
