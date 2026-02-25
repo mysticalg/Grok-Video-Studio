@@ -2389,6 +2389,13 @@ class MainWindow(QMainWindow):
         self.browser_home_btn.setCheckable(True)
         self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
 
+        self.browser_external_btn = QPushButton("🌐 External")
+        self.browser_external_btn.setToolTip("Open the current browser tab URL in your system default browser.")
+        self.browser_external_btn.setCheckable(True)
+        self.browser_external_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.browser_external_btn, self.open_current_browser_in_external_browser)
+        )
+
         self.browser_devtools_btn = QPushButton("🛠 DevTools")
         self.browser_devtools_btn.setToolTip("Open Chromium DevTools for the Grok browser tab.")
         self.browser_devtools_btn.setCheckable(True)
@@ -2424,6 +2431,13 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.sora_browser_home_btn, self.show_sora_browser_page)
         )
 
+        self.sora_browser_external_btn = QPushButton("🌐 External")
+        self.sora_browser_external_btn.setToolTip("Open the current browser tab URL in your system default browser.")
+        self.sora_browser_external_btn.setCheckable(True)
+        self.sora_browser_external_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.sora_browser_external_btn, self.open_current_browser_in_external_browser)
+        )
+
         self.sora_browser_devtools_btn = QPushButton("🛠 DevTools")
         self.sora_browser_devtools_btn.setToolTip("Open Chromium DevTools for the Sora browser tab.")
         self.sora_browser_devtools_btn.setCheckable(True)
@@ -2435,11 +2449,13 @@ class MainWindow(QMainWindow):
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
         self.browser_home_btn.setMaximumWidth(170)
+        self.browser_external_btn.setMaximumWidth(170)
         self.browser_devtools_btn.setMaximumWidth(170)
         self.sora_generate_image_btn.setMaximumWidth(170)
         self.sora_continue_frame_btn.setMaximumWidth(170)
         self.sora_continue_image_btn.setMaximumWidth(170)
         self.sora_browser_home_btn.setMaximumWidth(170)
+        self.sora_browser_external_btn.setMaximumWidth(170)
         self.sora_browser_devtools_btn.setMaximumWidth(170)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
@@ -2779,7 +2795,8 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
         grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
         grok_browser_controls.addWidget(self.browser_home_btn, 0, 3)
-        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 4)
+        grok_browser_controls.addWidget(self.browser_external_btn, 0, 4)
+        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 5)
 
         self.sora_browser_tab = QWidget()
         sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
@@ -2788,7 +2805,8 @@ class MainWindow(QMainWindow):
         sora_browser_controls.addWidget(self.sora_continue_frame_btn, 0, 1)
         sora_browser_controls.addWidget(self.sora_continue_image_btn, 0, 2)
         sora_browser_controls.addWidget(self.sora_browser_home_btn, 0, 3)
-        sora_browser_controls.addWidget(self.sora_browser_devtools_btn, 0, 4)
+        sora_browser_controls.addWidget(self.sora_browser_external_btn, 0, 4)
+        sora_browser_controls.addWidget(self.sora_browser_devtools_btn, 0, 5)
 
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
@@ -10347,6 +10365,23 @@ class MainWindow(QMainWindow):
     def open_sora_browser_devtools(self) -> None:
         self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
         self._open_devtools_for_browser(self.sora_browser, "Sora Browser")
+
+    def open_current_browser_in_external_browser(self) -> None:
+        index = self.browser_tabs.currentIndex()
+        target_browser = self._browser_for_tab_index(index)
+        if target_browser is None:
+            self._append_log("Current tab does not host an embedded browser; external launch skipped.")
+            return
+
+        url = target_browser.url().toString().strip()
+        if not url:
+            self._append_log("Current browser tab has no URL to open externally.")
+            return
+
+        if QDesktopServices.openUrl(QUrl(url)):
+            self._append_log(f"Opened external browser: {url}")
+        else:
+            self._append_log(f"Failed to open external browser for URL: {url}")
 
     def show_browser_page(self) -> None:
         if not self._is_browser_tab_enabled("Grok"):
