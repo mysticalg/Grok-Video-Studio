@@ -79,7 +79,7 @@ from grok_web_automation import build_trained_process, run_trained_process, trai
 from automation.chrome_manager import AutomationChromeManager, ChromeInstance
 from automation.cdp_controller import CDPController
 from automation.control_bus import ControlBusServer
-from udp_automation.executors import UdpExecutor
+from udp_automation.executors import LocalServiceExecutor, UdpExecutor
 from udp_automation.service import UdpAutomationService
 from udp_automation.workflows import facebook as udp_facebook_workflow
 from udp_automation.workflows import instagram as udp_instagram_workflow
@@ -1982,6 +1982,31 @@ class AutomationRuntimeWorker(QThread):
         self._run_coro(_start_udp())
         self.log.emit("UDP automation service listening on udp://127.0.0.1:18793")
 
+    def execute_local_automation_command(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.bus is None:
+            raise RuntimeError("Control bus is not running")
+        if self.udp_service is None:
+            self.udp_service = UdpAutomationService(
+                extension_dir=self.extension_dir,
+                bus=self.bus,
+                start_bus=False,
+            )
+
+        async def _run() -> dict[str, Any]:
+            result = await self.udp_service.handle_command(
+                {"id": f"local-{int(time.time() * 1000)}", "name": action, "payload": payload},
+                ("127.0.0.1", 0),
+            )
+            return {
+                "v": 1,
+                "type": "cmd_ack",
+                "id": f"local-{int(time.time() * 1000)}",
+                "name": action,
+                **result,
+            }
+
+        return self._run_coro(_run())
+
     def stop_runtime(self) -> None:
         if self.loop is None:
             return
@@ -2009,7 +2034,16 @@ class UdpWorkflowWorker(QThread):
     finished_with_result = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, platform_name: str, video_path: str, title: str, caption: str, action_delay_ms: int = 0):
+    def __init__(
+        self,
+        platform_name: str,
+        video_path: str,
+        title: str,
+        caption: str,
+        action_delay_ms: int = 0,
+        executor_mode: str = "udp",
+        local_command_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+    ):
         super().__init__()
         self.platform_name = platform_name
         self.video_path = video_path
@@ -2017,12 +2051,25 @@ class UdpWorkflowWorker(QThread):
         self.caption = caption
         self._stop_event = threading.Event()
         self.action_delay_ms = max(0, int(action_delay_ms))
+        self.executor_mode = str(executor_mode or "udp").lower()
+        self.local_command_handler = local_command_handler
 
     def request_stop(self) -> None:
         self._stop_event.set()
 
     def run(self) -> None:
-        executor = UdpExecutor(stop_event=self._stop_event, action_delay_ms=self.action_delay_ms)
+        if self.executor_mode == "local":
+            if self.local_command_handler is None:
+                self.failed.emit("Local automation executor is not configured")
+                return
+            executor = LocalServiceExecutor(
+                handler=self.local_command_handler,
+                stop_event=self._stop_event,
+                action_delay_ms=self.action_delay_ms,
+            )
+        else:
+            executor = UdpExecutor(stop_event=self._stop_event, action_delay_ms=self.action_delay_ms)
+
         try:
             platform = self.platform_name.lower()
             if platform == "youtube":
@@ -4994,13 +5041,16 @@ class MainWindow(QMainWindow):
             self._start_social_browser_upload(platform_name=platform_name, video_path=video_path, caption=caption, title=title)
             return
 
+        runtime = self._ensure_automation_runtime()
+        executor_mode = "udp"
+        local_command_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None
+
         if mode == "external":
             self._append_automation_log(
-                f"External browser mode selected for {platform_name}; opening Automation Chrome and running UDP automation."
+                f"External browser mode selected for {platform_name}; opening Automation Chrome and running local CDP/extension automation."
             )
             current_url = self._social_upload_url_for_platform(platform_name, self._default_social_upload_url_for_platform(platform_name))
             try:
-                runtime = self._ensure_automation_runtime()
                 runtime.start_chrome()
                 runtime.open_url_in_automation_chrome(current_url)
             except Exception as exc:
@@ -5011,9 +5061,12 @@ class MainWindow(QMainWindow):
                     f"Could not prepare Automation Chrome for external mode.\n\n{exc}",
                 )
                 return
+            executor_mode = "local"
+            local_command_handler = runtime.execute_local_automation_command
+        else:
+            self._ensure_udp_service()
 
-        self._cancel_social_upload_run(platform_name, reason="switching to UDP automation")
-        self._ensure_udp_service()
+        self._cancel_social_upload_run(platform_name, reason="switching to automated workflow")
         if self.udp_workflow_worker is not None and self.udp_workflow_worker.isRunning():
             self._append_automation_log("Stopping previous UDP workflow before starting a new one.")
             try:
@@ -5030,8 +5083,18 @@ class MainWindow(QMainWindow):
                 self._append_automation_log(f"WARNING: Failed to stop previous UDP workflow cleanly: {exc}")
         self._append_automation_log("UDP action log file: logs/udp_automation.log")
         action_delay_ms = int(self.automation_action_delay_ms.value())
-        self._append_automation_log(f"Starting UDP workflow for {platform_name} with {action_delay_ms}ms inter-action delay.")
-        worker = UdpWorkflowWorker(platform_name=platform_name, video_path=video_path, title=title, caption=caption, action_delay_ms=action_delay_ms)
+        self._append_automation_log(
+            f"Starting {executor_mode} workflow for {platform_name} with {action_delay_ms}ms inter-action delay."
+        )
+        worker = UdpWorkflowWorker(
+            platform_name=platform_name,
+            video_path=video_path,
+            title=title,
+            caption=caption,
+            action_delay_ms=action_delay_ms,
+            executor_mode=executor_mode,
+            local_command_handler=local_command_handler,
+        )
         worker.finished_with_result.connect(lambda result: self._append_automation_log(f"{platform_name} UDP result: {result}"))
         worker.failed.connect(lambda err: self._append_automation_log(f"{platform_name} UDP failed: {err}"))
         worker.finished.connect(lambda: setattr(self, "udp_workflow_worker", None))

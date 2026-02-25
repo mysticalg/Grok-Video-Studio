@@ -24,6 +24,41 @@ class EmbeddedExecutor(BaseExecutor):
         return self.handler(action, payload)
 
 
+
+
+class LocalServiceExecutor(BaseExecutor):
+    def __init__(
+        self,
+        handler: Callable[[str, dict[str, Any]], dict[str, Any]],
+        stop_event: threading.Event | None = None,
+        action_delay_ms: int = 0,
+    ):
+        self.handler = handler
+        self.stop_event = stop_event or threading.Event()
+        self.action_delay_ms = max(0, int(action_delay_ms))
+        self._run_lock = threading.Lock()
+        self._action_counter = 0
+
+    def run(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._run_lock:
+            self._action_counter += 1
+            if self.stop_event.is_set():
+                raise RuntimeError("Automation workflow stopped by user")
+
+            if self._action_counter > 1 and self.action_delay_ms > 0:
+                delay_s = self.action_delay_ms / 1000.0
+                deadline = time.time() + delay_s
+                while time.time() < deadline:
+                    if self.stop_event.is_set():
+                        raise RuntimeError("Automation workflow stopped by user")
+                    time.sleep(min(0.1, max(0.01, deadline - time.time())))
+
+            response = self.handler(action, payload)
+            if not bool(response.get("ok", False)):
+                raise RuntimeError(response.get("error") or f"Command failed: {action}")
+            return response
+
+
 class UdpExecutor(BaseExecutor):
     ACTION_TIMEOUT_OVERRIDES_S = {
         # Rich-text editors (notably YouTube Studio) can take several seconds
