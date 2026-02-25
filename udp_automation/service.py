@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
+import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -43,32 +45,81 @@ class UdpAutomationService:
         self._transport = None
         self._clients: set[tuple[str, int]] = set()
 
+    def _preferences_candidates(self) -> list[Path]:
+        return [
+            Path.cwd() / "preferences.json",
+            self.extension_dir.parent / "preferences.json",
+            Path(__file__).resolve().parents[1] / "preferences.json",
+        ]
+
+    def _load_preferences(self) -> dict[str, Any]:
+        for pref_path in self._preferences_candidates():
+            if not pref_path.exists():
+                continue
+            try:
+                payload = json.loads(pref_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    self._log_service_event("prefs.loaded", {"path": str(pref_path)})
+                    return payload
+            except Exception as exc:
+                self._log_service_event("prefs.error", {"path": str(pref_path), "error": str(exc)})
+        return {}
+
     @staticmethod
-    def _load_preferences() -> dict[str, Any]:
-        pref_path = Path.cwd() / "preferences.json"
-        if not pref_path.exists():
-            return {}
+    def _is_jwt_token(value: str) -> bool:
+        parts = str(value or "").split(".")
+        return len(parts) == 3 and all(parts)
+
+    @staticmethod
+    def _decode_jwt_payload(token: str) -> dict[str, Any]:
         try:
-            payload = json.loads(pref_path.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else {}
+            payload = str(token or "").split(".")[1]
+            pad = "=" * (-len(payload) % 4)
+            data = base64.urlsafe_b64decode((payload + pad).encode("utf-8"))
+            obj = json.loads(data.decode("utf-8"))
+            return obj if isinstance(obj, dict) else {}
         except Exception:
             return {}
 
-    def _resolve_openai_settings(self) -> tuple[str, str]:
+    def _openai_headers(self, credential: str) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {credential}",
+        }
+        if not self._is_jwt_token(credential):
+            return headers
+        claims = self._decode_jwt_payload(credential)
+        auth_claim = claims.get("https://api.openai.com/auth")
+        if isinstance(auth_claim, dict):
+            org_id = str(auth_claim.get("organization_id") or "").strip()
+            project_id = str(auth_claim.get("project_id") or "").strip()
+            if org_id:
+                headers["OpenAI-Organization"] = org_id
+            if project_id:
+                headers["OpenAI-Project"] = project_id
+        return headers
+
+    def _resolve_openai_settings(self) -> tuple[str, str, str]:
         preferences = self._load_preferences()
-        credential = (
-            os.environ.get("OPENAI_ACCESS_TOKEN", "").strip()
-            or os.environ.get("OPENAI_API_KEY", "").strip()
-            or str(preferences.get("openai_access_token") or "").strip()
-            or str(preferences.get("openai_api_key") or "").strip()
-        )
+        credential = ""
+        source = "none"
+        for value, label in [
+            (os.environ.get("OPENAI_ACCESS_TOKEN", "").strip(), "env.OPENAI_ACCESS_TOKEN"),
+            (os.environ.get("OPENAI_API_KEY", "").strip(), "env.OPENAI_API_KEY"),
+            (str(preferences.get("openai_access_token") or "").strip(), "preferences.openai_access_token"),
+            (str(preferences.get("openai_api_key") or "").strip(), "preferences.openai_api_key"),
+        ]:
+            if value:
+                credential = value
+                source = label
+                break
         model = (
             os.environ.get("OPENAI_MODEL", "").strip()
             or os.environ.get("OPENAI_CHAT_MODEL", "").strip()
             or str(preferences.get("openai_chat_model") or "").strip()
             or "gpt-5.1-codex"
         )
-        return credential, model
+        return credential, model, source
 
 
     def _service_log_path(self) -> Path:
@@ -252,7 +303,7 @@ class UdpAutomationService:
 
 
     def _openai_form_packets(self, html_fragment: str, title: str, description: str, timeout_s: float) -> list[dict[str, str]]:
-        credential, model = self._resolve_openai_settings()
+        credential, model, _ = self._resolve_openai_settings()
         if not credential:
             return []
 
@@ -283,10 +334,7 @@ class UdpAutomationService:
         req = urllib.request.Request(
             "https://api.openai.com/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {credential}",
-            },
+            headers=self._openai_headers(credential),
             method="POST",
         )
         try:
@@ -308,12 +356,20 @@ class UdpAutomationService:
                 cmds.append({"field": field, "selector": selector, "value": value})
             self._log_service_event("openai.packet_response", {"commands": len(cmds)})
             return cmds[:12]
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="ignore")[:600]
+            except Exception:
+                body = ""
+            self._log_service_event("openai.packet_error", {"error": str(exc), "status": exc.code, "body": body})
+            return []
         except Exception as exc:
             self._log_service_event("openai.packet_error", {"error": str(exc)})
             return []
 
     def _openai_fill_plan(self, html_fragment: str, title: str, description: str, timeout_s: float) -> dict[str, list[str]]:
-        credential, model = self._resolve_openai_settings()
+        credential, model, _ = self._resolve_openai_settings()
         if not credential:
             return {"title": [], "description": []}
 
@@ -345,10 +401,7 @@ class UdpAutomationService:
         req = urllib.request.Request(
             "https://api.openai.com/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {credential}",
-            },
+            headers=self._openai_headers(credential),
             method="POST",
         )
         try:
@@ -361,6 +414,14 @@ class UdpAutomationService:
             out = {"title": title_sels[:12], "description": desc_sels[:12]}
             self._log_service_event("openai.plan_response", {"titleSelectors": len(out["title"]), "descriptionSelectors": len(out["description"])})
             return out
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="ignore")[:600]
+            except Exception:
+                body = ""
+            self._log_service_event("openai.plan_error", {"error": str(exc), "status": exc.code, "body": body})
+            return {"title": [], "description": []}
         except Exception as exc:
             self._log_service_event("openai.plan_error", {"error": str(exc)})
             return {"title": [], "description": []}
@@ -384,9 +445,24 @@ class UdpAutomationService:
         title = str((fields or {}).get("title") or "")
         description = str((fields or {}).get("description") or "")
 
-        credential, _ = self._resolve_openai_settings()
+        credential, _, credential_source = self._resolve_openai_settings()
+        await self._emit(
+            "state",
+            {
+                "state": "youtube_openai_credential_resolved",
+                "source": credential_source,
+                "credentialType": "access_token" if self._is_jwt_token(credential) else ("api_key" if credential else "none"),
+            },
+        )
         if not credential:
-            await self._emit("state", {"state": "youtube_openai_skipped", "reason": "missing_openai_credentials"})
+            await self._emit(
+                "state",
+                {
+                    "state": "youtube_openai_skipped",
+                    "reason": "missing_openai_credentials",
+                    "preferencePaths": [str(p) for p in self._preferences_candidates()],
+                },
+            )
             return None
 
         await self._emit("state", {"state": "youtube_openai_plan_start"})
@@ -787,13 +863,15 @@ class UdpAutomationService:
                     )
 
                     async def _run_youtube_form_fill() -> dict[str, Any]:
-                        openai_credential, openai_model = self._resolve_openai_settings()
+                        openai_credential, openai_model, openai_source = self._resolve_openai_settings()
                         await self._emit(
                             "state",
                             {
                                 "state": "youtube_form_fill_start",
                                 "openaiKeyPresent": bool(openai_credential),
                                 "openaiModel": openai_model,
+                                "openaiSource": openai_source,
+                                "openaiCredentialType": "access_token" if self._is_jwt_token(openai_credential) else "api_key",
                             },
                         )
 
