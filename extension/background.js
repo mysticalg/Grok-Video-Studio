@@ -8,7 +8,9 @@ async function findTargetTab(platform = "") {
   const normalized = String(platform || "").toLowerCase();
   const matchByPlatform = {
     tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
-    youtube: ["studio.youtube.com", "youtube.com"],
+    // Keep YouTube matching scoped to Studio so a regular watch tab doesn't
+    // accidentally receive form.fill commands meant for the upload dialog.
+    youtube: ["studio.youtube.com/channel", "studio.youtube.com"],
     facebook: ["facebook.com/reels/create", "facebook.com"],
     instagram: ["instagram.com/create/reel", "instagram.com"],
     x: ["x.com/compose/post", "x.com/compose", "x.com"]
@@ -402,6 +404,53 @@ async function handleCmd(msg) {
           return getEditableText(el).length > 0;
         };
 
+        const setYouTubeRichTextboxValue = (el, value) => {
+          if (!el) return false;
+          const text = String(value || "");
+          try { el.focus(); } catch (_) {}
+          try {
+            const sel = window.getSelection?.();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          } catch (_) {}
+
+          let inserted = false;
+          try {
+            document.execCommand("selectAll", false, null);
+            document.execCommand("delete", false, null);
+            inserted = Boolean(document.execCommand("insertText", false, text));
+          } catch (_) {
+            inserted = false;
+          }
+
+          if (!inserted) {
+            try { el.textContent = text; } catch (_) {}
+          }
+
+          try { el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertText" })); } catch (_) {}
+          try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" })); } catch (_) {
+            try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+          }
+          try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+          return true;
+        };
+
+        const setYouTubeTextboxTextContent = (el, value) => {
+          if (!el) return false;
+          const text = String(value || "");
+          try { el.focus(); } catch (_) {}
+          try { el.textContent = text; } catch (_) { return false; }
+          try { el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: text, inputType: "insertText" })); } catch (_) {}
+          try { el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: text, inputType: "insertText" })); } catch (_) {
+            try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+          }
+          try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+          return true;
+        };
+
         const clickHashtagSuggestion = async () => {
           const selectors = [
             "[data-e2e*='hashtag'] li",
@@ -436,10 +485,10 @@ async function handleCmd(msg) {
           const outer = textbox.closest("#outer, #child-input, #container-content") || textbox.parentElement;
           if (outer) {
             try { outer.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-            try { outer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
-            try { outer.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
-            try { outer.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
           }
+          // Avoid synthetic mouse clicks here: YouTube may call
+          // requestStorageAccessFor() in click handlers which requires a trusted
+          // user gesture and logs console errors when triggered programmatically.
           try { textbox.focus(); } catch (_) {}
           return textbox;
         };
@@ -614,6 +663,22 @@ async function handleCmd(msg) {
             out[rawKey] = Boolean(filled) && draftTextMatches();
           } else if (currentPlatform === "instagram" && canonicalKey === "description") {
             out[rawKey] = setValue(el, text);
+          } else if (currentPlatform === "youtube" && (canonicalKey === "title" || canonicalKey === "description")) {
+            const normalizeForCompare = (value) => String(value || "")
+              .replace(/\u200B/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            const expected = normalizeForCompare(text);
+            const youtubeTextMatches = () => {
+              const current = normalizeForCompare(getEditableText(el));
+              if (!expected) return current.length === 0;
+              return current === expected || current.includes(expected) || expected.includes(current);
+            };
+
+            const filled = youtubeTextMatches()
+              || setYouTubeRichTextboxValue(el, text)
+              || setYouTubeTextboxTextContent(el, text);
+            out[rawKey] = Boolean(filled) && youtubeTextMatches();
           } else {
             out[rawKey] = setValue(el, text);
           }

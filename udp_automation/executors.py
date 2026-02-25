@@ -26,10 +26,17 @@ class EmbeddedExecutor(BaseExecutor):
 
 class UdpExecutor(BaseExecutor):
     ACTION_TIMEOUT_OVERRIDES_S = {
-        "form.fill": 4.0,
+        # Rich-text editors (notably YouTube Studio) can take several seconds
+        # to acknowledge synthetic input events before the extension replies.
+        "form.fill": 90.0,
+    }
+    ACTION_TIMEOUT_PLATFORM_OVERRIDES_S = {
+        # For YouTube, form.fill is best-effort; fail fast so workflow can continue.
+        ("form.fill", "youtube"): 30.0,
     }
     ACTION_RETRY_OVERRIDES = {
         ("form.fill", "x"): 0,
+        ("form.fill", "youtube"): 0,
     }
 
     def __init__(
@@ -103,7 +110,13 @@ class UdpExecutor(BaseExecutor):
                 raise RuntimeError("UDP workflow stopped by user")
 
             target_summary = self._target_summary(payload)
-            action_timeout_s = float(self.ACTION_TIMEOUT_OVERRIDES_S.get(action, self.timeout_s))
+            platform = str(payload.get("platform") or "").lower()
+            action_timeout_s = float(
+                self.ACTION_TIMEOUT_PLATFORM_OVERRIDES_S.get(
+                    (action, platform),
+                    self.ACTION_TIMEOUT_OVERRIDES_S.get(action, self.timeout_s),
+                )
+            )
             action_retries = self._effective_retries(action, payload)
             total_attempts = action_retries + 1
 
