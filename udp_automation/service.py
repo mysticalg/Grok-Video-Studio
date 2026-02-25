@@ -486,6 +486,57 @@ class UdpAutomationService:
 
         return {"ok": clicked_save > 0 or clicked_next > 0, "clicked": {"next": clicked_next, "save": clicked_save}, "mode": "cdp_publish_steps"}
 
+    async def _handle_form_fill(self, payload: dict[str, Any]) -> dict[str, Any]:
+        platform = str(payload.get("platform") or "").lower()
+        fields = payload.get("fields") or {}
+        if platform == "youtube" and isinstance(fields, dict):
+            await self._emit(
+                "state",
+                {
+                    "state": "youtube_form_fill_start",
+                    "openaiKeyPresent": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
+                    "openaiModel": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+                },
+            )
+
+            mode = "youtube_openai_fill"
+            try:
+                dom_result = await asyncio.wait_for(self._fill_youtube_fields_via_openai(fields), timeout=12.0)
+            except Exception:
+                dom_result = None
+
+            if not isinstance(dom_result, dict):
+                mode = "youtube_cdp_replace_fallback"
+                await self._emit("state", {"state": "youtube_form_fill_fallback", "mode": mode})
+                try:
+                    dom_result = await asyncio.wait_for(self._fill_youtube_fields_via_cdp_replace(fields), timeout=12.0)
+                except Exception:
+                    dom_result = {"title": False, "description": False}
+
+            title_requested = bool(str(fields.get("title") or ""))
+            description_requested = bool(str(fields.get("description") or ""))
+            title_ok = (not title_requested) or bool((dom_result or {}).get("title", False))
+            description_ok = (not description_requested) or bool((dom_result or {}).get("description", False))
+            await self._emit(
+                "state",
+                {
+                    "state": "youtube_form_fill_done",
+                    "mode": mode,
+                    "title": title_ok,
+                    "description": description_ok,
+                },
+            )
+            if title_ok and description_ok:
+                return {"ok": True, "payload": {**(dom_result or {}), "mode": mode}}
+            return {
+                "ok": False,
+                "error": "YouTube form.fill could not set all requested fields",
+                "payload": {**(dom_result or {}), "mode": mode},
+            }
+
+        ack = await self._send_extension_cmd("form.fill", payload)
+        return {"ok": bool(ack.get("ok", False)), "payload": ack.get("payload", {}), **({"error": ack.get("error")} if ack.get("error") else {})}
+
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
         name = msg.get("name")
@@ -596,54 +647,17 @@ class UdpAutomationService:
                 return {"ok": True, "payload": {"platform": platform, "loggedIn": True, "mode": "service_fastpath"}}
 
             if name == "form.fill":
-                platform = str(payload.get("platform") or "").lower()
-                fields = payload.get("fields") or {}
-                if platform == "youtube" and isinstance(fields, dict):
-                    await self._emit(
-                        "state",
-                        {
-                            "state": "youtube_form_fill_start",
-                            "openaiKeyPresent": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
-                            "openaiModel": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
-                        },
-                    )
-
-                    mode = "youtube_openai_fill"
-                    try:
-                        dom_result = await asyncio.wait_for(self._fill_youtube_fields_via_openai(fields), timeout=12.0)
-                    except Exception:
-                        dom_result = None
-
-                    if not isinstance(dom_result, dict):
-                        mode = "youtube_cdp_replace_fallback"
-                        await self._emit("state", {"state": "youtube_form_fill_fallback", "mode": mode})
-                        try:
-                            dom_result = await asyncio.wait_for(self._fill_youtube_fields_via_cdp_replace(fields), timeout=12.0)
-                        except Exception:
-                            dom_result = {"title": False, "description": False}
-
-                    title_requested = bool(str(fields.get("title") or ""))
-                    description_requested = bool(str(fields.get("description") or ""))
-                    title_ok = (not title_requested) or bool((dom_result or {}).get("title", False))
-                    description_ok = (not description_requested) or bool((dom_result or {}).get("description", False))
-                    await self._emit(
-                        "state",
-                        {
-                            "state": "youtube_form_fill_done",
-                            "mode": mode,
-                            "title": title_ok,
-                            "description": description_ok,
-                        },
-                    )
-                    if title_ok and description_ok:
-                        return {"ok": True, "payload": {**(dom_result or {}), "mode": mode}}
+                # Always produce a UDP cmd_ack for form.fill, even if downstream CDP/DOM work
+                # stalls. This prevents executor-side "No UDP cmd_ack for form.fill" timeouts.
+                timeout_s = float(os.environ.get("UDP_FORM_FILL_TIMEOUT_S", "25"))
+                try:
+                    return await asyncio.wait_for(self._handle_form_fill(payload), timeout=timeout_s)
+                except asyncio.TimeoutError:
                     return {
                         "ok": False,
-                        "error": "YouTube form.fill could not set all requested fields",
-                        "payload": {**(dom_result or {}), "mode": mode},
+                        "error": f"form.fill timed out in service after {int(timeout_s)}s",
+                        "payload": {},
                     }
-                ack = await self._send_extension_cmd(name, payload)
-                return _ack_from_extension(ack)
 
             if name == "youtube.publish_steps":
                 result = await self._youtube_publish_steps_via_cdp()
