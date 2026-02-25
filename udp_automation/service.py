@@ -96,6 +96,123 @@ class UdpAutomationService:
         if self._start_bus:
             await self.bus.stop()
 
+
+    async def _fill_youtube_fields_via_cdp(self, fields: dict[str, Any]) -> dict[str, bool] | None:
+        if self.cdp is None:
+            return None
+        page = await self.cdp.get_most_recent_page()
+        if page is None:
+            return None
+
+        title = str((fields or {}).get("title") or "")
+        description = str((fields or {}).get("description") or "")
+        if not title and not description:
+            return {}
+
+        script = r"""
+(value) => {
+  const normalize = (text) => String(text || "").replace(/\u200B/g, "").replace(/\s+/g, " ").trim();
+  const getEditableText = (el) => normalize(el?.innerText || el?.textContent || "");
+  const focusOnly = (el) => {
+    if (!el) return null;
+    const outer = el.closest('#outer, #child-input, #container-content') || el.parentElement;
+    try { outer?.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+    try { el.focus(); } catch (_) {}
+    return el;
+  };
+  const findField = (key) => {
+    const titleCandidates = [
+      "#textbox[contenteditable='true'][aria-label*='add a title' i]",
+      "#textbox[contenteditable='true'][aria-required='true'][aria-label*='title' i]",
+      "#title-textarea #textbox[contenteditable='true']",
+    ];
+    const descriptionCandidates = [
+      "#textbox[contenteditable='true'][aria-label*='tell viewers about your video' i]",
+      "#description #textbox[contenteditable='true']",
+      "#textbox[contenteditable='true'][aria-label*='description' i]",
+    ];
+    const candidates = key === 'title' ? titleCandidates : descriptionCandidates;
+    for (const sel of candidates) {
+      const found = document.querySelector(sel);
+      if (found) return focusOnly(found);
+    }
+    const containers = Array.from(document.querySelectorAll('ytcp-form-input-container#container, ytcp-form-input-container'));
+    for (const container of containers) {
+      const root = container.closest('ytcp-form-input-container') || container;
+      const label = String(root.querySelector('#label-text')?.textContent || '').toLowerCase();
+      if (key === 'title' && !label.includes('title')) continue;
+      if (key === 'description' && !label.includes('description')) continue;
+      const textbox = root.querySelector("#textbox[contenteditable='true'], textarea#textbox");
+      if (textbox) return focusOnly(textbox);
+    }
+    return null;
+  };
+  const setField = (el, text) => {
+    if (!el) return false;
+    const val = String(text || '');
+    try { el.focus(); } catch (_) {}
+    try {
+      const sel = window.getSelection?.();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    } catch (_) {}
+    let inserted = false;
+    try {
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      inserted = Boolean(document.execCommand('insertText', false, val));
+    } catch (_) {
+      inserted = false;
+    }
+    if (!inserted) {
+      try { el.textContent = val; } catch (_) {}
+    }
+    try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: val, inputType: 'insertText' })); } catch (_) {}
+    try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: val, inputType: 'insertText' })); } catch (_) {
+      try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+    }
+    try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    return true;
+  };
+
+  const out = {};
+  for (const [key, text] of Object.entries(value || {})) {
+    if (key !== 'title' && key !== 'description') continue;
+    const el = findField(key);
+    if (!el) {
+      out[key] = false;
+      continue;
+    }
+    setField(el, text);
+    const expected = normalize(text);
+    const current = getEditableText(el);
+    out[key] = expected ? (current === expected || current.includes(expected) || expected.includes(current)) : current.length === 0;
+  }
+  return out;
+}
+"""
+
+        last: dict[str, bool] = {}
+        for _ in range(5):
+            try:
+                payload = await page.evaluate(script, {"title": title, "description": description})
+                if isinstance(payload, dict):
+                    last = {str(k): bool(v) for k, v in payload.items()}
+            except Exception:
+                last = {}
+            title_ok = (not title) or bool(last.get("title", False))
+            description_ok = (not description) or bool(last.get("description", False))
+            if title_ok and description_ok:
+                return {"title": title_ok, "description": description_ok}
+            try:
+                await page.wait_for_timeout(300)
+            except Exception:
+                pass
+        return last or {"title": False, "description": False}
+
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
         name = msg.get("name")
@@ -183,7 +300,17 @@ class UdpAutomationService:
                 await self._emit("state", {"state": "login_check_skipped", "platform": platform, "loggedIn": True})
                 return {"ok": True, "payload": {"platform": platform, "loggedIn": True, "mode": "service_fastpath"}}
 
-            if name in {"form.fill", "post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
+            if name == "form.fill":
+                platform = str(payload.get("platform") or "").lower()
+                fields = payload.get("fields") or {}
+                if platform == "youtube" and isinstance(fields, dict):
+                    cdp_result = await self._fill_youtube_fields_via_cdp(fields)
+                    if isinstance(cdp_result, dict) and cdp_result:
+                        return {"ok": True, "payload": cdp_result}
+                ack = await self._send_extension_cmd(name, payload)
+                return _ack_from_extension(ack)
+
+            if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 
