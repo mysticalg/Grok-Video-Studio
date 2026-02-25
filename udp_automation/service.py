@@ -292,6 +292,52 @@ class UdpAutomationService:
             return {"title": False if title else True, "description": False if description else True}
         return {"title": bool(payload.get("title", not bool(title))), "description": bool(payload.get("description", not bool(description)))}
 
+    async def _youtube_publish_steps_via_cdp(self) -> dict[str, Any]:
+        if self.cdp is None:
+            await self._connect_cdp()
+        if self.cdp is None:
+            return {"ok": False, "clicked": {"next": 0, "save": 0}, "error": "CDP unavailable"}
+
+        page = await self.cdp.find_page_by_url_contains("studio.youtube.com")
+        if page is None:
+            page = await self.cdp.get_most_recent_page()
+        if page is None:
+            return {"ok": False, "clicked": {"next": 0, "save": 0}, "error": "No page"}
+
+        clicked_next = 0
+        clicked_save = 0
+
+        async def _click(selector: str) -> bool:
+            locator = page.locator(selector).first
+            try:
+                if await locator.count() == 0:
+                    return False
+                await locator.scroll_into_view_if_needed(timeout=1500)
+            except Exception:
+                pass
+            try:
+                await locator.click(timeout=3000)
+                return True
+            except Exception:
+                try:
+                    await locator.click(timeout=3000, force=True)
+                    return True
+                except Exception:
+                    return False
+
+        for _ in range(3):
+            if await _click("button[aria-label='Next']") or await _click("button[aria-label*='Next' i]"):
+                clicked_next += 1
+            try:
+                await page.wait_for_timeout(450)
+            except Exception:
+                pass
+
+        if await _click("button[aria-label='Save']") or await _click("button[aria-label*='Save' i]"):
+            clicked_save += 1
+
+        return {"ok": clicked_save > 0 or clicked_next > 0, "clicked": {"next": clicked_next, "save": clicked_save}, "mode": "cdp_publish_steps"}
+
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
         name = msg.get("name")
@@ -419,6 +465,10 @@ class UdpAutomationService:
                     }
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
+
+            if name == "youtube.publish_steps":
+                result = await self._youtube_publish_steps_via_cdp()
+                return {"ok": bool(result.get("ok", False)), "payload": result}
 
             if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
                 ack = await self._send_extension_cmd(name, payload)
