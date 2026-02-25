@@ -3074,10 +3074,22 @@ class MainWindow(QMainWindow):
             return configured
         return "https://www.facebook.com/"
 
-    def _social_upload_url_for_platform(self, platform_name: str, fallback_url: str) -> str:
+    def _default_social_upload_url_for_platform(self, platform_name: str) -> str:
         if platform_name == "Facebook":
             return self._facebook_upload_home_url()
-        return fallback_url
+        if platform_name == "Instagram":
+            return self._instagram_reels_create_url()
+        if platform_name == "TikTok":
+            return "https://www.tiktok.com/upload"
+        if platform_name == "X":
+            return "https://x.com/home"
+        if platform_name == "YouTube":
+            return "https://studio.youtube.com"
+        return ""
+
+    def _social_upload_url_for_platform(self, platform_name: str, fallback_url: str) -> str:
+        preferred = self._default_social_upload_url_for_platform(platform_name)
+        return preferred or fallback_url
 
     def _open_social_upload_page(self, platform_name: str, upload_url: str) -> None:
         if not self._is_browser_tab_enabled(platform_name):
@@ -4986,7 +4998,7 @@ class MainWindow(QMainWindow):
             self._append_automation_log(
                 f"External browser mode selected for {platform_name}; opening Automation Chrome and running UDP automation."
             )
-            current_url = self._social_upload_url_for_platform(platform_name, "")
+            current_url = self._social_upload_url_for_platform(platform_name, self._default_social_upload_url_for_platform(platform_name))
             try:
                 runtime = self._ensure_automation_runtime()
                 runtime.start_chrome()
