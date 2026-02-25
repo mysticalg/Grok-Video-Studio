@@ -5047,16 +5047,29 @@ class MainWindow(QMainWindow):
             )
             self._cancel_social_upload_run(platform_name, reason="switching to external automation")
 
+            if not getattr(self, "cdp_enabled", False):
+                self._set_cdp_enabled(True)
+                self._append_automation_log("CDP mode was disabled in UI; enabled automatically for external automation.")
+
             runtime = self._ensure_automation_runtime()
             try:
                 runtime.start_chrome()
+                cdp_state = runtime.ensure_cdp_connected()
+                self._append_automation_log(f"CDP readiness check: {cdp_state}")
+                ping_result = runtime.dom_ping()
+                self._append_automation_log(f"Extension readiness check: {json.dumps(ping_result, ensure_ascii=False)}")
                 runtime.open_url_in_automation_chrome(target_url)
             except Exception as exc:
                 self._append_automation_log(f"External automation preparation failed: {exc}")
                 QMessageBox.warning(
                     self,
                     "External Automation Failed",
-                    f"Could not prepare Automation Chrome for external mode.\n\n{exc}",
+                    "Could not prepare Automation Chrome/CDP/extension for external mode.\n\n"
+                    f"{exc}\n\n"
+                    "Tips:\n"
+                    "1) Keep Automation Chrome running with the bundled extension loaded.\n"
+                    "2) Leave at least one automation tab open in that Chrome window.\n"
+                    "3) Use the 'Connect CDP' and 'Extension DOM Ping' buttons to verify readiness.",
                 )
                 return
 
