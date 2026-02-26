@@ -6826,6 +6826,8 @@ class MainWindow(QMainWindow):
                         "button[aria-label='Submit'][type='submit']",
                         "button[type='submit']",
                         "button[aria-label*='submit' i]",
+                        "button[aria-label*='create' i]",
+                        "button[aria-label*='generate' i]",
                         "[role='button'][aria-label*='submit' i]"
                     ];
 
@@ -6844,7 +6846,15 @@ class MainWindow(QMainWindow):
                     collect(composerRoot);
                     collect(document);
 
-                    const submitButton = [...new Set(candidates)].find((el) => isVisible(el));
+                    const uniqueCandidates = [...new Set(candidates)];
+                    const isMenuToggle = (el) => {
+                        if (!el) return false;
+                        const aria = String(el.getAttribute("aria-label") || "").trim();
+                        const text = String(el.textContent || "").replace(/\s+/g, " ").trim();
+                        const hasPopup = String(el.getAttribute("aria-haspopup") || "").toLowerCase();
+                        return /settings|image|video/i.test(`${aria} ${text}`) || hasPopup === "menu" || hasPopup === "listbox";
+                    };
+                    const submitButton = uniqueCandidates.find((el) => isVisible(el) && !isMenuToggle(el));
                     if (!submitButton) return { ok: false, error: "Submit button not found" };
                     if (submitButton.disabled) {
                         return { ok: false, waiting: true, status: "submit-disabled" };
@@ -8197,7 +8207,8 @@ class MainWindow(QMainWindow):
                         "button[aria-label='Submit']",
                         "button[aria-label='Create video']",
                         "button[aria-label*='Create video' i]",
-                        "button[data-disabled='false']"
+                        "button[aria-label*='generate' i]",
+                        "button[aria-label*='send' i]"
                     ];
 
                     const submitCandidates = [];
@@ -8217,7 +8228,30 @@ class MainWindow(QMainWindow):
                     collect(document);
 
                     const uniqueCandidates = [...new Set(submitCandidates)];
-                    const submitButton = uniqueCandidates.find((el) => isVisible(el));
+                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const isMenuToggle = (el) => {
+                        if (!el) return false;
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const text = clean(el.textContent);
+                        const popup = clean(el.getAttribute("aria-haspopup")).toLowerCase();
+                        return /settings|image|video/i.test(`${aria} ${text}`) || popup === "menu" || popup === "listbox";
+                    };
+                    const scoreSubmitButton = (el) => {
+                        if (!el || !isVisible(el) || isMenuToggle(el)) return -100;
+                        const aria = clean(el.getAttribute("aria-label")).toLowerCase();
+                        const text = clean(el.textContent).toLowerCase();
+                        let score = 0;
+                        if ((el.getAttribute("type") || "").toLowerCase() === "submit") score += 8;
+                        if (/submit|create\s*video|generate|send/.test(`${aria} ${text}`)) score += 6;
+                        if (!text && el.querySelector("svg")) score += 4;
+                        if (el.disabled || el.getAttribute("aria-disabled") === "true") score -= 4;
+                        return score;
+                    };
+
+                    const submitButton = uniqueCandidates
+                        .map((el) => ({ el, score: scoreSubmitButton(el) }))
+                        .sort((a, b) => b.score - a.score)
+                        .find((entry) => entry.score >= 0)?.el || null;
 
                     const form = (submitButton && submitButton.form)
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
@@ -8241,12 +8275,12 @@ class MainWindow(QMainWindow):
                         el.dispatchEvent(new MouseEvent("click", common));
                     };
 
-                    const allButtons = [...document.querySelectorAll("button")].filter((el) => isVisible(el));
+                    const allButtons = [...document.querySelectorAll("button")].filter((el) => isVisible(el) && !isMenuToggle(el));
                     const createVideoButton = allButtons.find((btn) => {
-                        const label = (btn.getAttribute("aria-label") || "").trim();
-                        const txt = (btn.textContent || "").trim();
-                        const srOnly = (btn.querySelector(".sr-only")?.textContent || "").trim();
-                        return /create\s*video/i.test(label) || /create\s*video/i.test(txt) || /create\s*video/i.test(srOnly);
+                        const label = clean(btn.getAttribute("aria-label"));
+                        const txt = clean(btn.textContent);
+                        const srOnly = clean(btn.querySelector(".sr-only")?.textContent || "");
+                        return /create\s*video|submit|generate|send/i.test(`${label} ${txt} ${srOnly}`);
                     }) || submitButton;
 
                     let clicked = false;
