@@ -136,6 +136,11 @@ DEFAULT_MANUAL_PROMPT_TEXT = (
 )
 GROK_IMAGINE_URL = "https://grok.com/imagine"
 SORA_DRAFTS_URL = "https://sora.chatgpt.com/drafts"
+DEFAULT_EMBEDDED_CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
 
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
@@ -2755,6 +2760,10 @@ class MainWindow(QMainWindow):
         else:
             browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
+
+        embedded_ua = os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT
+        browser_profile.setHttpUserAgent(embedded_ua)
+        self._append_log(f"Embedded browser user-agent set to: {embedded_ua}")
 
         for embedded_browser in (self.grok_browser_view, self.sora_browser):
             browser_settings = embedded_browser.settings()
@@ -7007,12 +7016,31 @@ class MainWindow(QMainWindow):
                         const submit = document.querySelector("button[type='submit'][aria-label='Submit'], button[type='submit']");
                         if (prompt) {
                             try { prompt.focus({ preventScroll: true }); } catch (_) { try { prompt.focus(); } catch (_) {} }
-                            try { prompt.dispatchEvent(new Event('input', { bubbles: true, cancelable: true })); } catch (_) {}
+                            const isEditable = !!prompt.isContentEditable;
+                            try {
+                                if (isEditable) {
+                                    const text = String(prompt.textContent || "");
+                                    prompt.textContent = text;
+                                } else {
+                                    const value = String(prompt.value || "");
+                                    const proto = Object.getPrototypeOf(prompt);
+                                    const desc = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+                                    const setter = desc && desc.set;
+                                    if (setter) setter.call(prompt, value);
+                                    else prompt.value = value;
+                                }
+                            } catch (_) {}
+                            try { prompt.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: null, inputType: 'insertText' })); } catch (_) {
+                                try { prompt.dispatchEvent(new Event('input', { bubbles: true, cancelable: true })); } catch (_) {}
+                            }
                             try { prompt.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
+                            try { prompt.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', code: 'ShiftLeft', bubbles: true, cancelable: true })); } catch (_) {}
                         }
+                        try { window.dispatchEvent(new Event('resize')); } catch (_) {}
                         if (submit) {
                             try { submit.blur(); } catch (_) {}
                             try { submit.focus({ preventScroll: true }); } catch (_) { try { submit.focus(); } catch (_) {} }
+                            try { submit.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
                         }
                         return { ok: true, promptFound: !!prompt, submitFound: !!submit, refreshedAt: Date.now() };
                     } catch (err) {
