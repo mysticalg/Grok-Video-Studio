@@ -311,6 +311,19 @@ def _extract_first_balanced_json_object(text: str) -> str:
     return ""
 
 
+def _parse_hashtags_from_text(raw_text: str) -> list[str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return []
+
+    hash_matches = re.findall(r"#([A-Za-z0-9_\-]+)", text)
+    if hash_matches:
+        return [tag.strip().lstrip("#") for tag in hash_matches if tag.strip()]
+
+    parts = re.split(r"[\n,]+", text)
+    return [part.strip().lstrip("#") for part in parts if part.strip()]
+
+
 def _normalize_ai_social_metadata_payload(payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("AI response payload must be a JSON object.")
@@ -911,31 +924,55 @@ class PromptGenerationWorker(QThread):
             else:
                 instruction = f"{self.concept} {instruction_template}".strip()
 
-            system = self.system.strip() or DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT
-            user_template = self.user_template.strip() or DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE
-            if "{instruction}" in user_template:
-                user = user_template.replace("{instruction}", instruction)
-            else:
-                user = f"{user_template}\nConcept instruction: {instruction}".strip()
+            field_specs: list[tuple[str, str]] = [
+                ("manual_prompt", "Write one detailed cinematic 10-second video prompt. Return only the prompt text."),
+                ("title", "Write one short social title (3-7 words). Return only the title text."),
+                ("medium_title", "Write one medium-length social title (6-12 words). Return only the title text."),
+                ("tiktok_subheading", "Write one TikTok subheading/slogan around 100-140 characters. Return only the subheading text."),
+                ("description", "Write one social description (1-3 sentences). Return only the description text."),
+                ("x_post", "Write one X post style caption under 260 characters. Return only the post text."),
+                ("hashtags", "Provide 6-10 relevant hashtags. Return hashtags only, comma separated."),
+                ("category", "Provide one YouTube category ID as a number string (default 22 for People & Blogs when unsure). Return only the ID."),
+            ]
 
-            raw = self.caller._call_selected_ai(system, user)
-            self.raw_response.emit(f"Primary AI response:\n{raw}")
-            try:
-                parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(raw))
-            except Exception as parse_exc:
-                repair_system = (
-                    "You repair malformed or wrapped model output into strict JSON. Return JSON only with no markdown."
+            outputs: dict[str, str] = {}
+            base_system = (
+                "You generate social metadata fields one at a time. "
+                "Return plain text only for the requested field with no JSON, markdown, labels, or explanations."
+            )
+
+            for key, requirement in field_specs:
+                user_prompt = (
+                    f"Concept instruction:\n{instruction}\n\n"
+                    f"Field requested: {key}\n"
+                    f"Requirement: {requirement}\n\n"
+                    "Return only the requested field value."
                 )
-                repair_user = (
-                    "Convert the following response into one strict JSON object with keys: "
-                    "manual_prompt, title, medium_title, tiktok_subheading, description, x_post, hashtags, category. "
-                    "Do not include any text before or after JSON.\n\n"
-                    f"Original response:\n{raw}\n\n"
-                    f"Repair reason: {parse_exc}"
-                )
-                repaired_raw = self.caller._call_selected_ai(repair_system, repair_user)
-                self.raw_response.emit(f"Repair AI response:\n{repaired_raw}")
-                parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(repaired_raw))
+                raw = self.caller._call_selected_ai(base_system, user_prompt)
+                self.raw_response.emit(f"Field {key} raw response:\n{raw}")
+                outputs[key] = str(raw or "").strip()
+
+            manual_prompt = outputs.get("manual_prompt", "").strip()
+            if not manual_prompt:
+                raise RuntimeError("AI response did not include manual_prompt text.")
+
+            hashtags = _parse_hashtags_from_text(outputs.get("hashtags", ""))
+            category_raw = outputs.get("category", "").strip()
+            category_match = re.search(r"\d+", category_raw)
+            category = category_match.group(0) if category_match else "22"
+
+            parsed = {
+                "manual_prompt": manual_prompt,
+                "title": outputs.get("title", "AI Generated Video").strip() or "AI Generated Video",
+                "medium_title": outputs.get("medium_title", outputs.get("title", "AI Generated Video Clip")).strip()
+                or "AI Generated Video Clip",
+                "tiktok_subheading": outputs.get("tiktok_subheading", "Swipe for more AI visuals.").strip()
+                or "Swipe for more AI visuals.",
+                "description": outputs.get("description", "").strip(),
+                "x_post": outputs.get("x_post", "").strip(),
+                "hashtags": hashtags or ["grok", "ai", "generated-video"],
+                "category": category,
+            }
 
             self.finished_payload.emit(parsed)
         except Exception as exc:
@@ -6437,7 +6474,7 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.setEnabled(False)
         self.generate_prompt_btn.setText("⏳ Generating Prompt + Social Metadata...")
         self._set_prompt_thinking_indicator(True, f"Thinking with {str(source).title()}…")
-        self._append_log(f"Generating prompt + social metadata using {str(source).title()} (max tokens: {AI_MAX_OUTPUT_TOKENS}, timeout: {int(AI_TEXT_TIMEOUT_SECONDS)}s)...")
+        self._append_log(f"Generating prompt + social metadata using {str(source).title()} field-by-field (max tokens: {AI_MAX_OUTPUT_TOKENS}, timeout: {int(AI_TEXT_TIMEOUT_SECONDS)}s)...")
 
         worker = PromptGenerationWorker(
             source=str(source),
