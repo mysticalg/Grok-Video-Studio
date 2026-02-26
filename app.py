@@ -6999,6 +6999,20 @@ class MainWindow(QMainWindow):
         def _run_submit_attempt() -> None:
             nonlocal submit_attempts, manual_handoff_started_at_ms, manual_handoff_token
             submit_attempts += 1
+
+            manual_takeover_before_submit = os.getenv("GROK_MANUAL_EXIT_BEFORE_SUBMIT", "1").strip().lower() not in {"0", "false", "no"}
+            if manual_takeover_before_submit:
+                self._append_log(
+                    f"Manual image variant {variant}: reached submit stage ({submit_attempts}/{max_submit_attempts}); stopping automation before submit so you can continue manually."
+                )
+                self._append_log(
+                    "Manual takeover active: automation flow is paused at pre-submit. Click Submit in the embedded browser to continue manually."
+                )
+                self._append_log(
+                    "Tip: set GROK_MANUAL_EXIT_BEFORE_SUBMIT=0 to restore automatic submit attempts."
+                )
+                return
+
             self._append_log(
                 f"Manual image variant {variant}: paused before submit ({submit_attempts}/{max_submit_attempts}). Please click submit manually; automation will continue after detection."
             )
