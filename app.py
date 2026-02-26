@@ -3175,6 +3175,17 @@ class MainWindow(QMainWindow):
         self.stitch_progress_bar.setFixedWidth(260)
         status_bar.addPermanentWidget(self.stitch_progress_bar)
 
+        self.prompt_thinking_label = QLabel("Thinking…")
+        self.prompt_thinking_label.setStyleSheet("color: #9fb3c8;")
+        self.prompt_thinking_label.setVisible(False)
+        status_bar.addWidget(self.prompt_thinking_label, 1)
+
+        self.prompt_thinking_spinner = QProgressBar()
+        self.prompt_thinking_spinner.setRange(0, 0)
+        self.prompt_thinking_spinner.setVisible(False)
+        self.prompt_thinking_spinner.setFixedWidth(140)
+        status_bar.addPermanentWidget(self.prompt_thinking_spinner)
+
         self._populate_top_settings_menus()
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
@@ -4009,6 +4020,8 @@ class MainWindow(QMainWindow):
         tracked_widgets = [
             getattr(self, "stitch_progress_label", None),
             getattr(self, "stitch_progress_bar", None),
+            getattr(self, "prompt_thinking_label", None),
+            getattr(self, "prompt_thinking_spinner", None),
         ]
         return any(widget is not None and widget.isVisible() for widget in tracked_widgets)
 
@@ -4026,6 +4039,15 @@ class MainWindow(QMainWindow):
     def _reset_automation_counter_tracking(self) -> None:
         self.automation_counter_total = 0
         self.automation_counter_completed = 0
+
+    def _set_prompt_thinking_indicator(self, active: bool, message: str = "Thinking…") -> None:
+        active = bool(active)
+        if hasattr(self, "prompt_thinking_label") and self.prompt_thinking_label is not None:
+            self.prompt_thinking_label.setText(message if active else "Thinking…")
+            self.prompt_thinking_label.setVisible(active)
+        if hasattr(self, "prompt_thinking_spinner") and self.prompt_thinking_spinner is not None:
+            self.prompt_thinking_spinner.setVisible(active)
+        self._refresh_status_bar_visibility()
 
     def _refresh_status_bar_visibility(self) -> None:
         status_bar = self.statusBar()
@@ -6295,6 +6317,7 @@ class MainWindow(QMainWindow):
 
         self.generate_prompt_btn.setEnabled(False)
         self.generate_prompt_btn.setText("⏳ Generating Prompt + Social Metadata...")
+        self._set_prompt_thinking_indicator(True, f"Thinking with {str(source).title()}…")
         self._append_log(f"Generating prompt + social metadata using {str(source).title()}...")
 
         worker = PromptGenerationWorker(
@@ -6340,9 +6363,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
 
     def _on_prompt_generation_failed(self, message: str) -> None:
+        self._set_prompt_thinking_indicator(False)
         QMessageBox.critical(self, "Prompt Generation Failed", message)
 
     def _on_prompt_generation_finished(self) -> None:
+        self._set_prompt_thinking_indicator(False)
         self.generate_prompt_btn.setEnabled(True)
         self.generate_prompt_btn.setText("✨ Generate Prompt + Social Metadata from Concept")
         self.prompt_generation_worker = None
