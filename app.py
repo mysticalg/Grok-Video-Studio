@@ -206,10 +206,9 @@ def _ensure_public_download_query(url: str) -> str:
     parsed = urlparse(raw)
     if not parsed.scheme or not parsed.netloc:
         return raw
-    query = _parse_query_preserving_plus(parsed.query)
-    query["dl"] = "1"
-    rebuilt = urlencode(query, doseq=False)
-    return parsed._replace(query=rebuilt).geturl()
+    # Public imagine-public media URLs should be probed without transient query params
+    # such as cache/dl. Keep only the clean .mp4 URL.
+    return parsed._replace(query="").geturl()
 
 
 def _public_video_url_from_post_url(post_url: str) -> str:
@@ -222,7 +221,7 @@ def _public_video_url_from_post_url(post_url: str) -> str:
     if not match:
         return ""
     post_id = match.group(1)
-    return f"https://imagine-public.x.ai/imagine-public/share-videos/{post_id}.mp4?cache=1&dl=1"
+    return f"https://imagine-public.x.ai/imagine-public/share-videos/{post_id}.mp4"
 
 
 def _normalize_version_key(value: str) -> tuple[int, ...]:
