@@ -6863,7 +6863,13 @@ class MainWindow(QMainWindow):
                         const hasPopup = String(el.getAttribute("aria-haspopup") || "").toLowerCase();
                         return /settings|image|video/i.test(`${aria} ${text}`) || hasPopup === "menu" || hasPopup === "listbox";
                     };
-                    const submitButton = uniqueCandidates.find((el) => isVisible(el) && !isMenuToggle(el));
+                    const primarySubmitButton = uniqueCandidates.find((el) => {
+                        if (!isVisible(el) || isMenuToggle(el)) return false;
+                        const type = String(el.getAttribute("type") || "").toLowerCase();
+                        const aria = String(el.getAttribute("aria-label") || "").trim().toLowerCase();
+                        return type === "submit" && aria === "submit";
+                    });
+                    const submitButton = primarySubmitButton || uniqueCandidates.find((el) => isVisible(el) && !isMenuToggle(el));
                     if (!submitButton) return { ok: false, error: "Submit button not found" };
                     if (submitButton.disabled) {
                         return { ok: false, waiting: true, status: "submit-disabled" };
@@ -6874,6 +6880,7 @@ class MainWindow(QMainWindow):
                         ok: clicked,
                         waiting: !clicked,
                         status: clicked ? "submit-clicked" : "submit-click-failed",
+                        preferredFirstSubmit: !!primarySubmitButton,
                         ariaLabel: submitButton.getAttribute("aria-label") || "",
                         disabled: !!submitButton.disabled,
                     };
@@ -8257,7 +8264,14 @@ class MainWindow(QMainWindow):
                         return score;
                     };
 
-                    const submitButton = uniqueCandidates
+                    const primarySubmitButton = uniqueCandidates.find((el) => {
+                        if (!el || !isVisible(el) || isMenuToggle(el)) return false;
+                        const type = clean(el.getAttribute("type")).toLowerCase();
+                        const aria = clean(el.getAttribute("aria-label")).toLowerCase();
+                        return type === "submit" && aria === "submit";
+                    });
+
+                    const submitButton = primarySubmitButton || uniqueCandidates
                         .map((el) => ({ el, score: scoreSubmitButton(el) }))
                         .sort((a, b) => b.score - a.score)
                         .find((entry) => entry.score >= 0)?.el || null;
@@ -8310,6 +8324,7 @@ class MainWindow(QMainWindow):
                         submitted: clicked || formSubmitted,
                         doubleClicked: !!createVideoButton,
                         formSubmitted,
+                        preferredFirstSubmit: !!primarySubmitButton,
                         forceEnabled: !!createVideoButton,
                         buttonText: createVideoButton ? (createVideoButton.textContent || "").trim() : "",
                         buttonAriaLabel: createVideoButton ? (createVideoButton.getAttribute("aria-label") || "") : ""
