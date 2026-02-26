@@ -11165,12 +11165,19 @@ class MainWindow(QMainWindow):
                             ? [...new Set(scopedInputs)]
                             : [...document.querySelectorAll("input[type='file']")];
 
+                        const preferredInput =
+                            fileInputs.find((input) => isVisible(input) && !input.disabled) ||
+                            fileInputs.find((input) => !input.disabled) ||
+                            fileInputs[0] ||
+                            null;
+
                         let populatedInputs = 0;
-                        for (const input of fileInputs) {
+                        if (preferredInput) {
                             try {
-                                if (!setInputFiles(input, dt.files)) continue;
-                                dispatchFileEvents(input, dt);
-                                populatedInputs += 1;
+                                if (setInputFiles(preferredInput, dt.files)) {
+                                    dispatchFileEvents(preferredInput, dt);
+                                    populatedInputs = 1;
+                                }
                             } catch (_) {}
                         }
 
