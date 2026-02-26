@@ -6983,9 +6983,10 @@ class MainWindow(QMainWindow):
             max_attempts = int(self.automation_retry_attempts.value())
             if attempts >= max_attempts:
                 self._append_log(
-                    f"ERROR: Could not prepare manual image variant {variant} after {attempts} attempts; skipping variant."
+                    f"WARNING: Could not prepare manual image variant {variant} after {attempts} attempts; "
+                    "assuming submit already happened and continuing with image-ready polling."
                 )
-                self._submit_next_manual_image_variant()
+                QTimer.singleShot(700, self._poll_for_manual_image)
                 return
             self.manual_image_generation_queue.insert(0, item)
             QTimer.singleShot(1200, self._submit_next_manual_image_variant)
