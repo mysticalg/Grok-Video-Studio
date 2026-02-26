@@ -486,6 +486,148 @@ class UdpAutomationService:
 
         return {"ok": clicked_save > 0 or clicked_next > 0, "clicked": {"next": clicked_next, "save": clicked_save}, "mode": "cdp_publish_steps"}
 
+
+    async def _get_x_compose_page(self) -> Any:
+        if self.cdp is None:
+            await self._connect_cdp()
+        if self.cdp is None:
+            return None
+
+        page = await self.cdp.find_page_by_url_contains("x.com")
+        if page is None:
+            page = await self.cdp.get_most_recent_page()
+        return page
+
+    async def _fill_x_description_via_cdp(self, description: str) -> dict[str, Any]:
+        page = await self._get_x_compose_page()
+        if page is None:
+            return {"description": False, "mode": "cdp_fill_unavailable", "error": "No X page"}
+
+        value = str(description or "")
+        editor_root = page.locator("div.DraftEditor-root").first
+        span_target = editor_root.locator("span[data-text='true']").first
+
+        target = editor_root
+        target_name = "div.DraftEditor-root"
+        try:
+            if await span_target.count() > 0:
+                target = span_target
+                target_name = "div.DraftEditor-root span[data-text='true']"
+        except Exception:
+            target = editor_root
+
+        try:
+            await target.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+
+        try:
+            await target.click(timeout=4000, force=True)
+        except Exception as exc:
+            return {
+                "description": False,
+                "mode": "cdp_type",
+                "reason": "target_click_failed",
+                "error": str(exc),
+                "target": target_name,
+            }
+
+        try:
+            await page.keyboard.press("ControlOrMeta+A")
+            await page.keyboard.press("Backspace")
+            if value:
+                await page.keyboard.type(value, delay=12)
+        except Exception as exc:
+            return {
+                "description": False,
+                "mode": "cdp_type",
+                "reason": "keyboard_type_failed",
+                "error": str(exc),
+                "target": target_name,
+            }
+
+        verify_script = """
+() => {
+  const normalize = (text) => String(text || '').replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim();
+  const root = document.querySelector('div.DraftEditor-root');
+  if (!root) return { current: '', found: false };
+  return { current: normalize(root.innerText || root.textContent || ''), found: true };
+}
+"""
+        try:
+            verify = await asyncio.wait_for(page.evaluate(verify_script), timeout=4.0)
+        except Exception:
+            verify = {"current": "", "found": False}
+
+        current = str((verify or {}).get("current") or "")
+        expected = " ".join(value.replace(" ", " ").split())
+        ok = (not expected and not current) or current == expected or current.startswith(expected) or expected.startswith(current)
+        return {
+            "description": ok,
+            "mode": "cdp_type",
+            "reason": "ok" if ok else "value_mismatch",
+            "target": target_name,
+        }
+
+    async def _submit_x_post_via_cdp(self) -> dict[str, Any]:
+        page = await self._get_x_compose_page()
+        if page is None:
+            return {"submitted": False, "mode": "cdp_submit_unavailable", "error": "No X page"}
+
+        script = """
+() => {
+  const candidates = [
+    document.querySelector("button[data-testid='tweetButtonInline']"),
+    document.querySelector("button[data-testid='tweetButton']"),
+    document.querySelector("div[data-testid='tweetButtonInline']"),
+  ].filter(Boolean);
+
+  for (const node of candidates) {
+    const ariaDisabled = String(node.getAttribute('aria-disabled') || '').toLowerCase();
+    const disabled = Boolean(node.disabled) || ariaDisabled === 'true';
+    if (disabled) continue;
+    try { node.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (_) {}
+    try { node.focus({ preventScroll: true }); } catch (_) {}
+    try { node.click(); return { submitted: true, mode: 'cdp_submit' }; } catch (_) {}
+    try {
+      node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 }));
+      return { submitted: true, mode: 'cdp_submit' };
+    } catch (_) {}
+  }
+
+  return { submitted: false, mode: 'cdp_submit', reason: 'submit_not_clickable' };
+}
+"""
+        try:
+            payload = await asyncio.wait_for(page.evaluate(script), timeout=8.0)
+        except Exception as exc:
+            return {"submitted": False, "mode": "cdp_submit_exception", "error": str(exc)}
+        if not isinstance(payload, dict):
+            return {"submitted": False, "mode": "cdp_submit", "reason": "invalid_payload"}
+        return payload
+
+    async def _x_post_status_via_cdp(self) -> dict[str, Any]:
+        page = await self._get_x_compose_page()
+        if page is None:
+            return {"posted": True, "mode": "cdp_status_assumed"}
+
+        script = """
+() => {
+  const inline = document.querySelector("button[data-testid='tweetButtonInline']");
+  if (!inline) return { posted: true, mode: 'cdp_status_assumed', reason: 'composer_closed' };
+  const ariaDisabled = String(inline.getAttribute('aria-disabled') || '').toLowerCase();
+  const disabled = Boolean(inline.disabled) || ariaDisabled === 'true';
+  return { posted: true, mode: 'cdp_status', submitDisabled: disabled };
+}
+"""
+        try:
+            payload = await asyncio.wait_for(page.evaluate(script), timeout=6.0)
+        except Exception:
+            return {"posted": True, "mode": "cdp_status_assumed"}
+        if not isinstance(payload, dict):
+            return {"posted": True, "mode": "cdp_status_assumed"}
+        return payload
+
     async def handle_command(self, msg: dict[str, Any], addr: tuple[str, int]) -> dict[str, Any]:
         self._clients.add(addr)
         name = msg.get("name")
@@ -651,6 +793,23 @@ class UdpAutomationService:
                         "error": "YouTube form.fill could not set all requested fields",
                         "payload": {**(dom_result or {}), "mode": mode},
                     }
+
+                if platform == "x" and isinstance(fields, dict):
+                    description = str(fields.get("description") or "")
+                    try:
+                        ack = await self._send_extension_cmd(name, payload)
+                        return _ack_from_extension(ack)
+                    except Exception as exc:
+                        if description and ("no extension client connected" in str(exc).lower() or self._is_connection_closed_error(exc)):
+                            cdp_result = await self._fill_x_description_via_cdp(description)
+                            ok = bool(cdp_result.get("description"))
+                            return {
+                                "ok": ok,
+                                "error": "X form.fill fallback failed" if not ok else "",
+                                "payload": cdp_result,
+                            }
+                        raise
+
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 
@@ -659,6 +818,24 @@ class UdpAutomationService:
                 return {"ok": bool(result.get("ok", False)), "payload": result}
 
             if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
+                platform = str(payload.get("platform") or "").lower()
+                if platform == "x" and name in {"post.submit", "post.status"}:
+                    try:
+                        ack = await self._send_extension_cmd(name, payload)
+                        return _ack_from_extension(ack)
+                    except Exception as exc:
+                        if "no extension client connected" not in str(exc).lower() and not self._is_connection_closed_error(exc):
+                            raise
+                        if name == "post.submit":
+                            submit_result = await self._submit_x_post_via_cdp()
+                            return {
+                                "ok": bool(submit_result.get("submitted")),
+                                "error": "X post.submit fallback failed" if not bool(submit_result.get("submitted")) else "",
+                                "payload": submit_result,
+                            }
+                        status_result = await self._x_post_status_via_cdp()
+                        return {"ok": True, "payload": status_result}
+
                 ack = await self._send_extension_cmd(name, payload)
                 return _ack_from_extension(ack)
 

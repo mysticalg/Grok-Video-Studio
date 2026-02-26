@@ -16,8 +16,12 @@ def run(executor: BaseExecutor, video_path: str, caption: str) -> dict[str, Any]
     executor.run("platform.open", {"platform": "x", "reuseTab": True})
     executor.run("platform.ensure_logged_in", {"platform": "x"})
 
-    # X can start from feed and require focusing composer first.
-    _best_effort_click(executor, "x", "a[href='/compose/post']")
+    # Keep the workflow in a single browser tab.
+    #
+    # Clicking the compose nav link can spawn a second tab/popout in some X sessions,
+    # which breaks relay-backed workflows that are bound to the original tab.
+    # `platform.open` already targets /compose/post, so only try in-page compose
+    # buttons as fallback to focus the existing composer surface.
     _best_effort_click(executor, "x", "div[data-testid='SideNav_NewTweet_Button']")
     _best_effort_click(executor, "x", "button[data-testid='SideNav_NewTweet_Button']")
 
