@@ -12003,6 +12003,8 @@ class MainWindow(QMainWindow):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         duration = float(result.stdout.strip())
         if duration <= 0:
@@ -12027,6 +12029,8 @@ class MainWindow(QMainWindow):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         payload = json.loads(result.stdout or "{}")
         streams = payload.get("streams") or []
@@ -12059,6 +12063,8 @@ class MainWindow(QMainWindow):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         return bool(result.stdout.strip())
 
@@ -12074,6 +12080,8 @@ class MainWindow(QMainWindow):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             encoders_output = f"{result.stdout}\n{result.stderr}"
             self._ffmpeg_nvenc_available = "h264_nvenc" in encoders_output
@@ -12105,6 +12113,8 @@ class MainWindow(QMainWindow):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         self._active_ffmpeg_process = process
