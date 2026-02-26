@@ -7551,6 +7551,8 @@ class MainWindow(QMainWindow):
         else:
             phase = "submit"
 
+        action_delay_ms = int(self.automation_action_delay_ms.value())
+
         if phase == "pick":
             current_url = self.browser.url().toString().strip() if self.browser is not None else ""
             post_id = self._extract_valid_grok_post_id(current_url)
