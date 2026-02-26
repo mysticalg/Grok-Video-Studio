@@ -6858,7 +6858,34 @@ class MainWindow(QMainWindow):
                         || submitButtons[0]
                         || null;
 
-                    const form = (primarySubmit && primarySubmit.form)
+                    const recorderSelectors = [
+                        "button[aria-label='Submit']",
+                        "main [aria-label='Submit']",
+                        "button.group svg",
+                        "button[type='submit'] svg",
+                    ];
+                    const recorderXPath = "//*[@data-testid='drop-ui']//form//button[2]//svg";
+                    const firstVisible = (list) => list.find((el) => isVisible(el) && !el.disabled && !isMenuToggle(el)) || null;
+                    const findRecorderSubmitTarget = () => {
+                        const cssNodes = recorderSelectors
+                            .flatMap((selector) => [...document.querySelectorAll(selector)])
+                            .filter((el, idx, arr) => arr.indexOf(el) === idx);
+                        const cssTarget = firstVisible(cssNodes);
+                        if (cssTarget) return cssTarget.closest("button") || cssTarget;
+
+                        try {
+                            const xpathResult = document.evaluate(recorderXPath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                            const node = xpathResult && xpathResult.singleNodeValue;
+                            if (node && isVisible(node)) return node.closest("button") || node;
+                        } catch (_) {}
+                        return null;
+                    };
+                    const recorderSubmitTarget = findRecorderSubmitTarget();
+                    try { promptInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
+
+                    const submitTarget = recorderSubmitTarget || primarySubmit;
+                    const form = (submitTarget && submitTarget.form)
+                        || (primarySubmit && primarySubmit.form)
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
                         || document.querySelector("form");
 
@@ -6904,13 +6931,13 @@ class MainWindow(QMainWindow):
                         return fired;
                     };
 
-                    const listenerClick = activateSubmit(primarySubmit);
+                    const listenerClick = activateSubmit(submitTarget);
 
                     let formSubmitted = false;
                     if (!listenerClick && form) {
                         try {
                             if (typeof form.requestSubmit === "function") {
-                                form.requestSubmit(primarySubmit || undefined);
+                                form.requestSubmit(submitTarget || primarySubmit || undefined);
                             } else {
                                 const ev = new Event("submit", { bubbles: true, cancelable: true });
                                 form.dispatchEvent(ev);
@@ -6926,6 +6953,7 @@ class MainWindow(QMainWindow):
                         listenerClick,
                         formSubmitted,
                         usedPrimarySubmit: !!primarySubmit,
+                        usedRecorderTarget: !!recorderSubmitTarget,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -8510,7 +8538,34 @@ class MainWindow(QMainWindow):
                         || submitButtons[0]
                         || null;
 
-                    const form = (primarySubmit && primarySubmit.form)
+                    const recorderSelectors = [
+                        "button[aria-label='Submit']",
+                        "main [aria-label='Submit']",
+                        "button.group svg",
+                        "button[type='submit'] svg",
+                    ];
+                    const recorderXPath = "//*[@data-testid='drop-ui']//form//button[2]//svg";
+                    const firstVisible = (list) => list.find((el) => isVisible(el) && !el.disabled && !isMenuToggle(el)) || null;
+                    const findRecorderSubmitTarget = () => {
+                        const cssNodes = recorderSelectors
+                            .flatMap((selector) => [...document.querySelectorAll(selector)])
+                            .filter((el, idx, arr) => arr.indexOf(el) === idx);
+                        const cssTarget = firstVisible(cssNodes);
+                        if (cssTarget) return cssTarget.closest("button") || cssTarget;
+
+                        try {
+                            const xpathResult = document.evaluate(recorderXPath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                            const node = xpathResult && xpathResult.singleNodeValue;
+                            if (node && isVisible(node)) return node.closest("button") || node;
+                        } catch (_) {}
+                        return null;
+                    };
+                    const recorderSubmitTarget = findRecorderSubmitTarget();
+                    try { promptInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
+
+                    const submitTarget = recorderSubmitTarget || primarySubmit;
+                    const form = (submitTarget && submitTarget.form)
+                        || (primarySubmit && primarySubmit.form)
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
                         || document.querySelector("form");
 
@@ -8556,13 +8611,13 @@ class MainWindow(QMainWindow):
                         return fired;
                     };
 
-                    const listenerClick = activateSubmit(primarySubmit);
+                    const listenerClick = activateSubmit(submitTarget);
 
                     let formSubmitted = false;
                     if (!listenerClick && form) {
                         try {
                             if (typeof form.requestSubmit === "function") {
-                                form.requestSubmit(primarySubmit || undefined);
+                                form.requestSubmit(submitTarget || primarySubmit || undefined);
                             } else {
                                 const ev = new Event("submit", { bubbles: true, cancelable: true });
                                 form.dispatchEvent(ev);
@@ -8577,6 +8632,7 @@ class MainWindow(QMainWindow):
                         listenerClick,
                         formSubmitted,
                         usedPrimarySubmit: !!primarySubmit,
+                        usedRecorderTarget: !!recorderSubmitTarget,
                         status: (listenerClick || formSubmitted) ? "submit-listener-sequence-dispatched" : "submit-listener-sequence-failed"
                     };
                 } catch (err) {
