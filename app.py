@@ -7323,7 +7323,7 @@ class MainWindow(QMainWindow):
 
         action_delay_ms = int(self.automation_action_delay_ms.value())
         submit_delay_ms = action_delay_ms
-        disable_video_option_selection = os.getenv("GROK_DISABLE_VIDEO_OPTION_SELECTION", "1").strip().lower() not in {"0", "false", "no"}
+        disable_video_option_selection = os.getenv("GROK_DISABLE_VIDEO_OPTION_SELECTION", "0").strip().lower() not in {"0", "false", "no"}
 
         def _after_populate(result):
             if result in (None, ""):
