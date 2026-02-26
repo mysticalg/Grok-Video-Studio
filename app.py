@@ -7394,6 +7394,20 @@ class MainWindow(QMainWindow):
         remaining_ms = max(250, int(remaining_s * 1000))
         return True, remaining_ms
 
+    def _extract_valid_grok_post_id(self, url: str) -> str:
+        candidate = str(url or "").strip()
+        if not candidate:
+            return ""
+        match = re.search(r"/imagine/post/([^/?#]+)", candidate, re.IGNORECASE)
+        if not match:
+            return ""
+        post_id = str(match.group(1) or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", post_id, re.IGNORECASE):
+            return ""
+        if post_id.lower().startswith("placeholder-"):
+            return ""
+        return post_id
+
     def _poll_for_manual_image(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -7420,6 +7434,21 @@ class MainWindow(QMainWindow):
             phase = "video-mode"
         else:
             phase = "submit"
+
+        if phase == "pick":
+            current_url = self.browser.url().toString().strip() if self.browser is not None else ""
+            post_id = self._extract_valid_grok_post_id(current_url)
+            if post_id:
+                self._append_log(
+                    f"Variant {variant}: detected valid /imagine/post URL ({post_id}); advancing from pick to video-mode options."
+                )
+                self.manual_image_pick_clicked = True
+                self.manual_image_pick_retry_count = 0
+                self.manual_image_video_mode_retry_count = 0
+                self.manual_image_submit_retry_count = 0
+                QTimer.singleShot(700, self._poll_for_manual_image)
+                return
+
         script = f"""
             (async () => {{
                 const prompt = {prompt!r};
