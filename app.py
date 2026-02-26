@@ -9276,21 +9276,17 @@ class MainWindow(QMainWindow):
 
                 const isDownloadActionButton = (btn) => {{
                     if (!btn || !isVisible(btn) || btn.disabled) return false;
-                    const aria = String(btn.getAttribute("aria-label") || "").trim().toLowerCase();
-                    const txt = String(btn.textContent || "").trim().toLowerCase();
+                    const ariaRaw = String(btn.getAttribute("aria-label") || "").trim();
+                    if (ariaRaw !== "Download") return false;
                     const cls = String(btn.className || "").toLowerCase();
-                    const descriptor = `${{aria}} ${{txt}} ${{cls}}`;
-                    if (!(aria === "download" || /\bdownload\b/.test(txt))) return false;
+                    const descriptor = `${{ariaRaw}} ${{cls}}`.toLowerCase();
                     if (/\bshare\b/.test(descriptor)) return false;
                     return true;
                 }};
-                const exactDownloadCandidates = [...document.querySelectorAll("button[type='button'][aria-label='Download']")]
+                const exactDownloadCandidates = [...document.querySelectorAll("button[aria-label='Download']")]
                     .filter((btn) => isDownloadActionButton(btn));
                 const fallbackDownloadCandidates = [
-                    ...document.querySelectorAll("button[aria-label='Download']"),
-                    ...document.querySelectorAll("button[aria-label*='download' i]"),
-                    ...document.querySelectorAll("[role='button'][aria-label*='download' i]"),
-                    ...document.querySelectorAll("button, [role='button']"),
+                    ...document.querySelectorAll("[role='button'][aria-label='Download']"),
                 ]
                     .filter((btn) => isDownloadActionButton(btn));
                 const downloadCandidates = [...exactDownloadCandidates, ...fallbackDownloadCandidates]
@@ -9398,17 +9394,14 @@ class MainWindow(QMainWindow):
                         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                         const buttons = [
                             ...document.querySelectorAll("button[aria-label='Download']"),
-                            ...document.querySelectorAll("button[aria-label*='download' i]"),
-                            ...document.querySelectorAll("[role='button'][aria-label*='download' i]"),
-                            ...document.querySelectorAll("button, [role='button']"),
+                            ...document.querySelectorAll("[role='button'][aria-label='Download']"),
                         ];
                         const candidate = buttons.find((btn) => {
                             if (!isVisible(btn) || btn.disabled) return false;
-                            const aria = String(btn.getAttribute("aria-label") || "").trim().toLowerCase();
-                            const txt = String(btn.textContent || "").trim().toLowerCase();
+                            const ariaRaw = String(btn.getAttribute("aria-label") || "").trim();
+                            if (ariaRaw !== "Download") return false;
                             const cls = String(btn.className || "").toLowerCase();
-                            const descriptor = `${aria} ${txt} ${cls}`;
-                            if (!(aria === "download" || /\bdownload\b/.test(txt))) return false;
+                            const descriptor = `${ariaRaw} ${cls}`.toLowerCase();
                             if (/\bshare\b/.test(descriptor)) return false;
                             return true;
                         });
