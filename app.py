@@ -9237,8 +9237,7 @@ class MainWindow(QMainWindow):
                     if (!/^https?:[/][/]/i.test(normalized)) return false;
                     const isOpenAIVideo = /^https:[/][/]videos[.]openai[.]com[/]/i.test(normalized) && /[/]raw(?:$|[?#])/i.test(normalized);
                     const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized)
-                        && /[.]mp4(?:$|[?#])/i.test(normalized)
-                        && !/[/]share-videos[/]/i.test(normalized);
+                        && /[.]mp4(?:$|[?#])/i.test(normalized);
                     return isOpenAIVideo || isImaginePublicVideo;
                 }};
 
@@ -9255,13 +9254,17 @@ class MainWindow(QMainWindow):
                     const txt = String(btn.textContent || "").trim().toLowerCase();
                     const cls = String(btn.className || "").toLowerCase();
                     const descriptor = `${{aria}} ${{txt}} ${{cls}}`;
-                    if (aria !== "download") return false;
+                    if (!(aria === "download" || /\bdownload\b/.test(txt))) return false;
                     if (/\bshare\b/.test(descriptor)) return false;
                     return true;
                 }};
                 const exactDownloadCandidates = [...document.querySelectorAll("button[type='button'][aria-label='Download']")]
                     .filter((btn) => isDownloadActionButton(btn));
-                const fallbackDownloadCandidates = [...document.querySelectorAll("button[aria-label='Download']")]
+                const fallbackDownloadCandidates = [
+                    ...document.querySelectorAll("button[aria-label='Download']"),
+                    ...document.querySelectorAll("button[aria-label*='download' i]"),
+                    ...document.querySelectorAll("button"),
+                ]
                     .filter((btn) => isDownloadActionButton(btn));
                 const downloadCandidates = [...exactDownloadCandidates, ...fallbackDownloadCandidates]
                     .filter((btn, index, arr) => arr.indexOf(btn) === index);
