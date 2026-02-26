@@ -9303,10 +9303,13 @@ class MainWindow(QMainWindow):
                     if (!url) return false;
                     const normalized = String(url || "").trim();
                     if (!/^https?:[/][/]/i.test(normalized)) return false;
-                    const isOpenAIVideo = /^https:[/][/]videos[.]openai[.]com[/]/i.test(normalized) && /[/]raw(?:$|[?#])/i.test(normalized);
-                    const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized)
-                        && /[.]mp4(?:$|[?#])/i.test(normalized);
-                    return isOpenAIVideo || isImaginePublicVideo;
+                    if (/^https?:[/][/](?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)/i.test(normalized)) return false;
+                    const lowered = normalized.toLowerCase();
+                    if (/[.](?:mp4|webm|mov|m4v)(?:$|[?#])/i.test(lowered)) return true;
+                    if (/[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|\\/)/i.test(lowered)) return true;
+                    if (/[?&](?:format|ext)=mp4(?:$|[&#])/i.test(lowered)) return true;
+                    if (/[/](?:video|videos|render|download|media)[/]/i.test(lowered) && /[?&](?:token|sig|signature|expires|x-amz-)/i.test(lowered)) return true;
+                    return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
                 }};
 
                 const normalizeAbsoluteUrl = (rawUrl) => {{
@@ -9569,10 +9572,13 @@ class MainWindow(QMainWindow):
                         const isDirectVideoUrl = (url) => {
                             const normalized = normalizeAbsoluteUrl(url);
                             if (!/^https?:[/][/]/i.test(normalized)) return false;
-                            const isOpenAIVideo = /^https:[/][/]videos[.]openai[.]com[/]/i.test(normalized) && /[/]raw(?:$|[?#])/i.test(normalized);
-                            const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized)
-                                && /[.]mp4(?:$|[?#])/i.test(normalized);
-                            return isOpenAIVideo || isImaginePublicVideo;
+                            if (/^https?:[/][/](?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)/i.test(normalized)) return false;
+                            const lowered = String(normalized || "").toLowerCase();
+                            if (/[.](?:mp4|webm|mov|m4v)(?:$|[?#])/i.test(lowered)) return true;
+                            if (/[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|\\/)/i.test(lowered)) return true;
+                            if (/[?&](?:format|ext)=mp4(?:$|[&#])/i.test(lowered)) return true;
+                            if (/[/](?:video|videos|render|download|media)[/]/i.test(lowered) && /[?&](?:token|sig|signature|expires|x-amz-)/i.test(lowered)) return true;
+                            return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
                         };
 
                         const common = { bubbles: true, cancelable: true, composed: true };
