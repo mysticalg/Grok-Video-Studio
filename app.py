@@ -7440,12 +7440,13 @@ class MainWindow(QMainWindow):
                         return !listItem.querySelector("div.invisible");
                     }};
 
+                    const onPostView = /[/]imagine[/]post[/]/i.test((location.pathname || "") + (location.hash || ""));
                     const customizePromptReady = !!document.querySelector(
                         "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
                         + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                     );
-                    if (customizePromptReady) {{
-                        return {{ ok: true, status: "generated-image-clicked" }};
+                    if (customizePromptReady || onPostView) {{
+                        return {{ ok: true, status: "generated-image-clicked", detectedViaUrl: onPostView, path: (location.pathname || "") }};
                     }}
 
                     if (window.__grokManualPickObserverResult) {{
@@ -7668,9 +7669,14 @@ class MainWindow(QMainWindow):
                 status = result.get("status") or "ok"
                 if status == "generated-image-clicked":
                     if not self.manual_image_pick_clicked:
-                        self._append_log(
-                            f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
-                        )
+                        if isinstance(result, dict) and result.get("detectedViaUrl"):
+                            self._append_log(
+                                f"Variant {current_variant}: detected /imagine/post URL after image pick; proceeding to video-mode options."
+                            )
+                        else:
+                            self._append_log(
+                                f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
+                            )
                     self.manual_image_pick_clicked = True
                     self.browser.page().runJavaScript("""
                         (() => {
@@ -7933,13 +7939,14 @@ class MainWindow(QMainWindow):
                                     .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
                                 const path = String((window.location && window.location.pathname) || "").toLowerCase();
                                 const onPostView = path.includes("/imagine/post/");
-                                const ready = customizePromptVisible || (onPostView && (editImageVisible || makeVideoButtonVisible));
+                                const ready = customizePromptVisible || onPostView || editImageVisible || makeVideoButtonVisible;
                                 return {
                                     ready,
                                     customizePromptVisible,
                                     makeVideoButtonVisible,
                                     editImageVisible,
                                     onPostView,
+                                    path,
                                 };
                             } catch (_) {
                                 return { ready: false };
