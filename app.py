@@ -672,7 +672,15 @@ def _configure_qtwebengine_runtime() -> None:
         "--ignore-gpu-blocklist",
         "--disable-renderer-backgrounding",
         "--autoplay-policy=no-user-gesture-required",
+        f"--media-cache-size={_env_int('GROK_BROWSER_MEDIA_CACHE_BYTES', 268435456)}",
+        f"--disk-cache-size={_env_int('GROK_BROWSER_DISK_CACHE_BYTES', 536870912)}",
     ]
+
+    if not QTWEBENGINE_USE_DISK_CACHE:
+        default_flags.extend([
+            "--disable-gpu-shader-disk-cache",
+            "--disable-features=MediaHistoryLogging",
+        ])
 
     existing_flags = os.getenv("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(default_flags + ([existing_flags] if existing_flags else []))
@@ -2825,6 +2833,8 @@ class MainWindow(QMainWindow):
 
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
+            self._append_log(f"Browser profile storage path: {CACHE_DIR / 'profile'}")
+            self._append_log(f"Browser HTTP cache path: {CACHE_DIR / 'cache'}")
         else:
             self._append_log(
                 "Browser cache: running in memory/off-the-record mode because no writable cache folder was available."
