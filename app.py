@@ -2200,9 +2200,6 @@ class MainWindow(QMainWindow):
         self._cdp_relay_temporarily_disabled = False
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self._manual_download_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manual-download")
-        self._manual_direct_download_future: concurrent.futures.Future | None = None
-        self._manual_direct_download_context: dict[str, Any] | None = None
-        self._manual_direct_download_job_counter = 0
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
         self.browser_devtools_windows: dict[QWebEngineView, QMainWindow] = {}
@@ -5160,14 +5157,35 @@ class MainWindow(QMainWindow):
             self.video_playback_hack_timer.start()
             self._ensure_browser_video_playback()
             if self.continue_from_frame_waiting_for_reload and self.continue_from_frame_active:
-                self.continue_from_frame_waiting_for_reload = False
-                self.continue_from_frame_reload_timeout_timer.stop()
-                self._append_log(
-                    "Continue-from-last-frame: detected page reload after image upload. Proceeding with prompt entry."
+                self.browser.page().runJavaScript(
+                    "(() => ({ href: String((window.location && window.location.href) || '') }))()",
+                    self._after_continue_reload_location_check,
                 )
-                QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
             if self.embedded_training_active and self.training_use_embedded_browser.isChecked():
                 self._inject_embedded_training_capture_script()
+
+    def _after_continue_reload_location_check(self, location_result) -> None:
+        if not self.continue_from_frame_waiting_for_reload or not self.continue_from_frame_active:
+            return
+
+        current_url = ""
+        if isinstance(location_result, dict):
+            current_url = str(location_result.get("href") or "")
+
+        if re.search(r"https?://(?:www\.)?grok\.com/imagine/post/[^/?#]+", current_url, re.IGNORECASE):
+            self.continue_from_frame_waiting_for_reload = False
+            self.continue_from_frame_reload_timeout_timer.stop()
+            self._append_log(
+                "Continue-from-last-frame: detected post page reload after image upload. "
+                "Applying video options, then entering continuation prompt."
+            )
+            QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
+            return
+
+        self._append_log(
+            "Continue-from-last-frame: reload detected but not on imagine/post URL yet; "
+            "waiting for post page before applying options and prompt."
+        )
 
     def _retry_continue_after_small_download(self, variant: int) -> None:
         source_video = self.continue_from_frame_current_source_video
@@ -8939,11 +8957,14 @@ class MainWindow(QMainWindow):
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
-                    const click = (el) => {
+                    const click = (el, nativeOnly = false) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
                         let fired = false;
                         try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
                         try { el.focus({ preventScroll: true }); fired = true; } catch (_) {}
+                        if (nativeOnly) {
+                            try { el.click(); return true; } catch (_) { return fired; }
+                        }
                         try { el.dispatchEvent(new PointerEvent("pointerdown", common)); fired = true; } catch (_) {}
                         el.dispatchEvent(new MouseEvent("mousedown", common));
                         try { el.dispatchEvent(new PointerEvent("pointerup", common)); fired = true; } catch (_) {}
@@ -8973,6 +8994,17 @@ class MainWindow(QMainWindow):
                       .filter((el) => isVisible(el) && !el.disabled);
 
                     const buttonCandidates = candidates.filter((el) => (el.tagName || "").toLowerCase() === "button");
+                    const isMakeVideoPrimaryButton = (el) => {
+                        if (!el) return false;
+                        const tag = String(el.tagName || "").toLowerCase();
+                        if (tag !== "button") return false;
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        if (!/^make\s+video$/i.test(aria || txt)) return false;
+                        const role = clean(el.getAttribute("role")).toLowerCase();
+                        if (role === "menuitem" || role === "menuitemradio") return false;
+                        return true;
+                    };
                     const exactMatch = (el) => {
                         const aria = clean(el.getAttribute("aria-label"));
                         const txt = clean(el.textContent);
@@ -8987,11 +9019,22 @@ class MainWindow(QMainWindow):
                         return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
                     };
 
-                    const target = ((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
-                        ? (buttonCandidates.find(exactMatch) || buttonCandidates.find(fuzzyMatch))
-                        : null)
-                        || candidates.find(exactMatch)
-                        || candidates.find(fuzzyMatch)
+                    const menuMakeVideoTarget = (optionType === "type" && /make\s+video/i.test(targetLabel))
+                        ? ([...document.querySelectorAll("[role='menuitem'], [role='menuitemradio']")]
+                            .find((el) => {
+                                if (!isVisible(el) || el.disabled) return false;
+                                const txt = clean(el.textContent);
+                                const strongTxt = clean(el.querySelector("span.font-semibold.text-sm")?.textContent || "");
+                                return /make\s+video/i.test(strongTxt || txt);
+                            }) || null)
+                        : null;
+
+                    const target = menuMakeVideoTarget
+                        || ((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
+                            ? (buttonCandidates.find(exactMatch) || buttonCandidates.find(fuzzyMatch))
+                            : null)
+                        || candidates.find((el) => !isMakeVideoPrimaryButton(el) && exactMatch(el))
+                        || candidates.find((el) => !isMakeVideoPrimaryButton(el) && fuzzyMatch(el))
                         || null;
 
                     let clicked = false;
@@ -9003,6 +9046,10 @@ class MainWindow(QMainWindow):
                                 clicked = emulateActivate(innerDiv);
                                 clickedNodeTag = String(innerDiv.tagName || "").toLowerCase();
                             }
+                        }
+                        if (!clicked && optionType === "type" && /make\s+video/i.test(targetLabel)) {
+                            clicked = click(target, true);
+                            clickedNodeTag = String(target.tagName || "").toLowerCase();
                         }
                         if (!clicked && (optionType === "ratio" || optionType === "resolution" || optionType === "seconds" || optionType === "type")) {
                             clicked = emulateActivate(target);
@@ -9046,6 +9093,27 @@ class MainWindow(QMainWindow):
             )
             self._trigger_browser_video_download(variant)
 
+        def _click_make_video_after_prompt() -> None:
+            step_script = click_option_script_template.replace('"{target_label}"', json.dumps("Make Video"))
+            step_script = step_script.replace('"{option_type}"', json.dumps("type"))
+            self._append_log(f"Variant {variant}: opening options popup to click 'Make Video' after prompt entry.")
+
+            def _after_step(step_result):
+                if not isinstance(step_result, dict) or not step_result.get("ok"):
+                    self._append_log(
+                        f"WARNING: Variant {variant}: could not confirm click for type option 'Make Video'. result={step_result!r}"
+                    )
+                self._append_log(
+                    f"Variant {variant}: 'Make Video' selection attempted; polling for download readiness without extra submit clicks."
+                )
+                self._trigger_browser_video_download(variant, allow_make_video_click=False)
+
+            def _after_open(_open_result):
+                self._append_log(f"Variant {variant}: clicking type option 'Make Video'.")
+                self.browser.page().runJavaScript(step_script, _after_step)
+
+            self.browser.page().runJavaScript(open_options_script, _after_open)
+
         def _populate_prompt_then_submit() -> None:
             self._append_log(f"Variant {variant}: entering prompt text now.")
 
@@ -9054,17 +9122,69 @@ class MainWindow(QMainWindow):
                     error_detail = result.get("error") if isinstance(result, dict) else result
                     if error_detail not in (None, "", "callback-empty"):
                         self._append_log(
-                            f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing to submit."
+                            f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
+                if continue_last_video_mode:
+                    enter_script = r"""
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const selectors = [
+                                    "textarea[placeholder*='Type to imagine' i]",
+                                    "input[placeholder*='Type to imagine' i]",
+                                    "textarea[placeholder*='Type to customize this video' i]",
+                                    "input[placeholder*='Type to customize this video' i]",
+                                    "textarea[placeholder*='Type to customize video' i]",
+                                    "input[placeholder*='Type to customize video' i]",
+                                    "textarea[placeholder*='Customize video' i]",
+                                    "input[placeholder*='Customize video' i]",
+                                    "div.tiptap.ProseMirror[contenteditable='true']",
+                                    "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                                    "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                                ];
+                                const promptInput = selectors
+                                    .flatMap((selector) => [...document.querySelectorAll(selector)])
+                                    .find((el) => isVisible(el));
+                                if (!promptInput) return { ok: false, error: "prompt-input-not-found-for-enter" };
+                                try { promptInput.focus({ preventScroll: true }); } catch (_) {}
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
+                                return { ok: true };
+                            } catch (err) {
+                                return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                            }
+                        })()
+                    """
+
+                    def _after_enter_press(enter_result):
+                        if not isinstance(enter_result, dict) or not enter_result.get("ok"):
+                            self._append_log(
+                                f"WARNING: Variant {variant}: could not confirm trailing Enter press after prompt entry. result={enter_result!r}"
+                            )
+                        self._append_log(
+                            f"Variant {variant}: prompt populated with trailing Enter; moving to download polling (no extra option clicks or submit actions)."
+                        )
+                        QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+
+                    self.browser.page().runJavaScript(enter_script, _after_enter_press)
+                    return
+
                 QTimer.singleShot(2000, _run_flow_submit)
 
             self.browser.page().runJavaScript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
         if continue_last_video_mode:
-            option_steps = []
+            option_steps = [
+                ("type", "Make Video"),
+                ("resolution", selected_quality_label),
+                ("seconds", selected_duration_label),
+                ("ratio", selected_aspect_ratio),
+            ]
             self._append_log(
-                f"Variant {variant}: continue-last-video mode detected; bypassing the entire video-option selection phase."
+                f"Variant {variant}: continue-last-video mode detected; applying 'Make Video' first, then resolution, duration, and aspect ratio before prompt entry."
             )
         else:
             option_steps = [
@@ -9143,9 +9263,6 @@ class MainWindow(QMainWindow):
 
         variant = self.pending_manual_variant_for_download
         if variant is None:
-            return
-
-        if self._check_manual_direct_download_completion():
             return
 
         deadline = self.manual_download_deadline or 0
@@ -9250,10 +9367,13 @@ class MainWindow(QMainWindow):
                     if (!url) return false;
                     const normalized = String(url || "").trim();
                     if (!/^https?:[/][/]/i.test(normalized)) return false;
-                    const isOpenAIVideo = /^https:[/][/]videos[.]openai[.]com[/]/i.test(normalized) && /[/]raw(?:$|[?#])/i.test(normalized);
-                    const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized)
-                        && /[.]mp4(?:$|[?#])/i.test(normalized);
-                    return isOpenAIVideo || isImaginePublicVideo;
+                    if (/^https?:[/][/](?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)/i.test(normalized)) return false;
+                    const lowered = normalized.toLowerCase();
+                    if (/[.](?:mp4|webm|mov|m4v)(?:$|[?#])/i.test(lowered)) return true;
+                    if (/[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|\\/)/i.test(lowered)) return true;
+                    if (/[?&](?:format|ext)=mp4(?:$|[&#])/i.test(lowered)) return true;
+                    if (/[/](?:video|videos|render|download|media)[/]/i.test(lowered) && /[?&](?:token|sig|signature|expires|x-amz-)/i.test(lowered)) return true;
+                    return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
                 }};
 
                 const normalizeAbsoluteUrl = (rawUrl) => {{
@@ -9516,10 +9636,13 @@ class MainWindow(QMainWindow):
                         const isDirectVideoUrl = (url) => {
                             const normalized = normalizeAbsoluteUrl(url);
                             if (!/^https?:[/][/]/i.test(normalized)) return false;
-                            const isOpenAIVideo = /^https:[/][/]videos[.]openai[.]com[/]/i.test(normalized) && /[/]raw(?:$|[?#])/i.test(normalized);
-                            const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized)
-                                && /[.]mp4(?:$|[?#])/i.test(normalized);
-                            return isOpenAIVideo || isImaginePublicVideo;
+                            if (/^https?:[/][/](?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)/i.test(normalized)) return false;
+                            const lowered = String(normalized || "").toLowerCase();
+                            if (/[.](?:mp4|webm|mov|m4v)(?:$|[?#])/i.test(lowered)) return true;
+                            if (/[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|\\/)/i.test(lowered)) return true;
+                            if (/[?&](?:format|ext)=mp4(?:$|[&#])/i.test(lowered)) return true;
+                            if (/[/](?:video|videos|render|download|media)[/]/i.test(lowered) && /[?&](?:token|sig|signature|expires|x-amz-)/i.test(lowered)) return true;
+                            return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
                         };
 
                         const common = { bubbles: true, cancelable: true, composed: true };
@@ -9698,54 +9821,19 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after_poll)
 
     def _start_manual_direct_download(self, variant: int, source_url: str) -> bool:
-        if self._manual_direct_download_future is not None and not self._manual_direct_download_future.done():
-            return False
         try:
             self.download_dir.mkdir(parents=True, exist_ok=True)
             filename = self._build_session_download_filename("video", variant, "mp4")
             output_path = self.download_dir / filename
-            self._manual_direct_download_job_counter += 1
-            job_id = self._manual_direct_download_job_counter
-            self._manual_direct_download_context = {
-                "job_id": job_id,
-                "variant": variant,
-                "url": source_url,
-                "path": output_path,
-            }
-            self._manual_direct_download_future = self._manual_download_executor.submit(
-                self._download_video_from_public_url,
-                source_url,
-                output_path,
-            )
-            self._append_log(f"Variant {variant}: started background direct download to {output_path.name}.")
-            return True
+            self._append_log(f"Variant {variant}: downloading direct video URL to {output_path.name}.")
+            download_path = self._download_video_from_public_url(source_url, output_path)
         except Exception as exc:
-            self._append_log(f"WARNING: Could not start background direct download for variant {variant}: {exc}")
-            self._clear_manual_direct_download_tracking()
-            return False
-
-    def _check_manual_direct_download_completion(self) -> bool:
-        future = self._manual_direct_download_future
-        context = self._manual_direct_download_context
-        if future is None or context is None or not future.done():
-            return False
-
-        self._manual_direct_download_future = None
-        variant = int(context.get("variant") or 0)
-        output_path = Path(context.get("path") or "")
-        try:
-            download_path = future.result()
-        except Exception as exc:
-            if output_path.exists():
-                output_path.unlink(missing_ok=True)
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
-            self._manual_direct_download_context = None
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(3000)
-            return True
+            return False
 
         file_size = download_path.stat().st_size if download_path.exists() else 0
-        self._manual_direct_download_context = None
         if file_size < MIN_VALID_VIDEO_BYTES:
             self._append_log(
                 f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); retrying browser download flow."
@@ -9754,15 +9842,12 @@ class MainWindow(QMainWindow):
                 download_path.unlink(missing_ok=True)
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(2000)
-            return True
+            return False
 
         self._complete_manual_video_download(download_path, variant)
         return True
 
     def _clear_manual_direct_download_tracking(self) -> None:
-        future = self._manual_direct_download_future
-        if future is not None and not future.done():
-            future.cancel()
         self._manual_direct_download_future = None
         self._manual_direct_download_context = None
 
