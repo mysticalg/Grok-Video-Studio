@@ -2251,6 +2251,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_generating_indicator_seen = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
@@ -9128,6 +9129,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_generating_indicator_seen = False
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
@@ -9362,6 +9364,19 @@ class MainWindow(QMainWindow):
 
             status = result.get("status", "waiting")
             progress_text = (result.get("progressText") or "").strip()
+
+            was_generating = bool(getattr(self, "manual_generating_indicator_seen", False))
+            if status == "generating-indicator-visible":
+                if not was_generating:
+                    self._append_log(
+                        f"Variant {current_variant}: found 'Generating' span; polling until it disappears before download checks."
+                    )
+                self.manual_generating_indicator_seen = True
+            elif was_generating:
+                self.manual_generating_indicator_seen = False
+                self._append_log(
+                    f"Variant {current_variant}: 'Generating' span disappeared; checking whether download is now ready."
+                )
 
             if status == "progress":
                 self.manual_video_start_click_sent = True
@@ -9664,6 +9679,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_generating_indicator_seen = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -9838,6 +9854,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_generating_indicator_seen = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
