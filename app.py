@@ -134,6 +134,8 @@ DEFAULT_MANUAL_PROMPT_TEXT = (
     "abstract surreal artistic photorealistic strange random dream like scifi fast moving camera, "
     "fast moving fractals morphing and intersecting, highly detailed"
 )
+GROK_IMAGINE_URL = "https://grok.com/imagine"
+SORA_DRAFTS_URL = "https://sora.chatgpt.com/drafts"
 
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
@@ -2270,6 +2272,7 @@ class MainWindow(QMainWindow):
         self.custom_music_file: Path | None = None
         self.last_update_prompt_ts = 0
         self.cdp_enabled = False
+        self.external_ai_browser_only = os.getenv("GROK_EXTERNAL_AI_BROWSER_ONLY", "1").strip().lower() not in {"0", "false", "no"}
         self.browser_tab_enabled = {
             "Grok": True,
             "Sora": True,
@@ -2763,8 +2766,15 @@ class MainWindow(QMainWindow):
             if developer_extras_attr is not None:
                 browser_settings.setAttribute(developer_extras_attr, True)
 
-        self.grok_browser_view.setUrl(QUrl("https://grok.com/imagine"))
-        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/drafts"))
+        if self.external_ai_browser_only:
+            self.grok_browser_view.setUrl(QUrl("about:blank"))
+            self.sora_browser.setUrl(QUrl("about:blank"))
+            self.grok_browser_view.setEnabled(False)
+            self.sora_browser.setEnabled(False)
+            self._append_log("Internal Grok/Sora embedded browsers are disabled (external-browser mode enabled).")
+        else:
+            self.grok_browser_view.setUrl(QUrl(GROK_IMAGINE_URL))
+            self.sora_browser.setUrl(QUrl(SORA_DRAFTS_URL))
         self.grok_browser_view.loadFinished.connect(self._on_browser_load_finished)
         self.sora_browser.loadFinished.connect(self._on_browser_load_finished)
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
@@ -10351,7 +10361,20 @@ class MainWindow(QMainWindow):
         address_bar.setPlaceholderText("Enter URL and press Enter")
         address_bar.returnPressed.connect(lambda b=browser, bar=address_bar: self._navigate_browser_from_address_bar(b, bar))
         layout.addWidget(address_bar)
-        layout.addWidget(browser, 1)
+
+        is_primary_ai_browser = browser in {getattr(self, "grok_browser_view", None), getattr(self, "sora_browser", None)}
+        if self.external_ai_browser_only and is_primary_ai_browser:
+            browser_notice = QLabel(
+                "Internal browser is turned off for this tab.\n"
+                "Use the Homepage/External buttons to open this page in your system browser."
+            )
+            browser_notice.setWordWrap(True)
+            browser_notice.setStyleSheet("color: #9fb3c8; padding: 16px;")
+            browser_notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(browser_notice, 1)
+            address_bar.setEnabled(False)
+        else:
+            layout.addWidget(browser, 1)
 
         self.browser_address_bars[browser] = address_bar
         self._connect_browser_signals(browser)
@@ -10516,13 +10539,19 @@ class MainWindow(QMainWindow):
     def open_current_browser_in_external_browser(self) -> None:
         index = self.browser_tabs.currentIndex()
         target_browser = self._browser_for_tab_index(index)
-        if target_browser is None:
-            self._append_log("Current tab does not host an embedded browser; external launch skipped.")
-            return
-
-        url = target_browser.url().toString().strip()
+        url = ""
+        if target_browser is not None:
+            url = target_browser.url().toString().strip()
         if not url:
-            self._append_log("Current browser tab has no URL to open externally.")
+            if index == getattr(self, "grok_browser_tab_index", -1):
+                url = GROK_IMAGINE_URL
+            elif index == getattr(self, "sora_browser_tab_index", -1):
+                url = SORA_DRAFTS_URL
+            elif index == getattr(self, "sora2_settings_tab_index", -1):
+                url = SORA_DRAFTS_URL
+
+        if not url:
+            self._append_log("Current tab has no URL to open externally.")
             return
 
         if QDesktopServices.openUrl(QUrl(url)):
@@ -10535,8 +10564,14 @@ class MainWindow(QMainWindow):
             self._append_log("Grok Browser tab is disabled. Re-enable it from View → Browser Tabs.")
             return
         self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
+        if self.external_ai_browser_only:
+            if QDesktopServices.openUrl(QUrl(GROK_IMAGINE_URL)):
+                self._append_log(f"Opened external browser: {GROK_IMAGINE_URL}")
+            else:
+                self._append_log(f"Failed to open external browser for URL: {GROK_IMAGINE_URL}")
+            return
         self.browser = self.grok_browser_view
-        self.grok_browser_view.setUrl(QUrl("https://grok.com/imagine"))
+        self.grok_browser_view.setUrl(QUrl(GROK_IMAGINE_URL))
         self._append_log("Navigated embedded browser to grok.com/imagine.")
 
     def show_sora_browser_page(self) -> None:
@@ -10544,8 +10579,14 @@ class MainWindow(QMainWindow):
             self._append_log("Sora Browser tab is disabled. Re-enable it from View → Browser Tabs.")
             return
         self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
+        if self.external_ai_browser_only:
+            if QDesktopServices.openUrl(QUrl(SORA_DRAFTS_URL)):
+                self._append_log(f"Opened external browser: {SORA_DRAFTS_URL}")
+            else:
+                self._append_log(f"Failed to open external browser for URL: {SORA_DRAFTS_URL}")
+            return
         self.browser = self.sora_browser
-        self.sora_browser.setUrl(QUrl("https://sora.chatgpt.com/drafts"))
+        self.sora_browser.setUrl(QUrl(SORA_DRAFTS_URL))
         self._append_log("Navigated embedded browser to sora.chatgpt.com/drafts.")
 
     def stitch_all_videos(self) -> None:
