@@ -2272,7 +2272,7 @@ class MainWindow(QMainWindow):
         self.custom_music_file: Path | None = None
         self.last_update_prompt_ts = 0
         self.cdp_enabled = False
-        self.external_ai_browser_only = os.getenv("GROK_EXTERNAL_AI_BROWSER_ONLY", "1").strip().lower() not in {"0", "false", "no"}
+        self.external_ai_browser_only = os.getenv("GROK_EXTERNAL_AI_BROWSER_ONLY", "0").strip().lower() not in {"0", "false", "no"}
         self.browser_tab_enabled = {
             "Grok": True,
             "Sora": True,
