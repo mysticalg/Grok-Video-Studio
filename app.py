@@ -2311,6 +2311,7 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
@@ -9324,6 +9325,7 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
@@ -9352,6 +9354,7 @@ class MainWindow(QMainWindow):
             self.manual_download_in_progress = False
             self.manual_download_started_at = None
             self.manual_download_deadline = None
+            self.manual_refresh_after_generating_sent = False
             self.manual_public_video_url = ""
             self.manual_download_attempt_count = 0
             self.manual_download_poll_attempt_count = 0
@@ -9671,11 +9674,23 @@ class MainWindow(QMainWindow):
                         f"Variant {current_variant}: found 'Generating' span; polling until it disappears before download checks."
                     )
                 self.manual_generating_indicator_seen = True
+                self.manual_refresh_after_generating_sent = False
             elif was_generating:
                 self.manual_generating_indicator_seen = False
                 self._append_log(
                     f"Variant {current_variant}: 'Generating' span disappeared; checking whether download is now ready."
                 )
+                if not self.manual_refresh_after_generating_sent:
+                    self.manual_refresh_after_generating_sent = True
+                    self._append_log(
+                        f"Variant {current_variant}: refreshing embedded browser now that 'Generating' disappeared."
+                    )
+                    try:
+                        self.browser.reload()
+                    except Exception:
+                        pass
+                    self.manual_download_poll_timer.start(3000)
+                    return
 
             if status == "progress":
                 self.manual_video_start_click_sent = True
@@ -9979,6 +9994,7 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -10189,6 +10205,7 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
