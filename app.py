@@ -8035,13 +8035,17 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 self.manual_image_video_mode_retry_count += 1
-                if self.manual_image_video_mode_retry_count >= int(self.automation_retry_attempts.value()):
+                if self.manual_image_video_mode_retry_count >= 1:
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: video-mode validation stayed in '{status}' for "
-                        f"{self.manual_image_video_mode_retry_count} checks; continuing to wait for video-mode state."
+                        f"{self.manual_image_video_mode_retry_count} checks; proceeding to prompt entry with Enter-submit fallback."
                     )
+                    self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
+                    self.manual_image_submit_retry_count = 0
+                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    return
 
                 self._append_log(
                     f"Variant {current_variant}: waiting for video mode selection ({status}); retrying..."
