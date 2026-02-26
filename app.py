@@ -141,6 +141,21 @@ DEFAULT_MANUAL_PROMPT_TEXT = (
     "abstract surreal artistic photorealistic strange random dream like scifi fast moving camera, "
     "fast moving fractals morphing and intersecting, highly detailed"
 )
+DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE = "{concept} please turn this into a detailed 10 second prompt for grok imagine"
+DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT = (
+    "You are an expert prompt and social metadata generator for short-form AI videos. Return strict JSON only."
+)
+DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE = (
+    "Generate JSON with keys: manual_prompt, title, medium_title, tiktok_subheading, description, x_post, hashtags, category. "
+    "manual_prompt should be detailed and cinematic for a 10-second Grok Imagine clip. "
+    "title should be short and catchy. description should be 1-3 sentences. "
+    "medium_title should be a medium-length title fit for social display. "
+    "tiktok_subheading should be a slogan/subheading near 120 characters (roughly 100-140). "
+    "x_post should be a standalone X.com-ready post no longer than 275 characters total including spaces and hashtags. "
+    "hashtags should be an array of 5-12 hashtag strings without # prefixes. "
+    "category should be the best YouTube category id as a string (default 22 if unsure). "
+    "Concept instruction: {instruction}"
+)
 GROK_IMAGINE_URL = "https://grok.com/imagine"
 SORA_DRAFTS_URL = "https://sora.chatgpt.com/drafts"
 DEFAULT_EMBEDDED_CHROME_USER_AGENT = (
@@ -3862,6 +3877,24 @@ class MainWindow(QMainWindow):
         self.manual_prompt_default_input.setPlainText(DEFAULT_MANUAL_PROMPT_TEXT)
         app_layout.addRow("Default Manual Prompt", self.manual_prompt_default_input)
 
+        self.ai_concept_instruction_template_input = QPlainTextEdit()
+        self.ai_concept_instruction_template_input.setMaximumHeight(70)
+        self.ai_concept_instruction_template_input.setPlaceholderText("Template for concept-to-instruction text. Use {concept} placeholder.")
+        self.ai_concept_instruction_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE)
+        app_layout.addRow("AI Concept Instruction Template", self.ai_concept_instruction_template_input)
+
+        self.ai_concept_system_prompt_input = QPlainTextEdit()
+        self.ai_concept_system_prompt_input.setMaximumHeight(80)
+        self.ai_concept_system_prompt_input.setPlaceholderText("System prompt used for AI concept prompt generation.")
+        self.ai_concept_system_prompt_input.setPlainText(DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT)
+        app_layout.addRow("AI Concept System Prompt", self.ai_concept_system_prompt_input)
+
+        self.ai_concept_user_prompt_template_input = QPlainTextEdit()
+        self.ai_concept_user_prompt_template_input.setMaximumHeight(140)
+        self.ai_concept_user_prompt_template_input.setPlaceholderText("User prompt template used for AI concept prompt generation. Use {instruction} placeholder.")
+        self.ai_concept_user_prompt_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE)
+        app_layout.addRow("AI Concept User Prompt Template", self.ai_concept_user_prompt_template_input)
+
         self.qtwebengine_remote_debug_enabled = QCheckBox("Enable QtWebEngine CDP remote debugging")
         self.qtwebengine_remote_debug_enabled.setChecked(_env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 0) > 0)
         app_layout.addRow("CDP Remote Debugging", self.qtwebengine_remote_debug_enabled)
@@ -4658,6 +4691,9 @@ class MainWindow(QMainWindow):
             "concept": self.concept.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
+            "ai_concept_instruction_template": self.ai_concept_instruction_template_input.toPlainText(),
+            "ai_concept_system_prompt": self.ai_concept_system_prompt_input.toPlainText(),
+            "ai_concept_user_prompt_template": self.ai_concept_user_prompt_template_input.toPlainText(),
             "qtwebengine_remote_debug_enabled": self.qtwebengine_remote_debug_enabled.isChecked(),
             "qtwebengine_remote_debug_port": int(self.qtwebengine_remote_debug_port.value()),
             "cdp_social_upload_relay_enabled": self.cdp_social_upload_relay_enabled.isChecked(),
@@ -4799,6 +4835,12 @@ class MainWindow(QMainWindow):
             self.manual_prompt_default_input.setPlainText(default_prompt)
             if "manual_prompt" not in preferences:
                 self.manual_prompt.setPlainText(default_prompt)
+        if "ai_concept_instruction_template" in preferences:
+            self.ai_concept_instruction_template_input.setPlainText(str(preferences["ai_concept_instruction_template"]))
+        if "ai_concept_system_prompt" in preferences:
+            self.ai_concept_system_prompt_input.setPlainText(str(preferences["ai_concept_system_prompt"]))
+        if "ai_concept_user_prompt_template" in preferences:
+            self.ai_concept_user_prompt_template_input.setPlainText(str(preferences["ai_concept_user_prompt_template"]))
         if "qtwebengine_remote_debug_enabled" in preferences:
             self.qtwebengine_remote_debug_enabled.setChecked(bool(preferences["qtwebengine_remote_debug_enabled"]))
         if "qtwebengine_remote_debug_port" in preferences:
@@ -6181,19 +6223,21 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            instruction = concept + " please turn this into a detailed 10 second prompt for grok imagine"
-            system = "You are an expert prompt and social metadata generator for short-form AI videos. Return strict JSON only."
-            user = (
-                "Generate JSON with keys: manual_prompt, title, medium_title, tiktok_subheading, description, x_post, hashtags, category. "
-                "manual_prompt should be detailed and cinematic for a 10-second Grok Imagine clip. "
-                "title should be short and catchy. description should be 1-3 sentences. "
-                "medium_title should be a medium-length title fit for social display. "
-                "tiktok_subheading should be a slogan/subheading near 120 characters (roughly 100-140). "
-                "x_post should be a standalone X.com-ready post no longer than 275 characters total including spaces and hashtags. "
-                "hashtags should be an array of 5-12 hashtag strings without # prefixes. "
-                "category should be the best YouTube category id as a string (default 22 if unsure). "
-                f"Concept instruction: {instruction}"
-            )
+            instruction_template = self.ai_concept_instruction_template_input.toPlainText().strip()
+            if not instruction_template:
+                instruction_template = DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE
+            if "{concept}" in instruction_template:
+                instruction = instruction_template.replace("{concept}", concept)
+            else:
+                instruction = f"{concept} {instruction_template}".strip()
+
+            system = self.ai_concept_system_prompt_input.toPlainText().strip() or DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT
+            user_template = self.ai_concept_user_prompt_template_input.toPlainText().strip() or DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE
+            if "{instruction}" in user_template:
+                user = user_template.replace("{instruction}", instruction)
+            else:
+                user = f"{user_template}\nConcept instruction: {instruction}".strip()
+
             raw = self._call_selected_ai(system, user)
             parsed = _parse_json_object_from_text(raw)
             manual_prompt = str(parsed.get("manual_prompt", "")).strip()
