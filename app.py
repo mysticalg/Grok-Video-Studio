@@ -96,6 +96,8 @@ THUMBNAILS_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
+MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = 60_000
+MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
@@ -107,6 +109,10 @@ OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.
 OPENAI_USE_CHATGPT_BACKEND = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
 SEEDANCE_API_BASE = os.getenv("SEEDANCE_API_BASE", "https://api.seedance.ai/v2")
 FACEBOOK_GRAPH_VERSION = os.getenv("FACEBOOK_GRAPH_VERSION", "v21.0")
+
+
+class PublicVideoNotReadyError(RuntimeError):
+    """Raised when a public media URL resolves but backing object is not ready yet."""
 FACEBOOK_OAUTH_AUTHORIZE_URL = f"https://www.facebook.com/{FACEBOOK_GRAPH_VERSION}/dialog/oauth"
 FACEBOOK_OAUTH_TOKEN_URL = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/oauth/access_token"
 FACEBOOK_OAUTH_CALLBACK_PORT = int(os.getenv("FACEBOOK_OAUTH_CALLBACK_PORT", "1456"))
@@ -169,6 +175,53 @@ def _next_session_download_count() -> int:
 def _slugify_filename_part(value: str, fallback: str = "na") -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return cleaned or fallback
+
+
+def _looks_like_public_video_url(candidate: str) -> bool:
+    value = str(candidate or "").strip()
+    if not value:
+        return False
+    if re.match(r"^imagine-public[.]x[.]ai/", value, re.IGNORECASE):
+        value = f"https://{value}"
+    if not re.match(r"^https?://", value, re.IGNORECASE):
+        return False
+    if re.match(r"^https?://(?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)", value, re.IGNORECASE):
+        return False
+    lowered = value.lower()
+    if re.search(r"[.](?:mp4|webm|mov|m4v)(?:$|[?#])", lowered):
+        return True
+    if re.search(r"[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|/)", lowered):
+        return True
+    if re.search(r"[?&](?:format|ext)=mp4(?:$|[&#])", lowered):
+        return True
+    if re.search(r"/(?:video|videos|render|download|media)/", lowered) and re.search(r"[?&](?:token|sig|signature|expires|x-amz-)", lowered):
+        return True
+    return bool(re.search(r"(^|[?&])(?:type|kind)=video(?:$|[&#])", lowered))
+
+
+def _ensure_public_download_query(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        return raw
+    # Public imagine-public media URLs should be probed without transient query params
+    # such as cache/dl. Keep only the clean .mp4 URL.
+    return parsed._replace(query="").geturl()
+
+
+def _public_video_url_from_post_url(post_url: str) -> str:
+    raw = str(post_url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    path = str(parsed.path or "")
+    match = re.search(r"/imagine/post/([0-9a-fA-F-]{8,})", path)
+    if not match:
+        return ""
+    post_id = match.group(1)
+    return f"https://imagine-public.x.ai/imagine-public/share-videos/{post_id}.mp4"
 
 
 def _normalize_version_key(value: str) -> tuple[int, ...]:
@@ -671,7 +724,15 @@ def _configure_qtwebengine_runtime() -> None:
         "--ignore-gpu-blocklist",
         "--disable-renderer-backgrounding",
         "--autoplay-policy=no-user-gesture-required",
+        f"--media-cache-size={_env_int('GROK_BROWSER_MEDIA_CACHE_BYTES', 268435456)}",
+        f"--disk-cache-size={_env_int('GROK_BROWSER_DISK_CACHE_BYTES', 536870912)}",
     ]
+
+    if not QTWEBENGINE_USE_DISK_CACHE:
+        default_flags.extend([
+            "--disable-gpu-shader-disk-cache",
+            "--disable-features=MediaHistoryLogging",
+        ])
 
     existing_flags = os.getenv("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(default_flags + ([existing_flags] if existing_flags else []))
@@ -2250,9 +2311,15 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
+        self.manual_public_video_url = ""
+        self.manual_download_attempt_count = 0
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
@@ -2821,6 +2888,8 @@ class MainWindow(QMainWindow):
 
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
+            self._append_log(f"Browser profile storage path: {CACHE_DIR / 'profile'}")
+            self._append_log(f"Browser HTTP cache path: {CACHE_DIR / 'cache'}")
         else:
             self._append_log(
                 "Browser cache: running in memory/off-the-record mode because no writable cache folder was available."
@@ -9272,14 +9341,23 @@ class MainWindow(QMainWindow):
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
+        self.manual_public_video_url = ""
+        self.manual_download_attempt_count = 0
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
+        self._append_log(
+            f"Variant {variant}: manual download attempts are rate-limited to every {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000} seconds."
+        )
         self.manual_download_poll_timer.start(0)
 
     def _poll_for_manual_video(self) -> None:
@@ -9302,6 +9380,12 @@ class MainWindow(QMainWindow):
             self.manual_download_in_progress = False
             self.manual_download_started_at = None
             self.manual_download_deadline = None
+            self.manual_refresh_after_generating_sent = False
+            self.manual_public_video_url = ""
+            self.manual_download_attempt_count = 0
+            self.manual_download_poll_attempt_count = 0
+            self.manual_download_last_status = ""
+            self.manual_download_last_status_log_at = 0.0
             self._append_log(f"ERROR: Variant {variant} did not produce a downloadable video in time.")
             if self.continue_from_frame_active:
                 self._append_log("Continue-from-last-frame stopped because download polling timed out.")
@@ -9335,10 +9419,18 @@ class MainWindow(QMainWindow):
                         }}
                     }}
                 }};
-                const percentNode = [...document.querySelectorAll("div .tabular-nums, div.tabular-nums")]
-                    .find((el) => isVisible(el) && /^\\d{{1,3}}%$/.test((el.textContent || "").trim()));
+                const normalizeProgressText = (text) => String(text || "").replace(/\\s+/g, "").trim();
+                const percentNode = [...document.querySelectorAll(".tabular-nums, div .tabular-nums, div.tabular-nums, span.tabular-nums")]
+                    .find((el) => {{
+                        if (!isVisible(el)) return false;
+                        const normalized = normalizeProgressText(el.textContent || "");
+                        return /^\\d{{1,3}}%$/.test(normalized);
+                    }});
                 if (percentNode) {{
-                    return {{ status: "progress", progressText: (percentNode.textContent || "").trim() }};
+                    return {{
+                        status: "progress",
+                        progressText: normalizeProgressText(percentNode.textContent || ""),
+                    }};
                 }}
 
                 const generatingIndicator = [...document.querySelectorAll("span")]
@@ -9446,6 +9538,7 @@ class MainWindow(QMainWindow):
                     if (btn.matches?.("[data-sidebar='menu-button']") || btn.closest("[data-sidebar='menu-button']")) return false;
                     return true;
                 }};
+                const preferredDownloadButton = document.querySelector("button[type='button'][aria-label='Download'][data-state='closed']");
                 const exactDownloadCandidates = [...document.querySelectorAll("button[aria-label='Download']")]
                     .filter((btn) => isDownloadActionButton(btn));
                 const fallbackDownloadCandidates = [
@@ -9475,14 +9568,18 @@ class MainWindow(QMainWindow):
                     return score;
                 }};
                 let downloadButton = null;
-                let bestScore = Number.MAX_SAFE_INTEGER;
-                downloadCandidates.forEach((btn, index) => {{
-                    const score = candidateScore(btn, index);
-                    if (score < bestScore) {{
-                        bestScore = score;
-                        downloadButton = btn;
-                    }}
-                }});
+                if (preferredDownloadButton && isDownloadActionButton(preferredDownloadButton)) {{
+                    downloadButton = preferredDownloadButton;
+                }} else {{
+                    let bestScore = Number.MAX_SAFE_INTEGER;
+                    downloadCandidates.forEach((btn, index) => {{
+                        const score = candidateScore(btn, index);
+                        if (score < bestScore) {{
+                            bestScore = score;
+                            downloadButton = btn;
+                        }}
+                    }});
+                }}
 
                 if (cancelVideoButton) {{
                     return {{ status: "rendering-cancel-visible" }};
@@ -9500,11 +9597,6 @@ class MainWindow(QMainWindow):
                 }}
 
                 if (downloadButton) {{
-                    const rect = typeof downloadButton.getBoundingClientRect === "function"
-                        ? downloadButton.getBoundingClientRect()
-                        : null;
-                    const clickX = rect ? (rect.left + rect.width / 2) : null;
-                    const clickY = rect ? (rect.top + rect.height / 2) : null;
                     const directUrlCandidatesForDownload = [];
                     const pushDirectCandidate = (rawUrl) => {{
                         const candidate = normalizeAbsoluteUrl(rawUrl || "");
@@ -9530,9 +9622,7 @@ class MainWindow(QMainWindow):
                     }} catch (_) {{}}
                     const directUrl = directUrlCandidatesForDownload.find((candidate) => isDirectVideoUrl(candidate)) || "";
                     return {{
-                        status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
-                        clickX,
-                        clickY,
+                        status: "download-visible",
                         directUrl,
                     }};
                 }}
@@ -9560,12 +9650,48 @@ class MainWindow(QMainWindow):
             if current_variant is None:
                 return
 
+            try:
+                active_url = str(self.browser.url().toString() or "").strip()
+            except Exception:
+                active_url = ""
+            post_derived_public_url = _public_video_url_from_post_url(active_url)
+            if post_derived_public_url:
+                self.manual_public_video_url = post_derived_public_url
+                if self.manual_download_poll_attempt_count <= 2:
+                    self._append_log(
+                        f"Variant {current_variant}: derived public video URL from post id for probing: {post_derived_public_url}"
+                    )
+            if active_url and _looks_like_public_video_url(active_url):
+                self.manual_public_video_url = _ensure_public_download_query(active_url)
+
             if not isinstance(result, dict):
-                self.manual_download_poll_timer.start(3000)
+                if self.manual_public_video_url:
+                    self._append_log(
+                        f"Variant {current_variant}: poll returned no structured page state; probing known public URL directly."
+                    )
+                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
+                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                else:
+                    self._append_log(
+                        f"Variant {current_variant}: poll returned no structured page state and no public video URL is known yet; waiting for direct URL signal."
+                    )
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             status = result.get("status", "waiting")
             progress_text = (result.get("progressText") or "").strip()
+            self.manual_download_poll_attempt_count += 1
+
+            now = time.time()
+            status_changed = status != self.manual_download_last_status
+            status_log_interval_elapsed = (now - self.manual_download_last_status_log_at) >= 6.0
+            if status_changed or status_log_interval_elapsed:
+                suffix = f" ({progress_text})" if progress_text else ""
+                self._append_log(
+                    f"Variant {current_variant}: download poll #{self.manual_download_poll_attempt_count} status={status}{suffix}."
+                )
+                self.manual_download_last_status = status
+                self.manual_download_last_status_log_at = now
 
             was_generating = bool(getattr(self, "manual_generating_indicator_seen", False))
             if status == "generating-indicator-visible":
@@ -9574,22 +9700,34 @@ class MainWindow(QMainWindow):
                         f"Variant {current_variant}: found 'Generating' span; polling until it disappears before download checks."
                     )
                 self.manual_generating_indicator_seen = True
+                self.manual_refresh_after_generating_sent = False
             elif was_generating:
                 self.manual_generating_indicator_seen = False
                 self._append_log(
                     f"Variant {current_variant}: 'Generating' span disappeared; checking whether download is now ready."
                 )
+                if not self.manual_refresh_after_generating_sent:
+                    self.manual_refresh_after_generating_sent = True
+                    self._append_log(
+                        f"Variant {current_variant}: refreshing embedded browser now that 'Generating' disappeared."
+                    )
+                    try:
+                        self.browser.reload()
+                    except Exception:
+                        pass
+                    self.manual_download_poll_timer.start(3000)
+                    return
 
             if status == "progress":
                 self.manual_video_start_click_sent = True
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
-                self.manual_download_poll_timer.start(3000)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             if status == "generating-indicator-visible":
                 self.manual_video_start_click_sent = True
-                self.manual_download_poll_timer.start(3000)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             if status == "make-video-clicked":
@@ -9597,347 +9735,105 @@ class MainWindow(QMainWindow):
                 self._append_log(f"Variant {current_variant}: clicked '{label}' to start video generation.")
                 self.manual_video_start_click_sent = True
                 self.manual_video_make_click_fallback_used = True
-                self.manual_download_poll_timer.start(3000)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             if status == "make-video-awaiting-progress":
-                self.manual_download_poll_timer.start(3000)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             if status == "make-video-visible":
                 self._append_log(f"Variant {current_variant}: '{result.get('buttonLabel') or 'Make video'}' is visible but click did not register; retrying.")
-                self.manual_download_poll_timer.start(2000)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
                 self.manual_video_start_click_sent = True
-                self.manual_download_poll_timer.start(3000)
+                if self.manual_public_video_url:
+                    self._append_log(
+                        f"Variant {current_variant}: status={status}; probing known public URL directly."
+                    )
+                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
+                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                else:
+                    self._append_log(
+                        f"Variant {current_variant}: status={status}; waiting for public video URL to appear."
+                    )
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
-            if status == "download-clicked":
-                click_x = result.get("clickX")
-                click_y = result.get("clickY")
+            if status in ("download-clicked", "download-visible"):
+                self.manual_download_attempt_count += 1
                 direct_url = (result.get("directUrl") or "").strip()
-                if not self.manual_download_request_pending and direct_url:
+                self._append_log(
+                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL extraction (manual browser download bypass enabled)."
+                )
+
+                if direct_url:
+                    self.manual_public_video_url = _ensure_public_download_query(direct_url)
                     self._append_log(
-                        f"Variant {current_variant}: resolved direct video URL while clicking Download; starting automatic direct download fallback."
+                        f"Variant {current_variant}: found direct video URL from Download control; downloading without browser click."
                     )
                     if self._start_manual_direct_download(current_variant, direct_url):
                         self.manual_download_click_sent = True
                         self.manual_download_in_progress = True
-                        self.manual_download_poll_timer.start(1000)
-                        return
-                if not self.manual_download_click_sent:
-                    self._append_log(f"Variant {current_variant} appears ready; clicked in-page Download button.")
-                    self.manual_download_click_sent = True
-                    self.manual_download_in_progress = True
-                if not self.manual_download_request_pending and click_x is not None and click_y is not None:
-                    native_clicked = self._native_click_embedded_browser_at(float(click_x), float(click_y))
-                    if native_clicked:
-                        self._append_log(f"Variant {current_variant}: sent native embedded-browser click on Download control.")
-                self.manual_download_poll_timer.start(3000)
-                return
-
-            if status == "download-visible":
-                force_download_click_script = """
-                    (() => {
-                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                        const buttons = [
-                            ...document.querySelectorAll("button[aria-label='Download']"),
-                            ...document.querySelectorAll("[role='button'][aria-label='Download']"),
-                        ];
-                        const candidates = buttons.filter((btn, index, arr) => arr.indexOf(btn) === index)
-                            .filter((btn) => {
-                                if (!isVisible(btn) || btn.disabled) return false;
-                                if (btn.closest("[role='dialog'], dialog, [aria-modal='true']")) return false;
-                                if (btn.matches?.("[data-sidebar='menu-button']") || btn.closest("[data-sidebar='menu-button']")) return false;
-                                const ariaRaw = String(btn.getAttribute("aria-label") || "").trim();
-                                if (ariaRaw !== "Download") return false;
-                                const cls = String(btn.className || "").toLowerCase();
-                                const descriptor = `${ariaRaw} ${cls}`.toLowerCase();
-                                if (/\bshare\b/.test(descriptor)) return false;
-                                return true;
-                            });
-                        const video = document.querySelector("video");
-                        const videoRect = video && typeof video.getBoundingClientRect === "function" ? video.getBoundingClientRect() : null;
-                        const candidateScore = (btn, index) => {
-                            let score = index * 100;
-                            if (videoRect) {
-                                const rect = btn.getBoundingClientRect();
-                                const cx = rect.left + rect.width / 2;
-                                const cy = rect.top + rect.height / 2;
-                                const vCx = videoRect.left + videoRect.width / 2;
-                                const vCy = videoRect.top + videoRect.height / 2;
-                                score += Math.hypot(cx - vCx, cy - vCy);
-                                if (cx < vCx) score += 300;
-                                if (cy < (videoRect.top - 140) || cy > (videoRect.bottom + 140)) score += 300;
-                            }
-                            return score;
-                        };
-                        let candidate = null;
-                        let bestScore = Number.MAX_SAFE_INTEGER;
-                        candidates.forEach((btn, index) => {
-                            const score = candidateScore(btn, index);
-                            if (score < bestScore) {
-                                bestScore = score;
-                                candidate = btn;
-                            }
-                        });
-                        if (!candidate) return { clicked: false, reason: "missing-button", clickX: null, clickY: null, directUrl: "" };
-
-                        const normalizeAbsoluteUrl = (rawUrl) => {
-                            const value = String(rawUrl || "").trim();
-                            if (!value) return "";
-                            try {
-                                return new URL(value, window.location.href).toString();
-                            } catch (_) {
-                                return value;
-                            }
-                        };
-                        const isDirectVideoUrl = (url) => {
-                            const normalized = normalizeAbsoluteUrl(url);
-                            if (!/^https?:[/][/]/i.test(normalized)) return false;
-                            if (/^https?:[/][/](?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)/i.test(normalized)) return false;
-                            const lowered = String(normalized || "").toLowerCase();
-                            if (/[.](?:mp4|webm|mov|m4v)(?:$|[?#])/i.test(lowered)) return true;
-                            if (/[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|\\/)/i.test(lowered)) return true;
-                            if (/[?&](?:format|ext)=mp4(?:$|[&#])/i.test(lowered)) return true;
-                            if (/[/](?:video|videos|render|download|media)[/]/i.test(lowered) && /[?&](?:token|sig|signature|expires|x-amz-)/i.test(lowered)) return true;
-                            return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
-                        };
-
-                        const common = { bubbles: true, cancelable: true, composed: true };
-                        const fire = (el, eventName, ctorName) => {
-                            try {
-                                const Ctor = window[ctorName] || window.Event;
-                                el.dispatchEvent(new Ctor(eventName, common));
-                                return true;
-                            } catch (_) {
-                                try {
-                                    el.dispatchEvent(new Event(eventName, common));
-                                    return true;
-                                } catch (__) {
-                                    return false;
-                                }
-                            }
-                        };
-
-                        let clicked = false;
-                        let menuOpenOnly = false;
-                        try { candidate.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                        try { candidate.focus({ preventScroll: true }); } catch (_) {}
-                        clicked = fire(candidate, "pointerdown", "PointerEvent") || clicked;
-                        clicked = fire(candidate, "mousedown", "MouseEvent") || clicked;
-                        clicked = fire(candidate, "pointerup", "PointerEvent") || clicked;
-                        clicked = fire(candidate, "mouseup", "MouseEvent") || clicked;
-                        clicked = fire(candidate, "click", "MouseEvent") || clicked;
-                        try { candidate.click(); clicked = true; } catch (_) {}
-
-                        if (!clicked) {
-                            try {
-                                const rect = candidate.getBoundingClientRect();
-                                const x = Math.floor(rect.left + Math.max(1, Math.min(rect.width - 1, rect.width * 0.5)));
-                                const y = Math.floor(rect.top + Math.max(1, Math.min(rect.height - 1, rect.height * 0.5)));
-                                const pointTarget = document.elementFromPoint(x, y) || candidate;
-                                let safeTarget = pointTarget;
-                                if (safeTarget && !candidate.contains(safeTarget)) {
-                                    const ancestorMatch = safeTarget.closest("button[aria-label='Download'], [role='button'][aria-label='Download']");
-                                    if (ancestorMatch && candidate.contains(ancestorMatch)) {
-                                        safeTarget = ancestorMatch;
-                                    } else {
-                                        safeTarget = candidate;
-                                    }
-                                }
-                                if (safeTarget && (safeTarget.matches?.("[data-sidebar='menu-button']") || safeTarget.closest("[data-sidebar='menu-button']"))) {
-                                    safeTarget = candidate;
-                                }
-                                fire(safeTarget, "pointerdown", "PointerEvent");
-                                fire(safeTarget, "mousedown", "MouseEvent");
-                                fire(safeTarget, "pointerup", "PointerEvent");
-                                fire(safeTarget, "mouseup", "MouseEvent");
-                                fire(safeTarget, "click", "MouseEvent");
-                                try { safeTarget.click(); clicked = true; } catch (_) {}
-                            } catch (_) {}
-                        }
-
-                        const tryClickNestedDownloadTarget = () => {
-                            const menuSelectors = [
-                                "[role='menu'] a[href]",
-                                "[role='menuitem'][href]",
-                                "[role='menuitem']",
-                                "[data-radix-popper-content-wrapper] a[href]",
-                                "[data-radix-popper-content-wrapper] [role='menuitem']",
-                            ];
-                            const menuNodes = menuSelectors
-                                .flatMap((selector) => [...document.querySelectorAll(selector)]);
-                            const uniqueMenuNodes = menuNodes.filter((node, index, arr) => arr.indexOf(node) === index);
-                            const candidateNode = uniqueMenuNodes.find((node) => {
-                                if (!isVisible(node) || node.disabled) return false;
-                                const text = `${node.getAttribute?.("aria-label") || ""} ${node.textContent || ""}`.toLowerCase();
-                                const href = normalizeAbsoluteUrl(node.getAttribute?.("href") || "");
-                                if (isDirectVideoUrl(href)) return true;
-                                return /\bdownload\b/.test(text) && (/\bmp4\b/.test(text) || /\bvideo\b/.test(text) || /\bhd\b/.test(text));
-                            });
-                            if (!candidateNode) return false;
-                            try { candidateNode.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                            try { candidateNode.focus({ preventScroll: true }); } catch (_) {}
-                            let nestedClicked = false;
-                            nestedClicked = fire(candidateNode, "pointerdown", "PointerEvent") || nestedClicked;
-                            nestedClicked = fire(candidateNode, "mousedown", "MouseEvent") || nestedClicked;
-                            nestedClicked = fire(candidateNode, "pointerup", "PointerEvent") || nestedClicked;
-                            nestedClicked = fire(candidateNode, "mouseup", "MouseEvent") || nestedClicked;
-                            nestedClicked = fire(candidateNode, "click", "MouseEvent") || nestedClicked;
-                            try { candidateNode.click(); nestedClicked = true; } catch (_) {}
-                            return nestedClicked;
-                        };
-
-                        const menuStateBeforeNestedCheck = String(candidate.getAttribute("data-state") || "").trim().toLowerCase();
-                        const hasMenuSemantics = (
-                            candidate.getAttribute("aria-haspopup") === "menu"
-                            || candidate.getAttribute("aria-expanded") !== null
-                            || candidate.hasAttribute("data-state")
-                        );
-                        const nestedClicked = tryClickNestedDownloadTarget();
-                        if (nestedClicked) {
-                            clicked = true;
-                            menuOpenOnly = false;
-                        } else {
-                            const menuStateAfterNestedCheck = String(candidate.getAttribute("data-state") || "").trim().toLowerCase();
-                            const menuLikelyOpen = menuStateAfterNestedCheck === "open" || menuStateBeforeNestedCheck === "open";
-                            const menuLikelyTriggerOnly = menuStateBeforeNestedCheck === "closed" || hasMenuSemantics;
-                            if ((menuLikelyOpen || menuLikelyTriggerOnly) && clicked) {
-                                menuOpenOnly = true;
-                            }
-                        }
-
-                        const directUrlCandidates = [];
-                        const pushCandidate = (rawUrl) => {
-                            const normalized = normalizeAbsoluteUrl(rawUrl);
-                            if (normalized) directUrlCandidates.push(normalized);
-                        };
-                        pushCandidate(candidate.getAttribute("href"));
-                        pushCandidate(candidate.getAttribute("data-url"));
-                        pushCandidate(candidate.getAttribute("data-href"));
-                        pushCandidate(candidate.getAttribute("data-src"));
-                        const candidateAnchor = candidate.closest("a[href]");
-                        if (candidateAnchor) pushCandidate(candidateAnchor.getAttribute("href"));
-                        for (const mediaEl of document.querySelectorAll("video[src], source[src], [data-video-url], [data-url], [data-src]")) {
-                            pushCandidate(mediaEl.getAttribute?.("src"));
-                            pushCandidate(mediaEl.getAttribute?.("data-video-url"));
-                            pushCandidate(mediaEl.getAttribute?.("data-url"));
-                            pushCandidate(mediaEl.getAttribute?.("data-src"));
-                        }
-                        try {
-                            const resourceEntries = performance.getEntriesByType("resource") || [];
-                            for (const entry of resourceEntries.slice(-60)) {
-                                pushCandidate(entry && entry.name ? String(entry.name) : "");
-                            }
-                        } catch (_) {}
-                        const directUrl = directUrlCandidates.find((url) => isDirectVideoUrl(url)) || "";
-
-                        const finalRect = typeof candidate.getBoundingClientRect === "function"
-                            ? candidate.getBoundingClientRect()
-                            : null;
-                        return {
-                            clicked,
-                            menuOpenOnly,
-                            reason: menuOpenOnly ? "menu-opened-awaiting-item" : (clicked ? "clicked" : "dispatch-failed"),
-                            clickX: finalRect ? (finalRect.left + finalRect.width / 2) : null,
-                            clickY: finalRect ? (finalRect.top + finalRect.height / 2) : null,
-                            directUrl,
-                        };
-                    })()
-                """
-
-                def _after_force_download_click(click_result):
-                    clicked = isinstance(click_result, dict) and bool(click_result.get("clicked"))
-                    menu_open_only = isinstance(click_result, dict) and bool(click_result.get("menuOpenOnly"))
-                    click_x = click_result.get("clickX") if isinstance(click_result, dict) else None
-                    click_y = click_result.get("clickY") if isinstance(click_result, dict) else None
-                    direct_url = (click_result.get("directUrl") or "").strip() if isinstance(click_result, dict) else ""
-                    native_clicked = False
-                    if not self.manual_download_request_pending and direct_url:
-                        self._append_log(
-                            f"Variant {current_variant}: resolved direct video URL from Download control; starting automatic direct download fallback."
-                        )
-                        if self._start_manual_direct_download(current_variant, direct_url):
-                            self.manual_download_click_sent = True
-                            self.manual_download_in_progress = True
-                            self.manual_download_poll_timer.start(1000)
-                            return
-                    if not self.manual_download_request_pending and click_x is not None and click_y is not None:
-                        native_clicked = self._native_click_embedded_browser_at(float(click_x), float(click_y))
-                        if native_clicked:
-                            self._append_log(
-                                f"Variant {current_variant}: sent native embedded-browser click on Download control."
-                            )
-
-                    if menu_open_only:
-                        self._append_log(
-                            f"Variant {current_variant}: Download control opened a menu; waiting for nested video download item to become clickable."
-                        )
-                        self.manual_download_poll_timer.start(900)
+                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                         return
 
-                    if clicked or native_clicked:
-                        if not self.manual_download_click_sent:
-                            self._append_log(
-                                f"Variant {current_variant}: Download button required fallback automation click; download request sent."
-                            )
+                if self.manual_public_video_url:
+                    self._append_log(
+                        f"Variant {current_variant}: Download control is visible; probing known public URL directly."
+                    )
+                    if self._start_manual_direct_download(current_variant, self.manual_public_video_url):
                         self.manual_download_click_sent = True
                         self.manual_download_in_progress = True
-                        self.manual_download_poll_timer.start(1200)
+                        self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
                         return
 
-                    self._append_log(
-                        f"Variant {current_variant}: Download button is visible but automation click did not register yet; retrying..."
-                    )
-                    self.manual_download_poll_timer.start(1500)
-
-                self.browser.page().runJavaScript(force_download_click_script, _after_force_download_click)
+                self._append_log(
+                    f"Variant {current_variant}: Download control is visible but no public direct URL is known yet; waiting for URL discovery."
+                )
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             src = result.get("src") or ""
             if status == "video-buffering":
-                self.manual_download_poll_timer.start(3000)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             min_wait_elapsed = self.manual_download_started_at is not None and (time.time() - self.manual_download_started_at) >= 8
             if status not in ("video-src-ready", "direct-url-ready") or not src or not min_wait_elapsed:
-                self.manual_download_poll_timer.start(3000)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             if status == "direct-url-ready":
+                self.manual_download_attempt_count += 1
+                self.manual_public_video_url = _ensure_public_download_query(src)
+                self._append_log(
+                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL detection."
+                )
                 if self.manual_download_request_pending:
-                    self.manual_download_poll_timer.start(3000)
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                     return
                 source_type = result.get("sourceType") or "video-link"
                 self._append_log(f"Variant {current_variant} ready; downloading directly from detected video URL ({source_type}).")
                 if self._start_manual_direct_download(current_variant, src):
                     self.manual_download_click_sent = True
                     self.manual_download_in_progress = True
-                self.manual_download_poll_timer.start(1000)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
-            trigger_download_script = f"""
-                (() => {{
-                    const src = {src!r};
-                    const a = document.createElement("a");
-                    a.href = src;
-                    a.download = `grok_manual_variant_{current_variant}_${{Date.now()}}.mp4`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    return true;
-                }})()
-            """
             if not self.manual_download_click_sent:
-                self.browser.page().runJavaScript(trigger_download_script)
-                self._append_log(f"Variant {current_variant} video detected; browser download requested from video source.")
-                self.manual_download_click_sent = True
-                self.manual_download_in_progress = True
+                self.manual_download_attempt_count += 1
+                self.manual_public_video_url = _ensure_public_download_query(src)
+                self._append_log(
+                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via video source URL direct download (manual browser download bypass enabled)."
+                )
+                if self._start_manual_direct_download(current_variant, src):
+                    self.manual_download_click_sent = True
+                    self.manual_download_in_progress = True
 
-            self.manual_download_poll_timer.start(3000)
+            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
 
         self.browser.page().runJavaScript(script, after_poll)
 
@@ -9946,12 +9842,23 @@ class MainWindow(QMainWindow):
             self.download_dir.mkdir(parents=True, exist_ok=True)
             filename = self._build_session_download_filename("video", variant, "mp4")
             output_path = self.download_dir / filename
-            self._append_log(f"Variant {variant}: downloading direct video URL to {output_path.name}.")
-            download_path = self._download_video_from_public_url(source_url, output_path)
+            final_url = _ensure_public_download_query(source_url)
+            post_polled_url = self._poll_post_page_for_media_url(final_url)
+            if post_polled_url:
+                final_url = _ensure_public_download_query(post_polled_url)
+            self._append_log(
+                f"Variant {variant}: downloading direct video URL to {output_path.name} using curl-style public URL polling ({final_url})."
+            )
+            download_path = self._download_video_from_public_url(final_url, output_path)
+        except PublicVideoNotReadyError as exc:
+            self._append_log(f"Variant {variant}: public video URL exists but is not ready yet ({exc}); will retry.")
+            self.manual_download_click_sent = False
+            self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+            return False
         except Exception as exc:
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(3000)
+            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
             return False
 
         file_size = download_path.stat().st_size if download_path.exists() else 0
@@ -9962,7 +9869,7 @@ class MainWindow(QMainWindow):
             if download_path.exists():
                 download_path.unlink(missing_ok=True)
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(2000)
+            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
             return False
 
         self._complete_manual_video_download(download_path, variant)
@@ -9973,7 +9880,127 @@ class MainWindow(QMainWindow):
         self._manual_direct_download_context = None
 
     @staticmethod
+    def _poll_post_page_for_media_url(source_url: str) -> str:
+        raw = str(source_url or "").strip()
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        page_url = ""
+        if re.search(r"^https?://(?:www\.)?grok\.com/imagine/post/[0-9a-fA-F-]{8,}", raw, re.IGNORECASE):
+            page_url = raw
+        else:
+            id_match = re.search(r"/([0-9a-fA-F-]{8,})\.mp4(?:$|[?#])", parsed.path, re.IGNORECASE)
+            if id_match:
+                page_url = f"https://grok.com/imagine/post/{id_match.group(1)}"
+        if not page_url:
+            return ""
+
+        curl_command = shutil.which("curl")
+        html_payload = ""
+        if curl_command:
+            result = subprocess.run(
+                [
+                    curl_command,
+                    "--silent",
+                    "--show-error",
+                    "--location",
+                    "--connect-timeout",
+                    "20",
+                    "--max-time",
+                    "30",
+                    "--user-agent",
+                    os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
+                    "--referer",
+                    "https://grok.com/",
+                    page_url,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                html_payload = result.stdout or ""
+
+        if not html_payload:
+            return ""
+
+        html_normalized = html_payload.replace("\\/", "/").replace("\\u002F", "/")
+        match = re.search(
+            r"https?://imagine-public[.]x[.]ai/imagine-public/share-videos/[0-9a-fA-F-]{8,}\.mp4(?:[^\s\"'<>]*)",
+            html_normalized,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return match.group(0).strip()
+        return ""
+
+    @staticmethod
     def _download_video_from_public_url(source_url: str, output_path: Path) -> Path:
+        def _raise_if_not_ready(payload: str) -> None:
+            text = str(payload or "").lower()
+            if "<code>nosuchkey</code>" in text or "the specified key does not exist" in text:
+                raise PublicVideoNotReadyError("NoSuchKey")
+
+        head_headers = {
+            "Cache-Control": "no-cache, no-store, max-age=0",
+            "Pragma": "no-cache",
+            "User-Agent": os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
+            "Referer": "https://grok.com/",
+        }
+        try:
+            with requests.get(source_url, timeout=20, headers=head_headers) as probe:
+                if probe.status_code >= 400:
+                    _raise_if_not_ready(probe.text)
+                    probe.raise_for_status()
+                content_type = str(probe.headers.get("content-type", "")).lower()
+                if "xml" in content_type or "text/html" in content_type or "text/plain" in content_type:
+                    probe_text = probe.text
+                    _raise_if_not_ready(probe_text)
+        except PublicVideoNotReadyError:
+            raise
+        except Exception:
+            pass
+
+        curl_command = shutil.which("curl")
+        if curl_command:
+            result = subprocess.run(
+                [
+                    curl_command,
+                    "--silent",
+                    "--show-error",
+                    "--location",
+                    "--retry",
+                    "3",
+                    "--retry-delay",
+                    "1",
+                    "--connect-timeout",
+                    "20",
+                    "--max-time",
+                    "240",
+                    "--user-agent",
+                    head_headers["User-Agent"],
+                    "--referer",
+                    head_headers["Referer"],
+                    "--output",
+                    str(output_path),
+                    source_url,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                _raise_if_not_ready(stderr)
+                raise RuntimeError(stderr or f"curl failed with exit code {result.returncode}")
+            if output_path.exists() and output_path.stat().st_size < 32_768:
+                try:
+                    sample = output_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    sample = ""
+                _raise_if_not_ready(sample)
+            return output_path
+
         command = shutil.which("wget")
         if command:
             result = subprocess.run(
@@ -9982,6 +10009,10 @@ class MainWindow(QMainWindow):
                     "--quiet",
                     "--tries=3",
                     "--timeout=60",
+                    "--user-agent",
+                    head_headers["User-Agent"],
+                    "--referer",
+                    head_headers["Referer"],
                     "--output-document",
                     str(output_path),
                     source_url,
@@ -9992,11 +10023,25 @@ class MainWindow(QMainWindow):
             )
             if result.returncode != 0:
                 stderr = (result.stderr or "").strip()
+                _raise_if_not_ready(stderr)
                 raise RuntimeError(stderr or f"wget failed with exit code {result.returncode}")
+            if output_path.exists() and output_path.stat().st_size < 32_768:
+                try:
+                    sample = output_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    sample = ""
+                _raise_if_not_ready(sample)
             return output_path
 
-        with requests.get(source_url, stream=True, timeout=240) as response:
+        with requests.get(source_url, stream=True, timeout=240, headers=head_headers) as response:
+            if response.status_code >= 400:
+                _raise_if_not_ready(response.text)
             response.raise_for_status()
+            content_type = str(response.headers.get("content-type", "")).lower()
+            if "xml" in content_type or "text/html" in content_type or "text/plain" in content_type:
+                payload = response.text
+                _raise_if_not_ready(payload)
+                raise RuntimeError(f"Unexpected non-video response content-type: {content_type}")
             with open(output_path, "wb") as handle:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
@@ -10033,10 +10078,16 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
         self.manual_download_deadline = None
+        self.manual_public_video_url = ""
+        self.manual_download_attempt_count = 0
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
         if self.continue_from_frame_active:
             self.continue_from_frame_completed += 1
             if self.continue_from_frame_completed < self.continue_from_frame_target_count:
@@ -10141,38 +10192,23 @@ class MainWindow(QMainWindow):
                     self.manual_download_request_pending = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = time.time()
-                    self.manual_download_poll_timer.start(1200)
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                     return
 
                 if video_size < MIN_VALID_VIDEO_BYTES:
                     self._append_log(
-                        f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB)."
+                        f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB); discarding and retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
                     )
-                    self.pending_manual_variant_for_download = None
-                    self.pending_manual_download_type = None
-                    self.pending_manual_image_prompt = None
-                    self.manual_image_pick_clicked = False
-                    self.manual_image_video_mode_selected = False
-                    self.manual_image_video_submit_sent = False
-                    self.manual_image_pick_retry_count = 0
-                    self.manual_image_video_mode_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
+                    if video_path.exists():
+                        video_path.unlink(missing_ok=True)
                     self.manual_download_click_sent = False
                     self.manual_download_request_pending = False
                     self.manual_video_start_click_sent = False
                     self.manual_video_make_click_fallback_used = False
                     self.manual_video_allow_make_click = True
                     self.manual_download_in_progress = False
-                    self.manual_download_started_at = None
-                    self.manual_download_deadline = None
-
-                    if self.continue_from_frame_active:
-                        self._retry_continue_after_small_download(variant)
-                    else:
-                        self._append_log(
-                            "WARNING: Undersized manual download detected outside continue-from-last-frame mode; "
-                            "please use 'Continue from Last Frame' to regenerate from the extracted frame."
-                        )
+                    self.manual_download_started_at = time.time()
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                     return
 
                 self._complete_manual_video_download(video_path, variant)
@@ -10201,7 +10237,7 @@ class MainWindow(QMainWindow):
                     )
                     if self._start_manual_direct_download(variant, interrupted_url):
                         self.manual_download_click_sent = True
-                        self.manual_download_poll_timer.start(1000)
+                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                         return
 
                 self._append_log(f"ERROR: Download interrupted for manual variant {variant}; no usable fallback URL.")
@@ -10253,10 +10289,16 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
         self.manual_download_deadline = None
+        self.manual_public_video_url = ""
+        self.manual_download_attempt_count = 0
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
         self._reset_automation_counter_tracking()
 
         self.continue_from_frame_active = False
