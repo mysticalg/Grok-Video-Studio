@@ -9087,9 +9087,10 @@ class MainWindow(QMainWindow):
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
                 ("ratio", selected_aspect_ratio),
+                ("type", "Make Video"),
             ]
             self._append_log(
-                f"Variant {variant}: continue-last-video mode detected; applying resolution, duration, and aspect ratio on the post page."
+                f"Variant {variant}: continue-last-video mode detected; applying resolution, duration, aspect ratio, and 'Make Video' on the post page."
             )
         else:
             option_steps = [
