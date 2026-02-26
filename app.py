@@ -9195,6 +9195,18 @@ class MainWindow(QMainWindow):
                     return {{ status: "progress", progressText: (percentNode.textContent || "").trim() }};
                 }}
 
+                const generatingIndicator = [...document.querySelectorAll("span")]
+                    .find((el) => {{
+                        if (!isVisible(el)) return false;
+                        const text = String(el.textContent || "").trim().toLowerCase();
+                        if (text !== "generating") return false;
+                        const cls = String(el.className || "").toLowerCase();
+                        return /animate-pulse/.test(cls) || /font-semibold/.test(cls);
+                    }});
+                if (generatingIndicator) {{
+                    return {{ status: "generating-indicator-visible", progressText: "Generating" }};
+                }}
+
                 const cancelVideoButton = [...document.querySelectorAll("button")]
                     .find((btn) => isVisible(btn) && !btn.disabled && /cancel\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
 
@@ -9355,6 +9367,11 @@ class MainWindow(QMainWindow):
                 self.manual_video_start_click_sent = True
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
+                self.manual_download_poll_timer.start(3000)
+                return
+
+            if status == "generating-indicator-visible":
+                self.manual_video_start_click_sent = True
                 self.manual_download_poll_timer.start(3000)
                 return
 
