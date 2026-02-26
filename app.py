@@ -9296,6 +9296,7 @@ class MainWindow(QMainWindow):
                     const descriptor = `${{ariaRaw}} ${{cls}}`.toLowerCase();
                     if (/\bshare\b/.test(descriptor)) return false;
                     if (btn.closest("[role='dialog'], dialog, [aria-modal='true']")) return false;
+                    if (btn.matches?.("[data-sidebar='menu-button']") || btn.closest("[data-sidebar='menu-button']")) return false;
                     return true;
                 }};
                 const exactDownloadCandidates = [...document.querySelectorAll("button[aria-label='Download']")]
@@ -9454,6 +9455,7 @@ class MainWindow(QMainWindow):
                             .filter((btn) => {
                                 if (!isVisible(btn) || btn.disabled) return false;
                                 if (btn.closest("[role='dialog'], dialog, [aria-modal='true']")) return false;
+                                if (btn.matches?.("[data-sidebar='menu-button']") || btn.closest("[data-sidebar='menu-button']")) return false;
                                 const ariaRaw = String(btn.getAttribute("aria-label") || "").trim();
                                 if (ariaRaw !== "Download") return false;
                                 const cls = String(btn.className || "").toLowerCase();
@@ -9520,12 +9522,24 @@ class MainWindow(QMainWindow):
                                 const x = Math.floor(rect.left + Math.max(1, Math.min(rect.width - 1, rect.width * 0.5)));
                                 const y = Math.floor(rect.top + Math.max(1, Math.min(rect.height - 1, rect.height * 0.5)));
                                 const pointTarget = document.elementFromPoint(x, y) || candidate;
-                                fire(pointTarget, "pointerdown", "PointerEvent");
-                                fire(pointTarget, "mousedown", "MouseEvent");
-                                fire(pointTarget, "pointerup", "PointerEvent");
-                                fire(pointTarget, "mouseup", "MouseEvent");
-                                fire(pointTarget, "click", "MouseEvent");
-                                try { pointTarget.click(); clicked = true; } catch (_) {}
+                                let safeTarget = pointTarget;
+                                if (safeTarget && !candidate.contains(safeTarget)) {
+                                    const ancestorMatch = safeTarget.closest("button[aria-label='Download'], [role='button'][aria-label='Download']");
+                                    if (ancestorMatch && candidate.contains(ancestorMatch)) {
+                                        safeTarget = ancestorMatch;
+                                    } else {
+                                        safeTarget = candidate;
+                                    }
+                                }
+                                if (safeTarget && (safeTarget.matches?.("[data-sidebar='menu-button']") || safeTarget.closest("[data-sidebar='menu-button']"))) {
+                                    safeTarget = candidate;
+                                }
+                                fire(safeTarget, "pointerdown", "PointerEvent");
+                                fire(safeTarget, "mousedown", "MouseEvent");
+                                fire(safeTarget, "pointerup", "PointerEvent");
+                                fire(safeTarget, "mouseup", "MouseEvent");
+                                fire(safeTarget, "click", "MouseEvent");
+                                try { safeTarget.click(); clicked = true; } catch (_) {}
                             } catch (_) {}
                         }
 
