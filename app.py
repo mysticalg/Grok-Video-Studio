@@ -6830,59 +6830,48 @@ class MainWindow(QMainWindow):
                     };
 
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
-                    const submitSelectors = [
-                        "button[type='submit'][aria-label='Submit']",
-                        "button[aria-label='Submit'][type='submit']",
-                        "button[type='submit']",
-                        "button[aria-label*='submit' i]",
-                        "button[aria-label*='create' i]",
-                        "button[aria-label*='generate' i]",
-                        "[role='button'][aria-label*='submit' i]"
-                    ];
-
-                    const candidates = [];
-                    const collect = (root) => {
-                        if (!root || typeof root.querySelectorAll !== "function") return;
-                        submitSelectors.forEach((selector) => {
-                            const matches = root.querySelectorAll(selector);
-                            for (let i = 0; i < matches.length; i += 1) candidates.push(matches[i]);
-                        });
-                    };
-
-                    const composerRoot = (promptInput && typeof promptInput.closest === "function")
-                        ? (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section") || promptInput.parentElement)
-                        : null;
-                    collect(composerRoot);
-                    collect(document);
-
-                    const uniqueCandidates = [...new Set(candidates)];
-                    const isMenuToggle = (el) => {
-                        if (!el) return false;
-                        const aria = String(el.getAttribute("aria-label") || "").trim();
-                        const text = String(el.textContent || "").replace(/\s+/g, " ").trim();
-                        const hasPopup = String(el.getAttribute("aria-haspopup") || "").toLowerCase();
-                        return /settings|image|video/i.test(`${aria} ${text}`) || hasPopup === "menu" || hasPopup === "listbox";
-                    };
-                    const primarySubmitButton = uniqueCandidates.find((el) => {
-                        if (!isVisible(el) || isMenuToggle(el)) return false;
-                        const type = String(el.getAttribute("type") || "").toLowerCase();
-                        const aria = String(el.getAttribute("aria-label") || "").trim().toLowerCase();
-                        return type === "submit" && aria === "submit";
-                    });
-                    const submitButton = primarySubmitButton || uniqueCandidates.find((el) => isVisible(el) && !isMenuToggle(el));
-                    if (!submitButton) return { ok: false, error: "Submit button not found" };
-                    if (submitButton.disabled) {
-                        return { ok: false, waiting: true, status: "submit-disabled" };
+                    if (!promptInput || !isVisible(promptInput)) {
+                        return { ok: false, waiting: true, status: "prompt-not-ready" };
                     }
 
-                    const clicked = emulateClick(submitButton);
+                    let enterDispatched = false;
+                    try { promptInput.focus({ preventScroll: true }); } catch (_) { try { promptInput.focus(); } catch (_) {} }
+                    ["keydown", "keypress", "keyup"].forEach((type) => {
+                        try {
+                            const event = new KeyboardEvent(type, {
+                                key: "Enter",
+                                code: "Enter",
+                                keyCode: 13,
+                                which: 13,
+                                bubbles: true,
+                                cancelable: true,
+                                composed: true,
+                            });
+                            promptInput.dispatchEvent(event);
+                            enterDispatched = true;
+                        } catch (_) {}
+                    });
+
+                    const form = (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null) || document.querySelector("form");
+                    let formSubmitted = false;
+                    if (form) {
+                        try {
+                            if (typeof form.requestSubmit === "function") {
+                                form.requestSubmit();
+                            } else {
+                                const ev = new Event("submit", { bubbles: true, cancelable: true });
+                                form.dispatchEvent(ev);
+                            }
+                            formSubmitted = true;
+                        } catch (_) {}
+                    }
+
                     return {
-                        ok: clicked,
-                        waiting: !clicked,
-                        status: clicked ? "submit-clicked" : "submit-click-failed",
-                        preferredFirstSubmit: !!primarySubmitButton,
-                        ariaLabel: submitButton.getAttribute("aria-label") || "",
-                        disabled: !!submitButton.disabled,
+                        ok: enterDispatched || formSubmitted,
+                        waiting: !(enterDispatched || formSubmitted),
+                        status: (enterDispatched || formSubmitted) ? "submit-enter-dispatched" : "submit-enter-failed",
+                        enterDispatched,
+                        formSubmitted,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -8216,118 +8205,49 @@ class MainWindow(QMainWindow):
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
 
-                    const submitSelectors = [
-                        "button[type='submit'][aria-label='Submit']",
-                        "button[aria-label='Submit'][type='submit']",
-                        "button[type='submit']",
-                        "button[aria-label='Submit']",
-                        "button[aria-label='Create video']",
-                        "button[aria-label*='Create video' i]",
-                        "button[aria-label*='generate' i]",
-                        "button[aria-label*='send' i]"
-                    ];
+                    if (!promptInput || !isVisible(promptInput)) {
+                        return { ok: false, error: "Prompt input not ready for Enter submit", status: "prompt-not-ready" };
+                    }
 
-                    const submitCandidates = [];
-                    const collect = (root) => {
-                        if (!root || typeof root.querySelectorAll !== "function") return;
-                        submitSelectors.forEach((selector) => {
-                            const matches = root.querySelectorAll(selector);
-                            for (let i = 0; i < matches.length; i += 1) submitCandidates.push(matches[i]);
-                        });
-                    };
+                    try { promptInput.focus({ preventScroll: true }); } catch (_) { try { promptInput.focus(); } catch (_) {} }
 
-                    const composerRoot = (promptInput && typeof promptInput.closest === "function")
-                        ? (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section") || promptInput.parentElement)
-                        : null;
-
-                    collect(composerRoot);
-                    collect(document);
-
-                    const uniqueCandidates = [...new Set(submitCandidates)];
-                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
-                    const isMenuToggle = (el) => {
-                        if (!el) return false;
-                        const aria = clean(el.getAttribute("aria-label"));
-                        const text = clean(el.textContent);
-                        const popup = clean(el.getAttribute("aria-haspopup")).toLowerCase();
-                        return /settings|image|video/i.test(`${aria} ${text}`) || popup === "menu" || popup === "listbox";
-                    };
-                    const scoreSubmitButton = (el) => {
-                        if (!el || !isVisible(el) || isMenuToggle(el)) return -100;
-                        const aria = clean(el.getAttribute("aria-label")).toLowerCase();
-                        const text = clean(el.textContent).toLowerCase();
-                        let score = 0;
-                        if ((el.getAttribute("type") || "").toLowerCase() === "submit") score += 8;
-                        if (/submit|create\s*video|generate|send/.test(`${aria} ${text}`)) score += 6;
-                        if (!text && el.querySelector("svg")) score += 4;
-                        if (el.disabled || el.getAttribute("aria-disabled") === "true") score -= 4;
-                        return score;
-                    };
-
-                    const primarySubmitButton = uniqueCandidates.find((el) => {
-                        if (!el || !isVisible(el) || isMenuToggle(el)) return false;
-                        const type = clean(el.getAttribute("type")).toLowerCase();
-                        const aria = clean(el.getAttribute("aria-label")).toLowerCase();
-                        return type === "submit" && aria === "submit";
+                    let enterDispatched = false;
+                    ["keydown", "keypress", "keyup"].forEach((type) => {
+                        try {
+                            const event = new KeyboardEvent(type, {
+                                key: "Enter",
+                                code: "Enter",
+                                keyCode: 13,
+                                which: 13,
+                                bubbles: true,
+                                cancelable: true,
+                                composed: true,
+                            });
+                            promptInput.dispatchEvent(event);
+                            enterDispatched = true;
+                        } catch (_) {}
                     });
 
-                    const submitButton = primarySubmitButton || uniqueCandidates
-                        .map((el) => ({ el, score: scoreSubmitButton(el) }))
-                        .sort((a, b) => b.score - a.score)
-                        .find((entry) => entry.score >= 0)?.el || null;
-
-                    const form = (submitButton && submitButton.form)
-                        || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
-                        || (composerRoot && typeof composerRoot.closest === "function" ? composerRoot.closest("form") : null)
-                        || document.querySelector("form");
-
-                    if (!submitButton && !form) return { ok: false, error: "Submit button/form not found" };
-
-                    if (submitButton && submitButton.disabled) {
-                        submitButton.disabled = false;
-                        submitButton.removeAttribute("disabled");
-                        submitButton.setAttribute("aria-disabled", "false");
-                    }
-
-                    const common = { bubbles: true, cancelable: true, composed: true };
-                    const emulateClick = (el) => {
-                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                        el.dispatchEvent(new MouseEvent("mousedown", common));
-                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
-                        el.dispatchEvent(new MouseEvent("mouseup", common));
-                        el.dispatchEvent(new MouseEvent("click", common));
-                    };
-
-                    const allButtons = [...document.querySelectorAll("button")].filter((el) => isVisible(el) && !isMenuToggle(el));
-                    const createVideoButton = allButtons.find((btn) => {
-                        const label = clean(btn.getAttribute("aria-label"));
-                        const txt = clean(btn.textContent);
-                        const srOnly = clean(btn.querySelector(".sr-only")?.textContent || "");
-                        return /create\s*video|submit|generate|send/i.test(`${label} ${txt} ${srOnly}`);
-                    }) || submitButton;
-
-                    let clicked = false;
-                    if (createVideoButton) {
-                        emulateClick(createVideoButton);
-                        clicked = true;
-                    }
-
+                    const form = (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null) || document.querySelector("form");
                     let formSubmitted = false;
-                    if (!clicked && form) {
-                        const ev = new Event("submit", { bubbles: true, cancelable: true });
-                        form.dispatchEvent(ev); // lets React handlers run
-                        formSubmitted = true;
+                    if (form) {
+                        try {
+                            if (typeof form.requestSubmit === "function") {
+                                form.requestSubmit();
+                            } else {
+                                const ev = new Event("submit", { bubbles: true, cancelable: true });
+                                form.dispatchEvent(ev);
+                            }
+                            formSubmitted = true;
+                        } catch (_) {}
                     }
 
                     return {
-                        ok: clicked || formSubmitted,
-                        submitted: clicked || formSubmitted,
-                        doubleClicked: !!createVideoButton,
+                        ok: enterDispatched || formSubmitted,
+                        submitted: enterDispatched || formSubmitted,
                         formSubmitted,
-                        preferredFirstSubmit: !!primarySubmitButton,
-                        forceEnabled: !!createVideoButton,
-                        buttonText: createVideoButton ? (createVideoButton.textContent || "").trim() : "",
-                        buttonAriaLabel: createVideoButton ? (createVideoButton.getAttribute("aria-label") || "") : ""
+                        enterDispatched,
+                        status: (enterDispatched || formSubmitted) ? "submit-enter-dispatched" : "submit-enter-failed"
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
