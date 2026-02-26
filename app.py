@@ -9587,6 +9587,8 @@ class MainWindow(QMainWindow):
                 return
 
             if not isinstance(result, dict):
+                self._append_log(f"Variant {current_variant}: poll returned no structured page state; checking public page scrape fallback.")
+                self._try_public_page_download(current_variant, reason="poll-result-unstructured")
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
@@ -9649,6 +9651,7 @@ class MainWindow(QMainWindow):
 
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
                 self.manual_video_start_click_sent = True
+                self._try_public_page_download(current_variant, reason=f"status={status}")
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
@@ -9669,26 +9672,11 @@ class MainWindow(QMainWindow):
                         self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                         return
 
-                page_url = ""
-                try:
-                    page_url = str(self.browser.url().toString() or "").strip()
-                except Exception:
-                    page_url = ""
-
-                if page_url:
-                    self._append_log(
-                        f"Variant {current_variant}: no direct URL from page script; trying low-level page scrape from {page_url}."
-                    )
-                    scraped_url = self._extract_public_video_url_from_page(page_url)
-                    if scraped_url:
-                        self._append_log(
-                            f"Variant {current_variant}: extracted public video URL via HTTP scrape; downloading without browser click."
-                        )
-                        if self._start_manual_direct_download(current_variant, scraped_url):
-                            self.manual_download_click_sent = True
-                            self.manual_download_in_progress = True
-                            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
-                            return
+                if self._try_public_page_download(current_variant, reason="download-visible-no-direct-url"):
+                    self.manual_download_click_sent = True
+                    self.manual_download_in_progress = True
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    return
 
                 self._append_log(
                     f"Variant {current_variant}: Download control is visible but no direct URL was found yet; retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
@@ -9840,6 +9828,31 @@ class MainWindow(QMainWindow):
             if _looks_like_public_video_url(candidate):
                 return candidate
         return ""
+
+    def _try_public_page_download(self, variant: int, reason: str = "") -> bool:
+        page_url = ""
+        try:
+            page_url = str(self.browser.url().toString() or "").strip()
+        except Exception:
+            page_url = ""
+
+        if not page_url:
+            self._append_log(f"Variant {variant}: public-page download check skipped (no active browser URL).")
+            return False
+
+        reason_suffix = f" ({reason})" if reason else ""
+        self._append_log(
+            f"Variant {variant}: checking public page for downloadable video URL{reason_suffix}: {page_url}"
+        )
+        scraped_url = self._extract_public_video_url_from_page(page_url)
+        if not scraped_url:
+            self._append_log(f"Variant {variant}: no public downloadable video URL detected from page scrape.")
+            return False
+
+        self._append_log(
+            f"Variant {variant}: extracted public video URL via page scrape; attempting direct download."
+        )
+        return self._start_manual_direct_download(variant, scraped_url)
 
     def _complete_manual_video_download(self, video_path: Path, variant: int) -> None:
         self._clear_manual_direct_download_tracking()
