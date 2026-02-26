@@ -177,6 +177,8 @@ def _looks_like_public_video_url(candidate: str) -> bool:
     value = str(candidate or "").strip()
     if not value:
         return False
+    if re.match(r"^imagine-public[.]x[.]ai/", value, re.IGNORECASE):
+        value = f"https://{value}"
     if not re.match(r"^https?://", value, re.IGNORECASE):
         return False
     if re.match(r"^https?://(?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)", value, re.IGNORECASE):
@@ -9802,15 +9804,41 @@ class MainWindow(QMainWindow):
             return ""
 
         direct_candidates: list[str] = []
+        download_button_present = bool(
+            re.search(
+                r"<button[^>]+aria-label=[\"']download[\"'][^>]*>",
+                html,
+                flags=re.IGNORECASE,
+            )
+        )
         patterns = [
             r'https?://[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
             r'https?://[^\s"\'<>]+(?:download|render|media|video)[^\s"\'<>]*',
+            r'imagine-public[.]x[.]ai/[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
+            r'imagine-public[.]x[.]ai/[^\s"\'<>]*(?:share-videos|download|video)[^\s"\'<>]*',
         ]
         for pattern in patterns:
             for match in re.findall(pattern, html, flags=re.IGNORECASE):
                 candidate = str(match or "").strip()
                 if candidate:
+                    if re.match(r"^imagine-public[.]x[.]ai/", candidate, re.IGNORECASE):
+                        candidate = f"https://{candidate}"
                     direct_candidates.append(candidate)
+
+        if download_button_present:
+            button_scoped_patterns = [
+                r'(?:https?:)?//imagine-public[.]x[.]ai/[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
+                r'imagine-public[.]x[.]ai/[^\s"\'<>]*(?:share-videos|download|video)[^\s"\'<>]*',
+            ]
+            for pattern in button_scoped_patterns:
+                for match in re.findall(pattern, html, flags=re.IGNORECASE):
+                    candidate = str(match or "").strip()
+                    if candidate.startswith("//"):
+                        candidate = f"https:{candidate}"
+                    elif re.match(r"^imagine-public[.]x[.]ai/", candidate, re.IGNORECASE):
+                        candidate = f"https://{candidate}"
+                    if candidate:
+                        direct_candidates.insert(0, candidate)
 
         page_url_parsed = urlparse(page_url)
         page_origin = f"{page_url_parsed.scheme}://{page_url_parsed.netloc}"
