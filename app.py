@@ -2303,6 +2303,8 @@ class MainWindow(QMainWindow):
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_submit_in_flight = False
+        self.manual_image_submit_in_flight_since = 0.0
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
@@ -6317,6 +6319,8 @@ class MainWindow(QMainWindow):
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_submit_in_flight = False
+        self.manual_image_submit_in_flight_since = 0.0
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
@@ -7568,11 +7572,14 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(700, self._poll_for_manual_image)
                 return
 
+        submit_attempt_allowed = phase != "submit" or not self.manual_image_submit_in_flight
+
         script = f"""
             (async () => {{
                 const prompt = {prompt!r};
                 const phase = {phase!r};
                 const submitToken = {self.manual_image_submit_token};
+                const submitAttemptAllowed = {"true" if submit_attempt_allowed else "false"};
                 const ACTION_DELAY_MS = 200;
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -7768,6 +7775,10 @@ class MainWindow(QMainWindow):
                     }};
                 }}
 
+                if (!submitAttemptAllowed) {{
+                    return {{ ok: false, status: "submit-in-flight" }};
+                }}
+
                 if (window.__grokManualImageSubmitToken === submitToken) {{
                     return {{ ok: true, status: "video-submit-already-clicked" }};
                 }}
@@ -7919,6 +7930,8 @@ class MainWindow(QMainWindow):
                         })()
                     """)
                     self.manual_image_video_submit_sent = True
+                    self.manual_image_submit_in_flight = False
+                    self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.pending_manual_download_type = "video"
@@ -8189,19 +8202,21 @@ class MainWindow(QMainWindow):
 
             current_url = self.browser.url().toString().strip() if self.browser is not None else ""
             current_post_id = self._extract_valid_grok_post_id(current_url)
-            if current_post_id and status == "callback-empty":
+            if current_post_id and status in ("callback-empty", "submit-in-flight"):
                 self._append_log(
                     "WARNING: Variant "
                     f"{current_variant}: submit callback is empty but current URL is a valid post ({current_post_id}); "
                     "switching directly to video download polling to prevent submit-stage loop."
                 )
                 self.manual_image_video_submit_sent = True
+                self.manual_image_submit_in_flight = False
+                self.manual_image_submit_in_flight_since = 0.0
                 self.manual_image_submit_retry_count = 0
                 self.pending_manual_download_type = "video"
                 self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                 return
 
-            if status == "callback-empty":
+            if status in ("callback-empty", "submit-in-flight"):
                 submit_ready_probe_script = """
                     (() => {
                         try {
@@ -8246,6 +8261,8 @@ class MainWindow(QMainWindow):
                             f"videoSrc={bool(probe_result.get('hasVideoSource'))}); switching to download polling."
                         )
                         self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_in_flight = False
+                        self.manual_image_submit_in_flight_since = 0.0
                         self.manual_image_submit_retry_count = 0
                         self.pending_manual_download_type = "video"
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
@@ -8258,6 +8275,8 @@ class MainWindow(QMainWindow):
                             "moving to download polling to avoid submit-stage deadlock."
                         )
                         self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_in_flight = False
+                        self.manual_image_submit_in_flight_since = 0.0
                         self.manual_image_submit_retry_count = 0
                         self.pending_manual_download_type = "video"
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
@@ -8282,6 +8301,10 @@ class MainWindow(QMainWindow):
                 self.browser.page().runJavaScript(submit_ready_probe_script, _after_submit_ready_probe)
                 return
 
+            if status not in ("callback-empty", "submit-in-flight"):
+                self.manual_image_submit_in_flight = False
+                self.manual_image_submit_in_flight_since = 0.0
+
             self.manual_image_submit_retry_count += 1
             if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
                 self._append_log(
@@ -8299,6 +8322,9 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(3000, self._poll_for_manual_image)
 
         self.browser.page().runJavaScript(script, _after_poll)
+        if phase == "submit" and submit_attempt_allowed:
+            self.manual_image_submit_in_flight = True
+            self.manual_image_submit_in_flight_since = time.time()
 
     def _start_continue_iteration(self) -> None:
         if self.stop_all_requested:
@@ -10087,6 +10113,8 @@ class MainWindow(QMainWindow):
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_submit_in_flight = False
+        self.manual_image_submit_in_flight_since = 0.0
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
@@ -10297,6 +10325,8 @@ class MainWindow(QMainWindow):
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
+        self.manual_image_submit_in_flight = False
+        self.manual_image_submit_in_flight_since = 0.0
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
