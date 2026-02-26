@@ -109,6 +109,8 @@ OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.
 OPENAI_USE_CHATGPT_BACKEND = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
 OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434/v1")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1:8b")
+AI_TEXT_TIMEOUT_SECONDS = max(30.0, float(os.getenv("AI_TEXT_TIMEOUT_SECONDS", "240")))
+AI_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("AI_MAX_OUTPUT_TOKENS", "4096")))
 SEEDANCE_API_BASE = os.getenv("SEEDANCE_API_BASE", "https://api.seedance.ai/v2")
 FACEBOOK_GRAPH_VERSION = os.getenv("FACEBOOK_GRAPH_VERSION", "v21.0")
 
@@ -537,6 +539,7 @@ def _openai_chat_payload(model: str, system: str, user: str, temperature: float)
             {"role": "user", "content": user},
         ],
         "temperature": temperature,
+        "max_tokens": AI_MAX_OUTPUT_TOKENS,
     }
 
 
@@ -547,6 +550,7 @@ def _openai_responses_payload(model: str, system: str, user: str) -> dict[str, o
         "input": [
             {"role": "user", "content": user},
         ],
+        "max_output_tokens": AI_MAX_OUTPUT_TOKENS,
         "store": False,
         "stream": True,
     }
@@ -568,12 +572,12 @@ def _call_openai_chat_api(credential: str, model: str, system: str, user: str, t
         else _openai_chat_payload(model, system, user, temperature)
     )
 
-    response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+    response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
 
     if not response.ok and not is_responses_api and _openai_error_prefers_responses(response):
         responses_endpoint = f"{OPENAI_API_BASE}/responses"
         retry_payload = _openai_responses_payload(model, system, user)
-        retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=90)
+        retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
         if not retry_response.ok:
             raise RuntimeError(
                 f"OpenAI request failed: {retry_response.status_code} {retry_response.text[:500]}"
@@ -1469,7 +1473,7 @@ class GenerateWorker(QThread):
         last_error = ""
         for endpoint in endpoints:
             for payload in self._seedance_payload_variants(prompt):
-                response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+                response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
                 if response.ok:
                     data = response.json() if response.content else {}
                     job_id = data.get("id") or data.get("job_id")
@@ -6374,6 +6378,7 @@ class MainWindow(QMainWindow):
                 {"role": "user", "content": user},
             ],
             "temperature": 0.4,
+            "max_tokens": AI_MAX_OUTPUT_TOKENS,
         }
 
         if source == "openai":
@@ -6392,8 +6397,10 @@ class MainWindow(QMainWindow):
             ollama_api_base = self.ollama_api_base.text().strip() or OLLAMA_API_BASE
             ollama_chat_model = self.ollama_chat_model.text().strip() or OLLAMA_CHAT_MODEL
             payload["model"] = ollama_chat_model
+            payload["max_tokens"] = AI_MAX_OUTPUT_TOKENS
+            payload["options"] = {"num_predict": AI_MAX_OUTPUT_TOKENS}
             endpoint = f"{ollama_api_base.rstrip('/')}/chat/completions"
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
             if not response.ok:
                 raise RuntimeError(f"Ollama request failed: {response.status_code} {response.text[:400]}")
             return response.json()["choices"][0]["message"]["content"].strip()
@@ -6405,7 +6412,7 @@ class MainWindow(QMainWindow):
             raise RuntimeError("Grok API key is required.")
         headers["Authorization"] = f"Bearer {grok_key}"
         payload["model"] = self.chat_model.text().strip() or "grok-3-mini"
-        response = requests.post(f"{API_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=90)
+        response = requests.post(f"{API_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
         if not response.ok:
             raise RuntimeError(f"Grok request failed: {response.status_code} {response.text[:400]}")
         return response.json()["choices"][0]["message"]["content"].strip()
@@ -6430,7 +6437,7 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.setEnabled(False)
         self.generate_prompt_btn.setText("⏳ Generating Prompt + Social Metadata...")
         self._set_prompt_thinking_indicator(True, f"Thinking with {str(source).title()}…")
-        self._append_log(f"Generating prompt + social metadata using {str(source).title()}...")
+        self._append_log(f"Generating prompt + social metadata using {str(source).title()} (max tokens: {AI_MAX_OUTPUT_TOKENS}, timeout: {int(AI_TEXT_TIMEOUT_SECONDS)}s)...")
 
         worker = PromptGenerationWorker(
             source=str(source),
