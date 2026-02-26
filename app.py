@@ -6996,6 +6996,32 @@ class MainWindow(QMainWindow):
         manual_handoff_poll_ms = 450
         manual_handoff_started_at_ms = 0
         manual_handoff_token = ""
+        enter_script = r"""
+            (() => {
+                try {
+                    const prompt = document.querySelector(
+                        "textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], "
+                        + "textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], "
+                        + "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
+                        + "div.tiptap.ProseMirror[contenteditable='true'], "
+                        + "[contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], "
+                        + "[contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], "
+                        + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
+                    );
+                    if (!prompt) return { ok: false, error: "Prompt input not found for Enter keypress" };
+
+                    try { prompt.focus({ preventScroll: true }); } catch (_) { try { prompt.focus(); } catch (_) {} }
+                    const common = { key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true, cancelable: true };
+                    let dispatched = false;
+                    try { prompt.dispatchEvent(new KeyboardEvent('keydown', common)); dispatched = true; } catch (_) {}
+                    try { prompt.dispatchEvent(new KeyboardEvent('keypress', common)); dispatched = true; } catch (_) {}
+                    try { prompt.dispatchEvent(new KeyboardEvent('keyup', common)); dispatched = true; } catch (_) {}
+                    return { ok: dispatched, dispatched, targetTag: prompt.tagName || '', contentEditable: !!prompt.isContentEditable };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
 
         def _poll_for_manual_submit_handoff() -> None:
             nonlocal manual_handoff_started_at_ms, manual_handoff_token
@@ -7303,9 +7329,9 @@ class MainWindow(QMainWindow):
             if result in (None, ""):
                 self._append_log(
                     f"Manual image variant {variant}: prompt populate callback returned empty result; "
-                    f"waiting {submit_delay_ms / 1000:.1f}s before submit."
+                    f"waiting {submit_delay_ms / 1000:.1f}s before Enter key submit."
                 )
-                QTimer.singleShot(submit_delay_ms, _run_submit_attempt)
+                QTimer.singleShot(submit_delay_ms, _run_enter_attempt)
                 return
 
             if not isinstance(result, dict) or not result.get("ok"):
@@ -7314,9 +7340,22 @@ class MainWindow(QMainWindow):
 
             self._append_log(
                 f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); "
-                f"waiting {submit_delay_ms / 1000:.1f}s before submitting prompt."
+                f"waiting {submit_delay_ms / 1000:.1f}s before pressing Enter (no submit-button click)."
             )
-            QTimer.singleShot(submit_delay_ms, _run_submit_attempt)
+            QTimer.singleShot(submit_delay_ms, _run_enter_attempt)
+
+        def _run_enter_attempt() -> None:
+            self._append_log(
+                f"Manual image variant {variant}: pressing Enter in prompt field (no submit-button click)."
+            )
+
+            def _after_enter(result):
+                if isinstance(result, dict) and result.get("ok"):
+                    _after_submit({"ok": True, "status": "enter-key", "usedRecorderTarget": False, "usedCoordinatePlayback": False})
+                    return
+                _retry_variant(f"enter key dispatch failed: {result!r}")
+
+            self.browser.page().runJavaScript(enter_script, _after_enter)
 
         if disable_video_option_selection:
             self._append_log(
