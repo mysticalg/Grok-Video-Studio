@@ -6931,14 +6931,119 @@ class MainWindow(QMainWindow):
 
         submit_attempts = 0
         max_submit_attempts = max(1, int(self.automation_retry_attempts.value()))
+        manual_handoff_timeout_ms = max(5000, _env_int("GROK_MANUAL_SUBMIT_HANDOFF_TIMEOUT_MS", 45000))
+        manual_handoff_poll_ms = 450
+        manual_handoff_started_at_ms = 0
+        manual_handoff_token = ""
+
+        def _poll_for_manual_submit_handoff() -> None:
+            nonlocal manual_handoff_started_at_ms, manual_handoff_token
+            if self.stop_all_requested:
+                return
+            if self.pending_manual_variant_for_download != variant or self.pending_manual_download_type != "image":
+                return
+
+            elapsed_ms = int(time.time() * 1000) - manual_handoff_started_at_ms
+            if elapsed_ms >= manual_handoff_timeout_ms:
+                self._append_log(
+                    f"Manual image variant {variant}: no manual submit detected within {manual_handoff_timeout_ms / 1000:.0f}s; resuming automated submit listener sequence."
+                )
+                self.browser.page().runJavaScript(submit_script, _after_submit)
+                return
+
+            check_script = f"""
+                (() => {{
+                    try {{
+                        const token = {manual_handoff_token!r};
+                        const state = window.__grokManualSubmitState || {{}};
+                        const customizePromptVisible = !!document.querySelector(
+                            "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
+                            + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
+                        );
+                        const onPostView = /[/]imagine[/]post[/]/i.test((location.href || ""));
+                        const detected = Boolean(state.token === token && state.detected);
+                        return {{
+                            ok: true,
+                            detected: detected || customizePromptVisible || onPostView,
+                            stateToken: state.token || "",
+                            customizePromptVisible,
+                            onPostView,
+                        }};
+                    }} catch (err) {{
+                        return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                    }}
+                }})()
+            """
+
+            def _after_manual_handoff_check(result):
+                if isinstance(result, dict) and result.get("detected"):
+                    self._append_log(
+                        f"Manual image variant {variant}: detected manual submit click; continuing automated polling."
+                    )
+                    _after_submit({"ok": True, "manualDetected": True})
+                    return
+
+                QTimer.singleShot(manual_handoff_poll_ms, _poll_for_manual_submit_handoff)
+
+            self.browser.page().runJavaScript(check_script, _after_manual_handoff_check)
 
         def _run_submit_attempt() -> None:
-            nonlocal submit_attempts
+            nonlocal submit_attempts, manual_handoff_started_at_ms, manual_handoff_token
             submit_attempts += 1
             self._append_log(
-                f"Manual image variant {variant}: attempting submit listener sequence ({submit_attempts}/{max_submit_attempts})."
+                f"Manual image variant {variant}: paused before submit ({submit_attempts}/{max_submit_attempts}). Please click submit manually; automation will continue after detection."
             )
-            self.browser.page().runJavaScript(submit_script, _after_submit)
+
+            manual_handoff_started_at_ms = int(time.time() * 1000)
+            manual_handoff_token = f"variant-{variant}-submit-{self.manual_image_submit_token}-attempt-{submit_attempts}-{manual_handoff_started_at_ms}"
+            arm_script = f"""
+                (() => {{
+                    try {{
+                        const token = {manual_handoff_token!r};
+                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                        const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+                        const isMenuToggle = (el) => {{
+                            if (!el) return false;
+                            const popup = clean(el.getAttribute("aria-haspopup"));
+                            const aria = clean(el.getAttribute("aria-label"));
+                            return popup === "menu" || popup === "listbox" || aria.includes("settings");
+                        }};
+
+                        const submitButtons = [...document.querySelectorAll("button[type='submit']")]
+                            .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
+                        const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
+                            || submitButtons[0]
+                            || null;
+
+                        window.__grokManualSubmitState = {{ token, detected: false, armedAt: Date.now() }};
+
+                        const onManualSubmit = () => {{
+                            if (!window.__grokManualSubmitState || window.__grokManualSubmitState.token !== token) return;
+                            window.__grokManualSubmitState.detected = true;
+                        }};
+
+                        if (primarySubmit) {{
+                            primarySubmit.addEventListener("click", onManualSubmit, {{ once: true, passive: true }});
+                            primarySubmit.addEventListener("pointerdown", onManualSubmit, {{ once: true, passive: true }});
+                        }}
+
+                        return {{ ok: true, armed: !!primarySubmit }};
+                    }} catch (err) {{
+                        return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                    }}
+                }})()
+            """
+
+            def _after_arm_manual_handoff(result):
+                if isinstance(result, dict) and result.get("ok"):
+                    QTimer.singleShot(manual_handoff_poll_ms, _poll_for_manual_submit_handoff)
+                    return
+                self._append_log(
+                    f"Manual image variant {variant}: could not arm manual submit handoff ({result!r}); running automated listener sequence."
+                )
+                self.browser.page().runJavaScript(submit_script, _after_submit)
+
+            self.browser.page().runJavaScript(arm_script, _after_arm_manual_handoff)
 
         def _after_submit(result):
             if isinstance(result, dict) and result.get("ok"):
