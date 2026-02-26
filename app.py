@@ -8960,11 +8960,14 @@ class MainWindow(QMainWindow):
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                     const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
-                    const click = (el) => {
+                    const click = (el, nativeOnly = false) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
                         let fired = false;
                         try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
                         try { el.focus({ preventScroll: true }); fired = true; } catch (_) {}
+                        if (nativeOnly) {
+                            try { el.click(); return true; } catch (_) { return fired; }
+                        }
                         try { el.dispatchEvent(new PointerEvent("pointerdown", common)); fired = true; } catch (_) {}
                         el.dispatchEvent(new MouseEvent("mousedown", common));
                         try { el.dispatchEvent(new PointerEvent("pointerup", common)); fired = true; } catch (_) {}
@@ -9024,6 +9027,10 @@ class MainWindow(QMainWindow):
                                 clicked = emulateActivate(innerDiv);
                                 clickedNodeTag = String(innerDiv.tagName || "").toLowerCase();
                             }
+                        }
+                        if (!clicked && optionType === "type" && /make\s+video/i.test(targetLabel)) {
+                            clicked = click(target, true);
+                            clickedNodeTag = String(target.tagName || "").toLowerCase();
                         }
                         if (!clicked && (optionType === "ratio" || optionType === "resolution" || optionType === "seconds" || optionType === "type")) {
                             clicked = emulateActivate(target);
