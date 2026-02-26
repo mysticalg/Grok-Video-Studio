@@ -110,6 +110,10 @@ OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.
 OPENAI_USE_CHATGPT_BACKEND = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
 SEEDANCE_API_BASE = os.getenv("SEEDANCE_API_BASE", "https://api.seedance.ai/v2")
 FACEBOOK_GRAPH_VERSION = os.getenv("FACEBOOK_GRAPH_VERSION", "v21.0")
+
+
+class PublicVideoNotReadyError(RuntimeError):
+    """Raised when a public media URL resolves but backing object is not ready yet."""
 FACEBOOK_OAUTH_AUTHORIZE_URL = f"https://www.facebook.com/{FACEBOOK_GRAPH_VERSION}/dialog/oauth"
 FACEBOOK_OAUTH_TOKEN_URL = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/oauth/access_token"
 FACEBOOK_OAUTH_CALLBACK_PORT = int(os.getenv("FACEBOOK_OAUTH_CALLBACK_PORT", "1456"))
@@ -9734,6 +9738,11 @@ class MainWindow(QMainWindow):
             output_path = self.download_dir / filename
             self._append_log(f"Variant {variant}: downloading direct video URL to {output_path.name}.")
             download_path = self._download_video_from_public_url(source_url, output_path)
+        except PublicVideoNotReadyError as exc:
+            self._append_log(f"Variant {variant}: public video URL exists but is not ready yet ({exc}); will retry.")
+            self.manual_download_click_sent = False
+            self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+            return False
         except Exception as exc:
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
             self.manual_download_click_sent = False
@@ -9760,6 +9769,30 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _download_video_from_public_url(source_url: str, output_path: Path) -> Path:
+        def _raise_if_not_ready(payload: str) -> None:
+            text = str(payload or "").lower()
+            if "<code>nosuchkey</code>" in text or "the specified key does not exist" in text:
+                raise PublicVideoNotReadyError("NoSuchKey")
+
+        head_headers = {
+            "Cache-Control": "no-cache, no-store, max-age=0",
+            "Pragma": "no-cache",
+        }
+        head_params = {"_dl_probe_ts": str(int(time.time() * 1000))}
+        try:
+            with requests.get(source_url, timeout=20, headers=head_headers, params=head_params) as probe:
+                if probe.status_code >= 400:
+                    _raise_if_not_ready(probe.text)
+                    probe.raise_for_status()
+                content_type = str(probe.headers.get("content-type", "")).lower()
+                if "xml" in content_type or "text/html" in content_type or "text/plain" in content_type:
+                    probe_text = probe.text
+                    _raise_if_not_ready(probe_text)
+        except PublicVideoNotReadyError:
+            raise
+        except Exception:
+            pass
+
         command = shutil.which("wget")
         if command:
             result = subprocess.run(
@@ -9778,11 +9811,25 @@ class MainWindow(QMainWindow):
             )
             if result.returncode != 0:
                 stderr = (result.stderr or "").strip()
+                _raise_if_not_ready(stderr)
                 raise RuntimeError(stderr or f"wget failed with exit code {result.returncode}")
+            if output_path.exists() and output_path.stat().st_size < 32_768:
+                try:
+                    sample = output_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    sample = ""
+                _raise_if_not_ready(sample)
             return output_path
 
-        with requests.get(source_url, stream=True, timeout=240) as response:
+        with requests.get(source_url, stream=True, timeout=240, headers=head_headers, params=head_params) as response:
+            if response.status_code >= 400:
+                _raise_if_not_ready(response.text)
             response.raise_for_status()
+            content_type = str(response.headers.get("content-type", "")).lower()
+            if "xml" in content_type or "text/html" in content_type or "text/plain" in content_type:
+                payload = response.text
+                _raise_if_not_ready(payload)
+                raise RuntimeError(f"Unexpected non-video response content-type: {content_type}")
             with open(output_path, "wb") as handle:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
