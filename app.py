@@ -9241,11 +9241,37 @@ class MainWindow(QMainWindow):
                     return isOpenAIVideo || isImaginePublicVideo;
                 }};
 
-                if (isDirectVideoUrl(anchorUrl)) {{
-                    return {{ status: "direct-url-ready", src: anchorUrl, sourceType: "video-anchor" }};
+                const normalizeAbsoluteUrl = (rawUrl) => {{
+                    const value = String(rawUrl || "").trim();
+                    if (!value) return "";
+                    try {{
+                        return new URL(value, window.location.href).toString();
+                    }} catch (_) {{
+                        return value;
+                    }}
+                }};
+
+                const directUrlCandidates = [anchorUrl, src];
+                for (const anchor of document.querySelectorAll("a[href]")) {{
+                    const candidate = normalizeAbsoluteUrl(anchor.getAttribute("href") || "");
+                    if (candidate) directUrlCandidates.push(candidate);
                 }}
-                if (isDirectVideoUrl(src)) {{
-                    return {{ status: "direct-url-ready", src, sourceType: "video-src" }};
+                for (const mediaEl of document.querySelectorAll("video[src], source[src], [data-video-url], [data-url], [data-src]")) {{
+                    const attrs = [
+                        mediaEl.getAttribute?.("src"),
+                        mediaEl.getAttribute?.("data-video-url"),
+                        mediaEl.getAttribute?.("data-url"),
+                        mediaEl.getAttribute?.("data-src"),
+                    ];
+                    for (const raw of attrs) {{
+                        const candidate = normalizeAbsoluteUrl(raw || "");
+                        if (candidate) directUrlCandidates.push(candidate);
+                    }}
+                }}
+
+                const firstDirectUrl = directUrlCandidates.find((candidate) => isDirectVideoUrl(candidate));
+                if (firstDirectUrl) {{
+                    return {{ status: "direct-url-ready", src: firstDirectUrl, sourceType: "page-scan" }};
                 }}
 
                 const isDownloadActionButton = (btn) => {{
@@ -9263,7 +9289,8 @@ class MainWindow(QMainWindow):
                 const fallbackDownloadCandidates = [
                     ...document.querySelectorAll("button[aria-label='Download']"),
                     ...document.querySelectorAll("button[aria-label*='download' i]"),
-                    ...document.querySelectorAll("button"),
+                    ...document.querySelectorAll("[role='button'][aria-label*='download' i]"),
+                    ...document.querySelectorAll("button, [role='button']"),
                 ]
                     .filter((btn) => isDownloadActionButton(btn));
                 const downloadCandidates = [...exactDownloadCandidates, ...fallbackDownloadCandidates]
@@ -9372,7 +9399,8 @@ class MainWindow(QMainWindow):
                         const buttons = [
                             ...document.querySelectorAll("button[aria-label='Download']"),
                             ...document.querySelectorAll("button[aria-label*='download' i]"),
-                            ...document.querySelectorAll("button"),
+                            ...document.querySelectorAll("[role='button'][aria-label*='download' i]"),
+                            ...document.querySelectorAll("button, [role='button']"),
                         ];
                         const candidate = buttons.find((btn) => {
                             if (!isVisible(btn) || btn.disabled) return false;
