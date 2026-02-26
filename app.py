@@ -9164,9 +9164,9 @@ class MainWindow(QMainWindow):
                                 f"WARNING: Variant {variant}: could not confirm trailing Enter press after prompt entry. result={enter_result!r}"
                             )
                         self._append_log(
-                            f"Variant {variant}: prompt populated with trailing Enter; continuing with explicit 'Make Video' selection before download polling."
+                            f"Variant {variant}: prompt populated with trailing Enter; moving to download polling (no extra option clicks or submit actions)."
                         )
-                        QTimer.singleShot(700, _click_make_video_after_prompt)
+                        QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
 
                     self.browser.page().runJavaScript(enter_script, _after_enter_press)
                     return
