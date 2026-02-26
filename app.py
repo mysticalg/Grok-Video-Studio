@@ -2200,9 +2200,6 @@ class MainWindow(QMainWindow):
         self._cdp_relay_temporarily_disabled = False
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self._manual_download_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manual-download")
-        self._manual_direct_download_future: concurrent.futures.Future | None = None
-        self._manual_direct_download_context: dict[str, Any] | None = None
-        self._manual_direct_download_job_counter = 0
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
         self.browser_devtools_windows: dict[QWebEngineView, QMainWindow] = {}
@@ -9204,9 +9201,6 @@ class MainWindow(QMainWindow):
         if variant is None:
             return
 
-        if self._check_manual_direct_download_completion():
-            return
-
         deadline = self.manual_download_deadline or 0
         if time.time() > deadline:
             self.pending_manual_variant_for_download = None
@@ -9757,54 +9751,19 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after_poll)
 
     def _start_manual_direct_download(self, variant: int, source_url: str) -> bool:
-        if self._manual_direct_download_future is not None and not self._manual_direct_download_future.done():
-            return False
         try:
             self.download_dir.mkdir(parents=True, exist_ok=True)
             filename = self._build_session_download_filename("video", variant, "mp4")
             output_path = self.download_dir / filename
-            self._manual_direct_download_job_counter += 1
-            job_id = self._manual_direct_download_job_counter
-            self._manual_direct_download_context = {
-                "job_id": job_id,
-                "variant": variant,
-                "url": source_url,
-                "path": output_path,
-            }
-            self._manual_direct_download_future = self._manual_download_executor.submit(
-                self._download_video_from_public_url,
-                source_url,
-                output_path,
-            )
-            self._append_log(f"Variant {variant}: started background direct download to {output_path.name}.")
-            return True
+            self._append_log(f"Variant {variant}: downloading direct video URL to {output_path.name}.")
+            download_path = self._download_video_from_public_url(source_url, output_path)
         except Exception as exc:
-            self._append_log(f"WARNING: Could not start background direct download for variant {variant}: {exc}")
-            self._clear_manual_direct_download_tracking()
-            return False
-
-    def _check_manual_direct_download_completion(self) -> bool:
-        future = self._manual_direct_download_future
-        context = self._manual_direct_download_context
-        if future is None or context is None or not future.done():
-            return False
-
-        self._manual_direct_download_future = None
-        variant = int(context.get("variant") or 0)
-        output_path = Path(context.get("path") or "")
-        try:
-            download_path = future.result()
-        except Exception as exc:
-            if output_path.exists():
-                output_path.unlink(missing_ok=True)
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
-            self._manual_direct_download_context = None
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(3000)
-            return True
+            return False
 
         file_size = download_path.stat().st_size if download_path.exists() else 0
-        self._manual_direct_download_context = None
         if file_size < MIN_VALID_VIDEO_BYTES:
             self._append_log(
                 f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); retrying browser download flow."
@@ -9813,15 +9772,12 @@ class MainWindow(QMainWindow):
                 download_path.unlink(missing_ok=True)
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(2000)
-            return True
+            return False
 
         self._complete_manual_video_download(download_path, variant)
         return True
 
     def _clear_manual_direct_download_tracking(self) -> None:
-        future = self._manual_direct_download_future
-        if future is not None and not future.done():
-            future.cancel()
         self._manual_direct_download_future = None
         self._manual_direct_download_context = None
 
