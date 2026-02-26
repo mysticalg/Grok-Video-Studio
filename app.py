@@ -9513,11 +9513,6 @@ class MainWindow(QMainWindow):
                 }}
 
                 if (downloadButton) {{
-                    const rect = typeof downloadButton.getBoundingClientRect === "function"
-                        ? downloadButton.getBoundingClientRect()
-                        : null;
-                    const clickX = rect ? (rect.left + rect.width / 2) : null;
-                    const clickY = rect ? (rect.top + rect.height / 2) : null;
                     const directUrlCandidatesForDownload = [];
                     const pushDirectCandidate = (rawUrl) => {{
                         const candidate = normalizeAbsoluteUrl(rawUrl || "");
@@ -9543,9 +9538,7 @@ class MainWindow(QMainWindow):
                     }} catch (_) {{}}
                     const directUrl = directUrlCandidatesForDownload.find((candidate) => isDirectVideoUrl(candidate)) || "";
                     return {{
-                        status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
-                        clickX,
-                        clickY,
+                        status: "download-visible",
                         directUrl,
                     }};
                 }}
@@ -9639,295 +9632,27 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
-            if status == "download-clicked":
+            if status in ("download-clicked", "download-visible"):
                 self.manual_download_attempt_count += 1
-                self._append_log(
-                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via in-page Download button."
-                )
-                click_x = result.get("clickX")
-                click_y = result.get("clickY")
                 direct_url = (result.get("directUrl") or "").strip()
-                if not self.manual_download_request_pending and direct_url:
+                self._append_log(
+                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL extraction (manual browser download bypass enabled)."
+                )
+
+                if direct_url:
                     self._append_log(
-                        f"Variant {current_variant}: resolved direct video URL while clicking Download; starting automatic direct download fallback."
+                        f"Variant {current_variant}: found direct video URL from Download control; downloading without browser click."
                     )
                     if self._start_manual_direct_download(current_variant, direct_url):
                         self.manual_download_click_sent = True
                         self.manual_download_in_progress = True
                         self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                         return
-                if not self.manual_download_click_sent:
-                    self._append_log(f"Variant {current_variant} appears ready; clicked in-page Download button.")
-                    self.manual_download_click_sent = True
-                    self.manual_download_in_progress = True
-                if not self.manual_download_request_pending and click_x is not None and click_y is not None:
-                    native_clicked = self._native_click_embedded_browser_at(float(click_x), float(click_y))
-                    if native_clicked:
-                        self._append_log(f"Variant {current_variant}: sent native embedded-browser click on Download control.")
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
-                return
 
-            if status == "download-visible":
-                self.manual_download_attempt_count += 1
                 self._append_log(
-                    f"Variant {current_variant}: attempting automation click on Download button (attempt {self.manual_download_attempt_count})."
+                    f"Variant {current_variant}: Download control is visible but no direct URL was found yet; retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
                 )
-                force_download_click_script = """
-                    (() => {
-                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                        const buttons = [
-                            ...document.querySelectorAll("button[aria-label='Download']"),
-                            ...document.querySelectorAll("[role='button'][aria-label='Download']"),
-                        ];
-                        const candidates = buttons.filter((btn, index, arr) => arr.indexOf(btn) === index)
-                            .filter((btn) => {
-                                if (!isVisible(btn) || btn.disabled) return false;
-                                if (btn.closest("[role='dialog'], dialog, [aria-modal='true']")) return false;
-                                if (btn.matches?.("[data-sidebar='menu-button']") || btn.closest("[data-sidebar='menu-button']")) return false;
-                                const ariaRaw = String(btn.getAttribute("aria-label") || "").trim();
-                                if (ariaRaw !== "Download") return false;
-                                const cls = String(btn.className || "").toLowerCase();
-                                const descriptor = `${ariaRaw} ${cls}`.toLowerCase();
-                                if (/\bshare\b/.test(descriptor)) return false;
-                                return true;
-                            });
-                        const video = document.querySelector("video");
-                        const videoRect = video && typeof video.getBoundingClientRect === "function" ? video.getBoundingClientRect() : null;
-                        const candidateScore = (btn, index) => {
-                            let score = index * 100;
-                            if (videoRect) {
-                                const rect = btn.getBoundingClientRect();
-                                const cx = rect.left + rect.width / 2;
-                                const cy = rect.top + rect.height / 2;
-                                const vCx = videoRect.left + videoRect.width / 2;
-                                const vCy = videoRect.top + videoRect.height / 2;
-                                score += Math.hypot(cx - vCx, cy - vCy);
-                                if (cx < vCx) score += 300;
-                                if (cy < (videoRect.top - 140) || cy > (videoRect.bottom + 140)) score += 300;
-                            }
-                            return score;
-                        };
-                        let candidate = null;
-                        let bestScore = Number.MAX_SAFE_INTEGER;
-                        candidates.forEach((btn, index) => {
-                            const score = candidateScore(btn, index);
-                            if (score < bestScore) {
-                                bestScore = score;
-                                candidate = btn;
-                            }
-                        });
-                        if (!candidate) return { clicked: false, reason: "missing-button", clickX: null, clickY: null, directUrl: "" };
-
-                        const normalizeAbsoluteUrl = (rawUrl) => {
-                            const value = String(rawUrl || "").trim();
-                            if (!value) return "";
-                            try {
-                                return new URL(value, window.location.href).toString();
-                            } catch (_) {
-                                return value;
-                            }
-                        };
-                        const isDirectVideoUrl = (url) => {
-                            const normalized = normalizeAbsoluteUrl(url);
-                            if (!/^https?:[/][/]/i.test(normalized)) return false;
-                            if (/^https?:[/][/](?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)/i.test(normalized)) return false;
-                            const lowered = String(normalized || "").toLowerCase();
-                            if (/[.](?:mp4|webm|mov|m4v)(?:$|[?#])/i.test(lowered)) return true;
-                            if (/[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|\\/)/i.test(lowered)) return true;
-                            if (/[?&](?:format|ext)=mp4(?:$|[&#])/i.test(lowered)) return true;
-                            if (/[/](?:video|videos|render|download|media)[/]/i.test(lowered) && /[?&](?:token|sig|signature|expires|x-amz-)/i.test(lowered)) return true;
-                            return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
-                        };
-
-                        const common = { bubbles: true, cancelable: true, composed: true };
-                        const fire = (el, eventName, ctorName) => {
-                            try {
-                                const Ctor = window[ctorName] || window.Event;
-                                el.dispatchEvent(new Ctor(eventName, common));
-                                return true;
-                            } catch (_) {
-                                try {
-                                    el.dispatchEvent(new Event(eventName, common));
-                                    return true;
-                                } catch (__) {
-                                    return false;
-                                }
-                            }
-                        };
-
-                        let clicked = false;
-                        let menuOpenOnly = false;
-                        try { candidate.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                        try { candidate.focus({ preventScroll: true }); } catch (_) {}
-                        clicked = fire(candidate, "pointerdown", "PointerEvent") || clicked;
-                        clicked = fire(candidate, "mousedown", "MouseEvent") || clicked;
-                        clicked = fire(candidate, "pointerup", "PointerEvent") || clicked;
-                        clicked = fire(candidate, "mouseup", "MouseEvent") || clicked;
-                        clicked = fire(candidate, "click", "MouseEvent") || clicked;
-                        try { candidate.click(); clicked = true; } catch (_) {}
-
-                        if (!clicked) {
-                            try {
-                                const rect = candidate.getBoundingClientRect();
-                                const x = Math.floor(rect.left + Math.max(1, Math.min(rect.width - 1, rect.width * 0.5)));
-                                const y = Math.floor(rect.top + Math.max(1, Math.min(rect.height - 1, rect.height * 0.5)));
-                                const pointTarget = document.elementFromPoint(x, y) || candidate;
-                                let safeTarget = pointTarget;
-                                if (safeTarget && !candidate.contains(safeTarget)) {
-                                    const ancestorMatch = safeTarget.closest("button[aria-label='Download'], [role='button'][aria-label='Download']");
-                                    if (ancestorMatch && candidate.contains(ancestorMatch)) {
-                                        safeTarget = ancestorMatch;
-                                    } else {
-                                        safeTarget = candidate;
-                                    }
-                                }
-                                if (safeTarget && (safeTarget.matches?.("[data-sidebar='menu-button']") || safeTarget.closest("[data-sidebar='menu-button']"))) {
-                                    safeTarget = candidate;
-                                }
-                                fire(safeTarget, "pointerdown", "PointerEvent");
-                                fire(safeTarget, "mousedown", "MouseEvent");
-                                fire(safeTarget, "pointerup", "PointerEvent");
-                                fire(safeTarget, "mouseup", "MouseEvent");
-                                fire(safeTarget, "click", "MouseEvent");
-                                try { safeTarget.click(); clicked = true; } catch (_) {}
-                            } catch (_) {}
-                        }
-
-                        const tryClickNestedDownloadTarget = () => {
-                            const menuSelectors = [
-                                "[role='menu'] a[href]",
-                                "[role='menuitem'][href]",
-                                "[role='menuitem']",
-                                "[data-radix-popper-content-wrapper] a[href]",
-                                "[data-radix-popper-content-wrapper] [role='menuitem']",
-                            ];
-                            const menuNodes = menuSelectors
-                                .flatMap((selector) => [...document.querySelectorAll(selector)]);
-                            const uniqueMenuNodes = menuNodes.filter((node, index, arr) => arr.indexOf(node) === index);
-                            const candidateNode = uniqueMenuNodes.find((node) => {
-                                if (!isVisible(node) || node.disabled) return false;
-                                const text = `${node.getAttribute?.("aria-label") || ""} ${node.textContent || ""}`.toLowerCase();
-                                const href = normalizeAbsoluteUrl(node.getAttribute?.("href") || "");
-                                if (isDirectVideoUrl(href)) return true;
-                                return /\bdownload\b/.test(text) && (/\bmp4\b/.test(text) || /\bvideo\b/.test(text) || /\bhd\b/.test(text));
-                            });
-                            if (!candidateNode) return false;
-                            try { candidateNode.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                            try { candidateNode.focus({ preventScroll: true }); } catch (_) {}
-                            let nestedClicked = false;
-                            nestedClicked = fire(candidateNode, "pointerdown", "PointerEvent") || nestedClicked;
-                            nestedClicked = fire(candidateNode, "mousedown", "MouseEvent") || nestedClicked;
-                            nestedClicked = fire(candidateNode, "pointerup", "PointerEvent") || nestedClicked;
-                            nestedClicked = fire(candidateNode, "mouseup", "MouseEvent") || nestedClicked;
-                            nestedClicked = fire(candidateNode, "click", "MouseEvent") || nestedClicked;
-                            try { candidateNode.click(); nestedClicked = true; } catch (_) {}
-                            return nestedClicked;
-                        };
-
-                        const menuStateBeforeNestedCheck = String(candidate.getAttribute("data-state") || "").trim().toLowerCase();
-                        const hasMenuSemantics = (
-                            candidate.getAttribute("aria-haspopup") === "menu"
-                            || candidate.getAttribute("aria-expanded") !== null
-                            || candidate.hasAttribute("data-state")
-                        );
-                        const nestedClicked = tryClickNestedDownloadTarget();
-                        if (nestedClicked) {
-                            clicked = true;
-                            menuOpenOnly = false;
-                        } else {
-                            const menuStateAfterNestedCheck = String(candidate.getAttribute("data-state") || "").trim().toLowerCase();
-                            const menuLikelyOpen = menuStateAfterNestedCheck === "open" || menuStateBeforeNestedCheck === "open";
-                            const menuLikelyTriggerOnly = menuStateBeforeNestedCheck === "closed" || hasMenuSemantics;
-                            if ((menuLikelyOpen || menuLikelyTriggerOnly) && clicked) {
-                                menuOpenOnly = true;
-                            }
-                        }
-
-                        const directUrlCandidates = [];
-                        const pushCandidate = (rawUrl) => {
-                            const normalized = normalizeAbsoluteUrl(rawUrl);
-                            if (normalized) directUrlCandidates.push(normalized);
-                        };
-                        pushCandidate(candidate.getAttribute("href"));
-                        pushCandidate(candidate.getAttribute("data-url"));
-                        pushCandidate(candidate.getAttribute("data-href"));
-                        pushCandidate(candidate.getAttribute("data-src"));
-                        const candidateAnchor = candidate.closest("a[href]");
-                        if (candidateAnchor) pushCandidate(candidateAnchor.getAttribute("href"));
-                        for (const mediaEl of document.querySelectorAll("video[src], source[src], [data-video-url], [data-url], [data-src]")) {
-                            pushCandidate(mediaEl.getAttribute?.("src"));
-                            pushCandidate(mediaEl.getAttribute?.("data-video-url"));
-                            pushCandidate(mediaEl.getAttribute?.("data-url"));
-                            pushCandidate(mediaEl.getAttribute?.("data-src"));
-                        }
-                        try {
-                            const resourceEntries = performance.getEntriesByType("resource") || [];
-                            for (const entry of resourceEntries.slice(-60)) {
-                                pushCandidate(entry && entry.name ? String(entry.name) : "");
-                            }
-                        } catch (_) {}
-                        const directUrl = directUrlCandidates.find((url) => isDirectVideoUrl(url)) || "";
-
-                        const finalRect = typeof candidate.getBoundingClientRect === "function"
-                            ? candidate.getBoundingClientRect()
-                            : null;
-                        return {
-                            clicked,
-                            menuOpenOnly,
-                            reason: menuOpenOnly ? "menu-opened-awaiting-item" : (clicked ? "clicked" : "dispatch-failed"),
-                            clickX: finalRect ? (finalRect.left + finalRect.width / 2) : null,
-                            clickY: finalRect ? (finalRect.top + finalRect.height / 2) : null,
-                            directUrl,
-                        };
-                    })()
-                """
-
-                def _after_force_download_click(click_result):
-                    clicked = isinstance(click_result, dict) and bool(click_result.get("clicked"))
-                    menu_open_only = isinstance(click_result, dict) and bool(click_result.get("menuOpenOnly"))
-                    click_x = click_result.get("clickX") if isinstance(click_result, dict) else None
-                    click_y = click_result.get("clickY") if isinstance(click_result, dict) else None
-                    direct_url = (click_result.get("directUrl") or "").strip() if isinstance(click_result, dict) else ""
-                    native_clicked = False
-                    if not self.manual_download_request_pending and direct_url:
-                        self._append_log(
-                            f"Variant {current_variant}: resolved direct video URL from Download control; starting automatic direct download fallback."
-                        )
-                        if self._start_manual_direct_download(current_variant, direct_url):
-                            self.manual_download_click_sent = True
-                            self.manual_download_in_progress = True
-                            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
-                            return
-                    if not self.manual_download_request_pending and click_x is not None and click_y is not None:
-                        native_clicked = self._native_click_embedded_browser_at(float(click_x), float(click_y))
-                        if native_clicked:
-                            self._append_log(
-                                f"Variant {current_variant}: sent native embedded-browser click on Download control."
-                            )
-
-                    if menu_open_only:
-                        self._append_log(
-                            f"Variant {current_variant}: Download control opened a menu; waiting for nested video download item to become clickable."
-                        )
-                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
-                        return
-
-                    if clicked or native_clicked:
-                        if not self.manual_download_click_sent:
-                            self._append_log(
-                                f"Variant {current_variant}: Download button required fallback automation click; download request sent."
-                            )
-                        self.manual_download_click_sent = True
-                        self.manual_download_in_progress = True
-                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
-                        return
-
-                    self._append_log(
-                        f"Variant {current_variant}: Download button is visible but automation click did not register yet; retrying..."
-                    )
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
-
-                self.browser.page().runJavaScript(force_download_click_script, _after_force_download_click)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             src = result.get("src") or ""
@@ -9956,27 +9681,14 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
-            trigger_download_script = f"""
-                (() => {{
-                    const src = {src!r};
-                    const a = document.createElement("a");
-                    a.href = src;
-                    a.download = `grok_manual_variant_{current_variant}_${{Date.now()}}.mp4`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    return true;
-                }})()
-            """
             if not self.manual_download_click_sent:
                 self.manual_download_attempt_count += 1
                 self._append_log(
-                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via video source anchor trigger."
+                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via video source URL direct download (manual browser download bypass enabled)."
                 )
-                self.browser.page().runJavaScript(trigger_download_script)
-                self._append_log(f"Variant {current_variant} video detected; browser download requested from video source.")
-                self.manual_download_click_sent = True
-                self.manual_download_in_progress = True
+                if self._start_manual_direct_download(current_variant, src):
+                    self.manual_download_click_sent = True
+                    self.manual_download_in_progress = True
 
             self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
 
