@@ -9725,20 +9725,23 @@ class MainWindow(QMainWindow):
         script = r"""
             (() => {
                 try {
-                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const moderatedImage = [...document.querySelectorAll("img")]
-                        .find((img) => {
-                            if (!isVisible(img)) return false;
-                            const alt = String(img.getAttribute("alt") || "").trim().toLowerCase();
-                            const src = String(img.getAttribute("src") || "").trim().toLowerCase();
-                            const cls = String(img.className || "").toLowerCase();
-                            if (alt === "moderated") return true;
-                            const moderationStyleHint = /\bblur\b/.test(cls) && /saturate-0/.test(cls);
-                            return moderationStyleHint && src.includes("imagine-public.x.ai/imagine-public/images/");
-                        });
+                    const clean = (value) => String(value || "").trim().toLowerCase();
+                    const hasModeratedImageSignal = (img) => {
+                        if (!img) return false;
+                        const alt = clean(img.getAttribute("alt"));
+                        const src = clean(img.getAttribute("src"));
+                        const cls = clean(img.className || "");
+                        if (alt === "moderated") return true;
+                        if (src.includes("/imagine-public/images/") && /(\bblur\b|blur-lg)/.test(cls) && /saturate-0/.test(cls)) return true;
+                        return false;
+                    };
+                    const moderatedImage = [...document.querySelectorAll("img")].find(hasModeratedImageSignal) || null;
+                    const eyeOffIcon = document.querySelector("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off']");
+                    const moderated = !!moderatedImage || !!eyeOffIcon;
                     return {
-                        moderated: !!moderatedImage,
+                        moderated,
                         moderatedSrc: moderatedImage ? String(moderatedImage.getAttribute("src") || "").trim() : "",
+                        eyeOffDetected: !!eyeOffIcon,
                     };
                 } catch (err) {
                     return { moderated: false, error: String(err && err.stack ? err.stack : err) };
@@ -9832,20 +9835,23 @@ class MainWindow(QMainWindow):
                     return {{ status: "generating-indicator-visible", progressText: "Generating" }};
                 }}
 
-                const moderatedImage = [...document.querySelectorAll("img")]
-                    .find((img) => {{
-                        if (!isVisible(img)) return false;
-                        const alt = String(img.getAttribute("alt") || "").trim().toLowerCase();
-                        const src = String(img.getAttribute("src") || "").trim().toLowerCase();
-                        const cls = String(img.className || "").toLowerCase();
-                        if (alt === "moderated") return true;
-                        const moderationStyleHint = /\bblur\b/.test(cls) && /saturate-0/.test(cls);
-                        return moderationStyleHint && src.includes("imagine-public.x.ai/imagine-public/images/");
-                    }});
-                if (moderatedImage) {{
+                const clean = (value) => String(value || "").trim().toLowerCase();
+                const hasModeratedImageSignal = (img) => {{
+                    if (!img) return false;
+                    const alt = clean(img.getAttribute("alt"));
+                    const src = clean(img.getAttribute("src"));
+                    const cls = clean(img.className || "");
+                    if (alt === "moderated") return true;
+                    if (src.includes("/imagine-public/images/") && /(\bblur\b|blur-lg)/.test(cls) && /saturate-0/.test(cls)) return true;
+                    return false;
+                }};
+                const moderatedImage = [...document.querySelectorAll("img")].find((img) => hasModeratedImageSignal(img)) || null;
+                const eyeOffIcon = document.querySelector("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off']");
+                if (moderatedImage || eyeOffIcon) {{
                     return {{
                         status: "moderated",
-                        moderatedSrc: String(moderatedImage.getAttribute("src") || "").trim(),
+                        moderatedSrc: moderatedImage ? String(moderatedImage.getAttribute("src") || "").trim() : "",
+                        eyeOffDetected: !!eyeOffIcon,
                     }};
                 }}
 
@@ -10141,7 +10147,11 @@ class MainWindow(QMainWindow):
 
             if status == "moderated":
                 moderated_src = (result.get("moderatedSrc") or "").strip()
-                self._cancel_manual_flow_due_to_moderation(current_variant, moderated_src)
+                eye_off_detected = bool(result.get("eyeOffDetected"))
+                moderation_details = moderated_src
+                if eye_off_detected and not moderation_details:
+                    moderation_details = "eye-off-overlay"
+                self._cancel_manual_flow_due_to_moderation(current_variant, moderation_details)
                 return
 
             if status == "generating-indicator-visible":
