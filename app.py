@@ -6898,7 +6898,7 @@ class MainWindow(QMainWindow):
             nonlocal submit_attempts
             submit_attempts += 1
             self._append_log(
-                f"Manual image variant {variant}: attempting submit click ({submit_attempts}/{max_submit_attempts})."
+                f"Manual image variant {variant}: attempting Enter key submit ({submit_attempts}/{max_submit_attempts})."
             )
             self.browser.page().runJavaScript(submit_script, _after_submit)
 
@@ -6915,11 +6915,11 @@ class MainWindow(QMainWindow):
             if isinstance(result, dict) and result.get("waiting"):
                 if submit_attempts < max_submit_attempts:
                     self._append_log(
-                        f"Manual image variant {variant}: submit button still disabled (attempt {submit_attempts}); retrying click..."
+                        f"Manual image variant {variant}: submit input not ready for Enter (attempt {submit_attempts}); retrying Enter key submit..."
                     )
                     QTimer.singleShot(500, _run_submit_attempt)
                     return
-                _retry_variant(f"submit button stayed disabled: {result!r}")
+                _retry_variant(f"submit input stayed not-ready for Enter: {result!r}")
                 return
 
             # Some Grok navigations can clear the JS callback value; treat that as submitted.
@@ -6927,7 +6927,7 @@ class MainWindow(QMainWindow):
                 #self.show_browser_page()
                 self._append_log(
                     f"Submitted manual image variant {variant} (attempt {attempts}); "
-                    "submit callback returned empty result after page activity; continuing to image polling."
+                    "Enter-submit callback returned empty result after page activity; continuing to image polling."
                 )
                 QTimer.singleShot(7000, self._poll_for_manual_image)
                 return
