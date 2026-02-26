@@ -791,6 +791,41 @@ class AISocialMetadata:
     category: str
 
 
+class PromptGenerationWorker(QThread):
+    finished_payload = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, source: str, concept: str, instruction_template: str, system: str, user_template: str, caller):
+        super().__init__()
+        self.source = source
+        self.concept = concept
+        self.instruction_template = instruction_template
+        self.system = system
+        self.user_template = user_template
+        self.caller = caller
+
+    def run(self) -> None:
+        try:
+            instruction_template = self.instruction_template.strip() or DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE
+            if "{concept}" in instruction_template:
+                instruction = instruction_template.replace("{concept}", self.concept)
+            else:
+                instruction = f"{self.concept} {instruction_template}".strip()
+
+            system = self.system.strip() or DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT
+            user_template = self.user_template.strip() or DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE
+            if "{instruction}" in user_template:
+                user = user_template.replace("{instruction}", instruction)
+            else:
+                user = f"{user_template}\nConcept instruction: {instruction}".strip()
+
+            raw = self.caller._call_selected_ai(system, user)
+            parsed = _parse_json_object_from_text(raw)
+            self.finished_payload.emit(parsed)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class GenerateWorker(QThread):
     finished_video = Signal(dict)
     failed = Signal(str)
@@ -2295,6 +2330,7 @@ class MainWindow(QMainWindow):
         self.automation_runtime: AutomationRuntimeWorker | None = None
         self.automation_chrome_instance: ChromeInstance | None = None
         self.udp_workflow_worker: UdpWorkflowWorker | None = None
+        self.prompt_generation_worker: PromptGenerationWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -6249,25 +6285,34 @@ class MainWindow(QMainWindow):
         if not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept first.")
             return
+        if self.prompt_generation_worker and self.prompt_generation_worker.isRunning():
+            self._append_log("Prompt generation is already in progress.")
+            return
 
+        instruction_template = self.ai_concept_instruction_template_input.toPlainText().strip()
+        system = self.ai_concept_system_prompt_input.toPlainText().strip()
+        user_template = self.ai_concept_user_prompt_template_input.toPlainText().strip()
+
+        self.generate_prompt_btn.setEnabled(False)
+        self.generate_prompt_btn.setText("⏳ Generating Prompt + Social Metadata...")
+        self._append_log(f"Generating prompt + social metadata using {str(source).title()}...")
+
+        worker = PromptGenerationWorker(
+            source=str(source),
+            concept=concept,
+            instruction_template=instruction_template,
+            system=system,
+            user_template=user_template,
+            caller=self,
+        )
+        worker.finished_payload.connect(self._on_prompt_generation_success)
+        worker.failed.connect(self._on_prompt_generation_failed)
+        worker.finished.connect(self._on_prompt_generation_finished)
+        self.prompt_generation_worker = worker
+        worker.start()
+
+    def _on_prompt_generation_success(self, parsed: dict) -> None:
         try:
-            instruction_template = self.ai_concept_instruction_template_input.toPlainText().strip()
-            if not instruction_template:
-                instruction_template = DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE
-            if "{concept}" in instruction_template:
-                instruction = instruction_template.replace("{concept}", concept)
-            else:
-                instruction = f"{concept} {instruction_template}".strip()
-
-            system = self.ai_concept_system_prompt_input.toPlainText().strip() or DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT
-            user_template = self.ai_concept_user_prompt_template_input.toPlainText().strip() or DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE
-            if "{instruction}" in user_template:
-                user = user_template.replace("{instruction}", instruction)
-            else:
-                user = f"{user_template}\nConcept instruction: {instruction}".strip()
-
-            raw = self._call_selected_ai(system, user)
-            parsed = _parse_json_object_from_text(raw)
             manual_prompt = str(parsed.get("manual_prompt", "")).strip()
             if not manual_prompt:
                 raise RuntimeError("AI response did not include a manual_prompt.")
@@ -6276,8 +6321,10 @@ class MainWindow(QMainWindow):
             cleaned_hashtags = [str(tag).strip().lstrip("#") for tag in hashtags if str(tag).strip()]
             self.ai_social_metadata = AISocialMetadata(
                 title=str(parsed.get("title", "AI Generated Video")).strip() or "AI Generated Video",
-                medium_title=str(parsed.get("medium_title", parsed.get("title", "AI Generated Video Clip"))).strip() or "AI Generated Video Clip",
-                tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")).strip() or "Swipe for more AI visuals.",
+                medium_title=str(parsed.get("medium_title", parsed.get("title", "AI Generated Video Clip"))).strip()
+                or "AI Generated Video Clip",
+                tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")).strip()
+                or "Swipe for more AI visuals.",
                 description=str(parsed.get("description", "")).strip(),
                 x_post=str(parsed.get("x_post", "")).strip(),
                 hashtags=cleaned_hashtags or ["grok", "ai", "generated-video"],
@@ -6289,10 +6336,16 @@ class MainWindow(QMainWindow):
                 f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
                 f"{', '.join(self.ai_social_metadata.hashtags)})."
             )
-        except json.JSONDecodeError:
-            QMessageBox.critical(self, "AI Response Error", "AI response was not valid JSON. Please retry.")
         except Exception as exc:
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
+
+    def _on_prompt_generation_failed(self, message: str) -> None:
+        QMessageBox.critical(self, "Prompt Generation Failed", message)
+
+    def _on_prompt_generation_finished(self) -> None:
+        self.generate_prompt_btn.setEnabled(True)
+        self.generate_prompt_btn.setText("✨ Generate Prompt + Social Metadata from Concept")
+        self.prompt_generation_worker = None
 
     def populate_video_prompt(self) -> None:
         self.stop_all_requested = False
