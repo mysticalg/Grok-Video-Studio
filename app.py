@@ -6831,7 +6831,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
                     const isMenuToggle = (el) => {
                         if (!el) return false;
                         const aria = clean(el.getAttribute("aria-label")).toLowerCase();
@@ -7508,45 +7508,73 @@ class MainWindow(QMainWindow):
                 if (phase === "video-mode") {{
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
-                    const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(`${{textOf(el)}} ${{ariaOf(el)}}`);
-                    const modelTriggerCandidates = [
-                        ...document.querySelectorAll("#model-select-trigger"),
-                        ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
-                        ...document.querySelectorAll("button, [role='button']"),
-                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
-
-                    const modelTrigger = modelTriggerCandidates.find((el) => {{
-                        const txt = textOf(el);
-                        return /model|video|image|options|settings/i.test(txt) || (el.id || "") === "model-select-trigger";
-                    }}) || null;
-
-                    let optionsOpened = false;
-                    if (modelTrigger) {{
-                        optionsOpened = emulateClick(modelTrigger);
-                    }}
-                    await sleep(ACTION_DELAY_MS);
-
-                    const menuItems = [
+                    const titleOf = (el) => (el?.getAttribute?.("title") || "").replace(/\\s+/g, " ").trim();
+                    const descriptorOf = (el) => `${{textOf(el)}} ${{ariaOf(el)}} ${{titleOf(el)}}`.trim();
+                    const isMakeVideoItem = (el) => /\\bmake\\s+video\\b/i.test(descriptorOf(el))
+                        || /animate\\s+this\\s+image\\s+into\\s+a\\s+video/i.test(descriptorOf(el));
+                    const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(descriptorOf(el));
+                    const getMenuItems = () => [
                         ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
 
-                    const videoItem = menuItems.find((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el))) || null;
-                    const videoClicked = videoItem ? emulateClick(videoItem) : false;
-                    await sleep(ACTION_DELAY_MS);
+                    const makeVideoFromOpenMenu = async () => {{
+                        const menuItems = getMenuItems();
+                        const makeVideoItem = menuItems.find((el) => isMakeVideoItem(el)) || null;
+                        const clicked = makeVideoItem ? emulateClick(makeVideoItem) : false;
+                        if (clicked) await sleep(ACTION_DELAY_MS);
+                        return {{ item: makeVideoItem, clicked }};
+                    }};
+
+                    let optionsOpened = false;
+                    let makeVideoItemFound = false;
+                    let makeVideoClicked = false;
+
+                    let menuAttempt = await makeVideoFromOpenMenu();
+                    if (menuAttempt.item) {{
+                        makeVideoItemFound = true;
+                        makeVideoClicked = !!menuAttempt.clicked;
+                    }}
+
+                    if (!makeVideoItemFound || !makeVideoClicked) {{
+                        const triggerCandidates = [
+                            ...document.querySelectorAll("#model-select-trigger"),
+                            ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
+                            ...document.querySelectorAll("button[aria-label*='more' i], [role='button'][aria-label*='more' i], button[title*='more' i], [role='button'][title*='more' i]"),
+                            ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
+                            ...document.querySelectorAll("button, [role='button']"),
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
+
+                        const likelyTriggers = triggerCandidates.filter((el) => {{
+                            const descriptor = descriptorOf(el);
+                            return /model|video|image|options|settings|more/i.test(descriptor) || (el.id || "") === "model-select-trigger";
+                        }});
+                        const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
+
+                        for (const trigger of candidates) {{
+                            const opened = emulateClick(trigger);
+                            optionsOpened = optionsOpened || opened;
+                            await sleep(ACTION_DELAY_MS);
+                            menuAttempt = await makeVideoFromOpenMenu();
+                            if (menuAttempt.item) {{
+                                makeVideoItemFound = true;
+                                makeVideoClicked = !!menuAttempt.clicked;
+                                if (makeVideoClicked) break;
+                            }}
+                        }}
+                    }}
 
                     const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
                         .filter((el) => isVisible(el));
                     const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
-                    const selectedViaTrigger = !!(modelTrigger && /(^|\\s)video(\\s|$)/i.test(textOf(modelTrigger)));
-                    const videoSelected = videoClicked || selectedViaMarker || selectedViaTrigger;
+                    const videoSelected = makeVideoClicked || selectedViaMarker;
 
                     if (!videoSelected) {{
                         return {{
                             ok: false,
                             status: "waiting-for-video-mode",
                             optionsOpened,
-                            videoItemFound: !!videoItem,
-                            videoClicked,
+                            videoItemFound: makeVideoItemFound,
+                            videoClicked: makeVideoClicked,
                         }};
                     }}
 
@@ -7554,8 +7582,8 @@ class MainWindow(QMainWindow):
                         ok: true,
                         status: "video-mode-selected",
                         optionsOpened,
-                        videoItemFound: !!videoItem,
-                        videoClicked,
+                        videoItemFound: makeVideoItemFound,
+                        videoClicked: makeVideoClicked,
                     }};
                 }}
 
@@ -7599,17 +7627,32 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
-                if (!submitButton) return {{ ok: false, status: "prompt-filled-waiting-submit" }};
-
+                let enterDispatched = false;
+                const enterEventCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
                 await sleep(ACTION_DELAY_MS);
-                const submitted = emulateClick(submitButton);
+
+                const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
+                    .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video|send|generate|create/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+
+                let submitted = false;
+                let submitLabel = "enter-key";
+                if (submitButton) {{
+                    await sleep(ACTION_DELAY_MS);
+                    submitted = emulateClick(submitButton);
+                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || submitLabel;
+                }} else if (enterDispatched) {{
+                    submitted = true;
+                }}
+
                 if (submitted) window.__grokManualImageSubmitToken = submitToken;
                 return {{
                     ok: submitted,
                     status: submitted ? "video-submit-clicked" : "submit-click-failed",
-                    buttonLabel: (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim(),
+                    buttonLabel: submitLabel,
+                    enterDispatched,
                     filledLength: typedValue.length,
                 }};
             }})()
@@ -8573,7 +8616,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
                     const isMenuToggle = (el) => {
                         if (!el) return false;
                         const aria = clean(el.getAttribute("aria-label")).toLowerCase();
