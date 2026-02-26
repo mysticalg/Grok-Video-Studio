@@ -8077,10 +8077,12 @@ class MainWindow(QMainWindow):
                             const hasVideoSource = /^https?:[/][/]/i.test(String(src || "").trim());
                             const makeVideoVisible = !![...document.querySelectorAll("button")]
                                 .find((btn) => isVisible(btn) && !btn.disabled && /make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
-                            const readyForDownloadPolling = Boolean(validPostId && (downloadButtonVisible || hasVideoSource || !makeVideoVisible));
+                            const onPostViewReady = Boolean(validPostId);
+                            const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || !makeVideoVisible));
                             return {
                                 ok: true,
                                 readyForDownloadPolling,
+                                onPostViewReady,
                                 validPostId,
                                 postId,
                                 downloadButtonVisible,
@@ -8100,6 +8102,18 @@ class MainWindow(QMainWindow):
                             f"{current_variant}: submit callback remained empty but post view indicates video is ready "
                             f"(downloadBtn={bool(probe_result.get('downloadButtonVisible'))}, "
                             f"videoSrc={bool(probe_result.get('hasVideoSource'))}); switching to download polling."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+
+                    if isinstance(probe_result, dict) and probe_result.get("onPostViewReady"):
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: submit callback remained empty, but valid post URL is present; "
+                            "moving to download polling to avoid submit-stage deadlock."
                         )
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_retry_count = 0
