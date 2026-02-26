@@ -757,6 +757,7 @@ def _configure_qtwebengine_runtime() -> None:
 @dataclass
 class GrokConfig:
     api_key: str
+    oauth_token: str
     chat_model: str
     image_model: str
 
@@ -849,8 +850,17 @@ class GenerateWorker(QThread):
             raise RuntimeError("OpenAI API key or access token is required.")
         return _openai_headers_from_credential(credential)
 
+    def _grok_credential(self) -> str:
+        return self.config.api_key or self.config.oauth_token
+
+    def _grok_headers(self) -> dict[str, str]:
+        credential = self._grok_credential()
+        if not credential:
+            raise RuntimeError("Grok API key or OAuth token is required.")
+        return {"Authorization": f"Bearer {credential}", "Content-Type": "application/json"}
+
     def call_grok_chat(self, system: str, user: str) -> str:
-        headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
+        headers = self._grok_headers()
         response = requests.post(
             f"{API_BASE_URL}/chat/completions",
             headers=headers,
@@ -902,7 +912,7 @@ class GenerateWorker(QThread):
         self._ensure_not_stopped()
         response = requests.post(
             f"{API_BASE_URL}/imagine/video/generations",
-            headers={"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"},
+            headers=self._grok_headers(),
             json={
                 "model": self.config.image_model,
                 "prompt": prompt,
@@ -1410,7 +1420,7 @@ class GenerateWorker(QThread):
             self._ensure_not_stopped()
             response = requests.get(
                 f"{API_BASE_URL}/imagine/video/generations/{job_id}",
-                headers={"Authorization": f"Bearer {self.config.api_key}"},
+                headers={"Authorization": f"Bearer {self._grok_credential()}"},
                 timeout=30,
             )
             response.raise_for_status()
@@ -3710,6 +3720,12 @@ class MainWindow(QMainWindow):
         self.api_key.setText(os.getenv("GROK_API_KEY", ""))
         ai_layout.addRow("Grok API Key", self.api_key)
 
+        self.grok_oauth_token = QLineEdit()
+        self.grok_oauth_token.setEchoMode(QLineEdit.Password)
+        self.grok_oauth_token.setPlaceholderText("Optional Grok OAuth bearer token")
+        self.grok_oauth_token.setText(os.getenv("GROK_OAUTH_TOKEN", ""))
+        ai_layout.addRow("Grok OAuth Token", self.grok_oauth_token)
+
         self.chat_model = QLineEdit(os.getenv("GROK_CHAT_MODEL", "grok-3-mini"))
         ai_layout.addRow("Chat Model", self.chat_model)
 
@@ -4667,6 +4683,7 @@ class MainWindow(QMainWindow):
     def _collect_preferences(self) -> dict:
         return {
             "api_key": self.api_key.text(),
+            "grok_oauth_token": self.grok_oauth_token.text(),
             "chat_model": self.chat_model.text(),
             "image_model": self.image_model.text(),
             "prompt_source": self.prompt_source.currentData(),
@@ -4772,6 +4789,8 @@ class MainWindow(QMainWindow):
         self._applying_preferences = True
         if "api_key" in preferences:
             self.api_key.setText(str(preferences["api_key"]))
+        if "grok_oauth_token" in preferences:
+            self.grok_oauth_token.setText(str(preferences["grok_oauth_token"]))
         if "chat_model" in preferences:
             self.chat_model.setText(str(preferences["chat_model"]))
         if "image_model" in preferences:
@@ -5559,6 +5578,8 @@ class MainWindow(QMainWindow):
         video_provider = self.video_provider.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
         api_key = self.api_key.text().strip()
+        grok_oauth_token = self.grok_oauth_token.text().strip()
+        grok_credential = api_key or grok_oauth_token
 
         if prompt_source != "manual" and not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
@@ -5574,8 +5595,20 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if video_provider == "grok" and not api_key:
-            QMessageBox.warning(self, "Missing Grok API Key", "Please enter a Grok API key for Grok Imagine video generation.")
+        if prompt_source == "grok" and not grok_credential:
+            QMessageBox.warning(
+                self,
+                "Missing Grok Credentials",
+                "Please enter a Grok API key or Grok OAuth token for Grok prompt generation.",
+            )
+            return
+
+        if video_provider == "grok" and not grok_credential:
+            QMessageBox.warning(
+                self,
+                "Missing Grok Credentials",
+                "Please enter a Grok API key or Grok OAuth token for Grok Imagine video generation.",
+            )
             return
 
         if video_provider == "openai" and not (self.openai_api_key.text().strip() or self.openai_access_token.text().strip()):
@@ -5596,6 +5629,7 @@ class MainWindow(QMainWindow):
 
         config = GrokConfig(
             api_key=api_key,
+            oauth_token=grok_oauth_token,
             chat_model=self.chat_model.text().strip() or "grok-3-mini",
             image_model=self.image_model.text().strip() or "grok-video-latest",
         )
@@ -6044,7 +6078,7 @@ class MainWindow(QMainWindow):
             return
 
         self.browser.setUrl(QUrl("https://grok.com/"))
-        self._append_log("Opened Grok in browser for sign-in.")
+        self._append_log("Opened Grok in browser for sign-in. After authentication, paste your Grok OAuth bearer token into Model/API Settings if available.")
 
     def _describe_overlay_frame_with_selected_ai(self, frame_path: Path, timestamp_seconds: float) -> str:
         source = self.prompt_source.currentData()
@@ -11043,6 +11077,7 @@ class MainWindow(QMainWindow):
         self.openai_chat_model.setEnabled(prompt_source == "openai")
         self.seedance_api_key.setEnabled(uses_seedance)
         self.seedance_oauth_token.setEnabled(uses_seedance)
+        self.grok_oauth_token.setEnabled(uses_grok)
         self.chat_model.setEnabled(uses_grok)
         self.sora_generate_btn.setText("🎬 API Generate Video")
         self.seedance_generate_btn.setText("🎬 API Generate Video")
