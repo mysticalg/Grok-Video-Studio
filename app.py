@@ -9695,6 +9695,7 @@ class MainWindow(QMainWindow):
         self.manual_generation_queue.clear()
         self.manual_image_generation_queue.clear()
         self.manual_download_poll_timer.stop()
+        redirect_target = (self.pending_manual_redirect_target or "grok").lower()
         self.pending_manual_variant_for_download = None
         self.pending_manual_download_type = None
         self.manual_download_click_sent = False
@@ -9713,6 +9714,38 @@ class MainWindow(QMainWindow):
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
         self._reset_automation_counter_tracking()
+        if redirect_target == "sora":
+            self._append_log("Moderation detected; returning embedded browser to sora.chatgpt.com/drafts.")
+            QTimer.singleShot(0, self.show_sora_browser_page)
+        else:
+            self._append_log("Moderation detected; returning embedded browser to grok.com/imagine homepage.")
+            QTimer.singleShot(0, self.show_browser_page)
+
+    def _probe_manual_video_moderation(self, callback: Callable[[object], None]) -> None:
+        script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const moderatedImage = [...document.querySelectorAll("img")]
+                        .find((img) => {
+                            if (!isVisible(img)) return false;
+                            const alt = String(img.getAttribute("alt") || "").trim().toLowerCase();
+                            const src = String(img.getAttribute("src") || "").trim().toLowerCase();
+                            const cls = String(img.className || "").toLowerCase();
+                            if (alt === "moderated") return true;
+                            const moderationStyleHint = /\bblur\b/.test(cls) && /saturate-0/.test(cls);
+                            return moderationStyleHint && src.includes("imagine-public.x.ai/imagine-public/images/");
+                        });
+                    return {
+                        moderated: !!moderatedImage,
+                        moderatedSrc: moderatedImage ? String(moderatedImage.getAttribute("src") || "").trim() : "",
+                    };
+                } catch (err) {
+                    return { moderated: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+        self.browser.page().runJavaScript(script, callback)
 
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
@@ -10036,17 +10069,27 @@ class MainWindow(QMainWindow):
                 self.manual_public_video_url = _ensure_public_download_query(active_url)
 
             if not isinstance(result, dict):
-                if self.manual_public_video_url:
-                    self._append_log(
-                        f"Variant {current_variant}: poll returned no structured page state; probing known public URL directly."
-                    )
-                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
-                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
-                else:
-                    self._append_log(
-                        f"Variant {current_variant}: poll returned no structured page state and no public video URL is known yet; waiting for direct URL signal."
-                    )
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                def _after_unstructured_moderation_probe(probe_result: object) -> None:
+                    if self.pending_manual_variant_for_download != current_variant:
+                        return
+                    if isinstance(probe_result, dict) and probe_result.get("moderated"):
+                        moderated_src = str(probe_result.get("moderatedSrc") or "").strip()
+                        self._cancel_manual_flow_due_to_moderation(current_variant, moderated_src)
+                        return
+
+                    if self.manual_public_video_url:
+                        self._append_log(
+                            f"Variant {current_variant}: poll returned no structured page state; moderation not detected, probing known public URL directly."
+                        )
+                        self._start_manual_direct_download(current_variant, self.manual_public_video_url)
+                        self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                    else:
+                        self._append_log(
+                            f"Variant {current_variant}: poll returned no structured page state and no public video URL is known yet; waiting for direct URL signal."
+                        )
+                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+
+                self._probe_manual_video_moderation(_after_unstructured_moderation_probe)
                 return
 
             status = result.get("status", "waiting")
