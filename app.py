@@ -8727,7 +8727,14 @@ class MainWindow(QMainWindow):
             f"Remaining repeats after this: {remaining_count}."
         )
 
-        escaped_prompt = repr(prompt)
+        prompt_for_variant = prompt
+        if self.automation_counter_total > 1:
+            prompt_for_variant = f"{prompt}\n\nVariation #{variant} of {self.automation_counter_total}."
+            self._append_log(
+                f"Variant {variant}: using automation counter suffix in prompt to force a fresh generation turn."
+            )
+
+        escaped_prompt = repr(prompt_for_variant)
         script = rf"""
             (() => {{
                 try {{
@@ -9680,6 +9687,33 @@ class MainWindow(QMainWindow):
         )
         self.manual_download_poll_timer.start(0)
 
+    def _cancel_manual_flow_due_to_moderation(self, variant: int, details: str = "") -> None:
+        suffix = f" ({details})" if details else ""
+        self._append_log(
+            f"WARNING: Variant {variant} appears moderated in Grok Imagine; canceling the active manual flow because download will not be available{suffix}."
+        )
+        self.manual_generation_queue.clear()
+        self.manual_image_generation_queue.clear()
+        self.manual_download_poll_timer.stop()
+        self.pending_manual_variant_for_download = None
+        self.pending_manual_download_type = None
+        self.manual_download_click_sent = False
+        self.manual_download_request_pending = False
+        self.manual_video_start_click_sent = False
+        self.manual_video_make_click_fallback_used = False
+        self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
+        self.manual_video_allow_make_click = True
+        self.manual_download_in_progress = False
+        self.manual_download_started_at = None
+        self.manual_download_deadline = None
+        self.manual_public_video_url = ""
+        self.manual_download_attempt_count = 0
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
+        self._reset_automation_counter_tracking()
+
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -9763,6 +9797,23 @@ class MainWindow(QMainWindow):
                     }});
                 if (generatingIndicator) {{
                     return {{ status: "generating-indicator-visible", progressText: "Generating" }};
+                }}
+
+                const moderatedImage = [...document.querySelectorAll("img")]
+                    .find((img) => {{
+                        if (!isVisible(img)) return false;
+                        const alt = String(img.getAttribute("alt") || "").trim().toLowerCase();
+                        const src = String(img.getAttribute("src") || "").trim().toLowerCase();
+                        const cls = String(img.className || "").toLowerCase();
+                        if (alt === "moderated") return true;
+                        const moderationStyleHint = /\bblur\b/.test(cls) && /saturate-0/.test(cls);
+                        return moderationStyleHint && src.includes("imagine-public.x.ai/imagine-public/images/");
+                    }});
+                if (moderatedImage) {{
+                    return {{
+                        status: "moderated",
+                        moderatedSrc: String(moderatedImage.getAttribute("src") || "").trim(),
+                    }};
                 }}
 
                 const cancelVideoButton = [...document.querySelectorAll("button")]
@@ -10043,6 +10094,11 @@ class MainWindow(QMainWindow):
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                return
+
+            if status == "moderated":
+                moderated_src = (result.get("moderatedSrc") or "").strip()
+                self._cancel_manual_flow_due_to_moderation(current_variant, moderated_src)
                 return
 
             if status == "generating-indicator-visible":
