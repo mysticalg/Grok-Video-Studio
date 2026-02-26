@@ -107,6 +107,8 @@ OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455")
 OPENAI_TOKEN_PATHS = ("/token", "/oauth/token")
 OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.com/backend-api/codex")
 OPENAI_USE_CHATGPT_BACKEND = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
+OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434/v1")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1:8b")
 SEEDANCE_API_BASE = os.getenv("SEEDANCE_API_BASE", "https://api.seedance.ai/v2")
 FACEBOOK_GRAPH_VERSION = os.getenv("FACEBOOK_GRAPH_VERSION", "v21.0")
 
@@ -2507,7 +2509,7 @@ class MainWindow(QMainWindow):
 
         self.generate_prompt_btn = QPushButton("✨ Generate Prompt + Social Metadata from Concept")
         self.generate_prompt_btn.setToolTip(
-            "Uses Prompt Source (Grok/OpenAI) to convert Concept into a 10-second video prompt and social metadata."
+            "Uses Prompt Source (Grok/OpenAI/Ollama) to convert Concept into a 10-second video prompt and social metadata."
         )
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
@@ -3720,6 +3722,7 @@ class MainWindow(QMainWindow):
         self.prompt_source.addItem("Manual prompt (no API)", "manual")
         self.prompt_source.addItem("Grok API", "grok")
         self.prompt_source.addItem("OpenAI API", "openai")
+        self.prompt_source.addItem("Ollama (local)", "ollama")
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
         ai_layout.addRow("Prompt Source", self.prompt_source)
 
@@ -3744,6 +3747,13 @@ class MainWindow(QMainWindow):
 
         self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-5.1-codex"))
         ai_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
+
+        self.ollama_api_base = QLineEdit(os.getenv("OLLAMA_API_BASE", OLLAMA_API_BASE))
+        self.ollama_api_base.setPlaceholderText("http://127.0.0.1:11434/v1")
+        ai_layout.addRow("Ollama API Base", self.ollama_api_base)
+
+        self.ollama_chat_model = QLineEdit(os.getenv("OLLAMA_CHAT_MODEL", OLLAMA_CHAT_MODEL))
+        ai_layout.addRow("Ollama Chat Model", self.ollama_chat_model)
 
         self.seedance_api_key = QLineEdit()
         self.seedance_api_key.setEchoMode(QLineEdit.Password)
@@ -4674,6 +4684,8 @@ class MainWindow(QMainWindow):
             "openai_api_key": self.openai_api_key.text(),
             "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
+            "ollama_api_base": self.ollama_api_base.text(),
+            "ollama_chat_model": self.ollama_chat_model.text(),
             "seedance_api_key": self.seedance_api_key.text(),
             "seedance_oauth_token": self.seedance_oauth_token.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
@@ -4790,6 +4802,10 @@ class MainWindow(QMainWindow):
             self.openai_access_token.setText(str(preferences["openai_access_token"]))
         if "openai_chat_model" in preferences:
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
+        if "ollama_api_base" in preferences:
+            self.ollama_api_base.setText(str(preferences["ollama_api_base"]))
+        if "ollama_chat_model" in preferences:
+            self.ollama_chat_model.setText(str(preferences["ollama_chat_model"]))
         if "seedance_api_key" in preferences:
             self.seedance_api_key.setText(str(preferences["seedance_api_key"]))
         if "seedance_oauth_token" in preferences:
@@ -6202,6 +6218,16 @@ class MainWindow(QMainWindow):
                 temperature=0.4,
             )
 
+        if source == "ollama":
+            ollama_api_base = self.ollama_api_base.text().strip() or OLLAMA_API_BASE
+            ollama_chat_model = self.ollama_chat_model.text().strip() or OLLAMA_CHAT_MODEL
+            payload["model"] = ollama_chat_model
+            endpoint = f"{ollama_api_base.rstrip('/')}/chat/completions"
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+            if not response.ok:
+                raise RuntimeError(f"Ollama request failed: {response.status_code} {response.text[:400]}")
+            return response.json()["choices"][0]["message"]["content"].strip()
+
         grok_key = self.api_key.text().strip()
         if not grok_key:
             if self.ai_auth_method.currentData() == "browser":
@@ -6217,8 +6243,8 @@ class MainWindow(QMainWindow):
     def generate_prompt_from_concept(self) -> None:
         concept = self.concept.toPlainText().strip()
         source = self.prompt_source.currentData()
-        if source not in {"grok", "openai"}:
-            QMessageBox.warning(self, "AI Source Required", "Set Prompt Source to Grok API or OpenAI API.")
+        if source not in {"grok", "openai", "ollama"}:
+            QMessageBox.warning(self, "AI Source Required", "Set Prompt Source to Grok API, OpenAI API, or Ollama (local).")
             return
         if not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept first.")
@@ -11041,6 +11067,8 @@ class MainWindow(QMainWindow):
         self.openai_api_key.setEnabled(uses_openai)
         self.openai_access_token.setEnabled(uses_openai)
         self.openai_chat_model.setEnabled(prompt_source == "openai")
+        self.ollama_api_base.setEnabled(prompt_source == "ollama")
+        self.ollama_chat_model.setEnabled(prompt_source == "ollama")
         self.seedance_api_key.setEnabled(uses_seedance)
         self.seedance_oauth_token.setEnabled(uses_seedance)
         self.chat_model.setEnabled(uses_grok)
