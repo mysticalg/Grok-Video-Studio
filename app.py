@@ -8059,6 +8059,73 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(2500, self._poll_for_manual_image)
                 return
 
+            if status == "callback-empty":
+                submit_ready_probe_script = """
+                    (() => {
+                        try {
+                            const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                            const pathRaw = String((window.location && window.location.pathname) || "");
+                            const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                            const postId = postMatch ? String(postMatch[1] || "") : "";
+                            const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                                && !/^placeholder-/i.test(postId);
+                            const downloadButtonVisible = !![...document.querySelectorAll("button[aria-label='Download']")]
+                                .find((btn) => isVisible(btn) && !btn.disabled);
+                            const video = document.querySelector("video");
+                            const source = document.querySelector("video source");
+                            const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
+                            const hasVideoSource = /^https?:[/][/]/i.test(String(src || "").trim());
+                            const makeVideoVisible = !![...document.querySelectorAll("button")]
+                                .find((btn) => isVisible(btn) && !btn.disabled && /make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                            const readyForDownloadPolling = Boolean(validPostId && (downloadButtonVisible || hasVideoSource || !makeVideoVisible));
+                            return {
+                                ok: true,
+                                readyForDownloadPolling,
+                                validPostId,
+                                postId,
+                                downloadButtonVisible,
+                                hasVideoSource,
+                                makeVideoVisible,
+                            };
+                        } catch (_) {
+                            return { ok: false, readyForDownloadPolling: false };
+                        }
+                    })()
+                """
+
+                def _after_submit_ready_probe(probe_result):
+                    if isinstance(probe_result, dict) and probe_result.get("readyForDownloadPolling"):
+                        self._append_log(
+                            "Variant "
+                            f"{current_variant}: submit callback remained empty but post view indicates video is ready "
+                            f"(downloadBtn={bool(probe_result.get('downloadButtonVisible'))}, "
+                            f"videoSrc={bool(probe_result.get('hasVideoSource'))}); switching to download polling."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+
+                    self.manual_image_submit_retry_count += 1
+                    if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: submit-stage validation stayed in '{status}' for "
+                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so continuing image polling instead of forcing download."
+                        )
+                        self.manual_image_submit_retry_count = 0
+                        QTimer.singleShot(2000, self._poll_for_manual_image)
+                        return
+
+                    self._append_log(
+                        f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying..."
+                    )
+                    QTimer.singleShot(3000, self._poll_for_manual_image)
+
+                self.browser.page().runJavaScript(submit_ready_probe_script, _after_submit_ready_probe)
+                return
+
             self.manual_image_submit_retry_count += 1
             if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
                 self._append_log(
