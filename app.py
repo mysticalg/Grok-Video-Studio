@@ -9662,6 +9662,7 @@ class MainWindow(QMainWindow):
                         };
 
                         let clicked = false;
+                        let menuOpenOnly = false;
                         try { candidate.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
                         try { candidate.focus({ preventScroll: true }); } catch (_) {}
                         clicked = fire(candidate, "pointerdown", "PointerEvent") || clicked;
@@ -9698,6 +9699,47 @@ class MainWindow(QMainWindow):
                             } catch (_) {}
                         }
 
+                        const tryClickNestedDownloadTarget = () => {
+                            const menuSelectors = [
+                                "[role='menu'] a[href]",
+                                "[role='menuitem'][href]",
+                                "[role='menuitem']",
+                                "[data-radix-popper-content-wrapper] a[href]",
+                                "[data-radix-popper-content-wrapper] [role='menuitem']",
+                            ];
+                            const menuNodes = menuSelectors
+                                .flatMap((selector) => [...document.querySelectorAll(selector)]);
+                            const uniqueMenuNodes = menuNodes.filter((node, index, arr) => arr.indexOf(node) === index);
+                            const candidateNode = uniqueMenuNodes.find((node) => {
+                                if (!isVisible(node) || node.disabled) return false;
+                                const text = `${node.getAttribute?.("aria-label") || ""} ${node.textContent || ""}`.toLowerCase();
+                                const href = normalizeAbsoluteUrl(node.getAttribute?.("href") || "");
+                                if (isDirectVideoUrl(href)) return true;
+                                return /\bdownload\b/.test(text) && (/\bmp4\b/.test(text) || /\bvideo\b/.test(text) || /\bhd\b/.test(text));
+                            });
+                            if (!candidateNode) return false;
+                            try { candidateNode.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                            try { candidateNode.focus({ preventScroll: true }); } catch (_) {}
+                            let nestedClicked = false;
+                            nestedClicked = fire(candidateNode, "pointerdown", "PointerEvent") || nestedClicked;
+                            nestedClicked = fire(candidateNode, "mousedown", "MouseEvent") || nestedClicked;
+                            nestedClicked = fire(candidateNode, "pointerup", "PointerEvent") || nestedClicked;
+                            nestedClicked = fire(candidateNode, "mouseup", "MouseEvent") || nestedClicked;
+                            nestedClicked = fire(candidateNode, "click", "MouseEvent") || nestedClicked;
+                            try { candidateNode.click(); nestedClicked = true; } catch (_) {}
+                            return nestedClicked;
+                        };
+
+                        const menuState = String(candidate.getAttribute("data-state") || "").trim().toLowerCase();
+                        if (menuState === "closed") {
+                            const nestedClicked = tryClickNestedDownloadTarget();
+                            if (nestedClicked) {
+                                clicked = true;
+                            } else if (clicked) {
+                                menuOpenOnly = true;
+                            }
+                        }
+
                         const directUrlCandidates = [];
                         const pushCandidate = (rawUrl) => {
                             const normalized = normalizeAbsoluteUrl(rawUrl);
@@ -9728,7 +9770,8 @@ class MainWindow(QMainWindow):
                             : null;
                         return {
                             clicked,
-                            reason: clicked ? "clicked" : "dispatch-failed",
+                            menuOpenOnly,
+                            reason: menuOpenOnly ? "menu-opened-awaiting-item" : (clicked ? "clicked" : "dispatch-failed"),
                             clickX: finalRect ? (finalRect.left + finalRect.width / 2) : null,
                             clickY: finalRect ? (finalRect.top + finalRect.height / 2) : null,
                             directUrl,
@@ -9738,6 +9781,7 @@ class MainWindow(QMainWindow):
 
                 def _after_force_download_click(click_result):
                     clicked = isinstance(click_result, dict) and bool(click_result.get("clicked"))
+                    menu_open_only = isinstance(click_result, dict) and bool(click_result.get("menuOpenOnly"))
                     click_x = click_result.get("clickX") if isinstance(click_result, dict) else None
                     click_y = click_result.get("clickY") if isinstance(click_result, dict) else None
                     direct_url = (click_result.get("directUrl") or "").strip() if isinstance(click_result, dict) else ""
@@ -9757,6 +9801,13 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 f"Variant {current_variant}: sent native embedded-browser click on Download control."
                             )
+
+                    if menu_open_only:
+                        self._append_log(
+                            f"Variant {current_variant}: Download control opened a menu; waiting for nested video download item to become clickable."
+                        )
+                        self.manual_download_poll_timer.start(900)
+                        return
 
                     if clicked or native_clicked:
                         if not self.manual_download_click_sent:
