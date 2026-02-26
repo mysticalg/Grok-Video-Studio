@@ -9052,6 +9052,12 @@ class MainWindow(QMainWindow):
         """
 
         def _run_flow_submit() -> None:
+            if continue_last_video_mode:
+                self._append_log(
+                    f"Variant {variant}: continue-last-video mode skips submit click; relying on explicit 'Make Video' action instead."
+                )
+                QTimer.singleShot(200, _click_make_video_after_prompt)
+                return
             self._append_log(f"Variant {variant}: submitting after prompt population delay.")
             self.browser.page().runJavaScript(submit_script, _after_final_submit)
 
@@ -9098,9 +9104,6 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
-                if continue_last_video_mode:
-                    QTimer.singleShot(1200, _click_make_video_after_prompt)
-                    return
                 QTimer.singleShot(2000, _run_flow_submit)
 
             self.browser.page().runJavaScript(script, _after_prompt_populate)
