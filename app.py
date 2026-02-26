@@ -8994,6 +8994,17 @@ class MainWindow(QMainWindow):
                       .filter((el) => isVisible(el) && !el.disabled);
 
                     const buttonCandidates = candidates.filter((el) => (el.tagName || "").toLowerCase() === "button");
+                    const isMakeVideoPrimaryButton = (el) => {
+                        if (!el) return false;
+                        const tag = String(el.tagName || "").toLowerCase();
+                        if (tag !== "button") return false;
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        if (!/^make\s+video$/i.test(aria || txt)) return false;
+                        const role = clean(el.getAttribute("role")).toLowerCase();
+                        if (role === "menuitem" || role === "menuitemradio") return false;
+                        return true;
+                    };
                     const exactMatch = (el) => {
                         const aria = clean(el.getAttribute("aria-label"));
                         const txt = clean(el.textContent);
@@ -9008,11 +9019,22 @@ class MainWindow(QMainWindow):
                         return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
                     };
 
-                    const target = ((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
-                        ? (buttonCandidates.find(exactMatch) || buttonCandidates.find(fuzzyMatch))
-                        : null)
-                        || candidates.find(exactMatch)
-                        || candidates.find(fuzzyMatch)
+                    const menuMakeVideoTarget = (optionType === "type" && /make\s+video/i.test(targetLabel))
+                        ? ([...document.querySelectorAll("[role='menuitem'], [role='menuitemradio']")]
+                            .find((el) => {
+                                if (!isVisible(el) || el.disabled) return false;
+                                const txt = clean(el.textContent);
+                                const strongTxt = clean(el.querySelector("span.font-semibold.text-sm")?.textContent || "");
+                                return /make\s+video/i.test(strongTxt || txt);
+                            }) || null)
+                        : null;
+
+                    const target = menuMakeVideoTarget
+                        || ((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
+                            ? (buttonCandidates.find(exactMatch) || buttonCandidates.find(fuzzyMatch))
+                            : null)
+                        || candidates.find((el) => !isMakeVideoPrimaryButton(el) && exactMatch(el))
+                        || candidates.find((el) => !isMakeVideoPrimaryButton(el) && fuzzyMatch(el))
                         || null;
 
                     let clicked = false;
