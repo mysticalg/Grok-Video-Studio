@@ -5160,14 +5160,35 @@ class MainWindow(QMainWindow):
             self.video_playback_hack_timer.start()
             self._ensure_browser_video_playback()
             if self.continue_from_frame_waiting_for_reload and self.continue_from_frame_active:
-                self.continue_from_frame_waiting_for_reload = False
-                self.continue_from_frame_reload_timeout_timer.stop()
-                self._append_log(
-                    "Continue-from-last-frame: detected page reload after image upload. Proceeding with prompt entry."
+                self.browser.page().runJavaScript(
+                    "(() => ({ href: String((window.location && window.location.href) || '') }))()",
+                    self._after_continue_reload_location_check,
                 )
-                QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
             if self.embedded_training_active and self.training_use_embedded_browser.isChecked():
                 self._inject_embedded_training_capture_script()
+
+    def _after_continue_reload_location_check(self, location_result) -> None:
+        if not self.continue_from_frame_waiting_for_reload or not self.continue_from_frame_active:
+            return
+
+        current_url = ""
+        if isinstance(location_result, dict):
+            current_url = str(location_result.get("href") or "")
+
+        if re.search(r"https?://(?:www\.)?grok\.com/imagine/post/[^/?#]+", current_url, re.IGNORECASE):
+            self.continue_from_frame_waiting_for_reload = False
+            self.continue_from_frame_reload_timeout_timer.stop()
+            self._append_log(
+                "Continue-from-last-frame: detected post page reload after image upload. "
+                "Applying video options, then entering continuation prompt."
+            )
+            QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
+            return
+
+        self._append_log(
+            "Continue-from-last-frame: reload detected but not on imagine/post URL yet; "
+            "waiting for post page before applying options and prompt."
+        )
 
     def _retry_continue_after_small_download(self, variant: int) -> None:
         source_video = self.continue_from_frame_current_source_video
@@ -9062,9 +9083,13 @@ class MainWindow(QMainWindow):
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
         if continue_last_video_mode:
-            option_steps = []
+            option_steps = [
+                ("resolution", selected_quality_label),
+                ("seconds", selected_duration_label),
+                ("ratio", selected_aspect_ratio),
+            ]
             self._append_log(
-                f"Variant {variant}: continue-last-video mode detected; bypassing the entire video-option selection phase."
+                f"Variant {variant}: continue-last-video mode detected; applying resolution, duration, and aspect ratio on the post page."
             )
         else:
             option_steps = [
