@@ -2311,6 +2311,7 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_generating_indicator_seen_once = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
@@ -7569,7 +7570,7 @@ class MainWindow(QMainWindow):
                 const prompt = {prompt!r};
                 const phase = {phase!r};
                 const submitToken = {self.manual_image_submit_token};
-                const ACTION_DELAY_MS = 200;
+                const ACTION_DELAY_MS = Math.max(50, Number({action_delay_ms}) || 200);
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
@@ -9371,6 +9372,7 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_generating_indicator_seen_once = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
@@ -9714,12 +9716,15 @@ class MainWindow(QMainWindow):
                 self.manual_download_last_status_log_at = now
 
             was_generating = bool(getattr(self, "manual_generating_indicator_seen", False))
+            has_seen_generating = bool(getattr(self, "manual_generating_indicator_seen_once", False))
+            can_probe_public_url = (not has_seen_generating) or bool(getattr(self, "manual_refresh_after_generating_sent", False))
             if status == "generating-indicator-visible":
                 if not was_generating:
                     self._append_log(
                         f"Variant {current_variant}: found 'Generating' span; polling until it disappears before download checks."
                     )
                 self.manual_generating_indicator_seen = True
+                self.manual_generating_indicator_seen_once = True
                 self.manual_refresh_after_generating_sent = False
             elif was_generating:
                 self.manual_generating_indicator_seen = False
@@ -9769,12 +9774,17 @@ class MainWindow(QMainWindow):
 
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
                 self.manual_video_start_click_sent = True
-                if self.manual_public_video_url:
+                if self.manual_public_video_url and can_probe_public_url:
                     self._append_log(
                         f"Variant {current_variant}: status={status}; probing known public URL directly."
                     )
                     self._start_manual_direct_download(current_variant, self.manual_public_video_url)
                     self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                elif self.manual_public_video_url and has_seen_generating:
+                    self._append_log(
+                        f"Variant {current_variant}: status={status}; waiting for post-generating refresh before probing known public URL."
+                    )
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 else:
                     self._append_log(
                         f"Variant {current_variant}: status={status}; waiting for public video URL to appear."
@@ -9800,7 +9810,7 @@ class MainWindow(QMainWindow):
                         self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                         return
 
-                if self.manual_public_video_url:
+                if self.manual_public_video_url and can_probe_public_url:
                     self._append_log(
                         f"Variant {current_variant}: Download control is visible; probing known public URL directly."
                     )
@@ -9809,6 +9819,12 @@ class MainWindow(QMainWindow):
                         self.manual_download_in_progress = True
                         self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
                         return
+                elif self.manual_public_video_url and has_seen_generating:
+                    self._append_log(
+                        f"Variant {current_variant}: Download control is visible; waiting for post-generating refresh before direct URL probe."
+                    )
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    return
 
                 self._append_log(
                     f"Variant {current_variant}: Download control is visible but no public direct URL is known yet; waiting for URL discovery."
@@ -9826,6 +9842,13 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
+            if status == "direct-url-ready" and not can_probe_public_url:
+                self._append_log(
+                    f"Variant {current_variant}: direct URL detected but waiting for post-generating refresh before public URL polling."
+                )
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                return
+
             if status == "direct-url-ready":
                 self.manual_download_attempt_count += 1
                 self.manual_public_video_url = _ensure_public_download_query(src)
@@ -9840,6 +9863,13 @@ class MainWindow(QMainWindow):
                 if self._start_manual_direct_download(current_variant, src):
                     self.manual_download_click_sent = True
                     self.manual_download_in_progress = True
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                return
+
+            if not can_probe_public_url:
+                self._append_log(
+                    f"Variant {current_variant}: video source is ready but waiting for post-generating refresh before direct download."
+                )
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
@@ -10098,6 +10128,7 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_generating_indicator_seen_once = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
@@ -10309,6 +10340,7 @@ class MainWindow(QMainWindow):
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
         self.manual_generating_indicator_seen = False
+        self.manual_generating_indicator_seen_once = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
