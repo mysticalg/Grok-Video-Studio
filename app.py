@@ -2789,6 +2789,7 @@ class MainWindow(QMainWindow):
         self.grok_browser_view.loadFinished.connect(self._on_browser_load_finished)
         self.sora_browser.loadFinished.connect(self._on_browser_load_finished)
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
+        self._sync_embedded_browser_download_path()
 
         log_group = QGroupBox("📡 Activity Log")
         log_layout = QVBoxLayout(log_group)
@@ -4410,6 +4411,29 @@ class MainWindow(QMainWindow):
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(download_path))
 
+    def _sync_embedded_browser_download_path(self) -> None:
+        profile = getattr(self, "browser_profile", None)
+        if profile is None:
+            return
+        try:
+            resolved_download_dir = self.download_dir.resolve()
+            resolved_download_dir.mkdir(parents=True, exist_ok=True)
+            probe_path = resolved_download_dir / ".grok_write_probe"
+            with open(probe_path, "wb") as probe_file:
+                probe_file.write(b"")
+            probe_path.unlink(missing_ok=True)
+        except Exception as exc:
+            self._append_log(
+                f"WARNING: Download directory is not writable for embedded browser downloads ({self.download_dir}): {exc}"
+            )
+            return
+
+        if hasattr(profile, "setDownloadPath"):
+            try:
+                profile.setDownloadPath(str(resolved_download_dir))
+            except Exception as exc:
+                self._append_log(f"WARNING: Failed to set embedded browser download path: {exc}")
+
     def _set_cdp_enabled(self, enabled: bool) -> None:
         self.cdp_enabled = bool(enabled)
         if hasattr(self, "automation_group"):
@@ -4457,6 +4481,7 @@ class MainWindow(QMainWindow):
         self.download_dir = Path(path)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.download_path_input.setText(str(self.download_dir))
+        self._sync_embedded_browser_download_path()
         self._append_log(f"Download folder set to: {self.download_dir}")
 
     def _on_video_options_selected(self, index: int) -> None:
@@ -4895,6 +4920,7 @@ class MainWindow(QMainWindow):
                 download_dir.mkdir(parents=True, exist_ok=True)
                 self.download_dir = download_dir
                 self.download_path_input.setText(str(self.download_dir))
+                self._sync_embedded_browser_download_path()
             except Exception:
                 pass
         if "preview_muted" in preferences:
