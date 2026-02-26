@@ -7560,6 +7560,13 @@ class MainWindow(QMainWindow):
                     const isMakeVideoItem = (el) => /\\bmake\\s+video\\b/i.test(descriptorOf(el))
                         || /animate\\s+this\\s+image\\s+into\\s+a\\s+video/i.test(descriptorOf(el));
                     const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(descriptorOf(el));
+                    const isBlockedMoreOptionsControl = (el) => {{
+                        if (!el) return false;
+                        const descriptor = descriptorOf(el).toLowerCase();
+                        const hasPopup = String(el.getAttribute?.("aria-haspopup") || "").toLowerCase() === "menu";
+                        if ((el.id || "") === "model-select-trigger") return false;
+                        return hasPopup && /\\bmore\\s+options\\b/.test(descriptor);
+                    }};
                     const getMenuItems = () => [
                         ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
@@ -7586,14 +7593,13 @@ class MainWindow(QMainWindow):
                         const triggerCandidates = [
                             ...document.querySelectorAll("#model-select-trigger"),
                             ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
-                            ...document.querySelectorAll("button[aria-label*='more' i], [role='button'][aria-label*='more' i], button[title*='more' i], [role='button'][title*='more' i]"),
                             ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
                             ...document.querySelectorAll("button, [role='button']"),
-                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el));
 
                         const likelyTriggers = triggerCandidates.filter((el) => {{
                             const descriptor = descriptorOf(el);
-                            return /model|video|image|options|settings|more/i.test(descriptor) || (el.id || "") === "model-select-trigger";
+                            return /model|video|image|options|settings/i.test(descriptor) || (el.id || "") === "model-select-trigger";
                         }});
                         const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
 
