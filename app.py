@@ -9116,12 +9116,13 @@ class MainWindow(QMainWindow):
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
         if continue_last_video_mode:
             option_steps = [
+                ("type", "Make Video"),
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
                 ("ratio", selected_aspect_ratio),
             ]
             self._append_log(
-                f"Variant {variant}: continue-last-video mode detected; applying resolution, duration, and aspect ratio before prompt + 'Make Video'."
+                f"Variant {variant}: continue-last-video mode detected; applying 'Make Video' first, then resolution, duration, and aspect ratio before prompt entry."
             )
         else:
             option_steps = [
