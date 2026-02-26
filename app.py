@@ -6996,6 +6996,30 @@ class MainWindow(QMainWindow):
 
             manual_handoff_started_at_ms = int(time.time() * 1000)
             manual_handoff_token = f"variant-{variant}-submit-{self.manual_image_submit_token}-attempt-{submit_attempts}-{manual_handoff_started_at_ms}"
+            dom_refresh_script = r"""
+                (() => {
+                    try {
+                        const prompt = document.querySelector(
+                            "textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], "
+                            + "textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], "
+                            + "[contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]"
+                        );
+                        const submit = document.querySelector("button[type='submit'][aria-label='Submit'], button[type='submit']");
+                        if (prompt) {
+                            try { prompt.focus({ preventScroll: true }); } catch (_) { try { prompt.focus(); } catch (_) {} }
+                            try { prompt.dispatchEvent(new Event('input', { bubbles: true, cancelable: true })); } catch (_) {}
+                            try { prompt.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
+                        }
+                        if (submit) {
+                            try { submit.blur(); } catch (_) {}
+                            try { submit.focus({ preventScroll: true }); } catch (_) { try { submit.focus(); } catch (_) {} }
+                        }
+                        return { ok: true, promptFound: !!prompt, submitFound: !!submit, refreshedAt: Date.now() };
+                    } catch (err) {
+                        return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                    }
+                })()
+            """
             arm_script = f"""
                 (() => {{
                     try {{
@@ -7043,7 +7067,18 @@ class MainWindow(QMainWindow):
                 )
                 self.browser.page().runJavaScript(submit_script, _after_submit)
 
-            self.browser.page().runJavaScript(arm_script, _after_arm_manual_handoff)
+            def _after_dom_refresh(refresh_result):
+                if isinstance(refresh_result, dict) and refresh_result.get("ok"):
+                    self._append_log(
+                        f"Manual image variant {variant}: DOM refreshed before submit (prompt={bool(refresh_result.get('promptFound'))}, submit={bool(refresh_result.get('submitFound'))})."
+                    )
+                else:
+                    self._append_log(
+                        f"Manual image variant {variant}: DOM refresh probe failed before submit ({refresh_result!r}); continuing."
+                    )
+                self.browser.page().runJavaScript(arm_script, _after_arm_manual_handoff)
+
+            self.browser.page().runJavaScript(dom_refresh_script, _after_dom_refresh)
 
         def _after_submit(result):
             if isinstance(result, dict) and result.get("ok"):
