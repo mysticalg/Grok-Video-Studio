@@ -6845,9 +6845,16 @@ class MainWindow(QMainWindow):
                         return { ok: false, waiting: true, status: "prompt-not-ready" };
                     }
 
-                    const submitButtons = [...document.querySelectorAll("button[type='submit']")]
+                    const submitButtons = [
+                        ...document.querySelectorAll("button[aria-label='Submit']"),
+                        ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                        ...document.querySelectorAll("button[type='submit']"),
+                        ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                    ]
+                        .filter((el, idx, arr) => arr.indexOf(el) === idx)
                         .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
-                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")).toLowerCase() === "submit")
+                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
                         || submitButtons[0]
                         || null;
 
@@ -7000,7 +7007,7 @@ class MainWindow(QMainWindow):
             nonlocal submit_attempts, manual_handoff_started_at_ms, manual_handoff_token
             submit_attempts += 1
 
-            manual_takeover_before_submit = os.getenv("GROK_MANUAL_EXIT_BEFORE_SUBMIT", "1").strip().lower() not in {"0", "false", "no"}
+            manual_takeover_before_submit = os.getenv("GROK_MANUAL_EXIT_BEFORE_SUBMIT", "0").strip().lower() not in {"0", "false", "no"}
             if manual_takeover_before_submit:
                 self._append_log(
                     f"Manual image variant {variant}: reached submit stage ({submit_attempts}/{max_submit_attempts}); stopping automation before submit so you can continue manually."
@@ -7009,7 +7016,7 @@ class MainWindow(QMainWindow):
                     "Manual takeover active: automation flow is paused at pre-submit. Click Submit in the embedded browser to continue manually."
                 )
                 self._append_log(
-                    "Tip: set GROK_MANUAL_EXIT_BEFORE_SUBMIT=0 to restore automatic submit attempts."
+                    "Tip: set GROK_MANUAL_EXIT_BEFORE_SUBMIT=1 to stop before submit and continue manually."
                 )
                 return
 
@@ -7075,9 +7082,16 @@ class MainWindow(QMainWindow):
                             return popup === "menu" || popup === "listbox" || aria.includes("settings");
                         }};
 
-                        const submitButtons = [...document.querySelectorAll("button[type='submit']")]
+                        const submitButtons = [
+                            ...document.querySelectorAll("button[aria-label='Submit']"),
+                            ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                            ...document.querySelectorAll("button[type='submit']"),
+                            ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                        ]
+                            .filter((el, idx, arr) => arr.indexOf(el) === idx)
                             .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
                         const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
+                            || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
                             || submitButtons[0]
                             || null;
 
@@ -8483,9 +8497,16 @@ class MainWindow(QMainWindow):
                         return { ok: false, error: "Prompt input not ready for native submit", status: "prompt-not-ready" };
                     }
 
-                    const submitButtons = [...document.querySelectorAll("button[type='submit']")]
+                    const submitButtons = [
+                        ...document.querySelectorAll("button[aria-label='Submit']"),
+                        ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                        ...document.querySelectorAll("button[type='submit']"),
+                        ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                    ]
+                        .filter((el, idx, arr) => arr.indexOf(el) === idx)
                         .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
-                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")).toLowerCase() === "submit")
+                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
                         || submitButtons[0]
                         || null;
 
