@@ -582,7 +582,7 @@ def _probe_video_color_properties(video_path: str | Path) -> dict[str, str]:
         path_str,
     ]
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     except Exception:
         return {}
 
@@ -622,7 +622,7 @@ def _probe_video_duration_seconds(video_path: str | Path) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(video_path),
     ]
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return max(0.0, float((result.stdout or "0").strip() or "0"))
 
 
@@ -990,7 +990,7 @@ class GenerateWorker(QThread):
             result = None
             for cmd in extraction_cmds:
                 try:
-                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
                     break
                 except FileNotFoundError as exc:
                     raise RuntimeError(
@@ -1752,6 +1752,8 @@ class VideoOverlayWorker(QThread):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
     def _estimate_frame_brightness(self, frame_path: Path) -> float:
@@ -1869,6 +1871,8 @@ class VideoOverlayWorker(QThread):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
 
             self.finished_overlay.emit(
@@ -9916,6 +9920,8 @@ class MainWindow(QMainWindow):
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if result.returncode == 0:
@@ -9987,6 +9993,8 @@ class MainWindow(QMainWindow):
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if result.returncode != 0:
@@ -10019,6 +10027,8 @@ class MainWindow(QMainWindow):
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if result.returncode != 0:
@@ -10494,6 +10504,8 @@ class MainWindow(QMainWindow):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
             except Exception:
                 return QIcon()
@@ -11019,6 +11031,8 @@ class MainWindow(QMainWindow):
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                     )
                     break
                 except FileNotFoundError:
