@@ -9365,6 +9365,95 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_timer.start(3000)
                 return
 
+            if status == "download-visible":
+                force_download_click_script = """
+                    (() => {
+                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                        const buttons = [
+                            ...document.querySelectorAll("button[aria-label='Download']"),
+                            ...document.querySelectorAll("button[aria-label*='download' i]"),
+                            ...document.querySelectorAll("button"),
+                        ];
+                        const candidate = buttons.find((btn) => {
+                            if (!isVisible(btn) || btn.disabled) return false;
+                            const aria = String(btn.getAttribute("aria-label") || "").trim().toLowerCase();
+                            const txt = String(btn.textContent || "").trim().toLowerCase();
+                            const cls = String(btn.className || "").toLowerCase();
+                            const descriptor = `${aria} ${txt} ${cls}`;
+                            if (!(aria === "download" || /\bdownload\b/.test(txt))) return false;
+                            if (/\bshare\b/.test(descriptor)) return false;
+                            return true;
+                        });
+                        if (!candidate) return { clicked: false, reason: "missing-button" };
+
+                        const common = { bubbles: true, cancelable: true, composed: true };
+                        const fire = (el, eventName, ctorName) => {
+                            try {
+                                const Ctor = window[ctorName] || window.Event;
+                                el.dispatchEvent(new Ctor(eventName, common));
+                                return true;
+                            } catch (_) {
+                                try {
+                                    el.dispatchEvent(new Event(eventName, common));
+                                    return true;
+                                } catch (__) {
+                                    return false;
+                                }
+                            }
+                        };
+
+                        let clicked = false;
+                        try { candidate.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { candidate.focus({ preventScroll: true }); } catch (_) {}
+                        clicked = fire(candidate, "pointerdown", "PointerEvent") || clicked;
+                        clicked = fire(candidate, "mousedown", "MouseEvent") || clicked;
+                        clicked = fire(candidate, "pointerup", "PointerEvent") || clicked;
+                        clicked = fire(candidate, "mouseup", "MouseEvent") || clicked;
+                        clicked = fire(candidate, "click", "MouseEvent") || clicked;
+                        try { candidate.click(); clicked = true; } catch (_) {}
+
+                        if (!clicked) {
+                            try {
+                                const rect = candidate.getBoundingClientRect();
+                                const x = Math.floor(rect.left + Math.max(1, Math.min(rect.width - 1, rect.width * 0.5)));
+                                const y = Math.floor(rect.top + Math.max(1, Math.min(rect.height - 1, rect.height * 0.5)));
+                                const pointTarget = document.elementFromPoint(x, y) || candidate;
+                                fire(pointTarget, "pointerdown", "PointerEvent");
+                                fire(pointTarget, "mousedown", "MouseEvent");
+                                fire(pointTarget, "pointerup", "PointerEvent");
+                                fire(pointTarget, "mouseup", "MouseEvent");
+                                fire(pointTarget, "click", "MouseEvent");
+                                try { pointTarget.click(); clicked = true; } catch (_) {}
+                            } catch (_) {}
+                        }
+
+                        return {
+                            clicked,
+                            reason: clicked ? "clicked" : "dispatch-failed",
+                        };
+                    })()
+                """
+
+                def _after_force_download_click(click_result):
+                    clicked = isinstance(click_result, dict) and bool(click_result.get("clicked"))
+                    if clicked:
+                        if not self.manual_download_click_sent:
+                            self._append_log(
+                                f"Variant {current_variant}: Download button required fallback automation click; download request sent."
+                            )
+                        self.manual_download_click_sent = True
+                        self.manual_download_in_progress = True
+                        self.manual_download_poll_timer.start(1200)
+                        return
+
+                    self._append_log(
+                        f"Variant {current_variant}: Download button is visible but automation click did not register yet; retrying..."
+                    )
+                    self.manual_download_poll_timer.start(1500)
+
+                self.browser.page().runJavaScript(force_download_click_script, _after_force_download_click)
+                return
+
             src = result.get("src") or ""
             if status == "video-buffering":
                 self.manual_download_poll_timer.start(3000)
