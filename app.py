@@ -6818,15 +6818,13 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const common = { bubbles: true, cancelable: true, composed: true };
-                    const emulateClick = (el) => {
-                        if (!el || !isVisible(el) || el.disabled) return false;
-                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                        el.dispatchEvent(new MouseEvent("mousedown", common));
-                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
-                        el.dispatchEvent(new MouseEvent("mouseup", common));
-                        el.dispatchEvent(new MouseEvent("click", common));
-                        return true;
+                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const isMenuToggle = (el) => {
+                        if (!el) return false;
+                        const aria = clean(el.getAttribute("aria-label")).toLowerCase();
+                        const text = clean(el.textContent).toLowerCase();
+                        const popup = clean(el.getAttribute("aria-haspopup")).toLowerCase();
+                        return popup === "menu" || popup === "listbox" || /settings/.test(`${aria} ${text}`);
                     };
 
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
@@ -6834,30 +6832,28 @@ class MainWindow(QMainWindow):
                         return { ok: false, waiting: true, status: "prompt-not-ready" };
                     }
 
-                    let enterDispatched = false;
-                    try { promptInput.focus({ preventScroll: true }); } catch (_) { try { promptInput.focus(); } catch (_) {} }
-                    ["keydown", "keypress", "keyup"].forEach((type) => {
-                        try {
-                            const event = new KeyboardEvent(type, {
-                                key: "Enter",
-                                code: "Enter",
-                                keyCode: 13,
-                                which: 13,
-                                bubbles: true,
-                                cancelable: true,
-                                composed: true,
-                            });
-                            promptInput.dispatchEvent(event);
-                            enterDispatched = true;
-                        } catch (_) {}
-                    });
+                    const submitButtons = [...document.querySelectorAll("button[type='submit']")]
+                        .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
+                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")).toLowerCase() === "submit")
+                        || submitButtons[0]
+                        || null;
 
-                    const form = (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null) || document.querySelector("form");
+                    const form = (primarySubmit && primarySubmit.form)
+                        || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
+                        || document.querySelector("form");
+
+                    let nativeClick = false;
+                    if (primarySubmit) {
+                        try { primarySubmit.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { primarySubmit.focus({ preventScroll: true }); } catch (_) {}
+                        try { primarySubmit.click(); nativeClick = true; } catch (_) {}
+                    }
+
                     let formSubmitted = false;
-                    if (form) {
+                    if (!nativeClick && form) {
                         try {
                             if (typeof form.requestSubmit === "function") {
-                                form.requestSubmit();
+                                form.requestSubmit(primarySubmit || undefined);
                             } else {
                                 const ev = new Event("submit", { bubbles: true, cancelable: true });
                                 form.dispatchEvent(ev);
@@ -6867,11 +6863,12 @@ class MainWindow(QMainWindow):
                     }
 
                     return {
-                        ok: enterDispatched || formSubmitted,
-                        waiting: !(enterDispatched || formSubmitted),
-                        status: (enterDispatched || formSubmitted) ? "submit-enter-dispatched" : "submit-enter-failed",
-                        enterDispatched,
+                        ok: nativeClick || formSubmitted,
+                        waiting: !(nativeClick || formSubmitted),
+                        status: (nativeClick || formSubmitted) ? "submit-native-dispatched" : "submit-native-failed",
+                        nativeClick,
                         formSubmitted,
+                        usedPrimarySubmit: !!primarySubmit,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -6898,7 +6895,7 @@ class MainWindow(QMainWindow):
             nonlocal submit_attempts
             submit_attempts += 1
             self._append_log(
-                f"Manual image variant {variant}: attempting Enter key submit ({submit_attempts}/{max_submit_attempts})."
+                f"Manual image variant {variant}: attempting native submit ({submit_attempts}/{max_submit_attempts})."
             )
             self.browser.page().runJavaScript(submit_script, _after_submit)
 
@@ -6915,11 +6912,11 @@ class MainWindow(QMainWindow):
             if isinstance(result, dict) and result.get("waiting"):
                 if submit_attempts < max_submit_attempts:
                     self._append_log(
-                        f"Manual image variant {variant}: submit input not ready for Enter (attempt {submit_attempts}); retrying Enter key submit..."
+                        f"Manual image variant {variant}: submit target not ready (attempt {submit_attempts}); retrying native submit..."
                     )
                     QTimer.singleShot(500, _run_submit_attempt)
                     return
-                _retry_variant(f"submit input stayed not-ready for Enter: {result!r}")
+                _retry_variant(f"submit target stayed not-ready for native submit: {result!r}")
                 return
 
             # Some Grok navigations can clear the JS callback value; treat that as submitted.
@@ -6927,7 +6924,7 @@ class MainWindow(QMainWindow):
                 #self.show_browser_page()
                 self._append_log(
                     f"Submitted manual image variant {variant} (attempt {attempts}); "
-                    "Enter-submit callback returned empty result after page activity; continuing to image polling."
+                    "native-submit callback returned empty result after page activity; continuing to image polling."
                 )
                 QTimer.singleShot(7000, self._poll_for_manual_image)
                 return
@@ -8203,37 +8200,43 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const isMenuToggle = (el) => {
+                        if (!el) return false;
+                        const aria = clean(el.getAttribute("aria-label")).toLowerCase();
+                        const text = clean(el.textContent).toLowerCase();
+                        const popup = clean(el.getAttribute("aria-haspopup")).toLowerCase();
+                        return popup === "menu" || popup === "listbox" || /settings/.test(`${aria} ${text}`);
+                    };
+
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
 
                     if (!promptInput || !isVisible(promptInput)) {
-                        return { ok: false, error: "Prompt input not ready for Enter submit", status: "prompt-not-ready" };
+                        return { ok: false, error: "Prompt input not ready for native submit", status: "prompt-not-ready" };
                     }
 
-                    try { promptInput.focus({ preventScroll: true }); } catch (_) { try { promptInput.focus(); } catch (_) {} }
+                    const submitButtons = [...document.querySelectorAll("button[type='submit']")]
+                        .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
+                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")).toLowerCase() === "submit")
+                        || submitButtons[0]
+                        || null;
 
-                    let enterDispatched = false;
-                    ["keydown", "keypress", "keyup"].forEach((type) => {
-                        try {
-                            const event = new KeyboardEvent(type, {
-                                key: "Enter",
-                                code: "Enter",
-                                keyCode: 13,
-                                which: 13,
-                                bubbles: true,
-                                cancelable: true,
-                                composed: true,
-                            });
-                            promptInput.dispatchEvent(event);
-                            enterDispatched = true;
-                        } catch (_) {}
-                    });
+                    const form = (primarySubmit && primarySubmit.form)
+                        || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
+                        || document.querySelector("form");
 
-                    const form = (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null) || document.querySelector("form");
+                    let nativeClick = false;
+                    if (primarySubmit) {
+                        try { primarySubmit.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { primarySubmit.focus({ preventScroll: true }); } catch (_) {}
+                        try { primarySubmit.click(); nativeClick = true; } catch (_) {}
+                    }
+
                     let formSubmitted = false;
-                    if (form) {
+                    if (!nativeClick && form) {
                         try {
                             if (typeof form.requestSubmit === "function") {
-                                form.requestSubmit();
+                                form.requestSubmit(primarySubmit || undefined);
                             } else {
                                 const ev = new Event("submit", { bubbles: true, cancelable: true });
                                 form.dispatchEvent(ev);
@@ -8243,11 +8246,12 @@ class MainWindow(QMainWindow):
                     }
 
                     return {
-                        ok: enterDispatched || formSubmitted,
-                        submitted: enterDispatched || formSubmitted,
+                        ok: nativeClick || formSubmitted,
+                        submitted: nativeClick || formSubmitted,
+                        nativeClick,
                         formSubmitted,
-                        enterDispatched,
-                        status: (enterDispatched || formSubmitted) ? "submit-enter-dispatched" : "submit-enter-failed"
+                        usedPrimarySubmit: !!primarySubmit,
+                        status: (nativeClick || formSubmitted) ? "submit-native-dispatched" : "submit-native-failed"
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
