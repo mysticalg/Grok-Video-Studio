@@ -503,62 +503,70 @@ class UdpAutomationService:
         if page is None:
             return {"description": False, "mode": "cdp_fill_unavailable", "error": "No X page"}
 
-        script = """
-(data) => {
-  const normalize = (text) => String(text || '').replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim();
-  const target =
-    document.querySelector("div[data-testid='tweetTextarea_0'][role='textbox'][contenteditable='true']")
-    || document.querySelector("div[data-testid='tweetTextarea_0'] div[role='textbox'][contenteditable='true']")
-    || document.querySelector("div[role='textbox'][data-testid='tweetTextarea_0']")
-    || document.querySelector("div[role='textbox'][contenteditable='true']");
-  if (!target) return { description: false, reason: 'textbox_not_found' };
+        value = str(description or "")
+        editor_root = page.locator("div.DraftEditor-root").first
+        span_target = editor_root.locator("span[data-text='true']").first
 
-  const value = String((data && data.description) || '');
-  try { target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (_) {}
-  try { target.focus({ preventScroll: true }); } catch (_) {}
-
-  let applied = false;
-  try {
-    const sel = window.getSelection?.();
-    const range = document.createRange();
-    range.selectNodeContents(target);
-    range.collapse(false);
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-    document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
-    applied = Boolean(document.execCommand('insertText', false, value));
-  } catch (_) {
-    applied = false;
-  }
-
-  if (!applied) {
-    try { target.textContent = value; } catch (_) {}
-  }
-
-  try { target.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: value, inputType: 'insertText' })); } catch (_) {}
-  try { target.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: value, inputType: 'insertText' })); } catch (_) {
-    try { target.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-  }
-  try { target.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
-
-  const expected = normalize(value);
-  const current = normalize(target.innerText || target.textContent || '');
-  const ok = (!expected && !current) || current === expected || current.includes(expected) || expected.includes(current);
-  return { description: ok, reason: ok ? 'ok' : 'value_mismatch' };
-}
-"""
+        target = editor_root
+        target_name = "div.DraftEditor-root"
+        try:
+            if await span_target.count() > 0:
+                target = span_target
+                target_name = "div.DraftEditor-root span[data-text='true']"
+        except Exception:
+            target = editor_root
 
         try:
-            payload = await asyncio.wait_for(page.evaluate(script, {"description": description}), timeout=8.0)
-        except Exception as exc:
-            return {"description": False, "mode": "cdp_fill_exception", "error": str(exc)}
+            await target.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
 
-        ok = bool((payload or {}).get("description"))
+        try:
+            await target.click(timeout=4000, force=True)
+        except Exception as exc:
+            return {
+                "description": False,
+                "mode": "cdp_type",
+                "reason": "target_click_failed",
+                "error": str(exc),
+                "target": target_name,
+            }
+
+        try:
+            await page.keyboard.press("ControlOrMeta+A")
+            await page.keyboard.press("Backspace")
+            if value:
+                await page.keyboard.type(value, delay=12)
+        except Exception as exc:
+            return {
+                "description": False,
+                "mode": "cdp_type",
+                "reason": "keyboard_type_failed",
+                "error": str(exc),
+                "target": target_name,
+            }
+
+        verify_script = """
+() => {
+  const normalize = (text) => String(text || '').replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim();
+  const root = document.querySelector('div.DraftEditor-root');
+  if (!root) return { current: '', found: false };
+  return { current: normalize(root.innerText || root.textContent || ''), found: true };
+}
+"""
+        try:
+            verify = await asyncio.wait_for(page.evaluate(verify_script), timeout=4.0)
+        except Exception:
+            verify = {"current": "", "found": False}
+
+        current = str((verify or {}).get("current") or "")
+        expected = " ".join(value.replace(" ", " ").split())
+        ok = (not expected and not current) or current == expected or current.startswith(expected) or expected.startswith(current)
         return {
             "description": ok,
-            "mode": "cdp_fill",
-            "reason": str((payload or {}).get("reason") or ("ok" if ok else "unknown")),
+            "mode": "cdp_type",
+            "reason": "ok" if ok else "value_mismatch",
+            "target": target_name,
         }
 
     async def _submit_x_post_via_cdp(self) -> dict[str, Any]:
