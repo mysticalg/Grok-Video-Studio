@@ -2317,6 +2317,7 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
         self.manual_public_video_url = ""
+        self.manual_locked_post_id = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -8215,15 +8216,9 @@ class MainWindow(QMainWindow):
             if current_post_id and status == "callback-empty":
                 self._append_log(
                     "WARNING: Variant "
-                    f"{current_variant}: submit callback is empty but current URL is a valid post ({current_post_id}); "
-                    "switching directly to video download polling to prevent submit-stage loop."
+                    f"{current_variant}: submit callback is empty while on valid post URL ({current_post_id}); "
+                    "waiting for submit/download readiness signals before switching to video polling."
                 )
-                self.manual_image_video_submit_sent = True
-                self.manual_image_submit_retry_count = 0
-                self.pending_manual_download_type = "video"
-                self._cleanup_manual_pick_observer()
-                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                return
 
             if status == "callback-empty":
                 submit_ready_probe_script = """
@@ -9379,6 +9374,9 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
         self.manual_public_video_url = ""
+        self.manual_locked_post_id = self._extract_valid_grok_post_id(self.browser.url().toString().strip() if self.browser is not None else "")
+        if self.manual_locked_post_id:
+            self.manual_public_video_url = _public_video_url_from_post_url(f"https://grok.com/imagine/post/{self.manual_locked_post_id}")
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -9420,6 +9418,7 @@ class MainWindow(QMainWindow):
             self.manual_download_deadline = None
             self.manual_refresh_after_generating_sent = False
             self.manual_public_video_url = ""
+            self.manual_locked_post_id = ""
             self.manual_download_attempt_count = 0
             self.manual_download_poll_attempt_count = 0
             self.manual_download_last_status = ""
@@ -9692,8 +9691,23 @@ class MainWindow(QMainWindow):
                 active_url = str(self.browser.url().toString() or "").strip()
             except Exception:
                 active_url = ""
+            current_post_id = self._extract_valid_grok_post_id(active_url)
             post_derived_public_url = _public_video_url_from_post_url(active_url)
-            if post_derived_public_url:
+            if current_post_id and self.manual_locked_post_id and current_post_id.lower() != self.manual_locked_post_id.lower():
+                if self.manual_download_poll_attempt_count <= 3:
+                    self._append_log(
+                        f"WARNING: Variant {current_variant}: ignoring changed post id ({current_post_id}) during download polling; "
+                        f"sticking to locked post id ({self.manual_locked_post_id})."
+                    )
+            elif current_post_id and not self.manual_locked_post_id:
+                self.manual_locked_post_id = current_post_id
+                if post_derived_public_url:
+                    self.manual_public_video_url = post_derived_public_url
+                    if self.manual_download_poll_attempt_count <= 2:
+                        self._append_log(
+                            f"Variant {current_variant}: derived public video URL from post id for probing: {post_derived_public_url}"
+                        )
+            elif post_derived_public_url and not self.manual_locked_post_id:
                 self.manual_public_video_url = post_derived_public_url
                 if self.manual_download_poll_attempt_count <= 2:
                     self._append_log(
@@ -10151,6 +10165,7 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
+        self.manual_locked_post_id = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -10363,6 +10378,7 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
+        self.manual_locked_post_id = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
