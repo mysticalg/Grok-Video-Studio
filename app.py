@@ -6846,15 +6846,52 @@ class MainWindow(QMainWindow):
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
                         || document.querySelector("form");
 
-                    let nativeClick = false;
-                    if (primarySubmit) {
-                        try { primarySubmit.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                        try { primarySubmit.focus({ preventScroll: true }); } catch (_) {}
-                        try { primarySubmit.click(); nativeClick = true; } catch (_) {}
-                    }
+                    const common = { bubbles: true, cancelable: true, composed: true, view: window };
+                    const emitPointer = (el, type) => {
+                        try {
+                            el.dispatchEvent(new PointerEvent(type, {
+                                ...common,
+                                pointerType: "mouse",
+                                isPrimary: true,
+                                button: 0,
+                                buttons: type === "pointerup" || type === "pointerenter" || type === "pointerover" ? 0 : 1,
+                            }));
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
+                    const emitMouse = (el, type) => {
+                        try {
+                            el.dispatchEvent(new MouseEvent(type, { ...common, button: 0, buttons: type === "mouseup" || type === "mouseenter" || type === "mouseover" ? 0 : 1 }));
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
+                    const activateSubmit = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        emitPointer(el, "pointerenter");
+                        emitMouse(el, "mouseenter");
+                        emitPointer(el, "pointerover");
+                        emitMouse(el, "mouseover");
+                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) { try { el.focus(); fired = true; } catch (_) {} }
+                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); fired = true; } catch (_) {}
+                        emitPointer(el, "pointerdown");
+                        emitMouse(el, "mousedown");
+                        emitPointer(el, "pointerup");
+                        emitMouse(el, "mouseup");
+                        emitMouse(el, "click");
+                        try { el.click(); fired = true; } catch (_) {}
+                        return fired;
+                    };
+
+                    const listenerClick = activateSubmit(primarySubmit);
 
                     let formSubmitted = false;
-                    if (!nativeClick && form) {
+                    if (!listenerClick && form) {
                         try {
                             if (typeof form.requestSubmit === "function") {
                                 form.requestSubmit(primarySubmit || undefined);
@@ -6867,10 +6904,10 @@ class MainWindow(QMainWindow):
                     }
 
                     return {
-                        ok: nativeClick || formSubmitted,
-                        waiting: !(nativeClick || formSubmitted),
-                        status: (nativeClick || formSubmitted) ? "submit-native-dispatched" : "submit-native-failed",
-                        nativeClick,
+                        ok: listenerClick || formSubmitted,
+                        waiting: !(listenerClick || formSubmitted),
+                        status: (listenerClick || formSubmitted) ? "submit-listener-sequence-dispatched" : "submit-listener-sequence-failed",
+                        listenerClick,
                         formSubmitted,
                         usedPrimarySubmit: !!primarySubmit,
                     };
@@ -6899,7 +6936,7 @@ class MainWindow(QMainWindow):
             nonlocal submit_attempts
             submit_attempts += 1
             self._append_log(
-                f"Manual image variant {variant}: attempting native submit ({submit_attempts}/{max_submit_attempts})."
+                f"Manual image variant {variant}: attempting submit listener sequence ({submit_attempts}/{max_submit_attempts})."
             )
             self.browser.page().runJavaScript(submit_script, _after_submit)
 
@@ -6923,11 +6960,11 @@ class MainWindow(QMainWindow):
             if isinstance(result, dict) and result.get("waiting"):
                 if submit_attempts < max_submit_attempts:
                     self._append_log(
-                        f"Manual image variant {variant}: submit target not ready (attempt {submit_attempts}); retrying native submit..."
+                        f"Manual image variant {variant}: submit target not ready (attempt {submit_attempts}); retrying submit listener sequence..."
                     )
                     QTimer.singleShot(500, _run_submit_attempt)
                     return
-                _retry_variant(f"submit target stayed not-ready for native submit: {result!r}")
+                _retry_variant(f"submit target stayed not-ready for listener sequence: {result!r}")
                 return
 
             # Some Grok navigations can clear the JS callback value; treat that as submitted.
@@ -6937,12 +6974,12 @@ class MainWindow(QMainWindow):
                 if idle_ms > 0:
                     self._append_log(
                         f"Submitted manual image variant {variant} (attempt {attempts}); "
-                        f"native-submit callback returned empty result; pausing automation for {idle_ms / 1000:.1f}s before polling."
+                        f"listener-sequence callback returned empty result; pausing automation for {idle_ms / 1000:.1f}s before polling."
                     )
                 else:
                     self._append_log(
                         f"Submitted manual image variant {variant} (attempt {attempts}); "
-                        "native-submit callback returned empty result after page activity; continuing to image polling."
+                        "listener-sequence callback returned empty result after page activity; continuing to image polling."
                     )
                 QTimer.singleShot(7000, self._poll_for_manual_image)
                 return
@@ -8274,15 +8311,52 @@ class MainWindow(QMainWindow):
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
                         || document.querySelector("form");
 
-                    let nativeClick = false;
-                    if (primarySubmit) {
-                        try { primarySubmit.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                        try { primarySubmit.focus({ preventScroll: true }); } catch (_) {}
-                        try { primarySubmit.click(); nativeClick = true; } catch (_) {}
-                    }
+                    const common = { bubbles: true, cancelable: true, composed: true, view: window };
+                    const emitPointer = (el, type) => {
+                        try {
+                            el.dispatchEvent(new PointerEvent(type, {
+                                ...common,
+                                pointerType: "mouse",
+                                isPrimary: true,
+                                button: 0,
+                                buttons: type === "pointerup" || type === "pointerenter" || type === "pointerover" ? 0 : 1,
+                            }));
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
+                    const emitMouse = (el, type) => {
+                        try {
+                            el.dispatchEvent(new MouseEvent(type, { ...common, button: 0, buttons: type === "mouseup" || type === "mouseenter" || type === "mouseover" ? 0 : 1 }));
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
+                    const activateSubmit = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        emitPointer(el, "pointerenter");
+                        emitMouse(el, "mouseenter");
+                        emitPointer(el, "pointerover");
+                        emitMouse(el, "mouseover");
+                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) { try { el.focus(); fired = true; } catch (_) {} }
+                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); fired = true; } catch (_) {}
+                        emitPointer(el, "pointerdown");
+                        emitMouse(el, "mousedown");
+                        emitPointer(el, "pointerup");
+                        emitMouse(el, "mouseup");
+                        emitMouse(el, "click");
+                        try { el.click(); fired = true; } catch (_) {}
+                        return fired;
+                    };
+
+                    const listenerClick = activateSubmit(primarySubmit);
 
                     let formSubmitted = false;
-                    if (!nativeClick && form) {
+                    if (!listenerClick && form) {
                         try {
                             if (typeof form.requestSubmit === "function") {
                                 form.requestSubmit(primarySubmit || undefined);
@@ -8295,12 +8369,12 @@ class MainWindow(QMainWindow):
                     }
 
                     return {
-                        ok: nativeClick || formSubmitted,
-                        submitted: nativeClick || formSubmitted,
-                        nativeClick,
+                        ok: listenerClick || formSubmitted,
+                        submitted: listenerClick || formSubmitted,
+                        listenerClick,
                         formSubmitted,
                         usedPrimarySubmit: !!primarySubmit,
-                        status: (nativeClick || formSubmitted) ? "submit-native-dispatched" : "submit-native-failed"
+                        status: (listenerClick || formSubmitted) ? "submit-listener-sequence-dispatched" : "submit-listener-sequence-failed"
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
