@@ -9309,10 +9309,18 @@ class MainWindow(QMainWindow):
                         }}
                     }}
                 }};
-                const percentNode = [...document.querySelectorAll("div .tabular-nums, div.tabular-nums")]
-                    .find((el) => isVisible(el) && /^\\d{{1,3}}%$/.test((el.textContent || "").trim()));
+                const normalizeProgressText = (text) => String(text || "").replace(/\\s+/g, "").trim();
+                const percentNode = [...document.querySelectorAll(".tabular-nums, div .tabular-nums, div.tabular-nums, span.tabular-nums")]
+                    .find((el) => {{
+                        if (!isVisible(el)) return false;
+                        const normalized = normalizeProgressText(el.textContent || "");
+                        return /^\\d{{1,3}}%$/.test(normalized);
+                    }});
                 if (percentNode) {{
-                    return {{ status: "progress", progressText: (percentNode.textContent || "").trim() }};
+                    return {{
+                        status: "progress",
+                        progressText: normalizeProgressText(percentNode.textContent || ""),
+                    }};
                 }}
 
                 const generatingIndicator = [...document.querySelectorAll("span")]
@@ -9420,6 +9428,7 @@ class MainWindow(QMainWindow):
                     if (btn.matches?.("[data-sidebar='menu-button']") || btn.closest("[data-sidebar='menu-button']")) return false;
                     return true;
                 }};
+                const preferredDownloadButton = document.querySelector("button[type='button'][aria-label='Download'][data-state='closed']");
                 const exactDownloadCandidates = [...document.querySelectorAll("button[aria-label='Download']")]
                     .filter((btn) => isDownloadActionButton(btn));
                 const fallbackDownloadCandidates = [
@@ -9449,14 +9458,18 @@ class MainWindow(QMainWindow):
                     return score;
                 }};
                 let downloadButton = null;
-                let bestScore = Number.MAX_SAFE_INTEGER;
-                downloadCandidates.forEach((btn, index) => {{
-                    const score = candidateScore(btn, index);
-                    if (score < bestScore) {{
-                        bestScore = score;
-                        downloadButton = btn;
-                    }}
-                }});
+                if (preferredDownloadButton && isDownloadActionButton(preferredDownloadButton)) {{
+                    downloadButton = preferredDownloadButton;
+                }} else {{
+                    let bestScore = Number.MAX_SAFE_INTEGER;
+                    downloadCandidates.forEach((btn, index) => {{
+                        const score = candidateScore(btn, index);
+                        if (score < bestScore) {{
+                            bestScore = score;
+                            downloadButton = btn;
+                        }}
+                    }});
+                }}
 
                 if (cancelVideoButton) {{
                     return {{ status: "rendering-cancel-visible" }};
