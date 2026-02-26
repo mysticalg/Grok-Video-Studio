@@ -7325,23 +7325,17 @@ class MainWindow(QMainWindow):
         submit_delay_ms = action_delay_ms
         disable_video_option_selection = os.getenv("GROK_DISABLE_VIDEO_OPTION_SELECTION", "0").strip().lower() not in {"0", "false", "no"}
 
-        def _assume_submit_success(reason: str) -> None:
-            self._append_log(
-                f"Manual image variant {variant}: {reason}; assuming submit already succeeded and proceeding directly to image polling."
-            )
-            _after_submit({"ok": True, "status": "assumed-submitted", "usedRecorderTarget": False, "usedCoordinatePlayback": False})
-
         def _after_populate(result):
             if result in (None, ""):
                 self._append_log(
                     f"Manual image variant {variant}: prompt populate callback returned empty result; "
-                    f"skipping Enter key and moving directly to polling."
+                    f"waiting {submit_delay_ms / 1000:.1f}s before Enter key submit."
                 )
-                QTimer.singleShot(submit_delay_ms, lambda: _assume_submit_success("populate callback was empty"))
+                QTimer.singleShot(submit_delay_ms, _run_enter_attempt)
                 return
 
             if not isinstance(result, dict) or not result.get("ok"):
-                QTimer.singleShot(submit_delay_ms, lambda: _assume_submit_success(f"prompt population callback was not ok ({result!r})"))
+                _retry_variant(f"prompt population failed: {result!r}")
                 return
 
             self._append_log(
@@ -7359,7 +7353,7 @@ class MainWindow(QMainWindow):
                 if isinstance(result, dict) and result.get("ok"):
                     _after_submit({"ok": True, "status": "enter-key", "usedRecorderTarget": False, "usedCoordinatePlayback": False})
                     return
-                _assume_submit_success(f"Enter key dispatch was inconclusive ({result!r})")
+                _retry_variant(f"enter key dispatch failed: {result!r}")
 
             self.browser.page().runJavaScript(enter_script, _after_enter)
 
