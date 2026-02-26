@@ -7240,6 +7240,13 @@ class MainWindow(QMainWindow):
                     f"WARNING: Manual image variant {variant}: image option not selected ({result!r}); continuing anyway."
                 )
 
+            if disable_video_option_selection:
+                self._append_log(
+                    f"Manual image variant {variant}: video option selection is disabled; entering prompt and submitting without resolution/duration/aspect changes."
+                )
+                QTimer.singleShot(max(50, action_delay_ms), lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+                return
+
             self._append_log(
                 "Manual image variant "
                 f"{variant}: image mode selected={result.get('imageSelected') if isinstance(result, dict) else 'unknown'} "
@@ -7290,6 +7297,7 @@ class MainWindow(QMainWindow):
 
         action_delay_ms = int(self.automation_action_delay_ms.value())
         submit_delay_ms = action_delay_ms
+        disable_video_option_selection = os.getenv("GROK_DISABLE_VIDEO_OPTION_SELECTION", "1").strip().lower() not in {"0", "false", "no"}
 
         def _after_populate(result):
             if result in (None, ""):
@@ -7310,7 +7318,13 @@ class MainWindow(QMainWindow):
             )
             QTimer.singleShot(submit_delay_ms, _run_submit_attempt)
 
-        self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
+        if disable_video_option_selection:
+            self._append_log(
+                f"Manual image variant {variant}: skipping image/video option scripts and proceeding directly to prompt fill + submit."
+            )
+            QTimer.singleShot(max(50, action_delay_ms), lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+        else:
+            self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
 
     def _set_manual_post_submit_idle_window(self) -> int:
         idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 12000))
