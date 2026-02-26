@@ -17,7 +17,7 @@ import math
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import unquote, urlencode, urljoin, urlparse
 from typing import Any, Callable, Iterable
 
 import requests
@@ -170,6 +170,26 @@ def _next_session_download_count() -> int:
 def _slugify_filename_part(value: str, fallback: str = "na") -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return cleaned or fallback
+
+
+def _looks_like_public_video_url(candidate: str) -> bool:
+    value = str(candidate or "").strip()
+    if not value:
+        return False
+    if not re.match(r"^https?://", value, re.IGNORECASE):
+        return False
+    if re.match(r"^https?://(?:localhost|127[.]0[.]0[.]1)(?:[:/]|$)", value, re.IGNORECASE):
+        return False
+    lowered = value.lower()
+    if re.search(r"[.](?:mp4|webm|mov|m4v)(?:$|[?#])", lowered):
+        return True
+    if re.search(r"[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|/)", lowered):
+        return True
+    if re.search(r"[?&](?:format|ext)=mp4(?:$|[&#])", lowered):
+        return True
+    if re.search(r"/(?:video|videos|render|download|media)/", lowered) and re.search(r"[?&](?:token|sig|signature|expires|x-amz-)", lowered):
+        return True
+    return bool(re.search(r"(^|[?&])(?:type|kind)=video(?:$|[&#])", lowered))
 
 
 def _normalize_version_key(value: str) -> tuple[int, ...]:
@@ -9649,6 +9669,27 @@ class MainWindow(QMainWindow):
                         self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                         return
 
+                page_url = ""
+                try:
+                    page_url = str(self.browser.url().toString() or "").strip()
+                except Exception:
+                    page_url = ""
+
+                if page_url:
+                    self._append_log(
+                        f"Variant {current_variant}: no direct URL from page script; trying low-level page scrape from {page_url}."
+                    )
+                    scraped_url = self._extract_public_video_url_from_page(page_url)
+                    if scraped_url:
+                        self._append_log(
+                            f"Variant {current_variant}: extracted public video URL via HTTP scrape; downloading without browser click."
+                        )
+                        if self._start_manual_direct_download(current_variant, scraped_url):
+                            self.manual_download_click_sent = True
+                            self.manual_download_in_progress = True
+                            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                            return
+
                 self._append_log(
                     f"Variant {current_variant}: Download control is visible but no direct URL was found yet; retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
                 )
@@ -9755,6 +9796,50 @@ class MainWindow(QMainWindow):
                     if chunk:
                         handle.write(chunk)
         return output_path
+
+    def _extract_public_video_url_from_page(self, page_url: str) -> str:
+        if not page_url:
+            return ""
+        try:
+            headers = {
+                "User-Agent": os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Referer": "https://grok.com/",
+            }
+            response = requests.get(page_url, timeout=30, headers=headers)
+            response.raise_for_status()
+            html = response.text or ""
+        except Exception:
+            return ""
+
+        direct_candidates: list[str] = []
+        patterns = [
+            r'https?://[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
+            r'https?://[^\s"\'<>]+(?:download|render|media|video)[^\s"\'<>]*',
+        ]
+        for pattern in patterns:
+            for match in re.findall(pattern, html, flags=re.IGNORECASE):
+                candidate = str(match or "").strip()
+                if candidate:
+                    direct_candidates.append(candidate)
+
+        page_url_parsed = urlparse(page_url)
+        page_origin = f"{page_url_parsed.scheme}://{page_url_parsed.netloc}"
+        attr_patterns = [
+            r'(?:src|href|data-src|data-url|data-video-url)=["\']([^"\']+)["\']',
+        ]
+        for pattern in attr_patterns:
+            for raw in re.findall(pattern, html, flags=re.IGNORECASE):
+                candidate = str(raw or "").strip()
+                if not candidate:
+                    continue
+                absolute = urljoin(page_origin, candidate)
+                direct_candidates.append(absolute)
+
+        for candidate in direct_candidates:
+            if _looks_like_public_video_url(candidate):
+                return candidate
+        return ""
 
     def _complete_manual_video_download(self, video_path: Path, variant: int) -> None:
         self._clear_manual_direct_download_tracking()
