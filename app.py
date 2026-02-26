@@ -9796,14 +9796,41 @@ class MainWindow(QMainWindow):
                 "User-Agent": os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Referer": "https://grok.com/",
+                "Cache-Control": "no-cache, no-store, max-age=0",
+                "Pragma": "no-cache",
             }
-            response = requests.get(page_url, timeout=30, headers=headers)
+            parsed_page = urlparse(page_url)
+            scrape_url = parsed_page._replace(query="").geturl() if parsed_page.scheme and parsed_page.netloc else page_url
+            response = requests.get(
+                scrape_url,
+                timeout=30,
+                headers=headers,
+                params={"_scrape_ts": str(int(time.time() * 1000))},
+            )
             response.raise_for_status()
             html = response.text or ""
         except Exception:
             return ""
 
         direct_candidates: list[str] = []
+        sd_video_match = re.search(
+            r'<video[^>]*\bid=["\']sd-video["\'][^>]*\bsrc=["\']([^"\']+)["\']',
+            html,
+            flags=re.IGNORECASE,
+        )
+        if sd_video_match:
+            sd_video_src = str(sd_video_match.group(1) or "").strip()
+            if sd_video_src:
+                if sd_video_src.startswith("//"):
+                    sd_video_src = f"https:{sd_video_src}"
+                elif re.match(r"^imagine-public[.]x[.]ai/", sd_video_src, re.IGNORECASE):
+                    sd_video_src = f"https://{sd_video_src}"
+                else:
+                    page_url_parsed = urlparse(page_url)
+                    page_origin = f"{page_url_parsed.scheme}://{page_url_parsed.netloc}"
+                    sd_video_src = urljoin(page_origin, sd_video_src)
+                direct_candidates.append(sd_video_src)
+
         download_button_present = bool(
             re.search(
                 r"<button[^>]+aria-label=[\"']download[\"'][^>]*>",
