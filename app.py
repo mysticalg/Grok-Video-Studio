@@ -9056,12 +9056,6 @@ class MainWindow(QMainWindow):
         """
 
         def _run_flow_submit() -> None:
-            if continue_last_video_mode:
-                self._append_log(
-                    f"Variant {variant}: continue-last-video mode skips submit click; relying on explicit 'Make Video' action instead."
-                )
-                QTimer.singleShot(200, _click_make_video_after_prompt)
-                return
             self._append_log(f"Variant {variant}: submitting after prompt population delay.")
             self.browser.page().runJavaScript(submit_script, _after_final_submit)
 
@@ -9108,6 +9102,59 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
+                if continue_last_video_mode:
+                    enter_script = r"""
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const selectors = [
+                                    "textarea[placeholder*='Type to imagine' i]",
+                                    "input[placeholder*='Type to imagine' i]",
+                                    "textarea[placeholder*='Type to customize this video' i]",
+                                    "input[placeholder*='Type to customize this video' i]",
+                                    "textarea[placeholder*='Type to customize video' i]",
+                                    "input[placeholder*='Type to customize video' i]",
+                                    "textarea[placeholder*='Customize video' i]",
+                                    "input[placeholder*='Customize video' i]",
+                                    "div.tiptap.ProseMirror[contenteditable='true']",
+                                    "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                                    "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                                ];
+                                const promptInput = selectors
+                                    .flatMap((selector) => [...document.querySelectorAll(selector)])
+                                    .find((el) => isVisible(el));
+                                if (!promptInput) return { ok: false, error: "prompt-input-not-found-for-enter" };
+
+                                try { promptInput.focus({ preventScroll: true }); } catch (_) {}
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
+                                const form = promptInput.closest("form");
+                                if (form) {
+                                    try { form.requestSubmit(); } catch (_) {}
+                                    try { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); } catch (_) {}
+                                }
+                                return { ok: true };
+                            } catch (err) {
+                                return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                            }
+                        })()
+                    """
+
+                    def _after_enter_press(enter_result):
+                        if not isinstance(enter_result, dict) or not enter_result.get("ok"):
+                            self._append_log(
+                                f"WARNING: Variant {variant}: could not confirm Enter press after prompt entry. result={enter_result!r}"
+                            )
+                        self._append_log(
+                            f"Variant {variant}: prompt entered with trailing Enter; no further option clicks/submissions will be attempted."
+                        )
+                        self._trigger_browser_video_download(variant, allow_make_video_click=False)
+
+                    self.browser.page().runJavaScript(enter_script, _after_enter_press)
+                    return
+
                 QTimer.singleShot(2000, _run_flow_submit)
 
             self.browser.page().runJavaScript(script, _after_prompt_populate)
