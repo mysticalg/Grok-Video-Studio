@@ -7802,8 +7802,28 @@ class MainWindow(QMainWindow):
                 try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
                 await sleep(ACTION_DELAY_MS);
 
-                const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video|send|generate|create/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                const isProjectCreationButton = (btn) => {{
+                    if (!btn) return false;
+                    const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+                    const text = (btn.textContent || "").trim().toLowerCase();
+                    return /create\\s+new\\s+project/.test(`${{aria}} ${{text}}`);
+                }};
+                const submitCandidates = [
+                    ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                    ...document.querySelectorAll("button[type='submit']"),
+                    ...document.querySelectorAll("button[aria-label='Submit']"),
+                    ...document.querySelectorAll("button[aria-label*='submit' i]"),
+                    ...document.querySelectorAll("button[aria-label*='make video' i]"),
+                    ...document.querySelectorAll("button[aria-label*='generate' i]"),
+                    ...document.querySelectorAll("button:has(svg)[aria-label*='submit' i]"),
+                ];
+                const submitButton = submitCandidates
+                    .filter((btn, idx, arr) => arr.indexOf(btn) === idx)
+                    .find((btn) => {{
+                        if (!isVisible(btn) || btn.disabled || isProjectCreationButton(btn)) return false;
+                        const label = (btn.getAttribute("aria-label") || btn.textContent || "").trim();
+                        return /submit|make\\s+video|send|generate/i.test(label);
+                    }});
 
                 let submitted = false;
                 let submitLabel = "enter-key";
