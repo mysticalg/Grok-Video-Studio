@@ -9295,6 +9295,7 @@ class MainWindow(QMainWindow):
                     const cls = String(btn.className || "").toLowerCase();
                     const descriptor = `${{ariaRaw}} ${{cls}}`.toLowerCase();
                     if (/\bshare\b/.test(descriptor)) return false;
+                    if (btn.closest("[role='dialog'], dialog, [aria-modal='true']")) return false;
                     return true;
                 }};
                 const exactDownloadCandidates = [...document.querySelectorAll("button[aria-label='Download']")]
@@ -9308,11 +9309,32 @@ class MainWindow(QMainWindow):
                 const makeVideoContainer = makeVideoButton
                     ? (makeVideoButton.closest("form") || makeVideoButton.closest("section") || makeVideoButton.closest("main") || makeVideoButton.parentElement)
                     : null;
-                let downloadButton = exactDownloadCandidates[0] || null;
-                if (!downloadButton) {{
-                    downloadButton = downloadCandidates.find((btn) => makeVideoContainer && makeVideoContainer.contains(btn) && btn !== makeVideoButton);
-                }}
-                if (!downloadButton) downloadButton = downloadCandidates[0] || null;
+                const videoRect = video && typeof video.getBoundingClientRect === "function" ? video.getBoundingClientRect() : null;
+                const candidateScore = (btn, index) => {{
+                    if (!btn || !isVisible(btn)) return Number.MAX_SAFE_INTEGER;
+                    let score = index * 100;
+                    if (makeVideoContainer && makeVideoContainer.contains(btn)) score -= 300;
+                    if (videoRect) {{
+                        const rect = btn.getBoundingClientRect();
+                        const cx = rect.left + rect.width / 2;
+                        const cy = rect.top + rect.height / 2;
+                        const vCx = videoRect.left + videoRect.width / 2;
+                        const vCy = videoRect.top + videoRect.height / 2;
+                        score += Math.hypot(cx - vCx, cy - vCy);
+                        if (cx < vCx) score += 300;
+                        if (cy < (videoRect.top - 140) || cy > (videoRect.bottom + 140)) score += 300;
+                    }}
+                    return score;
+                }};
+                let downloadButton = null;
+                let bestScore = Number.MAX_SAFE_INTEGER;
+                downloadCandidates.forEach((btn, index) => {{
+                    const score = candidateScore(btn, index);
+                    if (score < bestScore) {{
+                        bestScore = score;
+                        downloadButton = btn;
+                    }}
+                }});
 
                 if (cancelVideoButton) {{
                     return {{ status: "rendering-cancel-visible" }};
@@ -9428,14 +9450,41 @@ class MainWindow(QMainWindow):
                             ...document.querySelectorAll("button[aria-label='Download']"),
                             ...document.querySelectorAll("[role='button'][aria-label='Download']"),
                         ];
-                        const candidate = buttons.find((btn) => {
-                            if (!isVisible(btn) || btn.disabled) return false;
-                            const ariaRaw = String(btn.getAttribute("aria-label") || "").trim();
-                            if (ariaRaw !== "Download") return false;
-                            const cls = String(btn.className || "").toLowerCase();
-                            const descriptor = `${ariaRaw} ${cls}`.toLowerCase();
-                            if (/\bshare\b/.test(descriptor)) return false;
-                            return true;
+                        const candidates = buttons.filter((btn, index, arr) => arr.indexOf(btn) === index)
+                            .filter((btn) => {
+                                if (!isVisible(btn) || btn.disabled) return false;
+                                if (btn.closest("[role='dialog'], dialog, [aria-modal='true']")) return false;
+                                const ariaRaw = String(btn.getAttribute("aria-label") || "").trim();
+                                if (ariaRaw !== "Download") return false;
+                                const cls = String(btn.className || "").toLowerCase();
+                                const descriptor = `${ariaRaw} ${cls}`.toLowerCase();
+                                if (/\bshare\b/.test(descriptor)) return false;
+                                return true;
+                            });
+                        const video = document.querySelector("video");
+                        const videoRect = video && typeof video.getBoundingClientRect === "function" ? video.getBoundingClientRect() : null;
+                        const candidateScore = (btn, index) => {
+                            let score = index * 100;
+                            if (videoRect) {
+                                const rect = btn.getBoundingClientRect();
+                                const cx = rect.left + rect.width / 2;
+                                const cy = rect.top + rect.height / 2;
+                                const vCx = videoRect.left + videoRect.width / 2;
+                                const vCy = videoRect.top + videoRect.height / 2;
+                                score += Math.hypot(cx - vCx, cy - vCy);
+                                if (cx < vCx) score += 300;
+                                if (cy < (videoRect.top - 140) || cy > (videoRect.bottom + 140)) score += 300;
+                            }
+                            return score;
+                        };
+                        let candidate = null;
+                        let bestScore = Number.MAX_SAFE_INTEGER;
+                        candidates.forEach((btn, index) => {
+                            const score = candidateScore(btn, index);
+                            if (score < bestScore) {
+                                bestScore = score;
+                                candidate = btn;
+                            }
                         });
                         if (!candidate) return { clicked: false, reason: "missing-button" };
 
