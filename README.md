@@ -7,7 +7,7 @@ Desktop PySide6 app for generating AI videos, managing clips, previewing/stitchi
 
 - **Video generation**
   - Manual prompt workflow in embedded `grok.com/imagine` browser
-  - Prompt generation via **xAI Grok API** or **OpenAI API**
+  - Prompt generation via **xAI Grok API**, **OpenAI API**, or **local Ollama API**
   - Video providers: **Grok Imagine API**, **OpenAI Sora 2 API**, **Seedance 2.0 API**
   - Batch/variant queue execution
   - Continue-from-last-frame and continue-from-local-image tools
@@ -31,6 +31,7 @@ Desktop PySide6 app for generating AI videos, managing clips, previewing/stitchi
 - **Grok chat/prompt models** (configurable), default: `grok-3-mini`
 - **Grok video model** (configurable), default: `grok-video-latest`
 - **OpenAI chat model** (configurable), default: `gpt-5.1-codex`
+- **Ollama chat model** (configurable), default: `llama3.1:8b` on `http://127.0.0.1:11434/v1`
 - **OpenAI Sora models** (Sora 2 tab examples include `sora-2`, `sora-2-pro`, dated variants)
 - **Seedance model settings** via Seedance tab
 
@@ -117,6 +118,7 @@ In **Model/API Settings** tab configure what you need:
 
 - `GROK_API_KEY`
 - `OPENAI_API_KEY` and/or `OPENAI_ACCESS_TOKEN`
+- `OLLAMA_API_BASE` and `OLLAMA_CHAT_MODEL` (optional, for local prompt/caption generation)
 - `SEEDANCE_API_KEY` (or OAuth token)
 - Upload credentials (YouTube/Facebook/Instagram/TikTok)
 

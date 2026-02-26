@@ -107,6 +107,10 @@ OPENAI_OAUTH_CALLBACK_PORT = int(os.getenv("OPENAI_OAUTH_CALLBACK_PORT", "1455")
 OPENAI_TOKEN_PATHS = ("/token", "/oauth/token")
 OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.com/backend-api/codex")
 OPENAI_USE_CHATGPT_BACKEND = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
+OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434/v1")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1:8b")
+AI_TEXT_TIMEOUT_SECONDS = max(30.0, float(os.getenv("AI_TEXT_TIMEOUT_SECONDS", "240")))
+AI_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("AI_MAX_OUTPUT_TOKENS", "4096")))
 SEEDANCE_API_BASE = os.getenv("SEEDANCE_API_BASE", "https://api.seedance.ai/v2")
 FACEBOOK_GRAPH_VERSION = os.getenv("FACEBOOK_GRAPH_VERSION", "v21.0")
 
@@ -265,8 +269,100 @@ def _parse_query_preserving_plus(query: str) -> dict[str, str]:
             result[decoded_key] = decoded_value
     return result
 
+AI_SOCIAL_METADATA_REQUIRED_KEYS = (
+    "manual_prompt",
+    "title",
+    "medium_title",
+    "tiktok_subheading",
+    "description",
+    "x_post",
+    "hashtags",
+    "category",
+)
+
+
+def _extract_first_balanced_json_object(text: str) -> str:
+    in_string = False
+    escape = False
+    depth = 0
+    start_index = -1
+    for idx, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == "{":
+            if depth == 0:
+                start_index = idx
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start_index != -1:
+                return text[start_index : idx + 1]
+    return ""
+
+
+def _parse_hashtags_from_text(raw_text: str) -> list[str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return []
+
+    hash_matches = re.findall(r"#([A-Za-z0-9_\-]+)", text)
+    if hash_matches:
+        return [tag.strip().lstrip("#") for tag in hash_matches if tag.strip()]
+
+    parts = re.split(r"[\n,]+", text)
+    return [part.strip().lstrip("#") for part in parts if part.strip()]
+
+
+def _normalize_ai_social_metadata_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("AI response payload must be a JSON object.")
+
+    nested_candidate = payload.get("json")
+    if isinstance(nested_candidate, dict):
+        payload = nested_candidate
+
+    missing = [key for key in AI_SOCIAL_METADATA_REQUIRED_KEYS if key not in payload]
+    if missing:
+        raise ValueError(f"AI response missing required keys: {', '.join(missing)}")
+
+    manual_prompt = str(payload.get("manual_prompt", "")).strip()
+    if not manual_prompt:
+        raise ValueError("AI response included JSON but manual_prompt was empty.")
+
+    hashtags_raw = payload.get("hashtags", [])
+    if isinstance(hashtags_raw, str):
+        hashtags = [tag.strip().lstrip("#") for tag in re.split(r"[\s,]+", hashtags_raw) if tag.strip()]
+    elif isinstance(hashtags_raw, list):
+        hashtags = [str(tag).strip().lstrip("#") for tag in hashtags_raw if str(tag).strip()]
+    else:
+        hashtags = []
+
+    return {
+        "manual_prompt": manual_prompt,
+        "title": str(payload.get("title", "AI Generated Video")).strip() or "AI Generated Video",
+        "medium_title": str(payload.get("medium_title", payload.get("title", "AI Generated Video Clip"))).strip()
+        or "AI Generated Video Clip",
+        "tiktok_subheading": str(payload.get("tiktok_subheading", "Swipe for more AI visuals.")).strip()
+        or "Swipe for more AI visuals.",
+        "description": str(payload.get("description", "")).strip(),
+        "x_post": str(payload.get("x_post", "")).strip(),
+        "hashtags": hashtags or ["grok", "ai", "generated-video"],
+        "category": str(payload.get("category", "22")).strip() or "22",
+    }
+
 def _parse_json_object_from_text(raw: str) -> dict:
-    """Parse a JSON object from a model response that may include wrappers."""
+    """Parse a JSON object from a model response that may include wrappers or trailing chatter."""
     text = (raw or "").strip()
     if not text:
         raise json.JSONDecodeError("Empty AI response", raw, 0)
@@ -279,10 +375,25 @@ def _parse_json_object_from_text(raw: str) -> dict:
     except json.JSONDecodeError:
         pass
 
+    first_brace = text.find("{")
+    if first_brace != -1:
+        try:
+            parsed, _ = decoder.raw_decode(text, first_brace)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
     fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
     if fence_match:
         candidate = fence_match.group(1)
         parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+
+    balanced_candidate = _extract_first_balanced_json_object(text)
+    if balanced_candidate:
+        parsed = json.loads(balanced_candidate)
         if isinstance(parsed, dict):
             return parsed
 
@@ -441,6 +552,7 @@ def _openai_chat_payload(model: str, system: str, user: str, temperature: float)
             {"role": "user", "content": user},
         ],
         "temperature": temperature,
+        "max_tokens": AI_MAX_OUTPUT_TOKENS,
     }
 
 
@@ -451,6 +563,7 @@ def _openai_responses_payload(model: str, system: str, user: str) -> dict[str, o
         "input": [
             {"role": "user", "content": user},
         ],
+        "max_output_tokens": AI_MAX_OUTPUT_TOKENS,
         "store": False,
         "stream": True,
     }
@@ -472,12 +585,12 @@ def _call_openai_chat_api(credential: str, model: str, system: str, user: str, t
         else _openai_chat_payload(model, system, user, temperature)
     )
 
-    response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+    response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
 
     if not response.ok and not is_responses_api and _openai_error_prefers_responses(response):
         responses_endpoint = f"{OPENAI_API_BASE}/responses"
         retry_payload = _openai_responses_payload(model, system, user)
-        retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=90)
+        retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
         if not retry_response.ok:
             raise RuntimeError(
                 f"OpenAI request failed: {retry_response.status_code} {retry_response.text[:500]}"
@@ -787,6 +900,59 @@ class AISocialMetadata:
     x_post: str
     hashtags: list[str]
     category: str
+
+
+class PromptGenerationWorker(QThread):
+    finished_payload = Signal(dict)
+    failed = Signal(str)
+    raw_response = Signal(str)
+
+    def __init__(self, source: str, concept: str, instruction_template: str, system: str, user_template: str, caller):
+        super().__init__()
+        self.source = source
+        self.concept = concept
+        self.instruction_template = instruction_template
+        self.system = system
+        self.user_template = user_template
+        self.caller = caller
+
+    def run(self) -> None:
+        try:
+            instruction_template = self.instruction_template.strip() or DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE
+            if "{concept}" in instruction_template:
+                instruction = instruction_template.replace("{concept}", self.concept)
+            else:
+                instruction = f"{self.concept} {instruction_template}".strip()
+
+            system = self.system.strip() or DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT
+            user_template = self.user_template.strip() or DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE
+            if "{instruction}" in user_template:
+                user = user_template.replace("{instruction}", instruction)
+            else:
+                user = f"{user_template}\nConcept instruction: {instruction}".strip()
+
+            raw = self.caller._call_selected_ai(system, user)
+            self.raw_response.emit(f"Primary AI response:\n{raw}")
+            try:
+                parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(raw))
+            except Exception as parse_exc:
+                repair_system = (
+                    "You repair malformed or wrapped model output into strict JSON. Return JSON only with no markdown."
+                )
+                repair_user = (
+                    "Convert the following response into one strict JSON object with keys: "
+                    "manual_prompt, title, medium_title, tiktok_subheading, description, x_post, hashtags, category. "
+                    "Do not include any text before or after JSON.\n\n"
+                    f"Original response:\n{raw}\n\n"
+                    f"Repair reason: {parse_exc}"
+                )
+                repaired_raw = self.caller._call_selected_ai(repair_system, repair_user)
+                self.raw_response.emit(f"Repair AI response:\n{repaired_raw}")
+                parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(repaired_raw))
+
+            self.finished_payload.emit(parsed)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class GenerateWorker(QThread):
@@ -1320,7 +1486,7 @@ class GenerateWorker(QThread):
         last_error = ""
         for endpoint in endpoints:
             for payload in self._seedance_payload_variants(prompt):
-                response = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+                response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
                 if response.ok:
                     data = response.json() if response.content else {}
                     job_id = data.get("id") or data.get("job_id")
@@ -2293,6 +2459,7 @@ class MainWindow(QMainWindow):
         self.automation_runtime: AutomationRuntimeWorker | None = None
         self.automation_chrome_instance: ChromeInstance | None = None
         self.udp_workflow_worker: UdpWorkflowWorker | None = None
+        self.prompt_generation_worker: PromptGenerationWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -2507,7 +2674,7 @@ class MainWindow(QMainWindow):
 
         self.generate_prompt_btn = QPushButton("✨ Generate Prompt + Social Metadata from Concept")
         self.generate_prompt_btn.setToolTip(
-            "Uses Prompt Source (Grok/OpenAI) to convert Concept into a 10-second video prompt and social metadata."
+            "Uses Prompt Source (Grok/OpenAI/Ollama) to convert Concept into a 10-second video prompt and social metadata."
         )
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
@@ -3137,6 +3304,17 @@ class MainWindow(QMainWindow):
         self.stitch_progress_bar.setFixedWidth(260)
         status_bar.addPermanentWidget(self.stitch_progress_bar)
 
+        self.prompt_thinking_label = QLabel("Thinking…")
+        self.prompt_thinking_label.setStyleSheet("color: #9fb3c8;")
+        self.prompt_thinking_label.setVisible(False)
+        status_bar.addWidget(self.prompt_thinking_label, 1)
+
+        self.prompt_thinking_spinner = QProgressBar()
+        self.prompt_thinking_spinner.setRange(0, 0)
+        self.prompt_thinking_spinner.setVisible(False)
+        self.prompt_thinking_spinner.setFixedWidth(140)
+        status_bar.addPermanentWidget(self.prompt_thinking_spinner)
+
         self._populate_top_settings_menus()
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
@@ -3720,6 +3898,7 @@ class MainWindow(QMainWindow):
         self.prompt_source.addItem("Manual prompt (no API)", "manual")
         self.prompt_source.addItem("Grok API", "grok")
         self.prompt_source.addItem("OpenAI API", "openai")
+        self.prompt_source.addItem("Ollama (local)", "ollama")
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
         ai_layout.addRow("Prompt Source", self.prompt_source)
 
@@ -3744,6 +3923,13 @@ class MainWindow(QMainWindow):
 
         self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-5.1-codex"))
         ai_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
+
+        self.ollama_api_base = QLineEdit(os.getenv("OLLAMA_API_BASE", OLLAMA_API_BASE))
+        self.ollama_api_base.setPlaceholderText("http://127.0.0.1:11434/v1")
+        ai_layout.addRow("Ollama API Base", self.ollama_api_base)
+
+        self.ollama_chat_model = QLineEdit(os.getenv("OLLAMA_CHAT_MODEL", OLLAMA_CHAT_MODEL))
+        ai_layout.addRow("Ollama Chat Model", self.ollama_chat_model)
 
         self.seedance_api_key = QLineEdit()
         self.seedance_api_key.setEchoMode(QLineEdit.Password)
@@ -3963,6 +4149,8 @@ class MainWindow(QMainWindow):
         tracked_widgets = [
             getattr(self, "stitch_progress_label", None),
             getattr(self, "stitch_progress_bar", None),
+            getattr(self, "prompt_thinking_label", None),
+            getattr(self, "prompt_thinking_spinner", None),
         ]
         return any(widget is not None and widget.isVisible() for widget in tracked_widgets)
 
@@ -3980,6 +4168,15 @@ class MainWindow(QMainWindow):
     def _reset_automation_counter_tracking(self) -> None:
         self.automation_counter_total = 0
         self.automation_counter_completed = 0
+
+    def _set_prompt_thinking_indicator(self, active: bool, message: str = "Thinking…") -> None:
+        active = bool(active)
+        if hasattr(self, "prompt_thinking_label") and self.prompt_thinking_label is not None:
+            self.prompt_thinking_label.setText(message if active else "Thinking…")
+            self.prompt_thinking_label.setVisible(active)
+        if hasattr(self, "prompt_thinking_spinner") and self.prompt_thinking_spinner is not None:
+            self.prompt_thinking_spinner.setVisible(active)
+        self._refresh_status_bar_visibility()
 
     def _refresh_status_bar_visibility(self) -> None:
         status_bar = self.statusBar()
@@ -4674,6 +4871,8 @@ class MainWindow(QMainWindow):
             "openai_api_key": self.openai_api_key.text(),
             "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
+            "ollama_api_base": self.ollama_api_base.text(),
+            "ollama_chat_model": self.ollama_chat_model.text(),
             "seedance_api_key": self.seedance_api_key.text(),
             "seedance_oauth_token": self.seedance_oauth_token.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
@@ -4790,6 +4989,10 @@ class MainWindow(QMainWindow):
             self.openai_access_token.setText(str(preferences["openai_access_token"]))
         if "openai_chat_model" in preferences:
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
+        if "ollama_api_base" in preferences:
+            self.ollama_api_base.setText(str(preferences["ollama_api_base"]))
+        if "ollama_chat_model" in preferences:
+            self.ollama_chat_model.setText(str(preferences["ollama_chat_model"]))
         if "seedance_api_key" in preferences:
             self.seedance_api_key.setText(str(preferences["seedance_api_key"]))
         if "seedance_oauth_token" in preferences:
@@ -6188,6 +6391,7 @@ class MainWindow(QMainWindow):
                 {"role": "user", "content": user},
             ],
             "temperature": 0.4,
+            "max_tokens": AI_MAX_OUTPUT_TOKENS,
         }
 
         if source == "openai":
@@ -6202,6 +6406,18 @@ class MainWindow(QMainWindow):
                 temperature=0.4,
             )
 
+        if source == "ollama":
+            ollama_api_base = self.ollama_api_base.text().strip() or OLLAMA_API_BASE
+            ollama_chat_model = self.ollama_chat_model.text().strip() or OLLAMA_CHAT_MODEL
+            payload["model"] = ollama_chat_model
+            payload["max_tokens"] = AI_MAX_OUTPUT_TOKENS
+            payload["options"] = {"num_predict": AI_MAX_OUTPUT_TOKENS}
+            endpoint = f"{ollama_api_base.rstrip('/')}/chat/completions"
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
+            if not response.ok:
+                raise RuntimeError(f"Ollama request failed: {response.status_code} {response.text[:400]}")
+            return response.json()["choices"][0]["message"]["content"].strip()
+
         grok_key = self.api_key.text().strip()
         if not grok_key:
             if self.ai_auth_method.currentData() == "browser":
@@ -6209,7 +6425,7 @@ class MainWindow(QMainWindow):
             raise RuntimeError("Grok API key is required.")
         headers["Authorization"] = f"Bearer {grok_key}"
         payload["model"] = self.chat_model.text().strip() or "grok-3-mini"
-        response = requests.post(f"{API_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=90)
+        response = requests.post(f"{API_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
         if not response.ok:
             raise RuntimeError(f"Grok request failed: {response.status_code} {response.text[:400]}")
         return response.json()["choices"][0]["message"]["content"].strip()
@@ -6217,45 +6433,53 @@ class MainWindow(QMainWindow):
     def generate_prompt_from_concept(self) -> None:
         concept = self.concept.toPlainText().strip()
         source = self.prompt_source.currentData()
-        if source not in {"grok", "openai"}:
-            QMessageBox.warning(self, "AI Source Required", "Set Prompt Source to Grok API or OpenAI API.")
+        if source not in {"grok", "openai", "ollama"}:
+            QMessageBox.warning(self, "AI Source Required", "Set Prompt Source to Grok API, OpenAI API, or Ollama (local).")
             return
         if not concept:
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept first.")
             return
+        if self.prompt_generation_worker and self.prompt_generation_worker.isRunning():
+            self._append_log("Prompt generation is already in progress.")
+            return
 
+        instruction_template = self.ai_concept_instruction_template_input.toPlainText().strip()
+        system = self.ai_concept_system_prompt_input.toPlainText().strip()
+        user_template = self.ai_concept_user_prompt_template_input.toPlainText().strip()
+
+        self.generate_prompt_btn.setEnabled(False)
+        self.generate_prompt_btn.setText("⏳ Generating Prompt + Social Metadata...")
+        self._set_prompt_thinking_indicator(True, f"Thinking with {str(source).title()}…")
+        self._append_log(f"Generating prompt + social metadata using {str(source).title()} (max tokens: {AI_MAX_OUTPUT_TOKENS}, timeout: {int(AI_TEXT_TIMEOUT_SECONDS)}s)...")
+
+        worker = PromptGenerationWorker(
+            source=str(source),
+            concept=concept,
+            instruction_template=instruction_template,
+            system=system,
+            user_template=user_template,
+            caller=self,
+        )
+        worker.finished_payload.connect(self._on_prompt_generation_success)
+        worker.failed.connect(self._on_prompt_generation_failed)
+        worker.raw_response.connect(self._on_prompt_generation_raw_response)
+        worker.finished.connect(self._on_prompt_generation_finished)
+        self.prompt_generation_worker = worker
+        worker.start()
+
+    def _on_prompt_generation_success(self, parsed: dict) -> None:
         try:
-            instruction_template = self.ai_concept_instruction_template_input.toPlainText().strip()
-            if not instruction_template:
-                instruction_template = DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE
-            if "{concept}" in instruction_template:
-                instruction = instruction_template.replace("{concept}", concept)
-            else:
-                instruction = f"{concept} {instruction_template}".strip()
-
-            system = self.ai_concept_system_prompt_input.toPlainText().strip() or DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT
-            user_template = self.ai_concept_user_prompt_template_input.toPlainText().strip() or DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE
-            if "{instruction}" in user_template:
-                user = user_template.replace("{instruction}", instruction)
-            else:
-                user = f"{user_template}\nConcept instruction: {instruction}".strip()
-
-            raw = self._call_selected_ai(system, user)
-            parsed = _parse_json_object_from_text(raw)
             manual_prompt = str(parsed.get("manual_prompt", "")).strip()
             if not manual_prompt:
                 raise RuntimeError("AI response did not include a manual_prompt.")
-
-            hashtags = parsed.get("hashtags", [])
-            cleaned_hashtags = [str(tag).strip().lstrip("#") for tag in hashtags if str(tag).strip()]
             self.ai_social_metadata = AISocialMetadata(
-                title=str(parsed.get("title", "AI Generated Video")).strip() or "AI Generated Video",
-                medium_title=str(parsed.get("medium_title", parsed.get("title", "AI Generated Video Clip"))).strip() or "AI Generated Video Clip",
-                tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")).strip() or "Swipe for more AI visuals.",
-                description=str(parsed.get("description", "")).strip(),
-                x_post=str(parsed.get("x_post", "")).strip(),
-                hashtags=cleaned_hashtags or ["grok", "ai", "generated-video"],
-                category=str(parsed.get("category", "22")).strip() or "22",
+                title=str(parsed.get("title", "AI Generated Video")),
+                medium_title=str(parsed.get("medium_title", "AI Generated Video Clip")),
+                tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")),
+                description=str(parsed.get("description", "")),
+                x_post=str(parsed.get("x_post", "")),
+                hashtags=list(parsed.get("hashtags", ["grok", "ai", "generated-video"])),
+                category=str(parsed.get("category", "22")),
             )
             self.manual_prompt.setPlainText(manual_prompt)
             self._append_log(
@@ -6263,10 +6487,23 @@ class MainWindow(QMainWindow):
                 f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
                 f"{', '.join(self.ai_social_metadata.hashtags)})."
             )
-        except json.JSONDecodeError:
-            QMessageBox.critical(self, "AI Response Error", "AI response was not valid JSON. Please retry.")
         except Exception as exc:
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
+
+    def _on_prompt_generation_raw_response(self, text: str) -> None:
+        self._append_log("----- Raw AI response begin -----")
+        self._append_log(text)
+        self._append_log("----- Raw AI response end -----")
+
+    def _on_prompt_generation_failed(self, message: str) -> None:
+        self._set_prompt_thinking_indicator(False)
+        QMessageBox.critical(self, "Prompt Generation Failed", message)
+
+    def _on_prompt_generation_finished(self) -> None:
+        self._set_prompt_thinking_indicator(False)
+        self.generate_prompt_btn.setEnabled(True)
+        self.generate_prompt_btn.setText("✨ Generate Prompt + Social Metadata from Concept")
+        self.prompt_generation_worker = None
 
     def populate_video_prompt(self) -> None:
         self.stop_all_requested = False
@@ -11041,6 +11278,8 @@ class MainWindow(QMainWindow):
         self.openai_api_key.setEnabled(uses_openai)
         self.openai_access_token.setEnabled(uses_openai)
         self.openai_chat_model.setEnabled(prompt_source == "openai")
+        self.ollama_api_base.setEnabled(prompt_source == "ollama")
+        self.ollama_chat_model.setEnabled(prompt_source == "ollama")
         self.seedance_api_key.setEnabled(uses_seedance)
         self.seedance_oauth_token.setEnabled(uses_seedance)
         self.chat_model.setEnabled(uses_grok)
