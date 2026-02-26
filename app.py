@@ -9804,7 +9804,34 @@ class MainWindow(QMainWindow):
 
                 self._complete_manual_video_download(video_path, variant)
             elif state == download.DownloadState.DownloadInterrupted:
-                self._append_log(f"ERROR: Download interrupted for manual variant {variant}.")
+                reason_text = ""
+                try:
+                    reason_text = str(download.interruptReasonString() or "").strip()
+                except Exception:
+                    reason_text = ""
+                detail_suffix = f" ({reason_text})" if reason_text else ""
+                self._append_log(f"WARNING: Download interrupted for manual variant {variant}{detail_suffix}.")
+
+                interrupted_url = ""
+                try:
+                    interrupted_url = str(download.url().toString() or "").strip()
+                except Exception:
+                    interrupted_url = ""
+
+                self.manual_download_request_pending = False
+                self.manual_download_in_progress = False
+                self.manual_download_click_sent = False
+
+                if interrupted_url and re.match(r"^https?://", interrupted_url, re.IGNORECASE):
+                    self._append_log(
+                        f"Variant {variant}: browser download interrupted; attempting direct URL fallback download."
+                    )
+                    if self._start_manual_direct_download(variant, interrupted_url):
+                        self.manual_download_click_sent = True
+                        self.manual_download_poll_timer.start(1000)
+                        return
+
+                self._append_log(f"ERROR: Download interrupted for manual variant {variant}; no usable fallback URL.")
                 self.pending_manual_variant_for_download = None
                 self.pending_manual_download_type = None
                 self.pending_manual_image_prompt = None
@@ -9814,12 +9841,10 @@ class MainWindow(QMainWindow):
                 self.manual_image_pick_retry_count = 0
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
-                self.manual_download_click_sent = False
-                self.manual_download_request_pending = False
                 self.manual_video_start_click_sent = False
                 self.manual_video_make_click_fallback_used = False
+                self.manual_generating_indicator_seen = False
                 self.manual_video_allow_make_click = True
-                self.manual_download_in_progress = False
                 self.manual_download_started_at = None
                 self.manual_download_deadline = None
                 self.continue_from_frame_active = False
