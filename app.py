@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlencode, urlparse
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QMimeData, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -72,6 +72,7 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtTest import QTest
 
 from social_uploaders import upload_video_to_facebook_page, upload_video_to_instagram_reels, upload_video_to_tiktok
 from youtube_uploader import upload_video_to_youtube
@@ -9353,8 +9354,15 @@ class MainWindow(QMainWindow):
                 }}
 
                 if (downloadButton) {{
+                    const rect = typeof downloadButton.getBoundingClientRect === "function"
+                        ? downloadButton.getBoundingClientRect()
+                        : null;
+                    const clickX = rect ? (rect.left + rect.width / 2) : null;
+                    const clickY = rect ? (rect.top + rect.height / 2) : null;
                     return {{
                         status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
+                        clickX,
+                        clickY,
                     }};
                 }}
 
@@ -9436,10 +9444,16 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "download-clicked":
+                click_x = result.get("clickX")
+                click_y = result.get("clickY")
                 if not self.manual_download_click_sent:
                     self._append_log(f"Variant {current_variant} appears ready; clicked in-page Download button.")
                     self.manual_download_click_sent = True
                     self.manual_download_in_progress = True
+                if not self.manual_download_request_pending and click_x is not None and click_y is not None:
+                    native_clicked = self._native_click_embedded_browser_at(float(click_x), float(click_y))
+                    if native_clicked:
+                        self._append_log(f"Variant {current_variant}: sent native embedded-browser click on Download control.")
                 self.manual_download_poll_timer.start(3000)
                 return
 
@@ -9488,7 +9502,7 @@ class MainWindow(QMainWindow):
                                 candidate = btn;
                             }
                         });
-                        if (!candidate) return { clicked: false, reason: "missing-button" };
+                        if (!candidate) return { clicked: false, reason: "missing-button", clickX: null, clickY: null };
 
                         const common = { bubbles: true, cancelable: true, composed: true };
                         const fire = (el, eventName, ctorName) => {
@@ -9543,16 +9557,31 @@ class MainWindow(QMainWindow):
                             } catch (_) {}
                         }
 
+                        const finalRect = typeof candidate.getBoundingClientRect === "function"
+                            ? candidate.getBoundingClientRect()
+                            : null;
                         return {
                             clicked,
                             reason: clicked ? "clicked" : "dispatch-failed",
+                            clickX: finalRect ? (finalRect.left + finalRect.width / 2) : null,
+                            clickY: finalRect ? (finalRect.top + finalRect.height / 2) : null,
                         };
                     })()
                 """
 
                 def _after_force_download_click(click_result):
                     clicked = isinstance(click_result, dict) and bool(click_result.get("clicked"))
-                    if clicked:
+                    click_x = click_result.get("clickX") if isinstance(click_result, dict) else None
+                    click_y = click_result.get("clickY") if isinstance(click_result, dict) else None
+                    native_clicked = False
+                    if not self.manual_download_request_pending and click_x is not None and click_y is not None:
+                        native_clicked = self._native_click_embedded_browser_at(float(click_x), float(click_y))
+                        if native_clicked:
+                            self._append_log(
+                                f"Variant {current_variant}: sent native embedded-browser click on Download control."
+                            )
+
+                    if clicked or native_clicked:
                         if not self.manual_download_click_sent:
                             self._append_log(
                                 f"Variant {current_variant}: Download button required fallback automation click; download request sent."
@@ -9762,6 +9791,26 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_seed_image_path = None
         else:
             self._submit_next_manual_variant()
+
+    def _native_click_embedded_browser_at(self, x: float, y: float) -> bool:
+        if self.browser is None:
+            return False
+        try:
+            view = self.browser
+            rect = view.rect()
+            if rect.width() <= 2 or rect.height() <= 2:
+                return False
+            px = int(round(float(x)))
+            py = int(round(float(y)))
+            px = max(1, min(px, rect.width() - 2))
+            py = max(1, min(py, rect.height() - 2))
+            click_pos = QPoint(px, py)
+            view.setFocus()
+            QTest.mouseMove(view, click_pos, 5)
+            QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, click_pos, 10)
+            return True
+        except Exception:
+            return False
 
     def _on_browser_download_requested(self, download) -> None:
         variant = self.pending_manual_variant_for_download
