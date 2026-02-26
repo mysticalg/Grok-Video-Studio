@@ -97,6 +97,7 @@ CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = 60_000
+MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
@@ -9589,7 +9590,7 @@ class MainWindow(QMainWindow):
             if not isinstance(result, dict):
                 self._append_log(f"Variant {current_variant}: poll returned no structured page state; checking public page scrape fallback.")
                 self._try_public_page_download(current_variant, reason="poll-result-unstructured")
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
                 return
 
             status = result.get("status", "waiting")
@@ -9652,7 +9653,7 @@ class MainWindow(QMainWindow):
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
                 self.manual_video_start_click_sent = True
                 self._try_public_page_download(current_variant, reason=f"status={status}")
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
                 return
 
             if status in ("download-clicked", "download-visible"):
@@ -9675,13 +9676,13 @@ class MainWindow(QMainWindow):
                 if self._try_public_page_download(current_variant, reason="download-visible-no-direct-url"):
                     self.manual_download_click_sent = True
                     self.manual_download_in_progress = True
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
                     return
 
                 self._append_log(
-                    f"Variant {current_variant}: Download control is visible but no direct URL was found yet; retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
+                    f"Variant {current_variant}: Download control is visible but no direct URL was found yet; re-scraping public page in {MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS // 1000}s."
                 )
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
                 return
 
             src = result.get("src") or ""
