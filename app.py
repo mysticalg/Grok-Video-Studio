@@ -9817,6 +9817,9 @@ class MainWindow(QMainWindow):
             filename = self._build_session_download_filename("video", variant, "mp4")
             output_path = self.download_dir / filename
             final_url = _ensure_public_download_query(source_url)
+            post_polled_url = self._poll_post_page_for_media_url(final_url)
+            if post_polled_url:
+                final_url = _ensure_public_download_query(post_polled_url)
             self._append_log(
                 f"Variant {variant}: downloading direct video URL to {output_path.name} using curl-style public URL polling ({final_url})."
             )
@@ -9849,6 +9852,61 @@ class MainWindow(QMainWindow):
     def _clear_manual_direct_download_tracking(self) -> None:
         self._manual_direct_download_future = None
         self._manual_direct_download_context = None
+
+    @staticmethod
+    def _poll_post_page_for_media_url(source_url: str) -> str:
+        raw = str(source_url or "").strip()
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        page_url = ""
+        if re.search(r"^https?://(?:www\.)?grok\.com/imagine/post/[0-9a-fA-F-]{8,}", raw, re.IGNORECASE):
+            page_url = raw
+        else:
+            id_match = re.search(r"/([0-9a-fA-F-]{8,})\.mp4(?:$|[?#])", parsed.path, re.IGNORECASE)
+            if id_match:
+                page_url = f"https://grok.com/imagine/post/{id_match.group(1)}"
+        if not page_url:
+            return ""
+
+        curl_command = shutil.which("curl")
+        html_payload = ""
+        if curl_command:
+            result = subprocess.run(
+                [
+                    curl_command,
+                    "--silent",
+                    "--show-error",
+                    "--location",
+                    "--connect-timeout",
+                    "20",
+                    "--max-time",
+                    "30",
+                    "--user-agent",
+                    os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
+                    "--referer",
+                    "https://grok.com/",
+                    page_url,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                html_payload = result.stdout or ""
+
+        if not html_payload:
+            return ""
+
+        html_normalized = html_payload.replace("\\/", "/").replace("\\u002F", "/")
+        match = re.search(
+            r"https?://imagine-public[.]x[.]ai/imagine-public/share-videos/[0-9a-fA-F-]{8,}\.mp4(?:[^\s\"'<>]*)",
+            html_normalized,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return match.group(0).strip()
+        return ""
 
     @staticmethod
     def _download_video_from_public_url(source_url: str, output_path: Path) -> Path:
