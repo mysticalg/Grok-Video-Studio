@@ -2253,6 +2253,9 @@ class MainWindow(QMainWindow):
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
@@ -9246,6 +9249,9 @@ class MainWindow(QMainWindow):
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -9276,6 +9282,9 @@ class MainWindow(QMainWindow):
             self.manual_download_in_progress = False
             self.manual_download_started_at = None
             self.manual_download_deadline = None
+            self.manual_download_poll_attempt_count = 0
+            self.manual_download_last_status = ""
+            self.manual_download_last_status_log_at = 0.0
             self._append_log(f"ERROR: Variant {variant} did not produce a downloadable video in time.")
             if self.continue_from_frame_active:
                 self._append_log("Continue-from-last-frame stopped because download polling timed out.")
@@ -9553,6 +9562,18 @@ class MainWindow(QMainWindow):
 
             status = result.get("status", "waiting")
             progress_text = (result.get("progressText") or "").strip()
+            self.manual_download_poll_attempt_count += 1
+
+            now = time.time()
+            status_changed = status != self.manual_download_last_status
+            status_log_interval_elapsed = (now - self.manual_download_last_status_log_at) >= 6.0
+            if status_changed or status_log_interval_elapsed:
+                suffix = f" ({progress_text})" if progress_text else ""
+                self._append_log(
+                    f"Variant {current_variant}: download poll #{self.manual_download_poll_attempt_count} status={status}{suffix}."
+                )
+                self.manual_download_last_status = status
+                self.manual_download_last_status_log_at = now
 
             was_generating = bool(getattr(self, "manual_generating_indicator_seen", False))
             if status == "generating-indicator-visible":
@@ -9626,6 +9647,9 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "download-visible":
+                self._append_log(
+                    f"Variant {current_variant}: attempting automation click on Download button (attempt {self.manual_download_poll_attempt_count})."
+                )
                 force_download_click_script = """
                     (() => {
                         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -10024,6 +10048,9 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
         self.manual_download_deadline = None
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
         if self.continue_from_frame_active:
             self.continue_from_frame_completed += 1
             if self.continue_from_frame_completed < self.continue_from_frame_target_count:
@@ -10244,6 +10271,9 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
         self.manual_download_deadline = None
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
         self._reset_automation_counter_tracking()
 
         self.continue_from_frame_active = False
