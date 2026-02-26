@@ -212,6 +212,19 @@ def _ensure_public_download_query(url: str) -> str:
     return parsed._replace(query=rebuilt).geturl()
 
 
+def _public_video_url_from_post_url(post_url: str) -> str:
+    raw = str(post_url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    path = str(parsed.path or "")
+    match = re.search(r"/imagine/post/([0-9a-fA-F-]{8,})", path)
+    if not match:
+        return ""
+    post_id = match.group(1)
+    return f"https://imagine-public.x.ai/imagine-public/share-videos/{post_id}.mp4?cache=1&dl=1"
+
+
 def _normalize_version_key(value: str) -> tuple[int, ...]:
     cleaned = str(value or "").strip().lower().lstrip("v")
     if not cleaned:
@@ -9613,6 +9626,13 @@ class MainWindow(QMainWindow):
                 active_url = str(self.browser.url().toString() or "").strip()
             except Exception:
                 active_url = ""
+            post_derived_public_url = _public_video_url_from_post_url(active_url)
+            if post_derived_public_url:
+                self.manual_public_video_url = post_derived_public_url
+                if self.manual_download_poll_attempt_count <= 2:
+                    self._append_log(
+                        f"Variant {current_variant}: derived public video URL from post id for probing: {post_derived_public_url}"
+                    )
             if active_url and _looks_like_public_video_url(active_url):
                 self.manual_public_video_url = _ensure_public_download_query(active_url)
 
