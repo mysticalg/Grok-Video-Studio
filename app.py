@@ -9664,13 +9664,14 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "direct-url-ready":
-                if self.manual_download_click_sent:
+                if self.manual_download_request_pending:
                     self.manual_download_poll_timer.start(3000)
                     return
                 source_type = result.get("sourceType") or "video-link"
                 self._append_log(f"Variant {current_variant} ready; downloading directly from detected video URL ({source_type}).")
                 if self._start_manual_direct_download(current_variant, src):
                     self.manual_download_click_sent = True
+                    self.manual_download_in_progress = True
                 self.manual_download_poll_timer.start(1000)
                 return
 
