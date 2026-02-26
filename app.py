@@ -7524,6 +7524,29 @@ class MainWindow(QMainWindow):
             return ""
         return post_id
 
+    def _cleanup_manual_pick_observer(self) -> None:
+        if self.browser is None:
+            return
+        self.browser.page().runJavaScript("""
+            (() => {
+                try {
+                    if (window.__grokManualPickObserver) {
+                        window.__grokManualPickObserver.disconnect();
+                    }
+                } catch (_) {}
+                try {
+                    if (window.__grokManualPickScrollTimer) {
+                        window.clearTimeout(window.__grokManualPickScrollTimer);
+                    }
+                } catch (_) {}
+                window.__grokManualPickObserver = null;
+                window.__grokManualPickObserverDisconnected = true;
+                window.__grokManualPickObserverResult = "";
+                window.__grokManualPickScrollTimer = 0;
+                return true;
+            })()
+        """)
+
     def _poll_for_manual_image(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -7564,6 +7587,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_pick_retry_count = 0
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
+                self._cleanup_manual_pick_observer()
                 QTimer.singleShot(700, self._poll_for_manual_image)
                 return
 
@@ -7868,19 +7892,7 @@ class MainWindow(QMainWindow):
                                 f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
                             )
                     self.manual_image_pick_clicked = True
-                    self.browser.page().runJavaScript("""
-                        (() => {
-                            try {
-                                if (window.__grokManualPickObserver) {
-                                    window.__grokManualPickObserver.disconnect();
-                                }
-                            } catch (_) {}
-                            window.__grokManualPickObserver = null;
-                            window.__grokManualPickObserverDisconnected = true;
-                            window.__grokManualPickObserverResult = "";
-                            return true;
-                        })()
-                    """)
+                    self._cleanup_manual_pick_observer()
                     self.manual_image_pick_retry_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
@@ -8167,6 +8179,7 @@ class MainWindow(QMainWindow):
                             self.manual_image_pick_retry_count = 0
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
+                            self._cleanup_manual_pick_observer()
                             QTimer.singleShot(700, self._poll_for_manual_image)
                             return
                         _queue_pick_retry(status)
@@ -8208,6 +8221,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_video_submit_sent = True
                 self.manual_image_submit_retry_count = 0
                 self.pending_manual_download_type = "video"
+                self._cleanup_manual_pick_observer()
                 self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                 return
 
