@@ -6954,6 +6954,13 @@ class MainWindow(QMainWindow):
                         const popup = clean(el.getAttribute("aria-haspopup")).toLowerCase();
                         return popup === "menu" || popup === "listbox" || /settings/.test(`${aria} ${text}`);
                     };
+                    const isForbiddenProjectAction = (el) => {
+                        if (!el) return false;
+                        const button = el.closest?.("button") || el;
+                        const aria = clean(button.getAttribute?.("aria-label")).toLowerCase();
+                        const text = clean(button.textContent).toLowerCase();
+                        return /create\s+new\s+project/.test(aria) || /create\s+(new\s+)?project/.test(text);
+                    };
 
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
                     if (!promptInput || !isVisible(promptInput)) {
@@ -6967,7 +6974,7 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("main button.group[aria-label='Submit']"),
                     ]
                         .filter((el, idx, arr) => arr.indexOf(el) === idx)
-                        .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
+                        .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el) && !isForbiddenProjectAction(el));
                     const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
                         || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
                         || submitButtons[0]
@@ -6980,7 +6987,7 @@ class MainWindow(QMainWindow):
                         "button[type='submit'] svg",
                     ];
                     const recorderXPath = "//*[@data-testid='drop-ui']//form//button[2]//svg";
-                    const firstVisible = (list) => list.find((el) => isVisible(el) && !el.disabled && !isMenuToggle(el)) || null;
+                    const firstVisible = (list) => list.find((el) => isVisible(el) && !el.disabled && !isMenuToggle(el) && !isForbiddenProjectAction(el)) || null;
                     const findRecorderSubmitTarget = () => {
                         const cssNodes = recorderSelectors
                             .flatMap((selector) => [...document.querySelectorAll(selector)])
@@ -7057,7 +7064,8 @@ class MainWindow(QMainWindow):
                             x = Math.floor(rect.left + Math.min(offsetX, Math.max(1, rect.width - 1)));
                             y = Math.floor(rect.top + Math.min(offsetY, Math.max(1, rect.height - 1)));
                             const pointTarget = document.elementFromPoint(x, y) || el;
-                            const clickTarget = pointTarget.closest?.("button") || pointTarget;
+                            const clickTargetCandidate = pointTarget.closest?.("button") || pointTarget;
+                            const clickTarget = isForbiddenProjectAction(clickTargetCandidate) ? el : clickTargetCandidate;
                             emitPointer(clickTarget, "pointerenter");
                             emitMouse(clickTarget, "mouseenter");
                             emitPointer(clickTarget, "pointerover");
@@ -8904,6 +8912,13 @@ class MainWindow(QMainWindow):
                         const popup = clean(el.getAttribute("aria-haspopup")).toLowerCase();
                         return popup === "menu" || popup === "listbox" || /settings/.test(`${aria} ${text}`);
                     };
+                    const isForbiddenProjectAction = (el) => {
+                        if (!el) return false;
+                        const button = el.closest?.("button") || el;
+                        const aria = clean(button.getAttribute?.("aria-label")).toLowerCase();
+                        const text = clean(button.textContent).toLowerCase();
+                        return /create\s+new\s+project/.test(aria) || /create\s+(new\s+)?project/.test(text);
+                    };
 
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
 
@@ -8918,7 +8933,7 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("main button.group[aria-label='Submit']"),
                     ]
                         .filter((el, idx, arr) => arr.indexOf(el) === idx)
-                        .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
+                        .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el) && !isForbiddenProjectAction(el));
                     const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
                         || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
                         || submitButtons[0]
@@ -8931,7 +8946,7 @@ class MainWindow(QMainWindow):
                         "button[type='submit'] svg",
                     ];
                     const recorderXPath = "//*[@data-testid='drop-ui']//form//button[2]//svg";
-                    const firstVisible = (list) => list.find((el) => isVisible(el) && !el.disabled && !isMenuToggle(el)) || null;
+                    const firstVisible = (list) => list.find((el) => isVisible(el) && !el.disabled && !isMenuToggle(el) && !isForbiddenProjectAction(el)) || null;
                     const findRecorderSubmitTarget = () => {
                         const cssNodes = recorderSelectors
                             .flatMap((selector) => [...document.querySelectorAll(selector)])
@@ -9008,7 +9023,8 @@ class MainWindow(QMainWindow):
                             x = Math.floor(rect.left + Math.min(offsetX, Math.max(1, rect.width - 1)));
                             y = Math.floor(rect.top + Math.min(offsetY, Math.max(1, rect.height - 1)));
                             const pointTarget = document.elementFromPoint(x, y) || el;
-                            const clickTarget = pointTarget.closest?.("button") || pointTarget;
+                            const clickTargetCandidate = pointTarget.closest?.("button") || pointTarget;
+                            const clickTarget = isForbiddenProjectAction(clickTargetCandidate) ? el : clickTargetCandidate;
                             emitPointer(clickTarget, "pointerenter");
                             emitMouse(clickTarget, "mouseenter");
                             emitPointer(clickTarget, "pointerover");
