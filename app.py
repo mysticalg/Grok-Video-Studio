@@ -1,7 +1,6 @@
 import os
 import asyncio
 import json
-import html as html_lib
 import re
 import base64
 import concurrent.futures
@@ -18,7 +17,7 @@ import math
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urljoin, urlparse
+from urllib.parse import unquote, urlencode, urlparse
 from typing import Any, Callable, Iterable
 
 import requests
@@ -2290,6 +2289,7 @@ class MainWindow(QMainWindow):
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
+        self.manual_public_video_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -9289,6 +9289,7 @@ class MainWindow(QMainWindow):
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
+        self.manual_public_video_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -9326,6 +9327,7 @@ class MainWindow(QMainWindow):
             self.manual_download_in_progress = False
             self.manual_download_started_at = None
             self.manual_download_deadline = None
+            self.manual_public_video_url = ""
             self.manual_download_attempt_count = 0
             self.manual_download_poll_attempt_count = 0
             self.manual_download_last_status = ""
@@ -9594,10 +9596,25 @@ class MainWindow(QMainWindow):
             if current_variant is None:
                 return
 
+            try:
+                active_url = str(self.browser.url().toString() or "").strip()
+            except Exception:
+                active_url = ""
+            if active_url and _looks_like_public_video_url(active_url):
+                self.manual_public_video_url = active_url
+
             if not isinstance(result, dict):
-                self._append_log(f"Variant {current_variant}: poll returned no structured page state; checking public page scrape fallback.")
-                self._try_public_page_download(current_variant, reason="poll-result-unstructured")
-                self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                if self.manual_public_video_url:
+                    self._append_log(
+                        f"Variant {current_variant}: poll returned no structured page state; probing known public URL directly."
+                    )
+                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
+                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                else:
+                    self._append_log(
+                        f"Variant {current_variant}: poll returned no structured page state and no public video URL is known yet; waiting for direct URL signal."
+                    )
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             status = result.get("status", "waiting")
@@ -9659,8 +9676,17 @@ class MainWindow(QMainWindow):
 
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
                 self.manual_video_start_click_sent = True
-                self._try_public_page_download(current_variant, reason=f"status={status}")
-                self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                if self.manual_public_video_url:
+                    self._append_log(
+                        f"Variant {current_variant}: status={status}; probing known public URL directly."
+                    )
+                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
+                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                else:
+                    self._append_log(
+                        f"Variant {current_variant}: status={status}; waiting for public video URL to appear."
+                    )
+                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             if status in ("download-clicked", "download-visible"):
@@ -9671,6 +9697,7 @@ class MainWindow(QMainWindow):
                 )
 
                 if direct_url:
+                    self.manual_public_video_url = direct_url
                     self._append_log(
                         f"Variant {current_variant}: found direct video URL from Download control; downloading without browser click."
                     )
@@ -9680,16 +9707,20 @@ class MainWindow(QMainWindow):
                         self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                         return
 
-                if self._try_public_page_download(current_variant, reason="download-visible-no-direct-url"):
-                    self.manual_download_click_sent = True
-                    self.manual_download_in_progress = True
-                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
-                    return
+                if self.manual_public_video_url:
+                    self._append_log(
+                        f"Variant {current_variant}: Download control is visible; probing known public URL directly."
+                    )
+                    if self._start_manual_direct_download(current_variant, self.manual_public_video_url):
+                        self.manual_download_click_sent = True
+                        self.manual_download_in_progress = True
+                        self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                        return
 
                 self._append_log(
-                    f"Variant {current_variant}: Download control is visible but no direct URL was found yet; re-scraping public page in {MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS // 1000}s."
+                    f"Variant {current_variant}: Download control is visible but no public direct URL is known yet; waiting for URL discovery."
                 )
-                self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             src = result.get("src") or ""
@@ -9704,6 +9735,7 @@ class MainWindow(QMainWindow):
 
             if status == "direct-url-ready":
                 self.manual_download_attempt_count += 1
+                self.manual_public_video_url = src
                 self._append_log(
                     f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL detection."
                 )
@@ -9720,6 +9752,7 @@ class MainWindow(QMainWindow):
 
             if not self.manual_download_click_sent:
                 self.manual_download_attempt_count += 1
+                self.manual_public_video_url = src
                 self._append_log(
                     f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via video source URL direct download (manual browser download bypass enabled)."
                 )
@@ -9836,148 +9869,6 @@ class MainWindow(QMainWindow):
                         handle.write(chunk)
         return output_path
 
-    def _extract_public_video_url_from_page(self, page_url: str) -> str:
-        if not page_url:
-            return ""
-        try:
-            headers = {
-                "User-Agent": os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Referer": "https://grok.com/",
-                "Cache-Control": "no-cache, no-store, max-age=0",
-                "Pragma": "no-cache",
-            }
-            parsed_page = urlparse(page_url)
-            scrape_url = parsed_page._replace(query="").geturl() if parsed_page.scheme and parsed_page.netloc else page_url
-            response = requests.get(
-                scrape_url,
-                timeout=30,
-                headers=headers,
-                params={"_scrape_ts": str(int(time.time() * 1000))},
-            )
-            response.raise_for_status()
-            html = response.text or ""
-        except Exception:
-            return ""
-
-        normalized_html = html
-        try:
-            normalized_html = html_lib.unescape(normalized_html)
-        except Exception:
-            normalized_html = html
-        normalized_html = normalized_html.replace("\\/", "/").replace("\\u002F", "/")
-
-        def _normalize_candidate(raw: str) -> str:
-            value = str(raw or "").strip()
-            if not value:
-                return ""
-            try:
-                value = html_lib.unescape(value)
-            except Exception:
-                pass
-            value = value.replace("\\/", "/").replace("\\u002F", "/")
-            if "%2f" in value.lower() or "%3a" in value.lower():
-                try:
-                    value = unquote(value)
-                except Exception:
-                    pass
-            if value.startswith("//"):
-                value = f"https:{value}"
-            elif re.match(r"^imagine-public[.]x[.]ai/", value, re.IGNORECASE):
-                value = f"https://{value}"
-            return value
-
-        direct_candidates: list[str] = []
-        sd_video_match = re.search(
-            r'<video[^>]*\bid=["\']sd-video["\'][^>]*\bsrc=["\']([^"\']+)["\']',
-            normalized_html,
-            flags=re.IGNORECASE,
-        )
-        if sd_video_match:
-            sd_video_src = _normalize_candidate(sd_video_match.group(1))
-            if sd_video_src:
-                if not re.match(r"^https?://", sd_video_src, re.IGNORECASE):
-                    page_url_parsed = urlparse(page_url)
-                    page_origin = f"{page_url_parsed.scheme}://{page_url_parsed.netloc}"
-                    sd_video_src = urljoin(page_origin, sd_video_src)
-                direct_candidates.append(sd_video_src)
-
-        download_button_present = bool(
-            re.search(
-                r'<button[^>]+aria-label=["\']download["\'][^>]*>',
-                normalized_html,
-                flags=re.IGNORECASE,
-            )
-        )
-        patterns = [
-            r'https?://[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
-            r'https?://[^\s"\'<>]+(?:download|render|media|video)[^\s"\'<>]*',
-            r'https?:\\/\\/[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
-            r'https?:\\/\\/[^\s"\'<>]+(?:share-videos|download|render|media|video)[^\s"\'<>]*',
-            r'https?%3A%2F%2F[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
-            r'imagine-public[.]x[.]ai/[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
-            r'imagine-public[.]x[.]ai/[^\s"\'<>]*(?:share-videos|download|video)[^\s"\'<>]*',
-        ]
-        for pattern in patterns:
-            for match in re.findall(pattern, normalized_html, flags=re.IGNORECASE):
-                candidate = _normalize_candidate(match)
-                if candidate:
-                    direct_candidates.append(candidate)
-
-        if download_button_present:
-            button_scoped_patterns = [
-                r'(?:https?:)?//imagine-public[.]x[.]ai/[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
-                r'imagine-public[.]x[.]ai/[^\s"\'<>]*(?:share-videos|download|video)[^\s"\'<>]*',
-            ]
-            for pattern in button_scoped_patterns:
-                for match in re.findall(pattern, normalized_html, flags=re.IGNORECASE):
-                    candidate = _normalize_candidate(match)
-                    if candidate:
-                        direct_candidates.insert(0, candidate)
-
-        page_url_parsed = urlparse(page_url)
-        page_origin = f"{page_url_parsed.scheme}://{page_url_parsed.netloc}"
-        attr_patterns = [
-            r'(?:src|href|data-src|data-url|data-video-url)=["\']([^"\']+)["\']',
-        ]
-        for pattern in attr_patterns:
-            for raw in re.findall(pattern, normalized_html, flags=re.IGNORECASE):
-                candidate = _normalize_candidate(raw)
-                if not candidate:
-                    continue
-                absolute = urljoin(page_origin, candidate)
-                direct_candidates.append(absolute)
-
-        for candidate in direct_candidates:
-            if _looks_like_public_video_url(candidate):
-                return candidate
-        return ""
-
-    def _try_public_page_download(self, variant: int, reason: str = "") -> bool:
-        page_url = ""
-        try:
-            page_url = str(self.browser.url().toString() or "").strip()
-        except Exception:
-            page_url = ""
-
-        if not page_url:
-            self._append_log(f"Variant {variant}: public-page download check skipped (no active browser URL).")
-            return False
-
-        reason_suffix = f" ({reason})" if reason else ""
-        self._append_log(
-            f"Variant {variant}: checking public page for downloadable video URL{reason_suffix}: {page_url}"
-        )
-        scraped_url = self._extract_public_video_url_from_page(page_url)
-        if not scraped_url:
-            self._append_log(f"Variant {variant}: no public downloadable video URL detected from page scrape.")
-            return False
-
-        self._append_log(
-            f"Variant {variant}: extracted public video URL via page scrape; attempting direct download."
-        )
-        return self._start_manual_direct_download(variant, scraped_url)
-
     def _complete_manual_video_download(self, video_path: Path, variant: int) -> None:
         self._clear_manual_direct_download_tracking()
         self._advance_automation_counter_tracking()
@@ -10012,6 +9903,7 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
         self.manual_download_deadline = None
+        self.manual_public_video_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -10221,6 +10113,7 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
         self.manual_download_deadline = None
+        self.manual_public_video_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
