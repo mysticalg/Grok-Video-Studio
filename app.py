@@ -6930,8 +6930,35 @@ class MainWindow(QMainWindow):
                         try { el.click(); fired = true; } catch (_) {}
                         return fired;
                     };
+                    const activateSubmitAtPoint = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return { fired: false, x: -1, y: -1 };
+                        let x = -1;
+                        let y = -1;
+                        let fired = false;
+                        try {
+                            const rect = el.getBoundingClientRect();
+                            const offsetX = Math.max(1, Math.floor(rect.width * 0.2));
+                            const offsetY = Math.max(1, Math.floor(rect.height * 0.2));
+                            x = Math.floor(rect.left + Math.min(offsetX, Math.max(1, rect.width - 1)));
+                            y = Math.floor(rect.top + Math.min(offsetY, Math.max(1, rect.height - 1)));
+                            const pointTarget = document.elementFromPoint(x, y) || el;
+                            const clickTarget = pointTarget.closest?.("button") || pointTarget;
+                            emitPointer(clickTarget, "pointerenter");
+                            emitMouse(clickTarget, "mouseenter");
+                            emitPointer(clickTarget, "pointerover");
+                            emitMouse(clickTarget, "mouseover");
+                            emitPointer(clickTarget, "pointerdown");
+                            emitMouse(clickTarget, "mousedown");
+                            emitPointer(clickTarget, "pointerup");
+                            emitMouse(clickTarget, "mouseup");
+                            emitMouse(clickTarget, "click");
+                            try { clickTarget.click(); fired = true; } catch (_) {}
+                        } catch (_) {}
+                        return { fired, x, y };
+                    };
 
-                    const listenerClick = activateSubmit(submitTarget);
+                    const coordinateClick = activateSubmitAtPoint(submitTarget);
+                    const listenerClick = coordinateClick.fired || activateSubmit(submitTarget);
 
                     let formSubmitted = false;
                     if (!listenerClick && form) {
@@ -6954,6 +6981,9 @@ class MainWindow(QMainWindow):
                         formSubmitted,
                         usedPrimarySubmit: !!primarySubmit,
                         usedRecorderTarget: !!recorderSubmitTarget,
+                        usedCoordinatePlayback: !!coordinateClick.fired,
+                        clickX: coordinateClick.x,
+                        clickY: coordinateClick.y,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -8610,8 +8640,35 @@ class MainWindow(QMainWindow):
                         try { el.click(); fired = true; } catch (_) {}
                         return fired;
                     };
+                    const activateSubmitAtPoint = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return { fired: false, x: -1, y: -1 };
+                        let x = -1;
+                        let y = -1;
+                        let fired = false;
+                        try {
+                            const rect = el.getBoundingClientRect();
+                            const offsetX = Math.max(1, Math.floor(rect.width * 0.2));
+                            const offsetY = Math.max(1, Math.floor(rect.height * 0.2));
+                            x = Math.floor(rect.left + Math.min(offsetX, Math.max(1, rect.width - 1)));
+                            y = Math.floor(rect.top + Math.min(offsetY, Math.max(1, rect.height - 1)));
+                            const pointTarget = document.elementFromPoint(x, y) || el;
+                            const clickTarget = pointTarget.closest?.("button") || pointTarget;
+                            emitPointer(clickTarget, "pointerenter");
+                            emitMouse(clickTarget, "mouseenter");
+                            emitPointer(clickTarget, "pointerover");
+                            emitMouse(clickTarget, "mouseover");
+                            emitPointer(clickTarget, "pointerdown");
+                            emitMouse(clickTarget, "mousedown");
+                            emitPointer(clickTarget, "pointerup");
+                            emitMouse(clickTarget, "mouseup");
+                            emitMouse(clickTarget, "click");
+                            try { clickTarget.click(); fired = true; } catch (_) {}
+                        } catch (_) {}
+                        return { fired, x, y };
+                    };
 
-                    const listenerClick = activateSubmit(submitTarget);
+                    const coordinateClick = activateSubmitAtPoint(submitTarget);
+                    const listenerClick = coordinateClick.fired || activateSubmit(submitTarget);
 
                     let formSubmitted = false;
                     if (!listenerClick && form) {
@@ -8633,6 +8690,9 @@ class MainWindow(QMainWindow):
                         formSubmitted,
                         usedPrimarySubmit: !!primarySubmit,
                         usedRecorderTarget: !!recorderSubmitTarget,
+                        usedCoordinatePlayback: !!coordinateClick.fired,
+                        clickX: coordinateClick.x,
+                        clickY: coordinateClick.y,
                         status: (listenerClick || formSubmitted) ? "submit-listener-sequence-dispatched" : "submit-listener-sequence-failed"
                     };
                 } catch (err) {
