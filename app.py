@@ -7705,14 +7705,10 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 "WARNING: Variant "
                                 f"{current_variant}: image pick stayed callback-empty for "
-                                f"{self.manual_image_pick_retry_count} checks; assuming pick stage already completed and advancing."
+                                f"{self.manual_image_pick_retry_count} checks; keeping pick stage active and continuing image-ready polling."
                             )
-                            self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = True
                             self.manual_image_pick_retry_count = 0
-                            self.manual_image_video_mode_retry_count = 0
-                            self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            QTimer.singleShot(1200, self._poll_for_manual_image)
                             return
                         self._append_log(
                             "WARNING: Variant "
@@ -7955,12 +7951,10 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     "WARNING: Variant "
                     f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                    f"{self.manual_image_submit_retry_count} checks; assuming submit succeeded and continuing to download polling."
+                    f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so continuing image polling instead of forcing download."
                 )
-                self.manual_image_video_submit_sent = True
                 self.manual_image_submit_retry_count = 0
-                self.pending_manual_download_type = "video"
-                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                QTimer.singleShot(2000, self._poll_for_manual_image)
                 return
 
             self._append_log(
