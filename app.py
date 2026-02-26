@@ -9067,6 +9067,27 @@ class MainWindow(QMainWindow):
             )
             self._trigger_browser_video_download(variant)
 
+        def _click_make_video_after_prompt() -> None:
+            step_script = click_option_script_template.replace('"{target_label}"', json.dumps("Make Video"))
+            step_script = step_script.replace('"{option_type}"', json.dumps("type"))
+            self._append_log(f"Variant {variant}: opening options popup to click 'Make Video' after prompt entry.")
+
+            def _after_step(step_result):
+                if not isinstance(step_result, dict) or not step_result.get("ok"):
+                    self._append_log(
+                        f"WARNING: Variant {variant}: could not confirm click for type option 'Make Video'. result={step_result!r}"
+                    )
+                self._append_log(
+                    f"Variant {variant}: 'Make Video' selection attempted; polling for download readiness without extra submit clicks."
+                )
+                self._trigger_browser_video_download(variant, allow_make_video_click=False)
+
+            def _after_open(_open_result):
+                self._append_log(f"Variant {variant}: clicking type option 'Make Video'.")
+                self.browser.page().runJavaScript(step_script, _after_step)
+
+            self.browser.page().runJavaScript(open_options_script, _after_open)
+
         def _populate_prompt_then_submit() -> None:
             self._append_log(f"Variant {variant}: entering prompt text now.")
 
@@ -9075,8 +9096,11 @@ class MainWindow(QMainWindow):
                     error_detail = result.get("error") if isinstance(result, dict) else result
                     if error_detail not in (None, "", "callback-empty"):
                         self._append_log(
-                            f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing to submit."
+                            f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
+                if continue_last_video_mode:
+                    QTimer.singleShot(1200, _click_make_video_after_prompt)
+                    return
                 QTimer.singleShot(2000, _run_flow_submit)
 
             self.browser.page().runJavaScript(script, _after_prompt_populate)
@@ -9087,10 +9111,9 @@ class MainWindow(QMainWindow):
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
                 ("ratio", selected_aspect_ratio),
-                ("type", "Make Video"),
             ]
             self._append_log(
-                f"Variant {variant}: continue-last-video mode detected; applying resolution, duration, aspect ratio, and 'Make Video' on the post page."
+                f"Variant {variant}: continue-last-video mode detected; applying resolution, duration, and aspect ratio before prompt + 'Make Video'."
             )
         else:
             option_steps = [
