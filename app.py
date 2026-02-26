@@ -9479,10 +9479,35 @@ class MainWindow(QMainWindow):
                         : null;
                     const clickX = rect ? (rect.left + rect.width / 2) : null;
                     const clickY = rect ? (rect.top + rect.height / 2) : null;
+                    const directUrlCandidatesForDownload = [];
+                    const pushDirectCandidate = (rawUrl) => {{
+                        const candidate = normalizeAbsoluteUrl(rawUrl || "");
+                        if (candidate) directUrlCandidatesForDownload.push(candidate);
+                    }};
+                    pushDirectCandidate(downloadButton.getAttribute("href"));
+                    pushDirectCandidate(downloadButton.getAttribute("data-url"));
+                    pushDirectCandidate(downloadButton.getAttribute("data-href"));
+                    pushDirectCandidate(downloadButton.getAttribute("data-src"));
+                    const buttonAnchor = downloadButton.closest("a[href]");
+                    if (buttonAnchor) pushDirectCandidate(buttonAnchor.getAttribute("href"));
+                    for (const mediaEl of document.querySelectorAll("video[src], source[src], [data-video-url], [data-url], [data-src]")) {{
+                        pushDirectCandidate(mediaEl.getAttribute?.("src"));
+                        pushDirectCandidate(mediaEl.getAttribute?.("data-video-url"));
+                        pushDirectCandidate(mediaEl.getAttribute?.("data-url"));
+                        pushDirectCandidate(mediaEl.getAttribute?.("data-src"));
+                    }}
+                    try {{
+                        const resourceEntries = performance.getEntriesByType("resource") || [];
+                        for (const entry of resourceEntries.slice(-120)) {{
+                            pushDirectCandidate(entry && entry.name ? String(entry.name) : "");
+                        }}
+                    }} catch (_) {{}}
+                    const directUrl = directUrlCandidatesForDownload.find((candidate) => isDirectVideoUrl(candidate)) || "";
                     return {{
                         status: emulateClick(downloadButton) ? "download-clicked" : "download-visible",
                         clickX,
                         clickY,
+                        directUrl,
                     }};
                 }}
 
@@ -9566,6 +9591,16 @@ class MainWindow(QMainWindow):
             if status == "download-clicked":
                 click_x = result.get("clickX")
                 click_y = result.get("clickY")
+                direct_url = (result.get("directUrl") or "").strip()
+                if not self.manual_download_request_pending and direct_url:
+                    self._append_log(
+                        f"Variant {current_variant}: resolved direct video URL while clicking Download; starting automatic direct download fallback."
+                    )
+                    if self._start_manual_direct_download(current_variant, direct_url):
+                        self.manual_download_click_sent = True
+                        self.manual_download_in_progress = True
+                        self.manual_download_poll_timer.start(1000)
+                        return
                 if not self.manual_download_click_sent:
                     self._append_log(f"Variant {current_variant} appears ready; clicked in-page Download button.")
                     self.manual_download_click_sent = True
