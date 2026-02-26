@@ -7048,7 +7048,12 @@ class MainWindow(QMainWindow):
                             "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
                             + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                         );
-                        const onPostView = /[/]imagine[/]post[/]/i.test((location.href || ""));
+                        const path = String((location && location.pathname) || "");
+                        const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                        const postId = postMatch ? String(postMatch[1] || "") : "";
+                        const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                            && !/^placeholder-/i.test(postId);
+                        const onPostView = Boolean(validPostId);
                         const detected = Boolean(state.token === token && state.detected);
                         return {{
                             ok: true,
@@ -7056,6 +7061,8 @@ class MainWindow(QMainWindow):
                             stateToken: state.token || "",
                             customizePromptVisible,
                             onPostView,
+                            postId,
+                            validPostId,
                         }};
                     }} catch (err) {{
                         return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
@@ -7440,13 +7447,23 @@ class MainWindow(QMainWindow):
                         return !listItem.querySelector("div.invisible");
                     }};
 
-                    const onPostView = /[/]imagine[/]post[/]/i.test((location.pathname || "") + (location.hash || ""));
+                    const path = String((location && location.pathname) || "");
+                    const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                    const postId = postMatch ? String(postMatch[1] || "") : "";
+                    const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                        && !/^placeholder-/i.test(postId);
                     const customizePromptReady = !!document.querySelector(
                         "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
                         + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                     );
                     if (customizePromptReady || onPostView) {{
-                        return {{ ok: true, status: "generated-image-clicked", detectedViaUrl: onPostView, path: (location.pathname || "") }};
+                        return {{
+                            ok: true,
+                            status: "generated-image-clicked",
+                            detectedViaUrl: onPostView,
+                            path,
+                            postId,
+                        }};
                     }}
 
                     if (window.__grokManualPickObserverResult) {{
@@ -7937,8 +7954,13 @@ class MainWindow(QMainWindow):
                                     .find((btn) => !!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)));
                                 const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
                                     .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
-                                const path = String((window.location && window.location.pathname) || "").toLowerCase();
-                                const onPostView = path.includes("/imagine/post/");
+                                const pathRaw = String((window.location && window.location.pathname) || "");
+                                const path = pathRaw.toLowerCase();
+                                const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                                const postId = postMatch ? String(postMatch[1] || "") : "";
+                                const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                                    && !/^placeholder-/i.test(postId);
+                                const onPostView = Boolean(validPostId);
                                 const ready = customizePromptVisible || onPostView || editImageVisible || makeVideoButtonVisible;
                                 return {
                                     ready,
@@ -7946,6 +7968,8 @@ class MainWindow(QMainWindow):
                                     makeVideoButtonVisible,
                                     editImageVisible,
                                     onPostView,
+                                    postId,
+                                    validPostId,
                                     path,
                                 };
                             } catch (_) {
