@@ -888,6 +888,7 @@ class AISocialMetadata:
 class PromptGenerationWorker(QThread):
     finished_payload = Signal(dict)
     failed = Signal(str)
+    raw_response = Signal(str)
 
     def __init__(self, source: str, concept: str, instruction_template: str, system: str, user_template: str, caller):
         super().__init__()
@@ -914,6 +915,7 @@ class PromptGenerationWorker(QThread):
                 user = f"{user_template}\nConcept instruction: {instruction}".strip()
 
             raw = self.caller._call_selected_ai(system, user)
+            self.raw_response.emit(f"Primary AI response:\n{raw}")
             try:
                 parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(raw))
             except Exception as parse_exc:
@@ -928,6 +930,7 @@ class PromptGenerationWorker(QThread):
                     f"Repair reason: {parse_exc}"
                 )
                 repaired_raw = self.caller._call_selected_ai(repair_system, repair_user)
+                self.raw_response.emit(f"Repair AI response:\n{repaired_raw}")
                 parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(repaired_raw))
 
             self.finished_payload.emit(parsed)
@@ -6439,6 +6442,7 @@ class MainWindow(QMainWindow):
         )
         worker.finished_payload.connect(self._on_prompt_generation_success)
         worker.failed.connect(self._on_prompt_generation_failed)
+        worker.raw_response.connect(self._on_prompt_generation_raw_response)
         worker.finished.connect(self._on_prompt_generation_finished)
         self.prompt_generation_worker = worker
         worker.start()
@@ -6465,6 +6469,11 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
+
+    def _on_prompt_generation_raw_response(self, text: str) -> None:
+        self._append_log("----- Raw AI response begin -----")
+        self._append_log(text)
+        self._append_log("----- Raw AI response end -----")
 
     def _on_prompt_generation_failed(self, message: str) -> None:
         self._set_prompt_thinking_indicator(False)
