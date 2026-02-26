@@ -2239,6 +2239,8 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token = 0
+        self.manual_post_submit_idle_until = 0.0
+        self.manual_post_submit_idle_token = -1
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
@@ -6191,6 +6193,8 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
+        self.manual_post_submit_idle_until = 0.0
+        self.manual_post_submit_idle_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
@@ -6902,10 +6906,17 @@ class MainWindow(QMainWindow):
         def _after_submit(result):
             if isinstance(result, dict) and result.get("ok"):
                 #self.show_browser_page()
-                self._append_log(
-                    f"Submitted manual image variant {variant} (attempt {attempts}); "
-                    "waiting for first rendered image, then opening it for download."
-                )
+                idle_ms = self._set_manual_post_submit_idle_window()
+                if idle_ms > 0:
+                    self._append_log(
+                        f"Submitted manual image variant {variant} (attempt {attempts}); "
+                        f"pausing automation for {idle_ms / 1000:.1f}s to let page render naturally."
+                    )
+                else:
+                    self._append_log(
+                        f"Submitted manual image variant {variant} (attempt {attempts}); "
+                        "waiting for first rendered image, then opening it for download."
+                    )
                 QTimer.singleShot(7000, self._poll_for_manual_image)
                 return
 
@@ -6922,10 +6933,17 @@ class MainWindow(QMainWindow):
             # Some Grok navigations can clear the JS callback value; treat that as submitted.
             if result in (None, ""):
                 #self.show_browser_page()
-                self._append_log(
-                    f"Submitted manual image variant {variant} (attempt {attempts}); "
-                    "native-submit callback returned empty result after page activity; continuing to image polling."
-                )
+                idle_ms = self._set_manual_post_submit_idle_window()
+                if idle_ms > 0:
+                    self._append_log(
+                        f"Submitted manual image variant {variant} (attempt {attempts}); "
+                        f"native-submit callback returned empty result; pausing automation for {idle_ms / 1000:.1f}s before polling."
+                    )
+                else:
+                    self._append_log(
+                        f"Submitted manual image variant {variant} (attempt {attempts}); "
+                        "native-submit callback returned empty result after page activity; continuing to image polling."
+                    )
                 QTimer.singleShot(7000, self._poll_for_manual_image)
                 return
 
@@ -7018,6 +7036,27 @@ class MainWindow(QMainWindow):
 
         self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
 
+    def _set_manual_post_submit_idle_window(self) -> int:
+        idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 12000))
+        if idle_ms <= 0:
+            self.manual_post_submit_idle_until = 0.0
+            self.manual_post_submit_idle_token = -1
+            return 0
+        self.manual_post_submit_idle_until = time.time() + (idle_ms / 1000.0)
+        self.manual_post_submit_idle_token = self.manual_image_submit_token
+        return idle_ms
+
+    def _should_pause_manual_image_poll(self) -> tuple[bool, int]:
+        if self.manual_post_submit_idle_until <= 0:
+            return False, 0
+        remaining_s = self.manual_post_submit_idle_until - time.time()
+        if remaining_s <= 0:
+            self.manual_post_submit_idle_until = 0.0
+            self.manual_post_submit_idle_token = -1
+            return False, 0
+        remaining_ms = max(250, int(remaining_s * 1000))
+        return True, remaining_ms
+
     def _poll_for_manual_image(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -7025,6 +7064,16 @@ class MainWindow(QMainWindow):
 
         variant = self.pending_manual_variant_for_download
         if variant is None or self.pending_manual_download_type != "image":
+            return
+
+        should_pause, remaining_ms = self._should_pause_manual_image_poll()
+        if should_pause:
+            if self.manual_post_submit_idle_token == self.manual_image_submit_token:
+                self._append_log(
+                    f"Variant {variant}: submit accepted; releasing page activity for {remaining_ms / 1000:.1f}s before next automation check."
+                )
+                self.manual_post_submit_idle_token = -1
+            QTimer.singleShot(min(remaining_ms, 1500), self._poll_for_manual_image)
             return
 
         prompt = self.pending_manual_image_prompt or ""
@@ -8847,6 +8896,8 @@ class MainWindow(QMainWindow):
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
+        self.manual_post_submit_idle_until = 0.0
+        self.manual_post_submit_idle_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -9019,6 +9070,8 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
+        self.manual_post_submit_idle_until = 0.0
+        self.manual_post_submit_idle_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
