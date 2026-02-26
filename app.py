@@ -6958,27 +6958,14 @@ class MainWindow(QMainWindow):
                     };
 
                     const coordinateClick = activateSubmitAtPoint(submitTarget);
-                    const listenerClick = coordinateClick.fired || activateSubmit(submitTarget);
-
-                    let formSubmitted = false;
-                    if (!listenerClick && form) {
-                        try {
-                            if (typeof form.requestSubmit === "function") {
-                                form.requestSubmit(submitTarget || primarySubmit || undefined);
-                            } else {
-                                const ev = new Event("submit", { bubbles: true, cancelable: true });
-                                form.dispatchEvent(ev);
-                            }
-                            formSubmitted = true;
-                        } catch (_) {}
-                    }
 
                     return {
-                        ok: listenerClick || formSubmitted,
-                        waiting: !(listenerClick || formSubmitted),
-                        status: (listenerClick || formSubmitted) ? "submit-listener-sequence-dispatched" : "submit-listener-sequence-failed",
-                        listenerClick,
-                        formSubmitted,
+                        ok: !!coordinateClick.fired,
+                        submitted: !!coordinateClick.fired,
+                        waiting: !coordinateClick.fired,
+                        status: coordinateClick.fired ? "submit-coordinate-click-dispatched" : "submit-coordinate-click-failed",
+                        listenerClick: !!coordinateClick.fired,
+                        formSubmitted: false,
                         usedPrimarySubmit: !!primarySubmit,
                         usedRecorderTarget: !!recorderSubmitTarget,
                         usedCoordinatePlayback: !!coordinateClick.fired,
@@ -7177,7 +7164,7 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(manual_handoff_poll_ms, _poll_for_manual_submit_handoff)
                     return
                 self._append_log(
-                    f"Manual image variant {variant}: could not arm manual submit handoff ({result!r}); running automated listener sequence."
+                    f"Manual image variant {variant}: could not arm manual submit handoff ({result!r}); running automated coordinate-click sequence."
                 )
                 self.browser.page().runJavaScript(submit_script, _after_submit)
 
@@ -7195,6 +7182,11 @@ class MainWindow(QMainWindow):
             self.browser.page().runJavaScript(dom_refresh_script, _after_dom_refresh)
 
         def _after_submit(result):
+            if isinstance(result, dict):
+                self._append_log(
+                    f"Manual image variant {variant}: submit attempt result status={result.get('status')} recorder={bool(result.get('usedRecorderTarget'))} coord={bool(result.get('usedCoordinatePlayback'))} x={result.get('clickX')} y={result.get('clickY')}"
+                )
+
             if isinstance(result, dict) and result.get("ok"):
                 #self.show_browser_page()
                 idle_ms = self._set_manual_post_submit_idle_window()
@@ -7214,31 +7206,24 @@ class MainWindow(QMainWindow):
             if isinstance(result, dict) and result.get("waiting"):
                 if submit_attempts < max_submit_attempts:
                     self._append_log(
-                        f"Manual image variant {variant}: submit target not ready (attempt {submit_attempts}); retrying submit listener sequence..."
+                        f"Manual image variant {variant}: submit target not ready (attempt {submit_attempts}); retrying coordinate click only..."
                     )
                     QTimer.singleShot(500, _run_submit_attempt)
                     return
-                _retry_variant(f"submit target stayed not-ready for listener sequence: {result!r}")
+                _retry_variant(f"submit target stayed not-ready for coordinate click: {result!r}")
                 return
 
-            # Some Grok navigations can clear the JS callback value; treat that as submitted.
             if result in (None, ""):
-                #self.show_browser_page()
-                idle_ms = self._set_manual_post_submit_idle_window()
-                if idle_ms > 0:
+                if submit_attempts < max_submit_attempts:
                     self._append_log(
-                        f"Submitted manual image variant {variant} (attempt {attempts}); "
-                        f"listener-sequence callback returned empty result; pausing automation for {idle_ms / 1000:.1f}s before polling."
+                        f"Manual image variant {variant}: submit callback returned empty result (attempt {submit_attempts}); retrying coordinate click only..."
                     )
-                else:
-                    self._append_log(
-                        f"Submitted manual image variant {variant} (attempt {attempts}); "
-                        "listener-sequence callback returned empty result after page activity; continuing to image polling."
-                    )
-                QTimer.singleShot(7000, self._poll_for_manual_image)
+                    QTimer.singleShot(500, _run_submit_attempt)
+                    return
+                _retry_variant(f"submit callback stayed empty after coordinate-click attempts: {result!r}")
                 return
 
-            _retry_variant(f"submit failed: {result!r}")
+            _retry_variant(f"submit failed (coordinate click only): {result!r}")
 
         def _after_set_mode(result):
             if result in (None, ""):
@@ -8668,32 +8653,19 @@ class MainWindow(QMainWindow):
                     };
 
                     const coordinateClick = activateSubmitAtPoint(submitTarget);
-                    const listenerClick = coordinateClick.fired || activateSubmit(submitTarget);
-
-                    let formSubmitted = false;
-                    if (!listenerClick && form) {
-                        try {
-                            if (typeof form.requestSubmit === "function") {
-                                form.requestSubmit(submitTarget || primarySubmit || undefined);
-                            } else {
-                                const ev = new Event("submit", { bubbles: true, cancelable: true });
-                                form.dispatchEvent(ev);
-                            }
-                            formSubmitted = true;
-                        } catch (_) {}
-                    }
 
                     return {
-                        ok: listenerClick || formSubmitted,
-                        submitted: listenerClick || formSubmitted,
-                        listenerClick,
-                        formSubmitted,
+                        ok: !!coordinateClick.fired,
+                        submitted: !!coordinateClick.fired,
+                        waiting: !coordinateClick.fired,
+                        listenerClick: !!coordinateClick.fired,
+                        formSubmitted: false,
                         usedPrimarySubmit: !!primarySubmit,
                         usedRecorderTarget: !!recorderSubmitTarget,
                         usedCoordinatePlayback: !!coordinateClick.fired,
                         clickX: coordinateClick.x,
                         clickY: coordinateClick.y,
-                        status: (listenerClick || formSubmitted) ? "submit-listener-sequence-dispatched" : "submit-listener-sequence-failed"
+                        status: coordinateClick.fired ? "submit-coordinate-click-dispatched" : "submit-coordinate-click-failed"
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
