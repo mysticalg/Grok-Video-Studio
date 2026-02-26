@@ -267,8 +267,87 @@ def _parse_query_preserving_plus(query: str) -> dict[str, str]:
             result[decoded_key] = decoded_value
     return result
 
+AI_SOCIAL_METADATA_REQUIRED_KEYS = (
+    "manual_prompt",
+    "title",
+    "medium_title",
+    "tiktok_subheading",
+    "description",
+    "x_post",
+    "hashtags",
+    "category",
+)
+
+
+def _extract_first_balanced_json_object(text: str) -> str:
+    in_string = False
+    escape = False
+    depth = 0
+    start_index = -1
+    for idx, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == "{":
+            if depth == 0:
+                start_index = idx
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start_index != -1:
+                return text[start_index : idx + 1]
+    return ""
+
+
+def _normalize_ai_social_metadata_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("AI response payload must be a JSON object.")
+
+    nested_candidate = payload.get("json")
+    if isinstance(nested_candidate, dict):
+        payload = nested_candidate
+
+    missing = [key for key in AI_SOCIAL_METADATA_REQUIRED_KEYS if key not in payload]
+    if missing:
+        raise ValueError(f"AI response missing required keys: {', '.join(missing)}")
+
+    manual_prompt = str(payload.get("manual_prompt", "")).strip()
+    if not manual_prompt:
+        raise ValueError("AI response included JSON but manual_prompt was empty.")
+
+    hashtags_raw = payload.get("hashtags", [])
+    if isinstance(hashtags_raw, str):
+        hashtags = [tag.strip().lstrip("#") for tag in re.split(r"[\s,]+", hashtags_raw) if tag.strip()]
+    elif isinstance(hashtags_raw, list):
+        hashtags = [str(tag).strip().lstrip("#") for tag in hashtags_raw if str(tag).strip()]
+    else:
+        hashtags = []
+
+    return {
+        "manual_prompt": manual_prompt,
+        "title": str(payload.get("title", "AI Generated Video")).strip() or "AI Generated Video",
+        "medium_title": str(payload.get("medium_title", payload.get("title", "AI Generated Video Clip"))).strip()
+        or "AI Generated Video Clip",
+        "tiktok_subheading": str(payload.get("tiktok_subheading", "Swipe for more AI visuals.")).strip()
+        or "Swipe for more AI visuals.",
+        "description": str(payload.get("description", "")).strip(),
+        "x_post": str(payload.get("x_post", "")).strip(),
+        "hashtags": hashtags or ["grok", "ai", "generated-video"],
+        "category": str(payload.get("category", "22")).strip() or "22",
+    }
+
 def _parse_json_object_from_text(raw: str) -> dict:
-    """Parse a JSON object from a model response that may include wrappers."""
+    """Parse a JSON object from a model response that may include wrappers or trailing chatter."""
     text = (raw or "").strip()
     if not text:
         raise json.JSONDecodeError("Empty AI response", raw, 0)
@@ -281,10 +360,25 @@ def _parse_json_object_from_text(raw: str) -> dict:
     except json.JSONDecodeError:
         pass
 
+    first_brace = text.find("{")
+    if first_brace != -1:
+        try:
+            parsed, _ = decoder.raw_decode(text, first_brace)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
     fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
     if fence_match:
         candidate = fence_match.group(1)
         parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+
+    balanced_candidate = _extract_first_balanced_json_object(text)
+    if balanced_candidate:
+        parsed = json.loads(balanced_candidate)
         if isinstance(parsed, dict):
             return parsed
 
@@ -820,7 +914,22 @@ class PromptGenerationWorker(QThread):
                 user = f"{user_template}\nConcept instruction: {instruction}".strip()
 
             raw = self.caller._call_selected_ai(system, user)
-            parsed = _parse_json_object_from_text(raw)
+            try:
+                parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(raw))
+            except Exception as parse_exc:
+                repair_system = (
+                    "You repair malformed or wrapped model output into strict JSON. Return JSON only with no markdown."
+                )
+                repair_user = (
+                    "Convert the following response into one strict JSON object with keys: "
+                    "manual_prompt, title, medium_title, tiktok_subheading, description, x_post, hashtags, category. "
+                    "Do not include any text before or after JSON.\n\n"
+                    f"Original response:\n{raw}\n\n"
+                    f"Repair reason: {parse_exc}"
+                )
+                repaired_raw = self.caller._call_selected_ai(repair_system, repair_user)
+                parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(repaired_raw))
+
             self.finished_payload.emit(parsed)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -6339,19 +6448,14 @@ class MainWindow(QMainWindow):
             manual_prompt = str(parsed.get("manual_prompt", "")).strip()
             if not manual_prompt:
                 raise RuntimeError("AI response did not include a manual_prompt.")
-
-            hashtags = parsed.get("hashtags", [])
-            cleaned_hashtags = [str(tag).strip().lstrip("#") for tag in hashtags if str(tag).strip()]
             self.ai_social_metadata = AISocialMetadata(
-                title=str(parsed.get("title", "AI Generated Video")).strip() or "AI Generated Video",
-                medium_title=str(parsed.get("medium_title", parsed.get("title", "AI Generated Video Clip"))).strip()
-                or "AI Generated Video Clip",
-                tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")).strip()
-                or "Swipe for more AI visuals.",
-                description=str(parsed.get("description", "")).strip(),
-                x_post=str(parsed.get("x_post", "")).strip(),
-                hashtags=cleaned_hashtags or ["grok", "ai", "generated-video"],
-                category=str(parsed.get("category", "22")).strip() or "22",
+                title=str(parsed.get("title", "AI Generated Video")),
+                medium_title=str(parsed.get("medium_title", "AI Generated Video Clip")),
+                tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")),
+                description=str(parsed.get("description", "")),
+                x_post=str(parsed.get("x_post", "")),
+                hashtags=list(parsed.get("hashtags", ["grok", "ai", "generated-video"])),
+                category=str(parsed.get("category", "22")),
             )
             self.manual_prompt.setPlainText(manual_prompt)
             self._append_log(
