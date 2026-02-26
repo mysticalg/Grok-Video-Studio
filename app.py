@@ -7676,6 +7676,15 @@ class MainWindow(QMainWindow):
                     const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
                     const titleOf = (el) => (el?.getAttribute?.("title") || "").replace(/\\s+/g, " ").trim();
                     const descriptorOf = (el) => `${{textOf(el)}} ${{ariaOf(el)}} ${{titleOf(el)}}`.trim();
+                    const isSidebarControl = (el) => {{
+                        if (!el) return false;
+                        const label = ariaOf(el).toLowerCase();
+                        if (/^create\s+new\s+project$/.test(label)) return true;
+                        if (el.matches?.("[data-sidebar], [data-sidebar='menu-button']")) return true;
+                        if (el.closest?.("[data-sidebar], [data-sidebar='menu-button']")) return true;
+                        if (el.closest?.("aside")) return true;
+                        return false;
+                    }};
                     const isMakeVideoItem = (el) => /\\bmake\\s+video\\b/i.test(descriptorOf(el))
                         || /animate\\s+this\\s+image\\s+into\\s+a\\s+video/i.test(descriptorOf(el));
                     const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(descriptorOf(el));
@@ -7714,7 +7723,7 @@ class MainWindow(QMainWindow):
                             ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
                             ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
                             ...document.querySelectorAll("button, [role='button']"),
-                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el));
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el) && !isSidebarControl(el));
 
                         const likelyTriggers = triggerCandidates.filter((el) => {{
                             const descriptor = descriptorOf(el);
