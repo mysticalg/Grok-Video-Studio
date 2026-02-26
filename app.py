@@ -199,6 +199,19 @@ def _looks_like_public_video_url(candidate: str) -> bool:
     return bool(re.search(r"(^|[?&])(?:type|kind)=video(?:$|[&#])", lowered))
 
 
+def _ensure_public_download_query(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        return raw
+    query = _parse_query_preserving_plus(parsed.query)
+    query["dl"] = "1"
+    rebuilt = urlencode(query, doseq=False)
+    return parsed._replace(query=rebuilt).geturl()
+
+
 def _normalize_version_key(value: str) -> tuple[int, ...]:
     cleaned = str(value or "").strip().lower().lstrip("v")
     if not cleaned:
@@ -9601,7 +9614,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 active_url = ""
             if active_url and _looks_like_public_video_url(active_url):
-                self.manual_public_video_url = active_url
+                self.manual_public_video_url = _ensure_public_download_query(active_url)
 
             if not isinstance(result, dict):
                 if self.manual_public_video_url:
@@ -9697,7 +9710,7 @@ class MainWindow(QMainWindow):
                 )
 
                 if direct_url:
-                    self.manual_public_video_url = direct_url
+                    self.manual_public_video_url = _ensure_public_download_query(direct_url)
                     self._append_log(
                         f"Variant {current_variant}: found direct video URL from Download control; downloading without browser click."
                     )
@@ -9735,7 +9748,7 @@ class MainWindow(QMainWindow):
 
             if status == "direct-url-ready":
                 self.manual_download_attempt_count += 1
-                self.manual_public_video_url = src
+                self.manual_public_video_url = _ensure_public_download_query(src)
                 self._append_log(
                     f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL detection."
                 )
@@ -9752,7 +9765,7 @@ class MainWindow(QMainWindow):
 
             if not self.manual_download_click_sent:
                 self.manual_download_attempt_count += 1
-                self.manual_public_video_url = src
+                self.manual_public_video_url = _ensure_public_download_query(src)
                 self._append_log(
                     f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via video source URL direct download (manual browser download bypass enabled)."
                 )
@@ -9769,8 +9782,11 @@ class MainWindow(QMainWindow):
             self.download_dir.mkdir(parents=True, exist_ok=True)
             filename = self._build_session_download_filename("video", variant, "mp4")
             output_path = self.download_dir / filename
-            self._append_log(f"Variant {variant}: downloading direct video URL to {output_path.name}.")
-            download_path = self._download_video_from_public_url(source_url, output_path)
+            final_url = _ensure_public_download_query(source_url)
+            self._append_log(
+                f"Variant {variant}: downloading direct video URL to {output_path.name} using wget-style public URL polling ({final_url})."
+            )
+            download_path = self._download_video_from_public_url(final_url, output_path)
         except PublicVideoNotReadyError as exc:
             self._append_log(f"Variant {variant}: public video URL exists but is not ready yet ({exc}); will retry.")
             self.manual_download_click_sent = False
