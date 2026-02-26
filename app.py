@@ -9803,7 +9803,7 @@ class MainWindow(QMainWindow):
             output_path = self.download_dir / filename
             final_url = _ensure_public_download_query(source_url)
             self._append_log(
-                f"Variant {variant}: downloading direct video URL to {output_path.name} using wget-style public URL polling ({final_url})."
+                f"Variant {variant}: downloading direct video URL to {output_path.name} using curl-style public URL polling ({final_url})."
             )
             download_path = self._download_video_from_public_url(final_url, output_path)
         except PublicVideoNotReadyError as exc:
@@ -9845,10 +9845,11 @@ class MainWindow(QMainWindow):
         head_headers = {
             "Cache-Control": "no-cache, no-store, max-age=0",
             "Pragma": "no-cache",
+            "User-Agent": os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
+            "Referer": "https://grok.com/",
         }
-        head_params = {"_dl_probe_ts": str(int(time.time() * 1000))}
         try:
-            with requests.get(source_url, timeout=20, headers=head_headers, params=head_params) as probe:
+            with requests.get(source_url, timeout=20, headers=head_headers) as probe:
                 if probe.status_code >= 400:
                     _raise_if_not_ready(probe.text)
                     probe.raise_for_status()
@@ -9861,6 +9862,46 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        curl_command = shutil.which("curl")
+        if curl_command:
+            result = subprocess.run(
+                [
+                    curl_command,
+                    "--silent",
+                    "--show-error",
+                    "--location",
+                    "--retry",
+                    "3",
+                    "--retry-delay",
+                    "1",
+                    "--connect-timeout",
+                    "20",
+                    "--max-time",
+                    "240",
+                    "--user-agent",
+                    head_headers["User-Agent"],
+                    "--referer",
+                    head_headers["Referer"],
+                    "--output",
+                    str(output_path),
+                    source_url,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                _raise_if_not_ready(stderr)
+                raise RuntimeError(stderr or f"curl failed with exit code {result.returncode}")
+            if output_path.exists() and output_path.stat().st_size < 32_768:
+                try:
+                    sample = output_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    sample = ""
+                _raise_if_not_ready(sample)
+            return output_path
+
         command = shutil.which("wget")
         if command:
             result = subprocess.run(
@@ -9869,6 +9910,10 @@ class MainWindow(QMainWindow):
                     "--quiet",
                     "--tries=3",
                     "--timeout=60",
+                    "--user-agent",
+                    head_headers["User-Agent"],
+                    "--referer",
+                    head_headers["Referer"],
                     "--output-document",
                     str(output_path),
                     source_url,
@@ -9889,7 +9934,7 @@ class MainWindow(QMainWindow):
                 _raise_if_not_ready(sample)
             return output_path
 
-        with requests.get(source_url, stream=True, timeout=240, headers=head_headers, params=head_params) as response:
+        with requests.get(source_url, stream=True, timeout=240, headers=head_headers) as response:
             if response.status_code >= 400:
                 _raise_if_not_ready(response.text)
             response.raise_for_status()
