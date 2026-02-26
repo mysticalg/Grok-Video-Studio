@@ -9730,12 +9730,21 @@ class MainWindow(QMainWindow):
                             return nestedClicked;
                         };
 
-                        const menuState = String(candidate.getAttribute("data-state") || "").trim().toLowerCase();
-                        if (menuState === "closed") {
-                            const nestedClicked = tryClickNestedDownloadTarget();
-                            if (nestedClicked) {
-                                clicked = true;
-                            } else if (clicked) {
+                        const menuStateBeforeNestedCheck = String(candidate.getAttribute("data-state") || "").trim().toLowerCase();
+                        const hasMenuSemantics = (
+                            candidate.getAttribute("aria-haspopup") === "menu"
+                            || candidate.getAttribute("aria-expanded") !== null
+                            || candidate.hasAttribute("data-state")
+                        );
+                        const nestedClicked = tryClickNestedDownloadTarget();
+                        if (nestedClicked) {
+                            clicked = true;
+                            menuOpenOnly = false;
+                        } else {
+                            const menuStateAfterNestedCheck = String(candidate.getAttribute("data-state") || "").trim().toLowerCase();
+                            const menuLikelyOpen = menuStateAfterNestedCheck === "open" || menuStateBeforeNestedCheck === "open";
+                            const menuLikelyTriggerOnly = menuStateBeforeNestedCheck === "closed" || hasMenuSemantics;
+                            if ((menuLikelyOpen || menuLikelyTriggerOnly) && clicked) {
                                 menuOpenOnly = true;
                             }
                         }
