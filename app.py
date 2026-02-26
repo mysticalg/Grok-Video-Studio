@@ -136,6 +136,11 @@ DEFAULT_MANUAL_PROMPT_TEXT = (
 )
 GROK_IMAGINE_URL = "https://grok.com/imagine"
 SORA_DRAFTS_URL = "https://sora.chatgpt.com/drafts"
+DEFAULT_EMBEDDED_CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
 
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
@@ -2239,6 +2244,8 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token = 0
+        self.manual_post_submit_idle_until = 0.0
+        self.manual_post_submit_idle_token = -1
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
@@ -2272,7 +2279,7 @@ class MainWindow(QMainWindow):
         self.custom_music_file: Path | None = None
         self.last_update_prompt_ts = 0
         self.cdp_enabled = False
-        self.external_ai_browser_only = os.getenv("GROK_EXTERNAL_AI_BROWSER_ONLY", "1").strip().lower() not in {"0", "false", "no"}
+        self.external_ai_browser_only = os.getenv("GROK_EXTERNAL_AI_BROWSER_ONLY", "0").strip().lower() not in {"0", "false", "no"}
         self.browser_tab_enabled = {
             "Grok": True,
             "Sora": True,
@@ -2286,6 +2293,7 @@ class MainWindow(QMainWindow):
             "AIFlowTrainer": True,
         }
         self.browser_zoom_factor = self.DEFAULT_BROWSER_ZOOM_FACTOR
+        self._pending_log_messages: list[str] = []
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
             medium_title="AI Generated Video Clip",
@@ -2753,6 +2761,10 @@ class MainWindow(QMainWindow):
             browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
 
+        embedded_ua = os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT
+        browser_profile.setHttpUserAgent(embedded_ua)
+        self._append_log(f"Embedded browser user-agent set to: {embedded_ua}")
+
         for embedded_browser in (self.grok_browser_view, self.sora_browser):
             browser_settings = embedded_browser.settings()
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
@@ -2785,6 +2797,10 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(120)
         log_layout.addWidget(self.log)
+        if self._pending_log_messages:
+            for pending_entry in self._pending_log_messages:
+                self.log.appendPlainText(pending_entry)
+            self._pending_log_messages.clear()
 
         log_actions_layout = QHBoxLayout()
         log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
@@ -5123,7 +5139,11 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log.appendPlainText(f"[{timestamp}] {text}")
+        entry = f"[{timestamp}] {text}"
+        if hasattr(self, "log") and self.log is not None:
+            self.log.appendPlainText(entry)
+            return
+        self._pending_log_messages.append(entry)
 
     def clear_activity_log(self) -> None:
         self.log.clear()
@@ -6182,6 +6202,8 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
+        self.manual_post_submit_idle_until = 0.0
+        self.manual_post_submit_idle_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
@@ -6809,54 +6831,146 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const common = { bubbles: true, cancelable: true, composed: true };
-                    const emulateClick = (el) => {
-                        if (!el || !isVisible(el) || el.disabled) return false;
-                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                        el.dispatchEvent(new MouseEvent("mousedown", common));
-                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
-                        el.dispatchEvent(new MouseEvent("mouseup", common));
-                        el.dispatchEvent(new MouseEvent("click", common));
-                        return true;
+                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const isMenuToggle = (el) => {
+                        if (!el) return false;
+                        const aria = clean(el.getAttribute("aria-label")).toLowerCase();
+                        const text = clean(el.textContent).toLowerCase();
+                        const popup = clean(el.getAttribute("aria-haspopup")).toLowerCase();
+                        return popup === "menu" || popup === "listbox" || /settings/.test(`${aria} ${text}`);
                     };
 
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]");
-                    const submitSelectors = [
-                        "button[type='submit'][aria-label='Submit']",
-                        "button[aria-label='Submit'][type='submit']",
-                        "button[type='submit']",
-                        "button[aria-label*='submit' i]",
-                        "[role='button'][aria-label*='submit' i]"
-                    ];
-
-                    const candidates = [];
-                    const collect = (root) => {
-                        if (!root || typeof root.querySelectorAll !== "function") return;
-                        submitSelectors.forEach((selector) => {
-                            const matches = root.querySelectorAll(selector);
-                            for (let i = 0; i < matches.length; i += 1) candidates.push(matches[i]);
-                        });
-                    };
-
-                    const composerRoot = (promptInput && typeof promptInput.closest === "function")
-                        ? (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section") || promptInput.parentElement)
-                        : null;
-                    collect(composerRoot);
-                    collect(document);
-
-                    const submitButton = [...new Set(candidates)].find((el) => isVisible(el));
-                    if (!submitButton) return { ok: false, error: "Submit button not found" };
-                    if (submitButton.disabled) {
-                        return { ok: false, waiting: true, status: "submit-disabled" };
+                    if (!promptInput || !isVisible(promptInput)) {
+                        return { ok: false, waiting: true, status: "prompt-not-ready" };
                     }
 
-                    const clicked = emulateClick(submitButton);
+                    const submitButtons = [
+                        ...document.querySelectorAll("button[aria-label='Submit']"),
+                        ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                        ...document.querySelectorAll("button[type='submit']"),
+                        ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                    ]
+                        .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                        .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
+                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
+                        || submitButtons[0]
+                        || null;
+
+                    const recorderSelectors = [
+                        "button[aria-label='Submit']",
+                        "main [aria-label='Submit']",
+                        "button.group svg",
+                        "button[type='submit'] svg",
+                    ];
+                    const recorderXPath = "//*[@data-testid='drop-ui']//form//button[2]//svg";
+                    const firstVisible = (list) => list.find((el) => isVisible(el) && !el.disabled && !isMenuToggle(el)) || null;
+                    const findRecorderSubmitTarget = () => {
+                        const cssNodes = recorderSelectors
+                            .flatMap((selector) => [...document.querySelectorAll(selector)])
+                            .filter((el, idx, arr) => arr.indexOf(el) === idx);
+                        const cssTarget = firstVisible(cssNodes);
+                        if (cssTarget) return cssTarget.closest("button") || cssTarget;
+
+                        try {
+                            const xpathResult = document.evaluate(recorderXPath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                            const node = xpathResult && xpathResult.singleNodeValue;
+                            if (node && isVisible(node)) return node.closest("button") || node;
+                        } catch (_) {}
+                        return null;
+                    };
+                    const recorderSubmitTarget = findRecorderSubmitTarget();
+                    try { promptInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
+
+                    const submitTarget = recorderSubmitTarget || primarySubmit;
+                    const form = (submitTarget && submitTarget.form)
+                        || (primarySubmit && primarySubmit.form)
+                        || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
+                        || document.querySelector("form");
+
+                    const common = { bubbles: true, cancelable: true, composed: true, view: window };
+                    const emitPointer = (el, type) => {
+                        try {
+                            el.dispatchEvent(new PointerEvent(type, {
+                                ...common,
+                                pointerType: "mouse",
+                                isPrimary: true,
+                                button: 0,
+                                buttons: type === "pointerup" || type === "pointerenter" || type === "pointerover" ? 0 : 1,
+                            }));
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
+                    const emitMouse = (el, type) => {
+                        try {
+                            el.dispatchEvent(new MouseEvent(type, { ...common, button: 0, buttons: type === "mouseup" || type === "mouseenter" || type === "mouseover" ? 0 : 1 }));
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
+                    const activateSubmit = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        emitPointer(el, "pointerenter");
+                        emitMouse(el, "mouseenter");
+                        emitPointer(el, "pointerover");
+                        emitMouse(el, "mouseover");
+                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) { try { el.focus(); fired = true; } catch (_) {} }
+                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); fired = true; } catch (_) {}
+                        emitPointer(el, "pointerdown");
+                        emitMouse(el, "mousedown");
+                        emitPointer(el, "pointerup");
+                        emitMouse(el, "mouseup");
+                        emitMouse(el, "click");
+                        try { el.click(); fired = true; } catch (_) {}
+                        return fired;
+                    };
+                    const activateSubmitAtPoint = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return { fired: false, x: -1, y: -1 };
+                        let x = -1;
+                        let y = -1;
+                        let fired = false;
+                        try {
+                            const rect = el.getBoundingClientRect();
+                            const offsetX = Math.max(1, Math.floor(rect.width * 0.2));
+                            const offsetY = Math.max(1, Math.floor(rect.height * 0.2));
+                            x = Math.floor(rect.left + Math.min(offsetX, Math.max(1, rect.width - 1)));
+                            y = Math.floor(rect.top + Math.min(offsetY, Math.max(1, rect.height - 1)));
+                            const pointTarget = document.elementFromPoint(x, y) || el;
+                            const clickTarget = pointTarget.closest?.("button") || pointTarget;
+                            emitPointer(clickTarget, "pointerenter");
+                            emitMouse(clickTarget, "mouseenter");
+                            emitPointer(clickTarget, "pointerover");
+                            emitMouse(clickTarget, "mouseover");
+                            emitPointer(clickTarget, "pointerdown");
+                            emitMouse(clickTarget, "mousedown");
+                            emitPointer(clickTarget, "pointerup");
+                            emitMouse(clickTarget, "mouseup");
+                            emitMouse(clickTarget, "click");
+                            try { clickTarget.click(); fired = true; } catch (_) {}
+                        } catch (_) {}
+                        return { fired, x, y };
+                    };
+
+                    const coordinateClick = activateSubmitAtPoint(submitTarget);
+
                     return {
-                        ok: clicked,
-                        waiting: !clicked,
-                        status: clicked ? "submit-clicked" : "submit-click-failed",
-                        ariaLabel: submitButton.getAttribute("aria-label") || "",
-                        disabled: !!submitButton.disabled,
+                        ok: !!coordinateClick.fired,
+                        submitted: !!coordinateClick.fired,
+                        waiting: !coordinateClick.fired,
+                        status: coordinateClick.fired ? "submit-coordinate-click-dispatched" : "submit-coordinate-click-failed",
+                        listenerClick: !!coordinateClick.fired,
+                        formSubmitted: false,
+                        usedPrimarySubmit: !!primarySubmit,
+                        usedRecorderTarget: !!recorderSubmitTarget,
+                        usedCoordinatePlayback: !!coordinateClick.fired,
+                        clickX: coordinateClick.x,
+                        clickY: coordinateClick.y,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -6878,46 +6992,264 @@ class MainWindow(QMainWindow):
 
         submit_attempts = 0
         max_submit_attempts = max(1, int(self.automation_retry_attempts.value()))
+        manual_handoff_timeout_ms = max(5000, _env_int("GROK_MANUAL_SUBMIT_HANDOFF_TIMEOUT_MS", 45000))
+        manual_handoff_poll_ms = 450
+        manual_handoff_started_at_ms = 0
+        manual_handoff_token = ""
+        enter_script = r"""
+            (() => {
+                try {
+                    const prompt = document.querySelector(
+                        "textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], "
+                        + "textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], "
+                        + "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
+                        + "div.tiptap.ProseMirror[contenteditable='true'], "
+                        + "[contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], "
+                        + "[contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], "
+                        + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
+                    );
+                    if (!prompt) return { ok: false, error: "Prompt input not found for Enter keypress" };
+
+                    try { prompt.focus({ preventScroll: true }); } catch (_) { try { prompt.focus(); } catch (_) {} }
+                    const common = { key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true, cancelable: true };
+                    let dispatched = false;
+                    try { prompt.dispatchEvent(new KeyboardEvent('keydown', common)); dispatched = true; } catch (_) {}
+                    try { prompt.dispatchEvent(new KeyboardEvent('keypress', common)); dispatched = true; } catch (_) {}
+                    try { prompt.dispatchEvent(new KeyboardEvent('keyup', common)); dispatched = true; } catch (_) {}
+                    return { ok: dispatched, dispatched, targetTag: prompt.tagName || '', contentEditable: !!prompt.isContentEditable };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _poll_for_manual_submit_handoff() -> None:
+            nonlocal manual_handoff_started_at_ms, manual_handoff_token
+            if self.stop_all_requested:
+                return
+            if self.pending_manual_variant_for_download != variant or self.pending_manual_download_type != "image":
+                return
+
+            elapsed_ms = int(time.time() * 1000) - manual_handoff_started_at_ms
+            if elapsed_ms >= manual_handoff_timeout_ms:
+                self._append_log(
+                    f"Manual image variant {variant}: no manual submit detected within {manual_handoff_timeout_ms / 1000:.0f}s; resuming automated submit listener sequence."
+                )
+                self.browser.page().runJavaScript(submit_script, _after_submit)
+                return
+
+            check_script = f"""
+                (() => {{
+                    try {{
+                        const token = {manual_handoff_token!r};
+                        const state = window.__grokManualSubmitState || {{}};
+                        const customizePromptVisible = !!document.querySelector(
+                            "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
+                            + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
+                        );
+                        const onPostView = /[/]imagine[/]post[/]/i.test((location.href || ""));
+                        const detected = Boolean(state.token === token && state.detected);
+                        return {{
+                            ok: true,
+                            detected: detected || customizePromptVisible || onPostView,
+                            stateToken: state.token || "",
+                            customizePromptVisible,
+                            onPostView,
+                        }};
+                    }} catch (err) {{
+                        return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                    }}
+                }})()
+            """
+
+            def _after_manual_handoff_check(result):
+                if isinstance(result, dict) and result.get("detected"):
+                    self._append_log(
+                        f"Manual image variant {variant}: detected manual submit click; continuing automated polling."
+                    )
+                    _after_submit({"ok": True, "manualDetected": True})
+                    return
+
+                QTimer.singleShot(manual_handoff_poll_ms, _poll_for_manual_submit_handoff)
+
+            self.browser.page().runJavaScript(check_script, _after_manual_handoff_check)
 
         def _run_submit_attempt() -> None:
-            nonlocal submit_attempts
+            nonlocal submit_attempts, manual_handoff_started_at_ms, manual_handoff_token
             submit_attempts += 1
+
+            manual_takeover_before_submit = os.getenv("GROK_MANUAL_EXIT_BEFORE_SUBMIT", "0").strip().lower() not in {"0", "false", "no"}
+            if manual_takeover_before_submit:
+                self._append_log(
+                    f"Manual image variant {variant}: reached submit stage ({submit_attempts}/{max_submit_attempts}); stopping automation before submit so you can continue manually."
+                )
+                self._append_log(
+                    "Manual takeover active: automation flow is paused at pre-submit. Click Submit in the embedded browser to continue manually."
+                )
+                self._append_log(
+                    "Tip: set GROK_MANUAL_EXIT_BEFORE_SUBMIT=1 to stop before submit and continue manually."
+                )
+                return
+
             self._append_log(
-                f"Manual image variant {variant}: attempting submit click ({submit_attempts}/{max_submit_attempts})."
+                f"Manual image variant {variant}: paused before submit ({submit_attempts}/{max_submit_attempts}). Please click submit manually; automation will continue after detection."
             )
-            self.browser.page().runJavaScript(submit_script, _after_submit)
+
+            manual_handoff_started_at_ms = int(time.time() * 1000)
+            manual_handoff_token = f"variant-{variant}-submit-{self.manual_image_submit_token}-attempt-{submit_attempts}-{manual_handoff_started_at_ms}"
+            dom_refresh_script = r"""
+                (() => {
+                    try {
+                        const prompt = document.querySelector(
+                            "textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], "
+                            + "textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], "
+                            + "[contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i]"
+                        );
+                        const submit = document.querySelector("button[type='submit'][aria-label='Submit'], button[type='submit']");
+                        if (prompt) {
+                            try { prompt.focus({ preventScroll: true }); } catch (_) { try { prompt.focus(); } catch (_) {} }
+                            const isEditable = !!prompt.isContentEditable;
+                            try {
+                                if (isEditable) {
+                                    const text = String(prompt.textContent || "");
+                                    prompt.textContent = text;
+                                } else {
+                                    const value = String(prompt.value || "");
+                                    const proto = Object.getPrototypeOf(prompt);
+                                    const desc = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+                                    const setter = desc && desc.set;
+                                    if (setter) setter.call(prompt, value);
+                                    else prompt.value = value;
+                                }
+                            } catch (_) {}
+                            try { prompt.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: null, inputType: 'insertText' })); } catch (_) {
+                                try { prompt.dispatchEvent(new Event('input', { bubbles: true, cancelable: true })); } catch (_) {}
+                            }
+                            try { prompt.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
+                            try { prompt.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', code: 'ShiftLeft', bubbles: true, cancelable: true })); } catch (_) {}
+                        }
+                        try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+                        if (submit) {
+                            try { submit.blur(); } catch (_) {}
+                            try { submit.focus({ preventScroll: true }); } catch (_) { try { submit.focus(); } catch (_) {} }
+                            try { submit.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+                        }
+                        return { ok: true, promptFound: !!prompt, submitFound: !!submit, refreshedAt: Date.now() };
+                    } catch (err) {
+                        return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                    }
+                })()
+            """
+            arm_script = f"""
+                (() => {{
+                    try {{
+                        const token = {manual_handoff_token!r};
+                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                        const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+                        const isMenuToggle = (el) => {{
+                            if (!el) return false;
+                            const popup = clean(el.getAttribute("aria-haspopup"));
+                            const aria = clean(el.getAttribute("aria-label"));
+                            return popup === "menu" || popup === "listbox" || aria.includes("settings");
+                        }};
+
+                        const submitButtons = [
+                            ...document.querySelectorAll("button[aria-label='Submit']"),
+                            ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                            ...document.querySelectorAll("button[type='submit']"),
+                            ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                        ]
+                            .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                            .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
+                        const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
+                            || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
+                            || submitButtons[0]
+                            || null;
+
+                        window.__grokManualSubmitState = {{ token, detected: false, armedAt: Date.now() }};
+
+                        const onManualSubmit = () => {{
+                            if (!window.__grokManualSubmitState || window.__grokManualSubmitState.token !== token) return;
+                            window.__grokManualSubmitState.detected = true;
+                        }};
+
+                        if (primarySubmit) {{
+                            primarySubmit.addEventListener("click", onManualSubmit, {{ once: true, passive: true }});
+                            primarySubmit.addEventListener("pointerdown", onManualSubmit, {{ once: true, passive: true }});
+                        }}
+
+                        return {{ ok: true, armed: !!primarySubmit }};
+                    }} catch (err) {{
+                        return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                    }}
+                }})()
+            """
+
+            def _after_arm_manual_handoff(result):
+                if isinstance(result, dict) and result.get("ok"):
+                    QTimer.singleShot(manual_handoff_poll_ms, _poll_for_manual_submit_handoff)
+                    return
+                self._append_log(
+                    f"Manual image variant {variant}: could not arm manual submit handoff ({result!r}); running automated coordinate-click sequence."
+                )
+                self.browser.page().runJavaScript(submit_script, _after_submit)
+
+            def _after_dom_refresh(refresh_result):
+                if isinstance(refresh_result, dict) and refresh_result.get("ok"):
+                    self._append_log(
+                        f"Manual image variant {variant}: DOM refreshed before submit (prompt={bool(refresh_result.get('promptFound'))}, submit={bool(refresh_result.get('submitFound'))})."
+                    )
+                else:
+                    self._append_log(
+                        f"Manual image variant {variant}: DOM refresh probe failed before submit ({refresh_result!r}); continuing."
+                    )
+                self.browser.page().runJavaScript(arm_script, _after_arm_manual_handoff)
+
+            self.browser.page().runJavaScript(dom_refresh_script, _after_dom_refresh)
 
         def _after_submit(result):
+            if isinstance(result, dict):
+                self._append_log(
+                    f"Manual image variant {variant}: submit attempt result status={result.get('status')} recorder={bool(result.get('usedRecorderTarget'))} coord={bool(result.get('usedCoordinatePlayback'))} x={result.get('clickX')} y={result.get('clickY')}"
+                )
+
             if isinstance(result, dict) and result.get("ok"):
                 #self.show_browser_page()
-                self._append_log(
-                    f"Submitted manual image variant {variant} (attempt {attempts}); "
-                    "waiting for first rendered image, then opening it for download."
-                )
+                idle_ms = self._set_manual_post_submit_idle_window()
+                if idle_ms > 0:
+                    self._append_log(
+                        f"Submitted manual image variant {variant} (attempt {attempts}); "
+                        f"pausing automation for {idle_ms / 1000:.1f}s to let page render naturally."
+                    )
+                else:
+                    self._append_log(
+                        f"Submitted manual image variant {variant} (attempt {attempts}); "
+                        "waiting for first rendered image, then opening it for download."
+                    )
                 QTimer.singleShot(7000, self._poll_for_manual_image)
                 return
 
             if isinstance(result, dict) and result.get("waiting"):
                 if submit_attempts < max_submit_attempts:
                     self._append_log(
-                        f"Manual image variant {variant}: submit button still disabled (attempt {submit_attempts}); retrying click..."
+                        f"Manual image variant {variant}: submit target not ready (attempt {submit_attempts}); retrying coordinate click only..."
                     )
                     QTimer.singleShot(500, _run_submit_attempt)
                     return
-                _retry_variant(f"submit button stayed disabled: {result!r}")
+                _retry_variant(f"submit target stayed not-ready for coordinate click: {result!r}")
                 return
 
-            # Some Grok navigations can clear the JS callback value; treat that as submitted.
             if result in (None, ""):
-                #self.show_browser_page()
-                self._append_log(
-                    f"Submitted manual image variant {variant} (attempt {attempts}); "
-                    "submit callback returned empty result after page activity; continuing to image polling."
-                )
-                QTimer.singleShot(7000, self._poll_for_manual_image)
+                if submit_attempts < max_submit_attempts:
+                    self._append_log(
+                        f"Manual image variant {variant}: submit callback returned empty result (attempt {submit_attempts}); retrying coordinate click only..."
+                    )
+                    QTimer.singleShot(500, _run_submit_attempt)
+                    return
+                _retry_variant(f"submit callback stayed empty after coordinate-click attempts: {result!r}")
                 return
 
-            _retry_variant(f"submit failed: {result!r}")
+            _retry_variant(f"submit failed (coordinate click only): {result!r}")
 
         def _after_set_mode(result):
             if result in (None, ""):
@@ -6933,6 +7265,13 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"WARNING: Manual image variant {variant}: image option not selected ({result!r}); continuing anyway."
                 )
+
+            if disable_video_option_selection:
+                self._append_log(
+                    f"Manual image variant {variant}: video option selection is disabled; entering prompt and submitting without resolution/duration/aspect changes."
+                )
+                QTimer.singleShot(max(50, action_delay_ms), lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+                return
 
             self._append_log(
                 "Manual image variant "
@@ -6984,14 +7323,15 @@ class MainWindow(QMainWindow):
 
         action_delay_ms = int(self.automation_action_delay_ms.value())
         submit_delay_ms = action_delay_ms
+        disable_video_option_selection = os.getenv("GROK_DISABLE_VIDEO_OPTION_SELECTION", "0").strip().lower() not in {"0", "false", "no"}
 
         def _after_populate(result):
             if result in (None, ""):
                 self._append_log(
                     f"Manual image variant {variant}: prompt populate callback returned empty result; "
-                    f"waiting {submit_delay_ms / 1000:.1f}s before submit."
+                    f"waiting {submit_delay_ms / 1000:.1f}s before Enter key submit."
                 )
-                QTimer.singleShot(submit_delay_ms, _run_submit_attempt)
+                QTimer.singleShot(submit_delay_ms, _run_enter_attempt)
                 return
 
             if not isinstance(result, dict) or not result.get("ok"):
@@ -7000,11 +7340,51 @@ class MainWindow(QMainWindow):
 
             self._append_log(
                 f"Manual image variant {variant}: prompt populated (length={result.get('filledLength', 'unknown')}); "
-                f"waiting {submit_delay_ms / 1000:.1f}s before submitting prompt."
+                f"waiting {submit_delay_ms / 1000:.1f}s before pressing Enter (no submit-button click)."
             )
-            QTimer.singleShot(submit_delay_ms, _run_submit_attempt)
+            QTimer.singleShot(submit_delay_ms, _run_enter_attempt)
 
-        self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
+        def _run_enter_attempt() -> None:
+            self._append_log(
+                f"Manual image variant {variant}: pressing Enter in prompt field (no submit-button click)."
+            )
+
+            def _after_enter(result):
+                if isinstance(result, dict) and result.get("ok"):
+                    _after_submit({"ok": True, "status": "enter-key", "usedRecorderTarget": False, "usedCoordinatePlayback": False})
+                    return
+                _retry_variant(f"enter key dispatch failed: {result!r}")
+
+            self.browser.page().runJavaScript(enter_script, _after_enter)
+
+        if disable_video_option_selection:
+            self._append_log(
+                f"Manual image variant {variant}: skipping image/video option scripts and proceeding directly to prompt fill + submit."
+            )
+            QTimer.singleShot(max(50, action_delay_ms), lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+        else:
+            self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
+
+    def _set_manual_post_submit_idle_window(self) -> int:
+        idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 12000))
+        if idle_ms <= 0:
+            self.manual_post_submit_idle_until = 0.0
+            self.manual_post_submit_idle_token = -1
+            return 0
+        self.manual_post_submit_idle_until = time.time() + (idle_ms / 1000.0)
+        self.manual_post_submit_idle_token = self.manual_image_submit_token
+        return idle_ms
+
+    def _should_pause_manual_image_poll(self) -> tuple[bool, int]:
+        if self.manual_post_submit_idle_until <= 0:
+            return False, 0
+        remaining_s = self.manual_post_submit_idle_until - time.time()
+        if remaining_s <= 0:
+            self.manual_post_submit_idle_until = 0.0
+            self.manual_post_submit_idle_token = -1
+            return False, 0
+        remaining_ms = max(250, int(remaining_s * 1000))
+        return True, remaining_ms
 
     def _poll_for_manual_image(self) -> None:
         if self.stop_all_requested:
@@ -7013,6 +7393,16 @@ class MainWindow(QMainWindow):
 
         variant = self.pending_manual_variant_for_download
         if variant is None or self.pending_manual_download_type != "image":
+            return
+
+        should_pause, remaining_ms = self._should_pause_manual_image_poll()
+        if should_pause:
+            if self.manual_post_submit_idle_token == self.manual_image_submit_token:
+                self._append_log(
+                    f"Variant {variant}: submit accepted; releasing page activity for {remaining_ms / 1000:.1f}s before next automation check."
+                )
+                self.manual_post_submit_idle_token = -1
+            QTimer.singleShot(min(remaining_ms, 1500), self._poll_for_manual_image)
             return
 
         prompt = self.pending_manual_image_prompt or ""
@@ -8188,88 +8578,147 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const isMenuToggle = (el) => {
+                        if (!el) return false;
+                        const aria = clean(el.getAttribute("aria-label")).toLowerCase();
+                        const text = clean(el.textContent).toLowerCase();
+                        const popup = clean(el.getAttribute("aria-haspopup")).toLowerCase();
+                        return popup === "menu" || popup === "listbox" || /settings/.test(`${aria} ${text}`);
+                    };
+
                     const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], textarea[aria-label*='Make a video' i], input[aria-label*='Make a video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
 
-                    const submitSelectors = [
-                        "button[type='submit'][aria-label='Submit']",
-                        "button[aria-label='Submit'][type='submit']",
-                        "button[type='submit']",
+                    if (!promptInput || !isVisible(promptInput)) {
+                        return { ok: false, error: "Prompt input not ready for native submit", status: "prompt-not-ready" };
+                    }
+
+                    const submitButtons = [
+                        ...document.querySelectorAll("button[aria-label='Submit']"),
+                        ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                        ...document.querySelectorAll("button[type='submit']"),
+                        ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                    ]
+                        .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                        .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
+                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
+                        || submitButtons[0]
+                        || null;
+
+                    const recorderSelectors = [
                         "button[aria-label='Submit']",
-                        "button[aria-label='Create video']",
-                        "button[aria-label*='Create video' i]",
-                        "button[data-disabled='false']"
+                        "main [aria-label='Submit']",
+                        "button.group svg",
+                        "button[type='submit'] svg",
                     ];
+                    const recorderXPath = "//*[@data-testid='drop-ui']//form//button[2]//svg";
+                    const firstVisible = (list) => list.find((el) => isVisible(el) && !el.disabled && !isMenuToggle(el)) || null;
+                    const findRecorderSubmitTarget = () => {
+                        const cssNodes = recorderSelectors
+                            .flatMap((selector) => [...document.querySelectorAll(selector)])
+                            .filter((el, idx, arr) => arr.indexOf(el) === idx);
+                        const cssTarget = firstVisible(cssNodes);
+                        if (cssTarget) return cssTarget.closest("button") || cssTarget;
 
-                    const submitCandidates = [];
-                    const collect = (root) => {
-                        if (!root || typeof root.querySelectorAll !== "function") return;
-                        submitSelectors.forEach((selector) => {
-                            const matches = root.querySelectorAll(selector);
-                            for (let i = 0; i < matches.length; i += 1) submitCandidates.push(matches[i]);
-                        });
+                        try {
+                            const xpathResult = document.evaluate(recorderXPath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                            const node = xpathResult && xpathResult.singleNodeValue;
+                            if (node && isVisible(node)) return node.closest("button") || node;
+                        } catch (_) {}
+                        return null;
                     };
+                    const recorderSubmitTarget = findRecorderSubmitTarget();
+                    try { promptInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
 
-                    const composerRoot = (promptInput && typeof promptInput.closest === "function")
-                        ? (promptInput.closest("form") || promptInput.closest("main") || promptInput.closest("section") || promptInput.parentElement)
-                        : null;
-
-                    collect(composerRoot);
-                    collect(document);
-
-                    const uniqueCandidates = [...new Set(submitCandidates)];
-                    const submitButton = uniqueCandidates.find((el) => isVisible(el));
-
-                    const form = (submitButton && submitButton.form)
+                    const submitTarget = recorderSubmitTarget || primarySubmit;
+                    const form = (submitTarget && submitTarget.form)
+                        || (primarySubmit && primarySubmit.form)
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
-                        || (composerRoot && typeof composerRoot.closest === "function" ? composerRoot.closest("form") : null)
                         || document.querySelector("form");
 
-                    if (!submitButton && !form) return { ok: false, error: "Submit button/form not found" };
-
-                    if (submitButton && submitButton.disabled) {
-                        submitButton.disabled = false;
-                        submitButton.removeAttribute("disabled");
-                        submitButton.setAttribute("aria-disabled", "false");
-                    }
-
-                    const common = { bubbles: true, cancelable: true, composed: true };
-                    const emulateClick = (el) => {
-                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                        el.dispatchEvent(new MouseEvent("mousedown", common));
-                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
-                        el.dispatchEvent(new MouseEvent("mouseup", common));
-                        el.dispatchEvent(new MouseEvent("click", common));
+                    const common = { bubbles: true, cancelable: true, composed: true, view: window };
+                    const emitPointer = (el, type) => {
+                        try {
+                            el.dispatchEvent(new PointerEvent(type, {
+                                ...common,
+                                pointerType: "mouse",
+                                isPrimary: true,
+                                button: 0,
+                                buttons: type === "pointerup" || type === "pointerenter" || type === "pointerover" ? 0 : 1,
+                            }));
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
+                    const emitMouse = (el, type) => {
+                        try {
+                            el.dispatchEvent(new MouseEvent(type, { ...common, button: 0, buttons: type === "mouseup" || type === "mouseenter" || type === "mouseover" ? 0 : 1 }));
+                            return true;
+                        } catch (_) {
+                            return false;
+                        }
+                    };
+                    const activateSubmit = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        let fired = false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        emitPointer(el, "pointerenter");
+                        emitMouse(el, "mouseenter");
+                        emitPointer(el, "pointerover");
+                        emitMouse(el, "mouseover");
+                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) { try { el.focus(); fired = true; } catch (_) {} }
+                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); fired = true; } catch (_) {}
+                        emitPointer(el, "pointerdown");
+                        emitMouse(el, "mousedown");
+                        emitPointer(el, "pointerup");
+                        emitMouse(el, "mouseup");
+                        emitMouse(el, "click");
+                        try { el.click(); fired = true; } catch (_) {}
+                        return fired;
+                    };
+                    const activateSubmitAtPoint = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return { fired: false, x: -1, y: -1 };
+                        let x = -1;
+                        let y = -1;
+                        let fired = false;
+                        try {
+                            const rect = el.getBoundingClientRect();
+                            const offsetX = Math.max(1, Math.floor(rect.width * 0.2));
+                            const offsetY = Math.max(1, Math.floor(rect.height * 0.2));
+                            x = Math.floor(rect.left + Math.min(offsetX, Math.max(1, rect.width - 1)));
+                            y = Math.floor(rect.top + Math.min(offsetY, Math.max(1, rect.height - 1)));
+                            const pointTarget = document.elementFromPoint(x, y) || el;
+                            const clickTarget = pointTarget.closest?.("button") || pointTarget;
+                            emitPointer(clickTarget, "pointerenter");
+                            emitMouse(clickTarget, "mouseenter");
+                            emitPointer(clickTarget, "pointerover");
+                            emitMouse(clickTarget, "mouseover");
+                            emitPointer(clickTarget, "pointerdown");
+                            emitMouse(clickTarget, "mousedown");
+                            emitPointer(clickTarget, "pointerup");
+                            emitMouse(clickTarget, "mouseup");
+                            emitMouse(clickTarget, "click");
+                            try { clickTarget.click(); fired = true; } catch (_) {}
+                        } catch (_) {}
+                        return { fired, x, y };
                     };
 
-                    const allButtons = [...document.querySelectorAll("button")].filter((el) => isVisible(el));
-                    const createVideoButton = allButtons.find((btn) => {
-                        const label = (btn.getAttribute("aria-label") || "").trim();
-                        const txt = (btn.textContent || "").trim();
-                        const srOnly = (btn.querySelector(".sr-only")?.textContent || "").trim();
-                        return /create\s*video/i.test(label) || /create\s*video/i.test(txt) || /create\s*video/i.test(srOnly);
-                    }) || submitButton;
-
-                    let clicked = false;
-                    if (createVideoButton) {
-                        emulateClick(createVideoButton);
-                        clicked = true;
-                    }
-
-                    let formSubmitted = false;
-                    if (!clicked && form) {
-                        const ev = new Event("submit", { bubbles: true, cancelable: true });
-                        form.dispatchEvent(ev); // lets React handlers run
-                        formSubmitted = true;
-                    }
+                    const coordinateClick = activateSubmitAtPoint(submitTarget);
 
                     return {
-                        ok: clicked || formSubmitted,
-                        submitted: clicked || formSubmitted,
-                        doubleClicked: !!createVideoButton,
-                        formSubmitted,
-                        forceEnabled: !!createVideoButton,
-                        buttonText: createVideoButton ? (createVideoButton.textContent || "").trim() : "",
-                        buttonAriaLabel: createVideoButton ? (createVideoButton.getAttribute("aria-label") || "") : ""
+                        ok: !!coordinateClick.fired,
+                        submitted: !!coordinateClick.fired,
+                        waiting: !coordinateClick.fired,
+                        listenerClick: !!coordinateClick.fired,
+                        formSubmitted: false,
+                        usedPrimarySubmit: !!primarySubmit,
+                        usedRecorderTarget: !!recorderSubmitTarget,
+                        usedCoordinatePlayback: !!coordinateClick.fired,
+                        clickX: coordinateClick.x,
+                        clickY: coordinateClick.y,
+                        status: coordinateClick.fired ? "submit-coordinate-click-dispatched" : "submit-coordinate-click-failed"
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -8865,6 +9314,8 @@ class MainWindow(QMainWindow):
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
+        self.manual_post_submit_idle_until = 0.0
+        self.manual_post_submit_idle_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -9037,6 +9488,8 @@ class MainWindow(QMainWindow):
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
         self.manual_image_submit_token += 1
+        self.manual_post_submit_idle_until = 0.0
+        self.manual_post_submit_idle_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
