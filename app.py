@@ -6831,7 +6831,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
                     const isMenuToggle = (el) => {
                         if (!el) return false;
                         const aria = clean(el.getAttribute("aria-label")).toLowerCase();
@@ -6983,9 +6983,10 @@ class MainWindow(QMainWindow):
             max_attempts = int(self.automation_retry_attempts.value())
             if attempts >= max_attempts:
                 self._append_log(
-                    f"ERROR: Could not prepare manual image variant {variant} after {attempts} attempts; skipping variant."
+                    f"WARNING: Could not prepare manual image variant {variant} after {attempts} attempts; "
+                    "assuming submit already happened and continuing with image-ready polling."
                 )
-                self._submit_next_manual_image_variant()
+                QTimer.singleShot(700, self._poll_for_manual_image)
                 return
             self.manual_image_generation_queue.insert(0, item)
             QTimer.singleShot(1200, self._submit_next_manual_image_variant)
@@ -7047,7 +7048,12 @@ class MainWindow(QMainWindow):
                             "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
                             + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                         );
-                        const onPostView = /[/]imagine[/]post[/]/i.test((location.href || ""));
+                        const path = String((location && location.pathname) || "");
+                        const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                        const postId = postMatch ? String(postMatch[1] || "") : "";
+                        const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                            && !/^placeholder-/i.test(postId);
+                        const onPostView = Boolean(validPostId);
                         const detected = Boolean(state.token === token && state.detected);
                         return {{
                             ok: true,
@@ -7055,6 +7061,8 @@ class MainWindow(QMainWindow):
                             stateToken: state.token || "",
                             customizePromptVisible,
                             onPostView,
+                            postId,
+                            validPostId,
                         }};
                     }} catch (err) {{
                         return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
@@ -7386,6 +7394,20 @@ class MainWindow(QMainWindow):
         remaining_ms = max(250, int(remaining_s * 1000))
         return True, remaining_ms
 
+    def _extract_valid_grok_post_id(self, url: str) -> str:
+        candidate = str(url or "").strip()
+        if not candidate:
+            return ""
+        match = re.search(r"/imagine/post/([^/?#]+)", candidate, re.IGNORECASE)
+        if not match:
+            return ""
+        post_id = str(match.group(1) or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", post_id, re.IGNORECASE):
+            return ""
+        if post_id.lower().startswith("placeholder-"):
+            return ""
+        return post_id
+
     def _poll_for_manual_image(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -7412,6 +7434,21 @@ class MainWindow(QMainWindow):
             phase = "video-mode"
         else:
             phase = "submit"
+
+        if phase == "pick":
+            current_url = self.browser.url().toString().strip() if self.browser is not None else ""
+            post_id = self._extract_valid_grok_post_id(current_url)
+            if post_id:
+                self._append_log(
+                    f"Variant {variant}: detected valid /imagine/post URL ({post_id}); advancing from pick to video-mode options."
+                )
+                self.manual_image_pick_clicked = True
+                self.manual_image_pick_retry_count = 0
+                self.manual_image_video_mode_retry_count = 0
+                self.manual_image_submit_retry_count = 0
+                QTimer.singleShot(700, self._poll_for_manual_image)
+                return
+
         script = f"""
             (async () => {{
                 const prompt = {prompt!r};
@@ -7439,12 +7476,23 @@ class MainWindow(QMainWindow):
                         return !listItem.querySelector("div.invisible");
                     }};
 
+                    const path = String((location && location.pathname) || "");
+                    const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                    const postId = postMatch ? String(postMatch[1] || "") : "";
+                    const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                        && !/^placeholder-/i.test(postId);
                     const customizePromptReady = !!document.querySelector(
                         "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
                         + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                     );
-                    if (customizePromptReady) {{
-                        return {{ ok: true, status: "generated-image-clicked" }};
+                    if (customizePromptReady || onPostView) {{
+                        return {{
+                            ok: true,
+                            status: "generated-image-clicked",
+                            detectedViaUrl: onPostView,
+                            path,
+                            postId,
+                        }};
                     }}
 
                     if (window.__grokManualPickObserverResult) {{
@@ -7507,45 +7555,79 @@ class MainWindow(QMainWindow):
                 if (phase === "video-mode") {{
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
-                    const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(`${{textOf(el)}} ${{ariaOf(el)}}`);
-                    const modelTriggerCandidates = [
-                        ...document.querySelectorAll("#model-select-trigger"),
-                        ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
-                        ...document.querySelectorAll("button, [role='button']"),
-                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el));
-
-                    const modelTrigger = modelTriggerCandidates.find((el) => {{
-                        const txt = textOf(el);
-                        return /model|video|image|options|settings/i.test(txt) || (el.id || "") === "model-select-trigger";
-                    }}) || null;
-
-                    let optionsOpened = false;
-                    if (modelTrigger) {{
-                        optionsOpened = emulateClick(modelTrigger);
-                    }}
-                    await sleep(ACTION_DELAY_MS);
-
-                    const menuItems = [
+                    const titleOf = (el) => (el?.getAttribute?.("title") || "").replace(/\\s+/g, " ").trim();
+                    const descriptorOf = (el) => `${{textOf(el)}} ${{ariaOf(el)}} ${{titleOf(el)}}`.trim();
+                    const isMakeVideoItem = (el) => /\\bmake\\s+video\\b/i.test(descriptorOf(el))
+                        || /animate\\s+this\\s+image\\s+into\\s+a\\s+video/i.test(descriptorOf(el));
+                    const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(descriptorOf(el));
+                    const isBlockedMoreOptionsControl = (el) => {{
+                        if (!el) return false;
+                        const descriptor = descriptorOf(el).toLowerCase();
+                        const hasPopup = String(el.getAttribute?.("aria-haspopup") || "").toLowerCase() === "menu";
+                        if ((el.id || "") === "model-select-trigger") return false;
+                        return hasPopup && /\\bmore\\s+options\\b/.test(descriptor);
+                    }};
+                    const getMenuItems = () => [
                         ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
 
-                    const videoItem = menuItems.find((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el))) || null;
-                    const videoClicked = videoItem ? emulateClick(videoItem) : false;
-                    await sleep(ACTION_DELAY_MS);
+                    const makeVideoFromOpenMenu = async () => {{
+                        const menuItems = getMenuItems();
+                        const makeVideoItem = menuItems.find((el) => isMakeVideoItem(el)) || null;
+                        const clicked = makeVideoItem ? emulateClick(makeVideoItem) : false;
+                        if (clicked) await sleep(ACTION_DELAY_MS);
+                        return {{ item: makeVideoItem, clicked }};
+                    }};
+
+                    let optionsOpened = false;
+                    let makeVideoItemFound = false;
+                    let makeVideoClicked = false;
+
+                    let menuAttempt = await makeVideoFromOpenMenu();
+                    if (menuAttempt.item) {{
+                        makeVideoItemFound = true;
+                        makeVideoClicked = !!menuAttempt.clicked;
+                    }}
+
+                    if (!makeVideoItemFound || !makeVideoClicked) {{
+                        const triggerCandidates = [
+                            ...document.querySelectorAll("#model-select-trigger"),
+                            ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
+                            ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
+                            ...document.querySelectorAll("button, [role='button']"),
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el));
+
+                        const likelyTriggers = triggerCandidates.filter((el) => {{
+                            const descriptor = descriptorOf(el);
+                            return /model|video|image|options|settings/i.test(descriptor) || (el.id || "") === "model-select-trigger";
+                        }});
+                        const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
+
+                        for (const trigger of candidates) {{
+                            const opened = emulateClick(trigger);
+                            optionsOpened = optionsOpened || opened;
+                            await sleep(ACTION_DELAY_MS);
+                            menuAttempt = await makeVideoFromOpenMenu();
+                            if (menuAttempt.item) {{
+                                makeVideoItemFound = true;
+                                makeVideoClicked = !!menuAttempt.clicked;
+                                if (makeVideoClicked) break;
+                            }}
+                        }}
+                    }}
 
                     const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
                         .filter((el) => isVisible(el));
                     const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
-                    const selectedViaTrigger = !!(modelTrigger && /(^|\\s)video(\\s|$)/i.test(textOf(modelTrigger)));
-                    const videoSelected = videoClicked || selectedViaMarker || selectedViaTrigger;
+                    const videoSelected = makeVideoClicked || selectedViaMarker;
 
                     if (!videoSelected) {{
                         return {{
                             ok: false,
                             status: "waiting-for-video-mode",
                             optionsOpened,
-                            videoItemFound: !!videoItem,
-                            videoClicked,
+                            videoItemFound: makeVideoItemFound,
+                            videoClicked: makeVideoClicked,
                         }};
                     }}
 
@@ -7553,8 +7635,8 @@ class MainWindow(QMainWindow):
                         ok: true,
                         status: "video-mode-selected",
                         optionsOpened,
-                        videoItemFound: !!videoItem,
-                        videoClicked,
+                        videoItemFound: makeVideoItemFound,
+                        videoClicked: makeVideoClicked,
                     }};
                 }}
 
@@ -7598,17 +7680,32 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
-                if (!submitButton) return {{ ok: false, status: "prompt-filled-waiting-submit" }};
-
+                let enterDispatched = false;
+                const enterEventCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
                 await sleep(ACTION_DELAY_MS);
-                const submitted = emulateClick(submitButton);
+
+                const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
+                    .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video|send|generate|create/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+
+                let submitted = false;
+                let submitLabel = "enter-key";
+                if (submitButton) {{
+                    await sleep(ACTION_DELAY_MS);
+                    submitted = emulateClick(submitButton);
+                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || submitLabel;
+                }} else if (enterDispatched) {{
+                    submitted = true;
+                }}
+
                 if (submitted) window.__grokManualImageSubmitToken = submitToken;
                 return {{
                     ok: submitted,
                     status: submitted ? "video-submit-clicked" : "submit-click-failed",
-                    buttonLabel: (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim(),
+                    buttonLabel: submitLabel,
+                    enterDispatched,
                     filledLength: typedValue.length,
                 }};
             }})()
@@ -7624,9 +7721,14 @@ class MainWindow(QMainWindow):
                 status = result.get("status") or "ok"
                 if status == "generated-image-clicked":
                     if not self.manual_image_pick_clicked:
-                        self._append_log(
-                            f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
-                        )
+                        if isinstance(result, dict) and result.get("detectedViaUrl"):
+                            self._append_log(
+                                f"Variant {current_variant}: detected /imagine/post URL after image pick; proceeding to video-mode options."
+                            )
+                        else:
+                            self._append_log(
+                                f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
+                            )
                     self.manual_image_pick_clicked = True
                     self.browser.page().runJavaScript("""
                         (() => {
@@ -7704,14 +7806,10 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 "WARNING: Variant "
                                 f"{current_variant}: image pick stayed callback-empty for "
-                                f"{self.manual_image_pick_retry_count} checks; assuming pick stage already completed and advancing."
+                                f"{self.manual_image_pick_retry_count} checks; keeping pick stage active and continuing image-ready polling."
                             )
-                            self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = True
                             self.manual_image_pick_retry_count = 0
-                            self.manual_image_video_mode_retry_count = 0
-                            self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            QTimer.singleShot(1200, self._poll_for_manual_image)
                             return
                         self._append_log(
                             "WARNING: Variant "
@@ -7891,15 +7989,23 @@ class MainWindow(QMainWindow):
                                     .find((btn) => !!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)));
                                 const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
                                     .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
-                                const path = String((window.location && window.location.pathname) || "").toLowerCase();
-                                const onPostView = path.includes("/imagine/post/");
-                                const ready = customizePromptVisible || (onPostView && (editImageVisible || makeVideoButtonVisible));
+                                const pathRaw = String((window.location && window.location.pathname) || "");
+                                const path = pathRaw.toLowerCase();
+                                const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                                const postId = postMatch ? String(postMatch[1] || "") : "";
+                                const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                                    && !/^placeholder-/i.test(postId);
+                                const onPostView = Boolean(validPostId);
+                                const ready = customizePromptVisible || onPostView || editImageVisible || makeVideoButtonVisible;
                                 return {
                                     ready,
                                     customizePromptVisible,
                                     makeVideoButtonVisible,
                                     editImageVisible,
                                     onPostView,
+                                    postId,
+                                    validPostId,
+                                    path,
                                 };
                             } catch (_) {
                                 return { ready: false };
@@ -7935,13 +8041,17 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 self.manual_image_video_mode_retry_count += 1
-                if self.manual_image_video_mode_retry_count >= int(self.automation_retry_attempts.value()):
+                if self.manual_image_video_mode_retry_count >= 1:
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: video-mode validation stayed in '{status}' for "
-                        f"{self.manual_image_video_mode_retry_count} checks; continuing to wait for video-mode state."
+                        f"{self.manual_image_video_mode_retry_count} checks; proceeding to prompt entry with Enter-submit fallback."
                     )
+                    self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
+                    self.manual_image_submit_retry_count = 0
+                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    return
 
                 self._append_log(
                     f"Variant {current_variant}: waiting for video mode selection ({status}); retrying..."
@@ -7949,17 +8059,110 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(2500, self._poll_for_manual_image)
                 return
 
-            self.manual_image_submit_retry_count += 1
-            if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
+            current_url = self.browser.url().toString().strip() if self.browser is not None else ""
+            current_post_id = self._extract_valid_grok_post_id(current_url)
+            if current_post_id and status == "callback-empty":
                 self._append_log(
                     "WARNING: Variant "
-                    f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                    f"{self.manual_image_submit_retry_count} checks; assuming submit succeeded and continuing to download polling."
+                    f"{current_variant}: submit callback is empty but current URL is a valid post ({current_post_id}); "
+                    "switching directly to video download polling to prevent submit-stage loop."
                 )
                 self.manual_image_video_submit_sent = True
                 self.manual_image_submit_retry_count = 0
                 self.pending_manual_download_type = "video"
                 self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                return
+
+            if status == "callback-empty":
+                submit_ready_probe_script = """
+                    (() => {
+                        try {
+                            const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                            const pathRaw = String((window.location && window.location.pathname) || "");
+                            const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                            const postId = postMatch ? String(postMatch[1] || "") : "";
+                            const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                                && !/^placeholder-/i.test(postId);
+                            const downloadButtonVisible = !![...document.querySelectorAll("button[aria-label='Download']")]
+                                .find((btn) => isVisible(btn) && !btn.disabled);
+                            const video = document.querySelector("video");
+                            const source = document.querySelector("video source");
+                            const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
+                            const hasVideoSource = /^https?:[/][/]/i.test(String(src || "").trim());
+                            const makeVideoVisible = !![...document.querySelectorAll("button")]
+                                .find((btn) => isVisible(btn) && !btn.disabled && /make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                            const onPostViewReady = Boolean(validPostId);
+                            const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || !makeVideoVisible));
+                            return {
+                                ok: true,
+                                readyForDownloadPolling,
+                                onPostViewReady,
+                                validPostId,
+                                postId,
+                                downloadButtonVisible,
+                                hasVideoSource,
+                                makeVideoVisible,
+                            };
+                        } catch (_) {
+                            return { ok: false, readyForDownloadPolling: false };
+                        }
+                    })()
+                """
+
+                def _after_submit_ready_probe(probe_result):
+                    if isinstance(probe_result, dict) and probe_result.get("readyForDownloadPolling"):
+                        self._append_log(
+                            "Variant "
+                            f"{current_variant}: submit callback remained empty but post view indicates video is ready "
+                            f"(downloadBtn={bool(probe_result.get('downloadButtonVisible'))}, "
+                            f"videoSrc={bool(probe_result.get('hasVideoSource'))}); switching to download polling."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+
+                    if isinstance(probe_result, dict) and probe_result.get("onPostViewReady"):
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: submit callback remained empty, but valid post URL is present; "
+                            "moving to download polling to avoid submit-stage deadlock."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+
+                    self.manual_image_submit_retry_count += 1
+                    if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: submit-stage validation stayed in '{status}' for "
+                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so continuing image polling instead of forcing download."
+                        )
+                        self.manual_image_submit_retry_count = 0
+                        QTimer.singleShot(2000, self._poll_for_manual_image)
+                        return
+
+                    self._append_log(
+                        f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying..."
+                    )
+                    QTimer.singleShot(3000, self._poll_for_manual_image)
+
+                self.browser.page().runJavaScript(submit_ready_probe_script, _after_submit_ready_probe)
+                return
+
+            self.manual_image_submit_retry_count += 1
+            if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
+                self._append_log(
+                    "WARNING: Variant "
+                    f"{current_variant}: submit-stage validation stayed in '{status}' for "
+                    f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so continuing image polling instead of forcing download."
+                )
+                self.manual_image_submit_retry_count = 0
+                QTimer.singleShot(2000, self._poll_for_manual_image)
                 return
 
             self._append_log(
@@ -8578,7 +8781,7 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
                     const isMenuToggle = (el) => {
                         if (!el) return false;
                         const aria = clean(el.getAttribute("aria-label")).toLowerCase();
@@ -9033,7 +9236,9 @@ class MainWindow(QMainWindow):
                     const normalized = String(url || "").trim();
                     if (!/^https?:[/][/]/i.test(normalized)) return false;
                     const isOpenAIVideo = /^https:[/][/]videos[.]openai[.]com[/]/i.test(normalized) && /[/]raw(?:$|[?#])/i.test(normalized);
-                    const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized) && /[.]mp4(?:$|[?#])/i.test(normalized);
+                    const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized)
+                        && /[.]mp4(?:$|[?#])/i.test(normalized)
+                        && !/[/]share-videos[/]/i.test(normalized);
                     return isOpenAIVideo || isImaginePublicVideo;
                 }};
 
@@ -9044,11 +9249,20 @@ class MainWindow(QMainWindow):
                     return {{ status: "direct-url-ready", src, sourceType: "video-src" }};
                 }}
 
-                const exactDownloadSelector = "button[type='button'][aria-label='Download']";
-                const exactDownloadCandidates = [...document.querySelectorAll(exactDownloadSelector)]
-                    .filter((btn) => isVisible(btn) && !btn.disabled);
+                const isDownloadActionButton = (btn) => {{
+                    if (!btn || !isVisible(btn) || btn.disabled) return false;
+                    const aria = String(btn.getAttribute("aria-label") || "").trim().toLowerCase();
+                    const txt = String(btn.textContent || "").trim().toLowerCase();
+                    const cls = String(btn.className || "").toLowerCase();
+                    const descriptor = `${{aria}} ${{txt}} ${{cls}}`;
+                    if (aria !== "download") return false;
+                    if (/\bshare\b/.test(descriptor)) return false;
+                    return true;
+                }};
+                const exactDownloadCandidates = [...document.querySelectorAll("button[type='button'][aria-label='Download']")]
+                    .filter((btn) => isDownloadActionButton(btn));
                 const fallbackDownloadCandidates = [...document.querySelectorAll("button[aria-label='Download']")]
-                    .filter((btn) => isVisible(btn) && !btn.disabled);
+                    .filter((btn) => isDownloadActionButton(btn));
                 const downloadCandidates = [...exactDownloadCandidates, ...fallbackDownloadCandidates]
                     .filter((btn, index, arr) => arr.indexOf(btn) === index);
                 const makeVideoContainer = makeVideoButton
