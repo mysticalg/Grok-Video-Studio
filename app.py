@@ -3726,6 +3726,11 @@ class MainWindow(QMainWindow):
         self.grok_oauth_token.setText(os.getenv("GROK_OAUTH_TOKEN", ""))
         ai_layout.addRow("Grok OAuth Token", self.grok_oauth_token)
 
+        self.grok_oauth_btn = QPushButton("Sign in to Grok / xAI")
+        self.grok_oauth_btn.setToolTip("Open Grok/xAI sign-in in your browser so you can obtain and paste an OAuth bearer token.")
+        self.grok_oauth_btn.clicked.connect(self.authorize_grok_oauth)
+        ai_layout.addRow("Grok OAuth Login", self.grok_oauth_btn)
+
         self.chat_model = QLineEdit(os.getenv("GROK_CHAT_MODEL", "grok-3-mini"))
         ai_layout.addRow("Chat Model", self.chat_model)
 
@@ -6063,6 +6068,27 @@ class MainWindow(QMainWindow):
             self._append_log(f"ERROR: TikTok OAuth flow failed: {exc}")
             QMessageBox.critical(self, "TikTok OAuth Failed", str(exc))
 
+    def authorize_grok_oauth(self) -> None:
+        grok_urls = ["https://grok.com/", "https://console.x.ai/"]
+        opened = False
+        for target in grok_urls:
+            opened = QDesktopServices.openUrl(QUrl(target)) or opened
+
+        if opened:
+            self._append_log(
+                "Opened Grok/xAI sign-in pages. After login, copy your Grok OAuth bearer token and paste it into Model/API Settings → Grok OAuth Token."
+            )
+        else:
+            self._append_log("WARNING: Could not open Grok/xAI sign-in page in system browser.")
+
+        QMessageBox.information(
+            self,
+            "Grok OAuth Login",
+            "Sign in to Grok/xAI in the opened browser tab(s).\n\n"
+            "Then copy your OAuth bearer token from the provider workflow and paste it into:\n"
+            "Model/API Settings → Grok OAuth Token",
+        )
+
     def open_ai_provider_login(self) -> None:
         prompt_source = self.prompt_source.currentData()
         video_provider = self.video_provider.currentData()
@@ -6077,8 +6103,7 @@ class MainWindow(QMainWindow):
             self._append_log("Opened Seedance in browser. If OAuth is supported on your account, complete sign-in and paste token.")
             return
 
-        self.browser.setUrl(QUrl("https://grok.com/"))
-        self._append_log("Opened Grok in browser for sign-in. After authentication, paste your Grok OAuth bearer token into Model/API Settings if available.")
+        self.authorize_grok_oauth()
 
     def _describe_overlay_frame_with_selected_ai(self, frame_path: Path, timestamp_seconds: float) -> str:
         source = self.prompt_source.currentData()
@@ -11078,6 +11103,8 @@ class MainWindow(QMainWindow):
         self.seedance_api_key.setEnabled(uses_seedance)
         self.seedance_oauth_token.setEnabled(uses_seedance)
         self.grok_oauth_token.setEnabled(uses_grok)
+        if hasattr(self, "grok_oauth_btn"):
+            self.grok_oauth_btn.setEnabled(uses_grok)
         self.chat_model.setEnabled(uses_grok)
         self.sora_generate_btn.setText("🎬 API Generate Video")
         self.seedance_generate_btn.setText("🎬 API Generate Video")
