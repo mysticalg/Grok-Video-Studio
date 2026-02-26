@@ -9502,7 +9502,25 @@ class MainWindow(QMainWindow):
                                 candidate = btn;
                             }
                         });
-                        if (!candidate) return { clicked: false, reason: "missing-button", clickX: null, clickY: null };
+                        if (!candidate) return { clicked: false, reason: "missing-button", clickX: null, clickY: null, directUrl: "" };
+
+                        const normalizeAbsoluteUrl = (rawUrl) => {
+                            const value = String(rawUrl || "").trim();
+                            if (!value) return "";
+                            try {
+                                return new URL(value, window.location.href).toString();
+                            } catch (_) {
+                                return value;
+                            }
+                        };
+                        const isDirectVideoUrl = (url) => {
+                            const normalized = normalizeAbsoluteUrl(url);
+                            if (!/^https?:[/][/]/i.test(normalized)) return false;
+                            const isOpenAIVideo = /^https:[/][/]videos[.]openai[.]com[/]/i.test(normalized) && /[/]raw(?:$|[?#])/i.test(normalized);
+                            const isImaginePublicVideo = /^https:[/][/]imagine-public[.]x[.]ai[/]/i.test(normalized)
+                                && /[.]mp4(?:$|[?#])/i.test(normalized);
+                            return isOpenAIVideo || isImaginePublicVideo;
+                        };
 
                         const common = { bubbles: true, cancelable: true, composed: true };
                         const fire = (el, eventName, ctorName) => {
@@ -9557,6 +9575,31 @@ class MainWindow(QMainWindow):
                             } catch (_) {}
                         }
 
+                        const directUrlCandidates = [];
+                        const pushCandidate = (rawUrl) => {
+                            const normalized = normalizeAbsoluteUrl(rawUrl);
+                            if (normalized) directUrlCandidates.push(normalized);
+                        };
+                        pushCandidate(candidate.getAttribute("href"));
+                        pushCandidate(candidate.getAttribute("data-url"));
+                        pushCandidate(candidate.getAttribute("data-href"));
+                        pushCandidate(candidate.getAttribute("data-src"));
+                        const candidateAnchor = candidate.closest("a[href]");
+                        if (candidateAnchor) pushCandidate(candidateAnchor.getAttribute("href"));
+                        for (const mediaEl of document.querySelectorAll("video[src], source[src], [data-video-url], [data-url], [data-src]")) {
+                            pushCandidate(mediaEl.getAttribute?.("src"));
+                            pushCandidate(mediaEl.getAttribute?.("data-video-url"));
+                            pushCandidate(mediaEl.getAttribute?.("data-url"));
+                            pushCandidate(mediaEl.getAttribute?.("data-src"));
+                        }
+                        try {
+                            const resourceEntries = performance.getEntriesByType("resource") || [];
+                            for (const entry of resourceEntries.slice(-60)) {
+                                pushCandidate(entry && entry.name ? String(entry.name) : "");
+                            }
+                        } catch (_) {}
+                        const directUrl = directUrlCandidates.find((url) => isDirectVideoUrl(url)) || "";
+
                         const finalRect = typeof candidate.getBoundingClientRect === "function"
                             ? candidate.getBoundingClientRect()
                             : null;
@@ -9565,6 +9608,7 @@ class MainWindow(QMainWindow):
                             reason: clicked ? "clicked" : "dispatch-failed",
                             clickX: finalRect ? (finalRect.left + finalRect.width / 2) : null,
                             clickY: finalRect ? (finalRect.top + finalRect.height / 2) : null,
+                            directUrl,
                         };
                     })()
                 """
@@ -9573,7 +9617,17 @@ class MainWindow(QMainWindow):
                     clicked = isinstance(click_result, dict) and bool(click_result.get("clicked"))
                     click_x = click_result.get("clickX") if isinstance(click_result, dict) else None
                     click_y = click_result.get("clickY") if isinstance(click_result, dict) else None
+                    direct_url = (click_result.get("directUrl") or "").strip() if isinstance(click_result, dict) else ""
                     native_clicked = False
+                    if not self.manual_download_request_pending and direct_url:
+                        self._append_log(
+                            f"Variant {current_variant}: resolved direct video URL from Download control; starting automatic direct download fallback."
+                        )
+                        if self._start_manual_direct_download(current_variant, direct_url):
+                            self.manual_download_click_sent = True
+                            self.manual_download_in_progress = True
+                            self.manual_download_poll_timer.start(1000)
+                            return
                     if not self.manual_download_request_pending and click_x is not None and click_y is not None:
                         native_clicked = self._native_click_embedded_browser_at(float(click_x), float(click_y))
                         if native_clicked:
