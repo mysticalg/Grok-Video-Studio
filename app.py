@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import html as html_lib
 import re
 import base64
 import concurrent.futures
@@ -9812,20 +9813,43 @@ class MainWindow(QMainWindow):
         except Exception:
             return ""
 
+        normalized_html = html
+        try:
+            normalized_html = html_lib.unescape(normalized_html)
+        except Exception:
+            normalized_html = html
+        normalized_html = normalized_html.replace("\\/", "/").replace("\\u002F", "/")
+
+        def _normalize_candidate(raw: str) -> str:
+            value = str(raw or "").strip()
+            if not value:
+                return ""
+            try:
+                value = html_lib.unescape(value)
+            except Exception:
+                pass
+            value = value.replace("\\/", "/").replace("\\u002F", "/")
+            if "%2f" in value.lower() or "%3a" in value.lower():
+                try:
+                    value = unquote(value)
+                except Exception:
+                    pass
+            if value.startswith("//"):
+                value = f"https:{value}"
+            elif re.match(r"^imagine-public[.]x[.]ai/", value, re.IGNORECASE):
+                value = f"https://{value}"
+            return value
+
         direct_candidates: list[str] = []
         sd_video_match = re.search(
             r'<video[^>]*\bid=["\']sd-video["\'][^>]*\bsrc=["\']([^"\']+)["\']',
-            html,
+            normalized_html,
             flags=re.IGNORECASE,
         )
         if sd_video_match:
-            sd_video_src = str(sd_video_match.group(1) or "").strip()
+            sd_video_src = _normalize_candidate(sd_video_match.group(1))
             if sd_video_src:
-                if sd_video_src.startswith("//"):
-                    sd_video_src = f"https:{sd_video_src}"
-                elif re.match(r"^imagine-public[.]x[.]ai/", sd_video_src, re.IGNORECASE):
-                    sd_video_src = f"https://{sd_video_src}"
-                else:
+                if not re.match(r"^https?://", sd_video_src, re.IGNORECASE):
                     page_url_parsed = urlparse(page_url)
                     page_origin = f"{page_url_parsed.scheme}://{page_url_parsed.netloc}"
                     sd_video_src = urljoin(page_origin, sd_video_src)
@@ -9833,23 +9857,24 @@ class MainWindow(QMainWindow):
 
         download_button_present = bool(
             re.search(
-                r"<button[^>]+aria-label=[\"']download[\"'][^>]*>",
-                html,
+                r'<button[^>]+aria-label=["\']download["\'][^>]*>',
+                normalized_html,
                 flags=re.IGNORECASE,
             )
         )
         patterns = [
             r'https?://[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
             r'https?://[^\s"\'<>]+(?:download|render|media|video)[^\s"\'<>]*',
+            r'https?:\\/\\/[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
+            r'https?:\\/\\/[^\s"\'<>]+(?:share-videos|download|render|media|video)[^\s"\'<>]*',
+            r'https?%3A%2F%2F[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
             r'imagine-public[.]x[.]ai/[^\s"\'<>]+(?:\.mp4|\.webm|\.mov|\.m4v)(?:[^\s"\'<>]*)',
             r'imagine-public[.]x[.]ai/[^\s"\'<>]*(?:share-videos|download|video)[^\s"\'<>]*',
         ]
         for pattern in patterns:
-            for match in re.findall(pattern, html, flags=re.IGNORECASE):
-                candidate = str(match or "").strip()
+            for match in re.findall(pattern, normalized_html, flags=re.IGNORECASE):
+                candidate = _normalize_candidate(match)
                 if candidate:
-                    if re.match(r"^imagine-public[.]x[.]ai/", candidate, re.IGNORECASE):
-                        candidate = f"https://{candidate}"
                     direct_candidates.append(candidate)
 
         if download_button_present:
@@ -9858,12 +9883,8 @@ class MainWindow(QMainWindow):
                 r'imagine-public[.]x[.]ai/[^\s"\'<>]*(?:share-videos|download|video)[^\s"\'<>]*',
             ]
             for pattern in button_scoped_patterns:
-                for match in re.findall(pattern, html, flags=re.IGNORECASE):
-                    candidate = str(match or "").strip()
-                    if candidate.startswith("//"):
-                        candidate = f"https:{candidate}"
-                    elif re.match(r"^imagine-public[.]x[.]ai/", candidate, re.IGNORECASE):
-                        candidate = f"https://{candidate}"
+                for match in re.findall(pattern, normalized_html, flags=re.IGNORECASE):
+                    candidate = _normalize_candidate(match)
                     if candidate:
                         direct_candidates.insert(0, candidate)
 
@@ -9873,8 +9894,8 @@ class MainWindow(QMainWindow):
             r'(?:src|href|data-src|data-url|data-video-url)=["\']([^"\']+)["\']',
         ]
         for pattern in attr_patterns:
-            for raw in re.findall(pattern, html, flags=re.IGNORECASE):
-                candidate = str(raw or "").strip()
+            for raw in re.findall(pattern, normalized_html, flags=re.IGNORECASE):
+                candidate = _normalize_candidate(raw)
                 if not candidate:
                     continue
                 absolute = urljoin(page_origin, candidate)
