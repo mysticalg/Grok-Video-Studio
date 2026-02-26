@@ -2286,6 +2286,7 @@ class MainWindow(QMainWindow):
             "AIFlowTrainer": True,
         }
         self.browser_zoom_factor = self.DEFAULT_BROWSER_ZOOM_FACTOR
+        self._pending_log_messages: list[str] = []
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
             medium_title="AI Generated Video Clip",
@@ -2785,6 +2786,10 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(120)
         log_layout.addWidget(self.log)
+        if self._pending_log_messages:
+            for pending_entry in self._pending_log_messages:
+                self.log.appendPlainText(pending_entry)
+            self._pending_log_messages.clear()
 
         log_actions_layout = QHBoxLayout()
         log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
@@ -5123,7 +5128,11 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log.appendPlainText(f"[{timestamp}] {text}")
+        entry = f"[{timestamp}] {text}"
+        if hasattr(self, "log") and self.log is not None:
+            self.log.appendPlainText(entry)
+            return
+        self._pending_log_messages.append(entry)
 
     def clear_activity_log(self) -> None:
         self.log.clear()
