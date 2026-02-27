@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlparse
 
 from playwright.async_api import Browser, Page, async_playwright
 
@@ -44,17 +45,45 @@ class CDPController:
             # Keep the flow moving; some social pages hold long network connections.
             pass
 
+    @staticmethod
+    def _urls_are_compatible(target_url: str, current_url: str) -> bool:
+        target = str(target_url or "").strip()
+        current = str(current_url or "").strip()
+        if not target:
+            return True
+        if not current:
+            return False
+        if target in current:
+            return True
+
+        target_parts = urlparse(target)
+        current_parts = urlparse(current)
+        target_host = (target_parts.netloc or "").lower()
+        current_host = (current_parts.netloc or "").lower()
+        target_path = (target_parts.path or "").rstrip("/") or "/"
+        current_path = (current_parts.path or "").rstrip("/") or "/"
+
+        # TikTok commonly bounces between /upload and /tiktokstudio/upload?from=webapp.
+        # Treat both upload entry points as equivalent so startup does not keep re-navigating.
+        tiktok_upload_paths = {"/upload", "/tiktokstudio/upload"}
+        if "tiktok.com" in target_host and "tiktok.com" in current_host:
+            if target_path in tiktok_upload_paths and current_path in tiktok_upload_paths:
+                return True
+
+        return False
+
     async def get_or_create_page(self, url: str, reuse_tab: bool = False) -> Page:
         if reuse_tab:
             page = await self.get_most_recent_page()
             if page is not None:
-                if url not in (page.url or ""):
+                if not self._urls_are_compatible(url, page.url or ""):
                     await self._goto_best_effort(page, url)
                 return page
 
-        page = await self.find_page_by_url_contains(url)
-        if page is not None:
-            return page
+        for context in self.browser.contexts:
+            for page in context.pages:
+                if self._urls_are_compatible(url, page.url or ""):
+                    return page
 
         context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         page = await context.new_page()
