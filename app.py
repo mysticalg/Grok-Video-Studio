@@ -2746,6 +2746,17 @@ class MainWindow(QMainWindow):
         if facebook_browser is not None:
             facebook_browser.setUrl(QUrl(self._facebook_upload_home_url()))
 
+    def _x_upload_home_url(self) -> str:
+        configured = self.x_profile_url.text().strip() if hasattr(self, "x_profile_url") else ""
+        if configured:
+            return configured
+        return "https://x.com/home"
+
+    def _refresh_x_upload_tab_url(self) -> None:
+        x_browser = self.social_upload_browsers.get("X")
+        if x_browser is not None:
+            x_browser.setUrl(QUrl(self._x_upload_home_url()))
+
     def _build_ui(self) -> None:
         splitter = QSplitter()
 
@@ -2754,6 +2765,7 @@ class MainWindow(QMainWindow):
         left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._build_model_api_settings_dialog()
+        self._build_social_networking_settings_dialog()
         self._build_menu_bar()
 
         self.automation_group = QGroupBox("🤖 Automation Chrome + CDP")
@@ -3568,7 +3580,7 @@ class MainWindow(QMainWindow):
         if platform_name == "TikTok":
             return "https://www.tiktok.com/tiktokstudio/upload"
         if platform_name == "X":
-            return "https://x.com/home"
+            return self._x_upload_home_url()
         if platform_name == "YouTube":
             return "https://studio.youtube.com"
         return ""
@@ -4105,117 +4117,6 @@ class MainWindow(QMainWindow):
         self.browser_auth_btn.clicked.connect(self.open_ai_provider_login)
         ai_layout.addRow("Browser Authorization", self.browser_auth_btn)
 
-        youtube_group = QGroupBox("YouTube")
-        youtube_layout = QFormLayout(youtube_group)
-
-        self.youtube_api_key = QLineEdit()
-        self.youtube_api_key.setEchoMode(QLineEdit.Password)
-        self.youtube_api_key.setText(os.getenv("YOUTUBE_API_KEY", ""))
-        youtube_layout.addRow("YouTube API Key", self.youtube_api_key)
-
-        facebook_group = QGroupBox("Facebook")
-        facebook_layout = QFormLayout(facebook_group)
-
-        self.facebook_page_id = QLineEdit(os.getenv("FACEBOOK_PAGE_ID", ""))
-        facebook_layout.addRow("Facebook Page ID", self.facebook_page_id)
-
-        self.facebook_access_token = QLineEdit()
-        self.facebook_access_token.setEchoMode(QLineEdit.Password)
-        self.facebook_access_token.setText(os.getenv("FACEBOOK_ACCESS_TOKEN", ""))
-        facebook_layout.addRow("Facebook Access Token", self.facebook_access_token)
-
-        self.facebook_app_id = QLineEdit(os.getenv("FACEBOOK_APP_ID", ""))
-        facebook_layout.addRow("Facebook App ID", self.facebook_app_id)
-
-        self.facebook_app_secret = QLineEdit()
-        self.facebook_app_secret.setEchoMode(QLineEdit.Password)
-        self.facebook_app_secret.setText(os.getenv("FACEBOOK_APP_SECRET", ""))
-        facebook_layout.addRow("Facebook App Secret", self.facebook_app_secret)
-
-        self.facebook_profile_url = QLineEdit(os.getenv("FACEBOOK_PROFILE_URL", "https://www.facebook.com/"))
-        self.facebook_profile_url.setPlaceholderText("e.g. https://www.facebook.com/dave.hook.94")
-        self.facebook_profile_url.setToolTip("Used for the Facebook web upload tab URL.")
-        self.facebook_profile_url.editingFinished.connect(self._refresh_facebook_upload_tab_url)
-        facebook_layout.addRow("Facebook Profile URL (web upload)", self.facebook_profile_url)
-
-        self.facebook_oauth_btn = QPushButton("Authorize Facebook for Pages")
-        self.facebook_oauth_btn.setToolTip("Open Facebook OAuth in browser and populate Page ID + Page access token.")
-        self.facebook_oauth_btn.clicked.connect(self.authorize_facebook_pages)
-        facebook_layout.addRow("Facebook OAuth", self.facebook_oauth_btn)
-
-        instagram_group = QGroupBox("Instagram")
-        instagram_layout = QFormLayout(instagram_group)
-
-        self.instagram_business_id = QLineEdit(os.getenv("INSTAGRAM_BUSINESS_ID", ""))
-        instagram_layout.addRow("Instagram Business ID", self.instagram_business_id)
-
-        self.instagram_access_token = QLineEdit()
-        self.instagram_access_token.setEchoMode(QLineEdit.Password)
-        self.instagram_access_token.setText(os.getenv("INSTAGRAM_ACCESS_TOKEN", ""))
-        instagram_layout.addRow("Instagram Access Token", self.instagram_access_token)
-
-        self.instagram_username = QLineEdit(os.getenv("INSTAGRAM_USERNAME", ""))
-        self.instagram_username.setPlaceholderText("e.g. funkymonk66")
-        self.instagram_username.setToolTip("Used for the Instagram web upload tab URL: https://www.instagram.com/<username>")
-        self.instagram_username.editingFinished.connect(self._refresh_instagram_upload_tab_url)
-        instagram_layout.addRow("Instagram Username (web upload URL)", self.instagram_username)
-
-        tiktok_group = QGroupBox("TikTok")
-        tiktok_layout = QFormLayout(tiktok_group)
-
-        self.tiktok_access_token = QLineEdit()
-        self.tiktok_access_token.setEchoMode(QLineEdit.Password)
-        self.tiktok_access_token.setText(os.getenv("TIKTOK_ACCESS_TOKEN", ""))
-        tiktok_layout.addRow("TikTok Access Token", self.tiktok_access_token)
-
-        self.tiktok_client_key = QLineEdit(os.getenv("TIKTOK_CLIENT_KEY", ""))
-        tiktok_layout.addRow("TikTok Client Key", self.tiktok_client_key)
-
-        self.tiktok_client_secret = QLineEdit()
-        self.tiktok_client_secret.setEchoMode(QLineEdit.Password)
-        self.tiktok_client_secret.setText(os.getenv("TIKTOK_CLIENT_SECRET", ""))
-        tiktok_layout.addRow("TikTok Client Secret", self.tiktok_client_secret)
-
-        self.tiktok_oauth_btn = QPushButton("Authorize TikTok Upload")
-        self.tiktok_oauth_btn.setToolTip("Open TikTok OAuth in browser and populate TikTok access token.")
-        self.tiktok_oauth_btn.clicked.connect(self.authorize_tiktok_upload)
-        tiktok_layout.addRow("TikTok OAuth", self.tiktok_oauth_btn)
-
-        self.tiktok_privacy_level = QComboBox()
-        self.tiktok_privacy_level.addItem("Public", "PUBLIC_TO_EVERYONE")
-        self.tiktok_privacy_level.addItem("Friends (mutual follow)", "MUTUAL_FOLLOW_FRIENDS")
-        self.tiktok_privacy_level.addItem("Private (only me)", "SELF_ONLY")
-        env_privacy = os.getenv("TIKTOK_PRIVACY_LEVEL", "PUBLIC_TO_EVERYONE").strip().upper()
-        privacy_index = self.tiktok_privacy_level.findData(env_privacy)
-        if privacy_index >= 0:
-            self.tiktok_privacy_level.setCurrentIndex(privacy_index)
-        tiktok_layout.addRow("TikTok Privacy", self.tiktok_privacy_level)
-
-        self.tiktok_track_candidates_file = QLineEdit()
-        self.tiktok_track_candidates_file.setPlaceholderText("Optional .txt file path (one track candidate per line)")
-        self.tiktok_track_candidates_file.setToolTip("Track candidates to combine with the music artist/term during TikTok sound search.")
-        self.tiktok_track_candidates_file.editingFinished.connect(self._sync_tiktok_track_settings_from_inputs)
-        self.tiktok_track_candidates_browse_btn = QPushButton("Browse...")
-        self.tiktok_track_candidates_browse_btn.clicked.connect(self._choose_tiktok_track_candidates_file)
-        tiktok_track_file_row = QHBoxLayout()
-        tiktok_track_file_row.addWidget(self.tiktok_track_candidates_file)
-        tiktok_track_file_row.addWidget(self.tiktok_track_candidates_browse_btn)
-        tiktok_layout.addRow("TikTok Track List File", tiktok_track_file_row)
-
-        self.tiktok_track_candidates_text = QPlainTextEdit()
-        self.tiktok_track_candidates_text.setMaximumHeight(90)
-        self.tiktok_track_candidates_text.setPlaceholderText("Optional extra track candidates (one per line)")
-        self.tiktok_track_candidates_text.textChanged.connect(self._sync_tiktok_track_settings_from_inputs)
-        tiktok_layout.addRow("TikTok Track Candidates", self.tiktok_track_candidates_text)
-
-        self.tiktok_rotate_tracks = QCheckBox("Rotate track names across TikTok uploads")
-        self.tiktok_rotate_tracks.toggled.connect(self._sync_tiktok_track_settings_from_inputs)
-        tiktok_layout.addRow("TikTok Track Rotation", self.tiktok_rotate_tracks)
-
-        self.tiktok_reset_track_rotation_btn = QPushButton("Reset Track Rotation Progress")
-        self.tiktok_reset_track_rotation_btn.clicked.connect(self._reset_tiktok_track_rotation_progress)
-        tiktok_layout.addRow("TikTok Track Rotation Reset", self.tiktok_reset_track_rotation_btn)
-
         app_group = QGroupBox("App Preferences")
         app_layout = QFormLayout(app_group)
 
@@ -4296,10 +4197,6 @@ class MainWindow(QMainWindow):
         app_layout.addRow("CDP Relay URL", self.cdp_social_upload_relay_url)
 
         settings_layout.addWidget(ai_group)
-        settings_layout.addWidget(youtube_group)
-        settings_layout.addWidget(facebook_group)
-        settings_layout.addWidget(instagram_group)
-        settings_layout.addWidget(tiktok_group)
         settings_layout.addWidget(app_group)
         settings_layout.addStretch(1)
 
@@ -4315,6 +4212,175 @@ class MainWindow(QMainWindow):
         if close_btn is not None:
             close_btn.clicked.connect(self.model_api_settings_dialog.close)
         dialog_layout.addWidget(button_box)
+
+    def _build_social_networking_settings_dialog(self) -> None:
+        self.social_networking_settings_dialog = QDialog(self)
+        self.social_networking_settings_dialog.setWindowTitle("Social Networking Settings")
+        self.social_networking_settings_dialog.setMinimumWidth(820)
+        self.social_networking_settings_dialog.resize(940, 720)
+
+        dialog_layout = QVBoxLayout(self.social_networking_settings_dialog)
+        social_tabs = QTabWidget()
+
+        youtube_tab = QWidget()
+        youtube_layout = QFormLayout(youtube_tab)
+        self.youtube_api_key = QLineEdit()
+        self.youtube_api_key.setEchoMode(QLineEdit.Password)
+        self.youtube_api_key.setText(os.getenv("YOUTUBE_API_KEY", ""))
+        youtube_layout.addRow("YouTube API Key", self.youtube_api_key)
+        social_tabs.addTab(youtube_tab, "YouTube")
+
+        facebook_tab = QWidget()
+        facebook_layout = QFormLayout(facebook_tab)
+        self.facebook_page_id = QLineEdit(os.getenv("FACEBOOK_PAGE_ID", ""))
+        facebook_layout.addRow("Facebook Page ID", self.facebook_page_id)
+
+        self.facebook_access_token = QLineEdit()
+        self.facebook_access_token.setEchoMode(QLineEdit.Password)
+        self.facebook_access_token.setText(os.getenv("FACEBOOK_ACCESS_TOKEN", ""))
+        facebook_layout.addRow("Facebook Access Token", self.facebook_access_token)
+
+        self.facebook_app_id = QLineEdit(os.getenv("FACEBOOK_APP_ID", ""))
+        facebook_layout.addRow("Facebook App ID", self.facebook_app_id)
+
+        self.facebook_app_secret = QLineEdit()
+        self.facebook_app_secret.setEchoMode(QLineEdit.Password)
+        self.facebook_app_secret.setText(os.getenv("FACEBOOK_APP_SECRET", ""))
+        facebook_layout.addRow("Facebook App Secret", self.facebook_app_secret)
+
+        self.facebook_profile_url = QLineEdit(os.getenv("FACEBOOK_PROFILE_URL", "https://www.facebook.com/"))
+        self.facebook_profile_url.setPlaceholderText("e.g. https://www.facebook.com/dave.hook.94")
+        self.facebook_profile_url.setToolTip("Used for the Facebook web upload tab URL.")
+        self.facebook_profile_url.editingFinished.connect(self._refresh_facebook_upload_tab_url)
+        facebook_layout.addRow("Facebook Profile URL (web upload)", self.facebook_profile_url)
+
+        self.facebook_oauth_btn = QPushButton("Authorize Facebook for Pages")
+        self.facebook_oauth_btn.setToolTip("Open Facebook OAuth in browser and populate Page ID + Page access token.")
+        self.facebook_oauth_btn.clicked.connect(self.authorize_facebook_pages)
+        facebook_layout.addRow("Facebook OAuth", self.facebook_oauth_btn)
+        social_tabs.addTab(facebook_tab, "Facebook")
+
+        instagram_tab = QWidget()
+        instagram_layout = QFormLayout(instagram_tab)
+        self.instagram_business_id = QLineEdit(os.getenv("INSTAGRAM_BUSINESS_ID", ""))
+        instagram_layout.addRow("Instagram Business ID", self.instagram_business_id)
+
+        self.instagram_access_token = QLineEdit()
+        self.instagram_access_token.setEchoMode(QLineEdit.Password)
+        self.instagram_access_token.setText(os.getenv("INSTAGRAM_ACCESS_TOKEN", ""))
+        instagram_layout.addRow("Instagram Access Token", self.instagram_access_token)
+
+        self.instagram_username = QLineEdit(os.getenv("INSTAGRAM_USERNAME", ""))
+        self.instagram_username.setPlaceholderText("e.g. funkymonk66")
+        self.instagram_username.setToolTip("Used for the Instagram web upload tab URL: https://www.instagram.com/<username>")
+        self.instagram_username.editingFinished.connect(self._refresh_instagram_upload_tab_url)
+        instagram_layout.addRow("Instagram Username (web upload URL)", self.instagram_username)
+        social_tabs.addTab(instagram_tab, "Instagram")
+
+        x_tab = QWidget()
+        x_layout = QFormLayout(x_tab)
+        self.x_profile_url = QLineEdit(os.getenv("X_PROFILE_URL", "https://x.com/home"))
+        self.x_profile_url.setPlaceholderText("e.g. https://x.com/home")
+        self.x_profile_url.setToolTip("Used for the X web upload tab URL.")
+        self.x_profile_url.editingFinished.connect(self._refresh_x_upload_tab_url)
+        x_layout.addRow("X Profile URL (web upload)", self.x_profile_url)
+
+        self.x_bearer_token = QLineEdit()
+        self.x_bearer_token.setEchoMode(QLineEdit.Password)
+        self.x_bearer_token.setText(os.getenv("X_BEARER_TOKEN", ""))
+        x_layout.addRow("X Bearer Token", self.x_bearer_token)
+
+        self.x_consumer_key = QLineEdit(os.getenv("X_CONSUMER_KEY", ""))
+        x_layout.addRow("X Consumer Key", self.x_consumer_key)
+
+        self.x_consumer_secret = QLineEdit()
+        self.x_consumer_secret.setEchoMode(QLineEdit.Password)
+        self.x_consumer_secret.setText(os.getenv("X_CONSUMER_SECRET", ""))
+        x_layout.addRow("X Consumer Secret", self.x_consumer_secret)
+
+        self.x_access_token = QLineEdit()
+        self.x_access_token.setEchoMode(QLineEdit.Password)
+        self.x_access_token.setText(os.getenv("X_ACCESS_TOKEN", ""))
+        x_layout.addRow("X Access Token", self.x_access_token)
+
+        self.x_access_token_secret = QLineEdit()
+        self.x_access_token_secret.setEchoMode(QLineEdit.Password)
+        self.x_access_token_secret.setText(os.getenv("X_ACCESS_TOKEN_SECRET", ""))
+        x_layout.addRow("X Access Token Secret", self.x_access_token_secret)
+        social_tabs.addTab(x_tab, "X")
+
+        tiktok_tab = QWidget()
+        tiktok_layout = QFormLayout(tiktok_tab)
+        self.tiktok_access_token = QLineEdit()
+        self.tiktok_access_token.setEchoMode(QLineEdit.Password)
+        self.tiktok_access_token.setText(os.getenv("TIKTOK_ACCESS_TOKEN", ""))
+        tiktok_layout.addRow("TikTok Access Token", self.tiktok_access_token)
+
+        self.tiktok_client_key = QLineEdit(os.getenv("TIKTOK_CLIENT_KEY", ""))
+        tiktok_layout.addRow("TikTok Client Key", self.tiktok_client_key)
+
+        self.tiktok_client_secret = QLineEdit()
+        self.tiktok_client_secret.setEchoMode(QLineEdit.Password)
+        self.tiktok_client_secret.setText(os.getenv("TIKTOK_CLIENT_SECRET", ""))
+        tiktok_layout.addRow("TikTok Client Secret", self.tiktok_client_secret)
+
+        self.tiktok_oauth_btn = QPushButton("Authorize TikTok Upload")
+        self.tiktok_oauth_btn.setToolTip("Open TikTok OAuth in browser and populate TikTok access token.")
+        self.tiktok_oauth_btn.clicked.connect(self.authorize_tiktok_upload)
+        tiktok_layout.addRow("TikTok OAuth", self.tiktok_oauth_btn)
+
+        self.tiktok_privacy_level = QComboBox()
+        self.tiktok_privacy_level.addItem("Public", "PUBLIC_TO_EVERYONE")
+        self.tiktok_privacy_level.addItem("Friends (mutual follow)", "MUTUAL_FOLLOW_FRIENDS")
+        self.tiktok_privacy_level.addItem("Private (only me)", "SELF_ONLY")
+        env_privacy = os.getenv("TIKTOK_PRIVACY_LEVEL", "PUBLIC_TO_EVERYONE").strip().upper()
+        privacy_index = self.tiktok_privacy_level.findData(env_privacy)
+        if privacy_index >= 0:
+            self.tiktok_privacy_level.setCurrentIndex(privacy_index)
+        tiktok_layout.addRow("TikTok Privacy", self.tiktok_privacy_level)
+
+        self.tiktok_track_candidates_file = QLineEdit()
+        self.tiktok_track_candidates_file.setPlaceholderText("Optional .txt file path (one track candidate per line)")
+        self.tiktok_track_candidates_file.setToolTip("Track candidates to combine with the music artist/term during TikTok sound search.")
+        self.tiktok_track_candidates_file.editingFinished.connect(self._sync_tiktok_track_settings_from_inputs)
+        self.tiktok_track_candidates_browse_btn = QPushButton("Browse...")
+        self.tiktok_track_candidates_browse_btn.clicked.connect(self._choose_tiktok_track_candidates_file)
+        tiktok_track_file_row = QHBoxLayout()
+        tiktok_track_file_row.addWidget(self.tiktok_track_candidates_file)
+        tiktok_track_file_row.addWidget(self.tiktok_track_candidates_browse_btn)
+        tiktok_layout.addRow("TikTok Track List File", tiktok_track_file_row)
+
+        self.tiktok_track_candidates_text = QPlainTextEdit()
+        self.tiktok_track_candidates_text.setMaximumHeight(90)
+        self.tiktok_track_candidates_text.setPlaceholderText("Optional extra track candidates (one per line)")
+        self.tiktok_track_candidates_text.textChanged.connect(self._sync_tiktok_track_settings_from_inputs)
+        tiktok_layout.addRow("TikTok Track Candidates", self.tiktok_track_candidates_text)
+
+        self.tiktok_rotate_tracks = QCheckBox("Rotate track names across TikTok uploads")
+        self.tiktok_rotate_tracks.toggled.connect(self._sync_tiktok_track_settings_from_inputs)
+        tiktok_layout.addRow("TikTok Track Rotation", self.tiktok_rotate_tracks)
+
+        self.tiktok_reset_track_rotation_btn = QPushButton("Reset Track Rotation Progress")
+        self.tiktok_reset_track_rotation_btn.clicked.connect(self._reset_tiktok_track_rotation_progress)
+        tiktok_layout.addRow("TikTok Track Rotation Reset", self.tiktok_reset_track_rotation_btn)
+        social_tabs.addTab(tiktok_tab, "TikTok")
+
+        dialog_layout.addWidget(social_tabs)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close)
+        save_btn = button_box.button(QDialogButtonBox.StandardButton.Save)
+        if save_btn is not None:
+            save_btn.setText("Save Settings")
+            save_btn.clicked.connect(self.save_model_api_settings)
+        close_btn = button_box.button(QDialogButtonBox.StandardButton.Close)
+        if close_btn is not None:
+            close_btn.clicked.connect(self.social_networking_settings_dialog.close)
+        dialog_layout.addWidget(button_box)
+
+    def show_social_networking_settings(self) -> None:
+        self.social_networking_settings_dialog.show()
+        self.social_networking_settings_dialog.raise_()
+        self.social_networking_settings_dialog.activateWindow()
 
     def _toolbar_tinted_standard_icon(self, standard_pixmap: QStyle.StandardPixmap, color_hex: str = "#1e88e5") -> QIcon:
         base_icon = self.style().standardIcon(standard_pixmap)
@@ -4449,6 +4515,10 @@ class MainWindow(QMainWindow):
         open_settings_action = QAction("Open Model/API Settings", self)
         open_settings_action.triggered.connect(self.show_model_api_settings)
         settings_menu.addAction(open_settings_action)
+
+        open_social_settings_action = QAction("Social Networking", self)
+        open_social_settings_action.triggered.connect(self.show_social_networking_settings)
+        settings_menu.addAction(open_social_settings_action)
 
         video_menu = menu_bar.addMenu("Video")
         self.video_settings_menu = video_menu.addMenu("Settings")
@@ -5082,6 +5152,12 @@ class MainWindow(QMainWindow):
             "instagram_business_id": self.instagram_business_id.text(),
             "instagram_access_token": self.instagram_access_token.text(),
             "instagram_username": self.instagram_username.text(),
+            "x_profile_url": self.x_profile_url.text(),
+            "x_bearer_token": self.x_bearer_token.text(),
+            "x_consumer_key": self.x_consumer_key.text(),
+            "x_consumer_secret": self.x_consumer_secret.text(),
+            "x_access_token": self.x_access_token.text(),
+            "x_access_token_secret": self.x_access_token_secret.text(),
             "tiktok_access_token": self.tiktok_access_token.text(),
             "tiktok_client_key": self.tiktok_client_key.text(),
             "tiktok_client_secret": self.tiktok_client_secret.text(),
@@ -5222,6 +5298,19 @@ class MainWindow(QMainWindow):
         if "instagram_username" in preferences:
             self.instagram_username.setText(str(preferences["instagram_username"]))
             self._refresh_instagram_upload_tab_url()
+        if "x_profile_url" in preferences:
+            self.x_profile_url.setText(str(preferences["x_profile_url"]))
+            self._refresh_x_upload_tab_url()
+        if "x_bearer_token" in preferences:
+            self.x_bearer_token.setText(str(preferences["x_bearer_token"]))
+        if "x_consumer_key" in preferences:
+            self.x_consumer_key.setText(str(preferences["x_consumer_key"]))
+        if "x_consumer_secret" in preferences:
+            self.x_consumer_secret.setText(str(preferences["x_consumer_secret"]))
+        if "x_access_token" in preferences:
+            self.x_access_token.setText(str(preferences["x_access_token"]))
+        if "x_access_token_secret" in preferences:
+            self.x_access_token_secret.setText(str(preferences["x_access_token_secret"]))
         if "tiktok_access_token" in preferences:
             self.tiktok_access_token.setText(str(preferences["tiktok_access_token"]))
         if "tiktok_client_key" in preferences:
