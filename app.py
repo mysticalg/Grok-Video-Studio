@@ -2690,6 +2690,7 @@ class MainWindow(QMainWindow):
         self.automation_mode.setToolTip(
             "Embedded: run DOM automation in the in-app upload tab. External Browser: run automation only in Automation Chrome (external window)."
         )
+        self.automation_mode.currentIndexChanged.connect(self._on_automation_mode_changed)
         automation_buttons.addWidget(self.automation_mode)
 
         automation_layout.addLayout(automation_buttons)
@@ -3300,6 +3301,7 @@ class MainWindow(QMainWindow):
         for tab_key in self.browser_tab_indices:
             self._set_browser_tab_enabled(tab_key, self._is_browser_tab_enabled(tab_key))
         self._refresh_browser_tab_selection()
+        self._sync_social_embedded_browser_state_for_automation_mode()
 
         right_splitter = QSplitter(Qt.Vertical)
         right_splitter.setOpaqueResize(True)
@@ -5584,6 +5586,39 @@ class MainWindow(QMainWindow):
             self.log.appendPlainText(entry)
             return
         self._pending_log_messages.append(entry)
+
+    def _on_automation_mode_changed(self, _index: int) -> None:
+        self._sync_social_embedded_browser_state_for_automation_mode(log_change=True)
+
+    def _sync_social_embedded_browser_state_for_automation_mode(self, log_change: bool = False) -> None:
+        mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded").strip().lower()
+        should_enable_embedded_social_browsers = mode != "external"
+
+        if not hasattr(self, "social_upload_browsers"):
+            return
+
+        for platform_name, browser in self.social_upload_browsers.items():
+            if should_enable_embedded_social_browsers:
+                browser.setEnabled(True)
+            else:
+                browser.stop()
+                browser.setEnabled(False)
+
+            status_label = self.social_upload_status_labels.get(platform_name)
+            if status_label is not None:
+                if should_enable_embedded_social_browsers:
+                    if "deactivated" in status_label.text().lower():
+                        status_label.setText("Status: ready")
+                else:
+                    status_label.setText("Status: embedded browser deactivated (External Browser mode)")
+
+        if log_change:
+            if should_enable_embedded_social_browsers:
+                self._append_automation_log("Automation mode switched to Embedded: re-enabled embedded social upload browsers.")
+            else:
+                self._append_automation_log(
+                    "Automation mode switched to External Browser: deactivated embedded social upload browsers while keeping tabs and controls available."
+                )
 
     def clear_activity_log(self) -> None:
         self.log.clear()
