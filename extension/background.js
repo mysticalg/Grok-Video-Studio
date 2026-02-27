@@ -16,9 +16,36 @@ async function findTargetTab(platform = "") {
     x: ["x.com/compose/post", "x.com/compose", "x.com"]
   };
 
+  const patternRank = (url, patterns) => {
+    const value = String(url || "");
+    for (let i = 0; i < patterns.length; i += 1) {
+      if (value.includes(patterns[i])) return i;
+    }
+    return Number.POSITIVE_INFINITY;
+  };
+
   const allTabs = await chrome.tabs.query({});
   const targets = matchByPlatform[normalized] || [];
-  const platformTab = allTabs.find((tab) => tab.id != null && targets.some((host) => String(tab.url || "").includes(host)));
+  const matchingTabs = allTabs.filter((tab) => tab.id != null && Number.isFinite(patternRank(tab.url, targets)));
+
+  const sortTabs = (tabs) => tabs.slice().sort((a, b) => {
+    const rankDelta = patternRank(a.url, targets) - patternRank(b.url, targets);
+    if (rankDelta !== 0) return rankDelta;
+
+    const aFocused = a.active && a.lastFocusedWindow ? 1 : 0;
+    const bFocused = b.active && b.lastFocusedWindow ? 1 : 0;
+    if (aFocused !== bFocused) return bFocused - aFocused;
+
+    const aActive = a.active ? 1 : 0;
+    const bActive = b.active ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+
+    return Number(b.lastAccessed || 0) - Number(a.lastAccessed || 0);
+  });
+
+  const focusedMatches = sortTabs(matchingTabs.filter((tab) => tab.lastFocusedWindow));
+  const anyMatches = sortTabs(matchingTabs);
+  const platformTab = focusedMatches[0] || anyMatches[0] || null;
 
   let activeTab = allTabs.find((tab) => tab.active && tab.lastFocusedWindow && tab.id != null);
   if (!activeTab) activeTab = allTabs.find((tab) => tab.active && tab.id != null);

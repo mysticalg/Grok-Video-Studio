@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlparse
 
 from playwright.async_api import Browser, Page, async_playwright
 
@@ -54,17 +55,38 @@ class CDPController:
             return False
         return target in current
 
+    @staticmethod
+    def _host_for_url(url: str) -> str:
+        try:
+            return (urlparse(str(url or "")).netloc or "").lower()
+        except Exception:
+            return ""
+
+    def _pages_newest_first(self) -> list[Page]:
+        pages: list[Page] = []
+        for context in self.browser.contexts:
+            pages.extend(context.pages)
+        pages.reverse()
+        return pages
+
     async def get_or_create_page(self, url: str, reuse_tab: bool = False) -> Page:
-        if reuse_tab:
-            page = await self.get_most_recent_page()
-            if page is not None:
-                if not self._urls_are_compatible(url, page.url or ""):
-                    await self._goto_best_effort(page, url)
+        pages = self._pages_newest_first()
+        for page in pages:
+            if self._urls_are_compatible(url, page.url or ""):
                 return page
 
-        for context in self.browser.contexts:
-            for page in context.pages:
-                if self._urls_are_compatible(url, page.url or ""):
+        if reuse_tab:
+            target_host = self._host_for_url(url)
+            if target_host:
+                for page in pages:
+                    current = str(page.url or "").strip()
+                    if not current:
+                        continue
+                    if current.startswith("chrome-extension://") or current.startswith("devtools://"):
+                        continue
+                    if self._host_for_url(current) != target_host:
+                        continue
+                    await self._goto_best_effort(page, url)
                     return page
 
         context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
