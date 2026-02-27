@@ -17,7 +17,7 @@ import math
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import unquote, urlencode, urlparse, urlsplit
 from typing import Any, Callable, Iterable
 
 import requests
@@ -111,6 +111,7 @@ OPENAI_CHATGPT_API_BASE = os.getenv("OPENAI_CHATGPT_API_BASE", "https://chatgpt.
 OPENAI_USE_CHATGPT_BACKEND = os.getenv("OPENAI_USE_CHATGPT_BACKEND", "1").strip().lower() not in {"0", "false", "no"}
 OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434/v1")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1:8b")
+OLLAMA_MODELS_DIR = os.getenv("OLLAMA_MODELS", str(Path.home() / ".ollama" / "models"))
 AI_TEXT_TIMEOUT_SECONDS = max(30.0, float(os.getenv("AI_TEXT_TIMEOUT_SECONDS", "240")))
 AI_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("AI_MAX_OUTPUT_TOKENS", "4096")))
 AI_MAX_OUTPUT_TOKENS_LOCAL = max(128, int(os.getenv("AI_MAX_OUTPUT_TOKENS_LOCAL", "768")))
@@ -183,6 +184,89 @@ DEFAULT_EMBEDDED_CHROME_USER_AGENT = (
 
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
+
+
+def _normalize_ollama_base_for_tags(base_url: str) -> str:
+    value = str(base_url or "").strip()
+    if not value:
+        return "http://127.0.0.1:11434"
+
+    parsed = urlsplit(value)
+    if not parsed.scheme:
+        value = f"http://{value}"
+        parsed = urlsplit(value)
+
+    path = parsed.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3]
+
+    normalized = parsed._replace(path=path, query="", fragment="")
+    return normalized.geturl().rstrip("/")
+
+
+def _discover_ollama_local_models(models_dir: Path) -> list[str]:
+    names: set[str] = set()
+    manifests_dir = models_dir / "manifests" / "registry.ollama.ai" / "library"
+    if not manifests_dir.exists():
+        return []
+
+    for manifest_file in manifests_dir.rglob("*"):
+        if not manifest_file.is_file():
+            continue
+        relative_parts = manifest_file.relative_to(manifests_dir).parts
+        if not relative_parts:
+            continue
+        if len(relative_parts) == 1:
+            names.add(relative_parts[0])
+            continue
+        model = "/".join(relative_parts[:-1])
+        tag = relative_parts[-1]
+        if tag == "latest":
+            names.add(model)
+        names.add(f"{model}:{tag}")
+
+    return sorted(names)
+
+
+def _fetch_ollama_models(base_url: str) -> list[str]:
+    endpoint = f"{_normalize_ollama_base_for_tags(base_url)}/api/tags"
+    response = requests.get(endpoint, timeout=5)
+    response.raise_for_status()
+    payload = response.json()
+    models = payload.get("models") if isinstance(payload, dict) else []
+    names: list[str] = []
+    if not isinstance(models, list):
+        return names
+
+    for model_entry in models:
+        if not isinstance(model_entry, dict):
+            continue
+        name = str(model_entry.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return sorted(set(names))
+
+
+def _available_ollama_models(ollama_api_base: str) -> tuple[list[str], str | None]:
+    local_models = _discover_ollama_local_models(Path(OLLAMA_MODELS_DIR).expanduser())
+    local_error: str | None = None
+    if not local_models:
+        local_error = f"No local manifests found under {Path(OLLAMA_MODELS_DIR).expanduser()}"
+
+    try:
+        api_models = _fetch_ollama_models(ollama_api_base)
+        merged = sorted(set(local_models) | set(api_models))
+        if merged:
+            return merged, None
+        if local_error:
+            return [], f"{local_error}; Ollama API returned no models."
+        return [], "Ollama API returned no models."
+    except Exception as exc:
+        if local_models:
+            return local_models, f"Unable to query Ollama API tags endpoint: {exc}"
+        if local_error:
+            return [], f"{local_error}; unable to query Ollama API tags endpoint: {exc}"
+        return [], f"Unable to query Ollama API tags endpoint: {exc}"
 
 
 def _read_local_app_version(default: str = "0.0.0") -> str:
@@ -3980,10 +4064,20 @@ class MainWindow(QMainWindow):
 
         self.ollama_api_base = QLineEdit(os.getenv("OLLAMA_API_BASE", OLLAMA_API_BASE))
         self.ollama_api_base.setPlaceholderText("http://127.0.0.1:11434/v1")
+        self.ollama_api_base.editingFinished.connect(self._refresh_ollama_chat_models)
         ai_layout.addRow("Ollama API Base", self.ollama_api_base)
 
-        self.ollama_chat_model = QLineEdit(os.getenv("OLLAMA_CHAT_MODEL", OLLAMA_CHAT_MODEL))
-        ai_layout.addRow("Ollama Chat Model", self.ollama_chat_model)
+        self.ollama_chat_model = QComboBox()
+        self.ollama_chat_model.setEditable(True)
+        self.ollama_chat_model.setInsertPolicy(QComboBox.NoInsert)
+        self.ollama_chat_model.setToolTip("Loaded from Ollama models directory and /api/tags. You can still type a custom model.")
+        self.refresh_ollama_models_btn = QPushButton("Refresh")
+        self.refresh_ollama_models_btn.clicked.connect(self._refresh_ollama_chat_models)
+        ollama_model_row = QHBoxLayout()
+        ollama_model_row.addWidget(self.ollama_chat_model, 1)
+        ollama_model_row.addWidget(self.refresh_ollama_models_btn)
+        ai_layout.addRow("Ollama Chat Model", ollama_model_row)
+        self._refresh_ollama_chat_models(initial=True)
 
         self.seedance_api_key = QLineEdit()
         self.seedance_api_key.setEchoMode(QLineEdit.Password)
@@ -4945,7 +5039,7 @@ class MainWindow(QMainWindow):
             "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
             "ollama_api_base": self.ollama_api_base.text(),
-            "ollama_chat_model": self.ollama_chat_model.text(),
+            "ollama_chat_model": self.ollama_chat_model.currentText(),
             "seedance_api_key": self.seedance_api_key.text(),
             "seedance_oauth_token": self.seedance_oauth_token.text(),
             "ai_auth_method": self.ai_auth_method.currentData(),
@@ -5067,8 +5161,9 @@ class MainWindow(QMainWindow):
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
         if "ollama_api_base" in preferences:
             self.ollama_api_base.setText(str(preferences["ollama_api_base"]))
+            self._refresh_ollama_chat_models(initial=True)
         if "ollama_chat_model" in preferences:
-            self.ollama_chat_model.setText(str(preferences["ollama_chat_model"]))
+            self.ollama_chat_model.setCurrentText(str(preferences["ollama_chat_model"]))
         if "seedance_api_key" in preferences:
             self.seedance_api_key.setText(str(preferences["seedance_api_key"]))
         if "seedance_oauth_token" in preferences:
@@ -6550,7 +6645,7 @@ class MainWindow(QMainWindow):
 
         if source == "ollama":
             ollama_api_base = self.ollama_api_base.text().strip() or OLLAMA_API_BASE
-            ollama_chat_model = self.ollama_chat_model.text().strip() or OLLAMA_CHAT_MODEL
+            ollama_chat_model = self.ollama_chat_model.currentText().strip() or OLLAMA_CHAT_MODEL
             payload["model"] = ollama_chat_model
             payload["max_tokens"] = AI_MAX_OUTPUT_TOKENS_LOCAL
             payload["options"] = {"num_predict": AI_MAX_OUTPUT_TOKENS_LOCAL}
@@ -11585,6 +11680,39 @@ class MainWindow(QMainWindow):
     def _set_preview_loop_enabled(self, enabled: bool) -> None:
         self.preview_loop_enabled = bool(enabled)
         self._append_log(f"Preview loop {'enabled' if self.preview_loop_enabled else 'disabled'}.")
+
+    def _set_ollama_model_choices(self, model_names: list[str], selected_model: str) -> None:
+        selected = str(selected_model or "").strip()
+        self.ollama_chat_model.blockSignals(True)
+        self.ollama_chat_model.clear()
+        for model_name in model_names:
+            self.ollama_chat_model.addItem(model_name, model_name)
+        if selected:
+            model_index = self.ollama_chat_model.findData(selected)
+            if model_index >= 0:
+                self.ollama_chat_model.setCurrentIndex(model_index)
+            else:
+                self.ollama_chat_model.setCurrentText(selected)
+        self.ollama_chat_model.blockSignals(False)
+
+    def _refresh_ollama_chat_models(self, initial: bool = False) -> None:
+        selected_model = self.ollama_chat_model.currentText().strip() or os.getenv("OLLAMA_CHAT_MODEL", OLLAMA_CHAT_MODEL)
+        base_url = self.ollama_api_base.text().strip() or OLLAMA_API_BASE
+        models, warning = _available_ollama_models(base_url)
+
+        if not models:
+            fallback_models = [selected_model, os.getenv("OLLAMA_CHAT_MODEL", OLLAMA_CHAT_MODEL), OLLAMA_CHAT_MODEL]
+            ordered_fallback: list[str] = []
+            for fallback in fallback_models:
+                value = str(fallback or "").strip()
+                if value and value not in ordered_fallback:
+                    ordered_fallback.append(value)
+            models = ordered_fallback
+
+        self._set_ollama_model_choices(models, selected_model)
+        if warning and not initial:
+            self._append_log(f"WARNING: {warning}")
+
 
     def _toggle_prompt_source_fields(self) -> None:
         prompt_source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
