@@ -10169,6 +10169,7 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after_poll)
 
     def _start_manual_direct_download(self, variant: int, source_url: str) -> bool:
+        output_path: Path | None = None
         try:
             self.download_dir.mkdir(parents=True, exist_ok=True)
             filename = self._build_session_download_filename("video", variant, "mp4")
@@ -10182,11 +10183,15 @@ class MainWindow(QMainWindow):
             )
             download_path = self._download_video_from_public_url(final_url, output_path)
         except PublicVideoNotReadyError as exc:
+            if output_path is not None and output_path.exists():
+                output_path.unlink(missing_ok=True)
             self._append_log(f"Variant {variant}: public video URL exists but is not ready yet ({exc}); will retry.")
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
             return False
         except Exception as exc:
+            if output_path is not None and output_path.exists():
+                output_path.unlink(missing_ok=True)
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
@@ -10195,7 +10200,7 @@ class MainWindow(QMainWindow):
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
             self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); retrying browser download flow."
+                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); discarding and retrying."
             )
             if download_path.exists():
                 download_path.unlink(missing_ok=True)
