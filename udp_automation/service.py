@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -569,10 +570,13 @@ class UdpAutomationService:
             "target": target_name,
         }
 
-    async def _submit_x_post_via_cdp(self) -> dict[str, Any]:
+    async def _submit_x_post_via_cdp(self, wait_for_upload: bool = False, timeout_ms: int = 120000) -> dict[str, Any]:
         page = await self._get_x_compose_page()
         if page is None:
             return {"submitted": False, "mode": "cdp_submit_unavailable", "error": "No X page"}
+
+        bounded_timeout_ms = max(1000, int(timeout_ms or 120000))
+        started = time.monotonic()
 
         script = """
 () => {
@@ -598,13 +602,30 @@ class UdpAutomationService:
   return { submitted: false, mode: 'cdp_submit', reason: 'submit_not_clickable' };
 }
 """
-        try:
-            payload = await asyncio.wait_for(page.evaluate(script), timeout=8.0)
-        except Exception as exc:
-            return {"submitted": False, "mode": "cdp_submit_exception", "error": str(exc)}
-        if not isinstance(payload, dict):
-            return {"submitted": False, "mode": "cdp_submit", "reason": "invalid_payload"}
-        return payload
+        last_payload: dict[str, Any] = {"submitted": False, "mode": "cdp_submit", "reason": "submit_not_clickable"}
+        while (time.monotonic() - started) * 1000 < bounded_timeout_ms:
+            try:
+                payload = await asyncio.wait_for(page.evaluate(script), timeout=8.0)
+            except Exception as exc:
+                return {"submitted": False, "mode": "cdp_submit_exception", "error": str(exc)}
+
+            if not isinstance(payload, dict):
+                return {"submitted": False, "mode": "cdp_submit", "reason": "invalid_payload"}
+
+            last_payload = payload
+            if bool(payload.get("submitted")):
+                payload.setdefault("waitedMs", int((time.monotonic() - started) * 1000))
+                return payload
+
+            if not wait_for_upload:
+                payload.setdefault("waitedMs", int((time.monotonic() - started) * 1000))
+                return payload
+
+            await asyncio.sleep(0.35)
+
+        last_payload.setdefault("waitedMs", int((time.monotonic() - started) * 1000))
+        last_payload["reason"] = "submit_not_ready_before_timeout"
+        return last_payload
 
     async def _x_post_status_via_cdp(self) -> dict[str, Any]:
         page = await self._get_x_compose_page()
@@ -827,7 +848,12 @@ class UdpAutomationService:
                         if "no extension client connected" not in str(exc).lower() and not self._is_connection_closed_error(exc):
                             raise
                         if name == "post.submit":
-                            submit_result = await self._submit_x_post_via_cdp()
+                            requested_timeout_ms = int(payload.get("timeoutMs") or 0)
+                            fallback_timeout_ms = max(120000, requested_timeout_ms or 120000)
+                            submit_result = await self._submit_x_post_via_cdp(
+                                wait_for_upload=bool(payload.get("waitForUpload", True)),
+                                timeout_ms=fallback_timeout_ms,
+                            )
                             return {
                                 "ok": bool(submit_result.get("submitted")),
                                 "error": "X post.submit fallback failed" if not bool(submit_result.get("submitted")) else "",
