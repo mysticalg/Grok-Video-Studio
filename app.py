@@ -4195,7 +4195,12 @@ class MainWindow(QMainWindow):
         self.tiktok_track_candidates_file.setPlaceholderText("Optional .txt file path (one track candidate per line)")
         self.tiktok_track_candidates_file.setToolTip("Track candidates to combine with the music artist/term during TikTok sound search.")
         self.tiktok_track_candidates_file.editingFinished.connect(self._sync_tiktok_track_settings_from_inputs)
-        tiktok_layout.addRow("TikTok Track List File", self.tiktok_track_candidates_file)
+        self.tiktok_track_candidates_browse_btn = QPushButton("Browse...")
+        self.tiktok_track_candidates_browse_btn.clicked.connect(self._choose_tiktok_track_candidates_file)
+        tiktok_track_file_row = QHBoxLayout()
+        tiktok_track_file_row.addWidget(self.tiktok_track_candidates_file)
+        tiktok_track_file_row.addWidget(self.tiktok_track_candidates_browse_btn)
+        tiktok_layout.addRow("TikTok Track List File", tiktok_track_file_row)
 
         self.tiktok_track_candidates_text = QPlainTextEdit()
         self.tiktok_track_candidates_text.setMaximumHeight(90)
@@ -5593,6 +5598,18 @@ class MainWindow(QMainWindow):
             return
 
         self._load_preferences_from_path(Path(file_path), show_feedback=True)
+
+    def _choose_tiktok_track_candidates_file(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select TikTok Track List File",
+            str(self.download_dir),
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if not file_path:
+            return
+        self.tiktok_track_candidates_file.setText(file_path)
+        self._sync_tiktok_track_settings_from_inputs()
 
     def _append_automation_log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
