@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from urllib.parse import urlparse
 
 from playwright.async_api import Browser, Page, async_playwright
 
@@ -53,24 +52,7 @@ class CDPController:
             return True
         if not current:
             return False
-        if target in current:
-            return True
-
-        target_parts = urlparse(target)
-        current_parts = urlparse(current)
-        target_host = (target_parts.netloc or "").lower()
-        current_host = (current_parts.netloc or "").lower()
-        target_path = (target_parts.path or "").rstrip("/") or "/"
-        current_path = (current_parts.path or "").rstrip("/") or "/"
-
-        # TikTok commonly bounces between /upload and /tiktokstudio/upload?from=webapp.
-        # Treat both upload entry points as equivalent so startup does not keep re-navigating.
-        tiktok_upload_paths = {"/upload", "/tiktokstudio/upload"}
-        if "tiktok.com" in target_host and "tiktok.com" in current_host:
-            if target_path in tiktok_upload_paths and current_path in tiktok_upload_paths:
-                return True
-
-        return False
+        return target in current
 
     async def get_or_create_page(self, url: str, reuse_tab: bool = False) -> Page:
         if reuse_tab:

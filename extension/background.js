@@ -7,7 +7,7 @@ let socket = null;
 async function findTargetTab(platform = "") {
   const normalized = String(platform || "").toLowerCase();
   const matchByPlatform = {
-    tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktok.com"],
+    tiktok: ["tiktok.com/tiktokstudio/upload", "tiktok.com"],
     // Keep YouTube matching scoped to Studio so a regular watch tab doesn't
     // accidentally receive form.fill commands meant for the upload dialog.
     youtube: ["studio.youtube.com/channel", "studio.youtube.com"],

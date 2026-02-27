@@ -3250,7 +3250,7 @@ class MainWindow(QMainWindow):
             "Instagram Upload",
         )
         self.social_upload_tab_indices["TikTok"] = self.browser_tabs.addTab(
-            self._build_social_upload_tab("TikTok", "https://www.tiktok.com/upload"),
+            self._build_social_upload_tab("TikTok", "https://www.tiktok.com/tiktokstudio/upload"),
             "TikTok Upload",
         )
         self.social_upload_tab_indices["X"] = self.browser_tabs.addTab(
@@ -3477,7 +3477,7 @@ class MainWindow(QMainWindow):
         if platform_name == "Instagram":
             return self._instagram_reels_create_url()
         if platform_name == "TikTok":
-            return "https://www.tiktok.com/upload"
+            return "https://www.tiktok.com/tiktokstudio/upload"
         if platform_name == "X":
             return "https://x.com/home"
         if platform_name == "YouTube":
