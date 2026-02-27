@@ -4274,6 +4274,12 @@ class MainWindow(QMainWindow):
             action.setChecked(enabled)
             action.blockSignals(False)
 
+        checkbox = self.browser_tab_toggle_checkboxes.get(tab_key) if hasattr(self, "browser_tab_toggle_checkboxes") else None
+        if checkbox is not None and checkbox.isChecked() != enabled:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(enabled)
+            checkbox.blockSignals(False)
+
     def _set_quick_actions_toolbar_visible(self, visible: bool) -> None:
         visible = bool(visible)
         if hasattr(self, "quick_actions_toolbar"):
@@ -4366,24 +4372,28 @@ class MainWindow(QMainWindow):
 
         browser_tabs_menu = view_menu.addMenu("Browser Tabs")
         self.browser_tab_toggle_actions = {}
+        self.browser_tab_toggle_checkboxes = {}
         browser_tab_menu_items = (
             ("Grok", "Grok"),
             ("Sora", "Sora"),
             ("Facebook", "Facebook"),
             ("Instagram", "Instagram"),
             ("TikTok", "TikTok"),
+            ("X", "X"),
             ("YouTube", "YouTube"),
             ("Sora2Settings", "Sora 2 Video Settings"),
             ("SeedanceSettings", "Seedance 2.0 Video Settings"),
             ("AIFlowTrainer", "AI Flow Trainer"),
         )
         for tab_key, tab_label in browser_tab_menu_items:
-            action = QAction(tab_label, self)
-            action.setCheckable(True)
-            action.setChecked(self._is_browser_tab_enabled(tab_key))
-            action.toggled.connect(lambda checked, k=tab_key: self._set_browser_tab_enabled(k, checked))
+            action = QWidgetAction(browser_tabs_menu)
+            checkbox = QCheckBox(tab_label)
+            checkbox.setChecked(self._is_browser_tab_enabled(tab_key))
+            checkbox.toggled.connect(lambda checked, k=tab_key: self._set_browser_tab_enabled(k, checked))
+            action.setDefaultWidget(checkbox)
             browser_tabs_menu.addAction(action)
             self.browser_tab_toggle_actions[tab_key] = action
+            self.browser_tab_toggle_checkboxes[tab_key] = checkbox
 
         help_menu = menu_bar.addMenu("Help")
         info_action = QAction("Info", self)
