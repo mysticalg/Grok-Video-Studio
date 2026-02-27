@@ -10899,7 +10899,8 @@ class MainWindow(QMainWindow):
         session_index = _next_session_download_count()
         normalized_type = _slugify_filename_part(download_type or "download")
         normalized_ext = _slugify_filename_part(extension or "mp4")
-        return f"{normalized_type}_{provider}_{resolution}_{aspect}_v{item_variant:02d}_d{session_index:03d}.{normalized_ext}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{normalized_type}_{provider}_{resolution}_{aspect}_v{item_variant:02d}_{timestamp}_d{session_index:03d}.{normalized_ext}"
 
     def _thumbnail_for_video(self, video_path: str) -> QIcon:
         source_path = Path(video_path)
