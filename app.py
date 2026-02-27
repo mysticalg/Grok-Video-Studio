@@ -2549,6 +2549,13 @@ class MainWindow(QMainWindow):
         self.video_playback_hack_timer.setSingleShot(True)
         self.video_playback_hack_timer.timeout.connect(self._ensure_browser_video_playback)
         self._playback_hack_success_logged = False
+        self._global_manual_download_poll_in_flight = False
+        self._global_manual_download_future: concurrent.futures.Future | None = None
+        self._recent_manual_click_downloads: dict[str, float] = {}
+        self.global_manual_download_poll_timer = QTimer(self)
+        self.global_manual_download_poll_timer.setInterval(1200)
+        self.global_manual_download_poll_timer.timeout.connect(self._poll_global_manual_download_clicks)
+        self.global_manual_download_poll_timer.start()
         self.last_extracted_frame_path: Path | None = None
         self.preview_muted = False
         self.preview_volume = 100
@@ -5560,6 +5567,9 @@ class MainWindow(QMainWindow):
             self._playback_hack_success_logged = False
             self.video_playback_hack_timer.start()
             self._ensure_browser_video_playback()
+            sender_browser = self.sender() if isinstance(self.sender(), QWebEngineView) else None
+            if sender_browser is not None:
+                self._inject_global_manual_download_click_hook(sender_browser)
             if self.continue_from_frame_waiting_for_reload and self.continue_from_frame_active:
                 self.browser.page().runJavaScript(
                     "(() => ({ href: String((window.location && window.location.href) || '') }))()",
@@ -5567,6 +5577,214 @@ class MainWindow(QMainWindow):
                 )
             if self.embedded_training_active and self.training_use_embedded_browser.isChecked():
                 self._inject_embedded_training_capture_script()
+
+    def _inject_global_manual_download_click_hook(self, browser: QWebEngineView) -> None:
+        page = browser.page() if browser is not None else None
+        if page is None:
+            return
+        script = r"""
+            (() => {
+                if (window.__gvsGlobalDownloadHookInstalled) return true;
+                window.__gvsGlobalDownloadHookInstalled = true;
+                window.__gvsGlobalDownloadEvents = window.__gvsGlobalDownloadEvents || [];
+                const isTargetButton = (node) => {
+                    if (!node || typeof node.closest !== "function") return null;
+                    const btn = node.closest("button[aria-label='Download'][type='button']");
+                    if (!btn) return null;
+                    const state = String(btn.getAttribute("data-state") || "").trim().toLowerCase();
+                    if (state && state !== "closed") return null;
+                    return btn;
+                };
+                const normalizeUrl = (raw) => {
+                    const value = String(raw || "").trim();
+                    if (!value) return "";
+                    try { return new URL(value, window.location.href).toString(); } catch (_) { return value; }
+                };
+                const toPublicFromPost = (url) => {
+                    const value = normalizeUrl(url);
+                    const match = value.match(/\/imagine\/post\/([0-9a-fA-F-]{8,})/i);
+                    return match ? `https://imagine-public.x.ai/imagine-public/share-videos/${match[1]}.mp4` : "";
+                };
+                const isVideoUrl = (url) => {
+                    const value = normalizeUrl(url);
+                    if (!/^https?:\/\//i.test(value)) return false;
+                    const lowered = value.toLowerCase();
+                    if (/[.](mp4|webm|mov|m4v)(?:$|[?#])/i.test(lowered)) return true;
+                    return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
+                };
+                const captureClick = (event) => {
+                    const button = isTargetButton(event && event.target);
+                    if (!button) return;
+                    const pageUrl = normalizeUrl(window.location && window.location.href ? String(window.location.href) : "");
+                    const postFromPage = /\/imagine\/post\//i.test(pageUrl) ? pageUrl : "";
+                    const closestAnchor = button.closest("a[href]");
+                    const anchorUrl = closestAnchor ? normalizeUrl(closestAnchor.getAttribute("href")) : "";
+                    const postUrl = postFromPage || (/\/imagine\/post\//i.test(anchorUrl) ? anchorUrl : "");
+                    const video = document.querySelector("video");
+                    const source = document.querySelector("video source");
+                    const directCandidates = [
+                        normalizeUrl(button.getAttribute("href")),
+                        normalizeUrl(button.getAttribute("data-url")),
+                        normalizeUrl(button.getAttribute("data-href")),
+                        normalizeUrl(button.getAttribute("data-src")),
+                        video ? normalizeUrl(video.currentSrc || video.src) : "",
+                        source ? normalizeUrl(source.src) : "",
+                    ].filter(Boolean);
+                    let directUrl = directCandidates.find((value) => isVideoUrl(value)) || "";
+                    if (!directUrl) {
+                        try {
+                            const resources = performance.getEntriesByType("resource") || [];
+                            for (const entry of resources.slice(-120)) {
+                                const candidate = normalizeUrl(entry && entry.name ? String(entry.name) : "");
+                                if (isVideoUrl(candidate)) { directUrl = candidate; break; }
+                            }
+                        } catch (_) {}
+                    }
+                    const publicUrl = toPublicFromPost(postUrl || pageUrl);
+                    window.__gvsGlobalDownloadEvents.push({
+                        at: Date.now(),
+                        pageUrl,
+                        postUrl,
+                        publicUrl,
+                        directUrl,
+                    });
+                    if (window.__gvsGlobalDownloadEvents.length > 20) {
+                        window.__gvsGlobalDownloadEvents.splice(0, window.__gvsGlobalDownloadEvents.length - 20);
+                    }
+                };
+                window.addEventListener("click", captureClick, true);
+                return true;
+            })();
+        """
+        page.runJavaScript(script)
+
+    def _poll_global_manual_download_clicks(self) -> None:
+        if self._global_manual_download_poll_in_flight:
+            return
+        if self._global_manual_download_future is not None and not self._global_manual_download_future.done():
+            return
+        browsers = [b for b in (getattr(self, "grok_browser_view", None), getattr(self, "sora_browser", None)) if b is not None]
+        if not browsers:
+            return
+        self._global_manual_download_poll_in_flight = True
+        pending = len(browsers)
+
+        def _done_one() -> None:
+            nonlocal pending
+            pending -= 1
+            if pending <= 0:
+                self._global_manual_download_poll_in_flight = False
+
+        for browser in browsers:
+            page = browser.page() if browser is not None else None
+            if page is None:
+                _done_one()
+                continue
+            pull_script = r"""
+                (() => {
+                    const events = Array.isArray(window.__gvsGlobalDownloadEvents) ? window.__gvsGlobalDownloadEvents.splice(0) : [];
+                    return events;
+                })();
+            """
+
+            def _after_pull(result, b=browser):
+                try:
+                    if isinstance(result, list):
+                        for item in result:
+                            self._handle_global_manual_download_event(item, b)
+                finally:
+                    _done_one()
+
+            page.runJavaScript(pull_script, _after_pull)
+
+    def _handle_global_manual_download_event(self, payload: object, browser: QWebEngineView) -> None:
+        if not isinstance(payload, dict):
+            return
+        public_url = _ensure_public_download_query(str(payload.get("publicUrl") or "").strip())
+        direct_url = _ensure_public_download_query(str(payload.get("directUrl") or "").strip())
+        post_url = str(payload.get("postUrl") or "").strip()
+        page_url = str(payload.get("pageUrl") or "").strip()
+
+        if not public_url:
+            public_url = _public_video_url_from_post_url(post_url or page_url)
+        source_url = public_url or direct_url
+        if not source_url:
+            return
+
+        dedupe_key = source_url
+        now = time.time()
+        last_seen = self._recent_manual_click_downloads.get(dedupe_key, 0.0)
+        if now - last_seen < 10.0:
+            return
+        self._recent_manual_click_downloads[dedupe_key] = now
+        if len(self._recent_manual_click_downloads) > 100:
+            cutoff = now - 600.0
+            self._recent_manual_click_downloads = {
+                k: v for k, v in self._recent_manual_click_downloads.items() if v >= cutoff
+            }
+
+        provider = "sora" if browser is getattr(self, "sora_browser", None) else "grok"
+        self._append_log(
+            f"Detected manual Download click in embedded {provider} browser; attempting public URL fetch ({source_url})."
+        )
+        self._start_out_of_band_manual_download(source_url, provider)
+
+    def _start_out_of_band_manual_download(self, source_url: str, provider: str) -> None:
+        if self._global_manual_download_future is not None and not self._global_manual_download_future.done():
+            self._append_log("Manual click download is already running; skipping duplicate trigger.")
+            return
+
+        final_source = _ensure_public_download_query(source_url)
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        filename = self._build_session_download_filename("video", 0, "mp4", provider_override=provider)
+        output_path = self.download_dir / filename
+
+        def _job() -> dict[str, object]:
+            try:
+                resolved_url = final_source
+                post_polled = self._poll_post_page_for_media_url(resolved_url)
+                if post_polled:
+                    resolved_url = _ensure_public_download_query(post_polled)
+                download_path = self._download_video_from_public_url(resolved_url, output_path)
+                size = download_path.stat().st_size if download_path.exists() else 0
+                if size < MIN_VALID_VIDEO_BYTES:
+                    raise RuntimeError(f"downloaded file too small: {size} bytes")
+                return {"ok": True, "path": str(download_path), "resolved_url": resolved_url}
+            except Exception as exc:
+                try:
+                    if output_path.exists():
+                        output_path.unlink()
+                except Exception:
+                    pass
+                return {"ok": False, "error": str(exc), "resolved_url": final_source}
+
+        future = self._manual_download_executor.submit(_job)
+        self._global_manual_download_future = future
+
+        def _on_done(done_future: concurrent.futures.Future) -> None:
+            result = done_future.result()
+
+            def _finish() -> None:
+                self._global_manual_download_future = None
+                if not isinstance(result, dict) or not result.get("ok"):
+                    self._append_log(f"WARNING: Manual click public URL download failed: {result.get('error') if isinstance(result, dict) else result}")
+                    return
+                video_path = Path(str(result.get("path") or ""))
+                resolved_url = str(result.get("resolved_url") or final_source)
+                self.on_video_finished(
+                    {
+                        "title": f"Manual Browser Download ({provider})",
+                        "prompt": "manual-download-click",
+                        "resolution": "web",
+                        "video_file_path": str(video_path),
+                        "source_url": resolved_url,
+                    }
+                )
+                self._append_log(f"Manual Download click fetch complete: {video_path}")
+
+            QTimer.singleShot(0, _finish)
+
+        future.add_done_callback(_on_done)
 
     def _after_continue_reload_location_check(self, location_result) -> None:
         if not self.continue_from_frame_waiting_for_reload or not self.continue_from_frame_active:
