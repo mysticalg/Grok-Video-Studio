@@ -172,7 +172,28 @@ async function handleCmd(msg) {
           return { clicked: false };
         };
 
+        const findByWrappedText = () => {
+          const targetText = String(opts.text || "").trim().toLowerCase();
+          if (!targetText) return null;
+
+          const spanNodes = Array.from(document.querySelectorAll("span"));
+          const match = spanNodes.find((node) => {
+            if (!isVisible(node)) return false;
+            const text = String(node.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+            return text === targetText || text.includes(targetText);
+          });
+          if (!match) return null;
+
+          const wrapSelector = String(opts.closestSelector || "a, [role='link'], button, [role='button'], div");
+          const wrapped = match.closest(wrapSelector) || match.closest("a, [role='link'], button, [role='button'], div");
+          if (!wrapped) return null;
+          return { el: wrapped, selector: `text:${targetText}`, randomIndex: 0, randomPoolSize: 1 };
+        };
+
         const findCandidate = () => {
+          const wrappedTextMatch = findByWrappedText();
+          if (wrappedTextMatch) return wrappedTextMatch;
+
           for (const sel of selectors) {
             const visibleMatches = Array.from(document.querySelectorAll(sel)).filter(isVisible);
             if (visibleMatches.length > 0) {
@@ -231,7 +252,7 @@ async function handleCmd(msg) {
         const requestedTimeoutMs = Number(payload.timeoutMs || 0);
         const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
         const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
-        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform, useRandomMatch, hoverOnly };
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform, useRandomMatch, hoverOnly, text: payload.text || "", closestSelector: payload.closestSelector || "" };
       })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {

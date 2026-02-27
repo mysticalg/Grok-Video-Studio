@@ -25,6 +25,28 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, tim
         return
 
 
+
+
+def _best_effort_click_wrapped_text(
+    executor: BaseExecutor,
+    platform: str,
+    text_value: str,
+    closest_selector: str = "a[role='link'], a, div[role='button'], button",
+    timeout_ms: int = 8000,
+) -> None:
+    try:
+        executor.run(
+            "dom.click",
+            {
+                "platform": platform,
+                "text": text_value,
+                "closestSelector": closest_selector,
+                "timeoutMs": timeout_ms,
+            },
+        )
+    except Exception:
+        return
+
 def _safe_instagram_url(url: str | None) -> str:
     candidate = str(url or "").strip()
     if candidate.lower().startswith(("http://", "https://")):
@@ -53,14 +75,13 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
             "timeoutMs": 10000,
         },
     )
-    # Prefer the explicit Create entry link in collapsed sidebar layouts.
+    # Prefer wrapped text targeting (find <span>Create</span>/<span>Post</span> and click the wrapping link/button).
+    _best_effort_click_wrapped_text(executor, "instagram", "Create", timeout_ms=12000)
     _best_effort_click(executor, "instagram", _INSTAGRAM_CREATE_LINK_SELECTOR, timeout_ms=12000)
     _best_effort_click(executor, "instagram", _INSTAGRAM_CREATE_LINK_SELECTOR_ALT, timeout_ms=12000)
-    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=10000)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=10000)
     _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)
-    _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=10000)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Post')", timeout_ms=10000)
+
+    _best_effort_click_wrapped_text(executor, "instagram", "Post", timeout_ms=12000)
     _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)
 
     _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]")
