@@ -17,7 +17,15 @@ def _log(log_fn: LogFn | None, message: str) -> None:
             pass
 
 
-def _must_click(executor: BaseExecutor, selector: str, timeout_ms: int = 30000, *, step: str = "", log_fn: LogFn | None = None) -> dict[str, Any]:
+def _must_click(
+    executor: BaseExecutor,
+    selector: str,
+    timeout_ms: int = 30000,
+    *,
+    step: str = "",
+    log_fn: LogFn | None = None,
+    text_contains: str = "",
+) -> dict[str, Any]:
     _log(log_fn, f"{step or 'click'}: selector={selector} timeout_ms={timeout_ms}")
     result = executor.run(
         "dom.click",
@@ -25,6 +33,7 @@ def _must_click(executor: BaseExecutor, selector: str, timeout_ms: int = 30000, 
             "platform": "tiktok",
             "selector": selector,
             "timeoutMs": timeout_ms,
+            "textContains": text_contains,
         },
     )
     payload = result.get("payload") or {}
@@ -131,10 +140,11 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     if add_text or (add_music and music_query):
         _must_click(
             executor,
-            "button.button.Button__root--type-primary, button.Button__root--type-primary",
+            "button.button.Button__root--type-primary .Button__content, button.button.Button__root--type-primary, button.Button__root--type-primary",
             timeout_ms=60000,
             step="editor_save",
             log_fn=log_fn,
+            text_contains="save",
         )
 
     _log(log_fn, f"post.submit: start mode={publish_mode}")
