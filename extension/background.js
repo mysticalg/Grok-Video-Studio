@@ -434,6 +434,56 @@ async function handleCmd(msg) {
           return getEditableText(el).length > 0;
         };
 
+        const dispatchKeyboardPair = (el, key, code, extras = {}) => {
+          if (!el) return;
+          const base = {
+            key,
+            code,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            ...extras,
+          };
+          try { el.dispatchEvent(new KeyboardEvent("keydown", base)); } catch (_) {}
+          try { el.dispatchEvent(new KeyboardEvent("keyup", base)); } catch (_) {}
+        };
+
+        const typeTikTokCaptionWithHashtagTabs = async (el, value) => {
+          if (!el) return false;
+          const text = String(value || "");
+          clearEditable(el);
+
+          const insertToken = async (token) => {
+            if (!token) return;
+            await typeToken(el, token);
+          };
+
+          let idx = 0;
+          while (idx < text.length) {
+            const ch = text[idx];
+            if (ch === "#") {
+              let end = idx + 1;
+              while (end < text.length && /[A-Za-z0-9_\-.]/.test(text[end])) end += 1;
+              const hashtag = text.slice(idx, end);
+              if (hashtag.length > 1) {
+                await insertToken(hashtag);
+                dispatchKeyboardPair(el, "Tab", "Tab", { keyCode: 9, which: 9 });
+                await wait(90);
+                try { el.focus(); } catch (_) {}
+                idx = end;
+                continue;
+              }
+            }
+
+            await insertToken(ch);
+            idx += 1;
+          }
+
+          try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+          try { el.dispatchEvent(new Event("blur", { bubbles: true })); } catch (_) {}
+          return getEditableText(el).length > 0;
+        };
+
         const setYouTubeRichTextboxValue = (el, value) => {
           if (!el) return false;
           const text = String(value || "");
@@ -693,9 +743,14 @@ async function handleCmd(msg) {
               "div[contenteditable='true']",
             ];
             const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
-            const pasteOk = setValue(tiktokEl, text);
-            const matches = getEditableText(tiktokEl).includes(text.trim());
-            out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
+            const hasHashtags = /(^|\s)#[A-Za-z0-9_\-.]+/.test(text);
+            if (hasHashtags) {
+              out[rawKey] = await typeTikTokCaptionWithHashtagTabs(tiktokEl, text);
+            } else {
+              const pasteOk = setValue(tiktokEl, text);
+              const matches = getEditableText(tiktokEl).includes(text.trim());
+              out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
+            }
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
             out[rawKey] = setValue(facebookEl, text);
