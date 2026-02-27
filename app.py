@@ -4119,6 +4119,10 @@ class MainWindow(QMainWindow):
         self.reset_ai_concept_templates_btn.clicked.connect(self.reset_ai_concept_templates)
         app_layout.addRow("AI Concept Defaults", self.reset_ai_concept_templates_btn)
 
+        self.custom_ai_hashtags_input = QLineEdit()
+        self.custom_ai_hashtags_input.setPlaceholderText("Optional custom hashtags to append (comma or space separated)")
+        app_layout.addRow("Append Custom AI Hashtags", self.custom_ai_hashtags_input)
+
         self.qtwebengine_remote_debug_enabled = QCheckBox("Enable QtWebEngine CDP remote debugging")
         self.qtwebengine_remote_debug_enabled.setChecked(_env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 0) > 0)
         app_layout.addRow("CDP Remote Debugging", self.qtwebengine_remote_debug_enabled)
@@ -4931,6 +4935,7 @@ class MainWindow(QMainWindow):
             "ai_concept_instruction_template": self.ai_concept_instruction_template_input.toPlainText(),
             "ai_concept_system_prompt": self.ai_concept_system_prompt_input.toPlainText(),
             "ai_concept_user_prompt_template": self.ai_concept_user_prompt_template_input.toPlainText(),
+            "custom_ai_hashtags": self.custom_ai_hashtags_input.text(),
             "qtwebengine_remote_debug_enabled": self.qtwebengine_remote_debug_enabled.isChecked(),
             "qtwebengine_remote_debug_port": int(self.qtwebengine_remote_debug_port.value()),
             "cdp_social_upload_relay_enabled": self.cdp_social_upload_relay_enabled.isChecked(),
@@ -5083,6 +5088,8 @@ class MainWindow(QMainWindow):
             self.ai_concept_system_prompt_input.setPlainText(str(preferences["ai_concept_system_prompt"]))
         if "ai_concept_user_prompt_template" in preferences:
             self.ai_concept_user_prompt_template_input.setPlainText(str(preferences["ai_concept_user_prompt_template"]))
+        if "custom_ai_hashtags" in preferences:
+            self.custom_ai_hashtags_input.setText(str(preferences["custom_ai_hashtags"]))
         if "qtwebengine_remote_debug_enabled" in preferences:
             self.qtwebengine_remote_debug_enabled.setChecked(bool(preferences["qtwebengine_remote_debug_enabled"]))
         if "qtwebengine_remote_debug_port" in preferences:
@@ -6521,25 +6528,49 @@ class MainWindow(QMainWindow):
         self.prompt_generation_worker = worker
         worker.start()
 
+    def _custom_ai_hashtag_list(self) -> list[str]:
+        if not hasattr(self, "custom_ai_hashtags_input") or self.custom_ai_hashtags_input is None:
+            return []
+        return _parse_hashtags_from_text(self.custom_ai_hashtags_input.text())
+
+    @staticmethod
+    def _merge_hashtag_lists(primary: list[str], extra: list[str]) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for tag in [*primary, *extra]:
+            clean = str(tag).strip().lstrip("#")
+            if not clean:
+                continue
+            key = clean.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(clean)
+        return merged
+
     def _on_prompt_generation_success(self, parsed: dict) -> None:
         try:
             manual_prompt = str(parsed.get("manual_prompt", "")).strip()
             if not manual_prompt:
                 raise RuntimeError("AI response did not include a manual_prompt.")
+            ai_hashtags = list(parsed.get("hashtags", ["grok", "ai", "generated-video"]))
+            custom_hashtags = self._custom_ai_hashtag_list()
+            merged_hashtags = self._merge_hashtag_lists(ai_hashtags, custom_hashtags)
             self.ai_social_metadata = AISocialMetadata(
                 title=str(parsed.get("title", "AI Generated Video")),
                 medium_title=str(parsed.get("medium_title", "AI Generated Video Clip")),
                 tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")),
                 description=str(parsed.get("description", "")),
                 x_post=str(parsed.get("x_post", "")),
-                hashtags=list(parsed.get("hashtags", ["grok", "ai", "generated-video"])),
+                hashtags=merged_hashtags,
                 category=str(parsed.get("category", "22")),
             )
             self.manual_prompt.setPlainText(manual_prompt)
+            appended_note = f" (+{len(custom_hashtags)} custom)" if custom_hashtags else ""
             self._append_log(
                 "AI updated Manual Prompt and social metadata defaults "
                 f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
-                f"{', '.join(self.ai_social_metadata.hashtags)})."
+                f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
             )
         except Exception as exc:
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
