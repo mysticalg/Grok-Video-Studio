@@ -11039,6 +11039,22 @@ class MainWindow(QMainWindow):
         self.show_selected_video(selected_index)
 
     def on_video_finished(self, video: dict) -> None:
+        video_path_raw = str(video.get("video_file_path") or "").strip()
+        if video_path_raw:
+            candidate_key = str(Path(video_path_raw).expanduser())
+            for index, existing in enumerate(self.videos):
+                existing_path_raw = str(existing.get("video_file_path") or "").strip()
+                if not existing_path_raw:
+                    continue
+                if str(Path(existing_path_raw).expanduser()) != candidate_key:
+                    continue
+                merged_video = dict(existing)
+                merged_video.update(video)
+                self.videos[index] = merged_video
+                self._refresh_video_picker(selected_index=index)
+                self._append_log(f"Skipped duplicate video entry and refreshed existing item: {video_path_raw}")
+                return
+
         self.videos.append(video)
         self._refresh_video_picker(selected_index=len(self.videos) - 1)
         self._append_log(f"Saved: {video['video_file_path']}")
