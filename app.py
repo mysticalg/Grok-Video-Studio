@@ -9827,6 +9827,31 @@ class MainWindow(QMainWindow):
                     }}
                 }};
                 const normalizeProgressText = (text) => String(text || "").replace(/\\s+/g, "").trim();
+                const isManualDownloadButton = (node) => {{
+                    if (!node || typeof node.closest !== "function") return false;
+                    const btn = node.closest("button[aria-label='Download'][type='button']");
+                    if (!btn) return false;
+                    const dataState = String(btn.getAttribute("data-state") || "").trim().toLowerCase();
+                    return !dataState || dataState === "closed";
+                }};
+                if (!window.__gvsManualDownloadClickHookInstalled) {{
+                    window.__gvsManualDownloadClickHookInstalled = true;
+                    window.__gvsManualDownloadClickPending = false;
+                    window.addEventListener("click", (event) => {{
+                        if (isManualDownloadButton(event && event.target)) {{
+                            window.__gvsManualDownloadClickPending = true;
+                            window.__gvsManualDownloadClickAt = Date.now();
+                        }}
+                    }}, true);
+                }}
+                const consumeManualDownloadClick = () => {{
+                    if (window.__gvsManualDownloadClickPending) {{
+                        window.__gvsManualDownloadClickPending = false;
+                        return true;
+                    }}
+                    return false;
+                }};
+                const userDownloadClickPending = consumeManualDownloadClick();
                 const percentNode = [...document.querySelectorAll(".tabular-nums, div .tabular-nums, div.tabular-nums, span.tabular-nums")]
                     .find((el) => {{
                         if (!isVisible(el)) return false;
@@ -10040,7 +10065,7 @@ class MainWindow(QMainWindow):
                     }} catch (_) {{}}
                     const directUrl = directUrlCandidatesForDownload.find((candidate) => isDirectVideoUrl(candidate)) || "";
                     return {{
-                        status: "download-visible",
+                        status: userDownloadClickPending ? "user-download-clicked" : "download-visible",
                         directUrl,
                         postUrl: firstPostUrl,
                     }};
@@ -10187,7 +10212,7 @@ class MainWindow(QMainWindow):
                     self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
-            if status in ("download-clicked", "download-visible"):
+            if status in ("download-clicked", "download-visible", "user-download-clicked"):
                 self.manual_download_attempt_count += 1
                 direct_url = (result.get("directUrl") or "").strip()
                 self._append_log(
