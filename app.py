@@ -9726,25 +9726,44 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const clean = (value) => String(value || "").trim().toLowerCase();
+                    const allRoots = [document];
+                    for (let i = 0; i < allRoots.length; i += 1) {
+                        const root = allRoots[i];
+                        const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+                        for (const node of nodes) {
+                            if (node && node.shadowRoot) allRoots.push(node.shadowRoot);
+                        }
+                    }
+                    const queryAllDeep = (selector) => {
+                        const results = [];
+                        for (const root of allRoots) {
+                            if (!root.querySelectorAll) continue;
+                            for (const el of root.querySelectorAll(selector)) results.push(el);
+                        }
+                        return results;
+                    };
+
                     const hasModeratedImageSignal = (img) => {
                         if (!img) return false;
                         const alt = clean(img.getAttribute("alt"));
                         const src = clean(img.getAttribute("src"));
                         const cls = clean(img.className || "");
                         const style = clean(img.getAttribute("style"));
-                        if (alt === "moderated" || alt.includes("moderated")) return true;
-                        if (/(\bblur\b|blur-lg)/.test(cls) && /(saturate-0|grayscale|grayscale-100)/.test(cls)) return true;
-                        if (src.includes("/imagine-public/images/") && /(\bblur\b|blur-lg)/.test(cls)) return true;
-                        if (/filter\s*:/.test(style) && /blur\(/.test(style) && /saturate\(0/.test(style)) return true;
+                        if (alt.includes("moderated")) return true;
+                        if ((cls.includes("blur") || cls.includes("blur-lg")) && (cls.includes("saturate-0") || cls.includes("grayscale"))) return true;
+                        if (src.includes("/imagine-public/images/") && (cls.includes("blur") || style.includes("blur("))) return true;
+                        if (style.includes("blur(") && (style.includes("saturate(0") || style.includes("grayscale"))) return true;
                         return false;
                     };
-                    const moderatedImage = [...document.querySelectorAll("img")].find(hasModeratedImageSignal) || null;
-                    const eyeOffIcon = document.querySelector("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off'], [aria-label*='moderated' i], [title*='moderated' i]");
-                    const crossedEyeGlyph = [...document.querySelectorAll("svg")].find((svg) => {
+
+                    const moderatedImage = queryAllDeep("img").find(hasModeratedImageSignal) || null;
+                    const eyeOffIcon = queryAllDeep("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off'], [aria-label*='moderated' i], [title*='moderated' i]")[0] || null;
+                    const crossedEyeGlyph = queryAllDeep("svg").find((svg) => {
                         const cls = clean(svg.className && svg.className.baseVal ? svg.className.baseVal : svg.className);
                         if (cls.includes("eye-off") || cls.includes("lucide-eye-off")) return true;
-                        const markup = clean(svg.innerHTML || "");
-                        return markup.includes("line") && markup.includes("polyline") && markup.includes("eye");
+                        const html = clean(svg.innerHTML || "");
+                        const hasCrossLine = html.includes("22 2 2 22") || html.includes("2 2 22 22") || html.includes("line") || html.includes("polyline");
+                        return hasCrossLine && html.includes("eye");
                     }) || null;
                     const moderated = !!moderatedImage || !!eyeOffIcon || !!crossedEyeGlyph;
                     return {
@@ -9845,25 +9864,42 @@ class MainWindow(QMainWindow):
                 }}
 
                 const clean = (value) => String(value || "").trim().toLowerCase();
+                const allRoots = [document];
+                for (let i = 0; i < allRoots.length; i += 1) {{
+                    const root = allRoots[i];
+                    const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+                    for (const node of nodes) {{
+                        if (node && node.shadowRoot) allRoots.push(node.shadowRoot);
+                    }}
+                }}
+                const queryAllDeep = (selector) => {{
+                    const results = [];
+                    for (const root of allRoots) {{
+                        if (!root.querySelectorAll) continue;
+                        for (const el of root.querySelectorAll(selector)) results.push(el);
+                    }}
+                    return results;
+                }};
                 const hasModeratedImageSignal = (img) => {{
                     if (!img) return false;
                     const alt = clean(img.getAttribute("alt"));
                     const src = clean(img.getAttribute("src"));
                     const cls = clean(img.className || "");
                     const style = clean(img.getAttribute("style"));
-                    if (alt === "moderated" || alt.includes("moderated")) return true;
-                    if (/(\bblur\b|blur-lg)/.test(cls) && /(saturate-0|grayscale|grayscale-100)/.test(cls)) return true;
-                    if (src.includes("/imagine-public/images/") && /(\bblur\b|blur-lg)/.test(cls)) return true;
-                    if (/filter\s*:/.test(style) && /blur\(/.test(style) && /saturate\(0/.test(style)) return true;
+                    if (alt.includes("moderated")) return true;
+                    if ((cls.includes("blur") || cls.includes("blur-lg")) && (cls.includes("saturate-0") || cls.includes("grayscale"))) return true;
+                    if (src.includes("/imagine-public/images/") && (cls.includes("blur") || style.includes("blur("))) return true;
+                    if (style.includes("blur(") && (style.includes("saturate(0") || style.includes("grayscale"))) return true;
                     return false;
                 }};
-                const moderatedImage = [...document.querySelectorAll("img")].find((img) => hasModeratedImageSignal(img)) || null;
-                const eyeOffIcon = document.querySelector("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off'], [aria-label*='moderated' i], [title*='moderated' i]");
-                const crossedEyeGlyph = [...document.querySelectorAll("svg")].find((svg) => {{
+                const moderatedImage = queryAllDeep("img").find((img) => hasModeratedImageSignal(img)) || null;
+                const eyeOffIcon = queryAllDeep("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off'], [aria-label*='moderated' i], [title*='moderated' i]")[0] || null;
+                const crossedEyeGlyph = queryAllDeep("svg").find((svg) => {{
                     const cls = clean(svg.className && svg.className.baseVal ? svg.className.baseVal : svg.className);
                     if (cls.includes("eye-off") || cls.includes("lucide-eye-off")) return true;
                     const markup = clean(svg.innerHTML || "");
-                    return markup.includes("line") && markup.includes("polyline") && markup.includes("eye");
+                    const hasCrossLine = markup.includes("22 2 2 22") || markup.includes("2 2 22 22") || markup.includes("line") || markup.includes("polyline");
+                    return hasCrossLine && markup.includes("eye");
                 }}) || null;
                 if (moderatedImage || eyeOffIcon || crossedEyeGlyph) {{
                     return {{
