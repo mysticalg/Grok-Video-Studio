@@ -434,20 +434,6 @@ async function handleCmd(msg) {
           return getEditableText(el).length > 0;
         };
 
-        const dispatchKeyboardPair = (el, key, code, extras = {}) => {
-          if (!el) return;
-          const base = {
-            key,
-            code,
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            ...extras,
-          };
-          try { el.dispatchEvent(new KeyboardEvent("keydown", base)); } catch (_) {}
-          try { el.dispatchEvent(new KeyboardEvent("keyup", base)); } catch (_) {}
-        };
-
         const typeTikTokCaptionWithHashtagTabs = async (el, value) => {
           if (!el) return false;
           const text = String(value || "");
@@ -466,10 +452,8 @@ async function handleCmd(msg) {
               while (end < text.length && /[A-Za-z0-9_\-.]/.test(text[end])) end += 1;
               const hashtag = text.slice(idx, end);
               if (hashtag.length > 1) {
-                await insertToken(hashtag);
-                dispatchKeyboardPair(el, "Tab", "Tab", { keyCode: 9, which: 9 });
+                await insertToken(`${hashtag}	`);
                 await wait(90);
-                try { el.focus(); } catch (_) {}
                 idx = end;
                 continue;
               }
