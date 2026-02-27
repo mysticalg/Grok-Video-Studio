@@ -10241,7 +10241,8 @@ class MainWindow(QMainWindow):
         output_path: Path | None = None
         try:
             self.download_dir.mkdir(parents=True, exist_ok=True)
-            filename = self._build_session_download_filename("video", variant, "mp4")
+            browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+            filename = self._build_session_download_filename("video", variant, "mp4", provider_override=browser_provider)
             output_path = self.download_dir / filename
             final_url = _ensure_public_download_query(source_url)
             post_polled_url = self._poll_post_page_for_media_url(final_url)
