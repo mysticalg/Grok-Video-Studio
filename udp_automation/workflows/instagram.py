@@ -13,6 +13,10 @@ _INSTAGRAM_CREATE_LINK_SELECTOR = (
     "a[role='link'][href='#'].x1i10hfl.x1qjc9v5.xjbqb8w.xjqpnuy.xc5r6h4.xqeqjp1.x1phubyo.x13fuv20"
 )
 
+_INSTAGRAM_CREATE_LINK_SELECTOR_ALT = (
+    "a[role='link'][href='#'].x1i10hfl.xjbqb8w.x1ejq31n.x18oe1m7.x1sy0etr.xstzfhl"
+)
+
 
 def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, timeout_ms: int = 8000) -> None:
     try:
@@ -51,6 +55,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     )
     # Prefer the explicit Create entry link in collapsed sidebar layouts.
     _best_effort_click(executor, "instagram", _INSTAGRAM_CREATE_LINK_SELECTOR, timeout_ms=12000)
+    _best_effort_click(executor, "instagram", _INSTAGRAM_CREATE_LINK_SELECTOR_ALT, timeout_ms=12000)
     _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=10000)
     _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=10000)
     _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)
