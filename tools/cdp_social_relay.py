@@ -552,38 +552,49 @@ def _script_for_platform(platform: str) -> str:
             if (!nextText) return false;
             try {
                 if (el.isContentEditable) {
-                    el.focus();
-                    try { document.execCommand('selectAll', false, null); } catch (_) {}
-                    try { document.execCommand('insertText', false, nextText); } catch (_) {}
+                    const applyEditableText = () => {
+                        el.focus();
+                        try { el.click?.(); } catch (_) {}
+                        try { document.execCommand('selectAll', false, null); } catch (_) {}
+                        try { document.execCommand('insertText', false, nextText); } catch (_) {}
 
-                    if (normText(el.textContent) !== normText(nextText)) {
-                        try {
-                            const selection = window.getSelection();
-                            const range = document.createRange();
-                            range.selectNodeContents(el);
-                            range.deleteContents();
-                            const textNode = document.createTextNode(nextText);
-                            el.appendChild(textNode);
-                            if (selection) {
-                                selection.removeAllRanges();
-                                const caret = document.createRange();
-                                caret.setStart(textNode, textNode.length);
-                                caret.collapse(true);
-                                selection.addRange(caret);
+                        if (normText(el.textContent) !== normText(nextText)) {
+                            try {
+                                const selection = window.getSelection();
+                                const range = document.createRange();
+                                range.selectNodeContents(el);
+                                range.deleteContents();
+                                const textNode = document.createTextNode(nextText);
+                                el.appendChild(textNode);
+                                if (selection) {
+                                    selection.removeAllRanges();
+                                    const caret = document.createRange();
+                                    caret.setStart(textNode, textNode.length);
+                                    caret.collapse(true);
+                                    selection.addRange(caret);
+                                }
+                            } catch (_) {
+                                try { el.textContent = nextText; } catch (_) {}
                             }
-                        } catch (_) {
-                            try { el.textContent = nextText; } catch (_) {}
                         }
-                    }
 
-                    try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' })); } catch (_) {}
-                    try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' })); } catch (_) {
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.dispatchEvent(new Event('blur', { bubbles: true }));
-                    return normText(el.textContent) === normText(nextText);
+                        try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' })); } catch (_) {}
+                        try { el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: nextText, inputType: 'insertText' })); } catch (_) {
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+                        el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        return normText(el.textContent) === normText(nextText);
+                    };
+
+                    if (applyEditableText()) return true;
+                    try {
+                        const container = el.closest('#container, #outer, #child-input, ytcp-form-input-container, ytcp-social-suggestions-textbox') || el.parentElement;
+                        if (container) activateContainer(container);
+                    } catch (_) {}
+                    return applyEditableText();
                 }
                 if ('value' in el) {
                     el.value = nextText;
@@ -620,14 +631,29 @@ def _script_for_platform(platform: str) -> str:
             return null;
         };
 
-        const titleTarget = findYoutubeTextboxByOuterLabel(['title']) || findYoutubeTextbox(['title', 'describes your video'], [
+        const findYoutubeTextboxByAriaLabel = (hints) => {
+            const nodes = Array.from(document.querySelectorAll('#textbox[contenteditable="true"][aria-label], [contenteditable="true"][role="textbox"][aria-label]'));
+            for (const node of nodes) {
+                const aria = String(node.getAttribute('aria-label') || '').toLowerCase();
+                if (!hints.some((hint) => aria.includes(hint))) continue;
+                if (isVisible(node)) return node;
+            }
+            for (const node of nodes) {
+                const aria = String(node.getAttribute('aria-label') || '').toLowerCase();
+                if (!hints.some((hint) => aria.includes(hint))) continue;
+                return node;
+            }
+            return null;
+        };
+
+        const titleTarget = findYoutubeTextboxByAriaLabel(['add a title that describes your video', 'add a title', 'title']) || findYoutubeTextboxByOuterLabel(['title']) || findYoutubeTextbox(['title', 'describes your video'], [
             '#title-textarea #textbox[contenteditable="true"]',
             '[aria-label*="add a title" i]#textbox[contenteditable="true"]',
         ]) || byVisibleSelectors([
             'div#textbox[contenteditable="true"][aria-label*="title" i]',
             'textarea#textbox[aria-label*="title" i]',
         ]);
-        const descTarget = findYoutubeTextboxByOuterLabel(['description']) || findYoutubeTextbox(['description', 'tell viewers about your video'], [
+        const descTarget = findYoutubeTextboxByAriaLabel(['tell viewers about your video', 'tell viewers', 'description']) || findYoutubeTextboxByOuterLabel(['description']) || findYoutubeTextbox(['description', 'tell viewers about your video'], [
             '#description #textbox[contenteditable="true"]',
             '[aria-label*="tell viewers about your video" i]#textbox[contenteditable="true"]',
             '[aria-label*="tell viewers" i][contenteditable="true"]#textbox',
