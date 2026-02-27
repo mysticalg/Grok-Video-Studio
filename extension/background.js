@@ -106,13 +106,14 @@ async function handleCmd(msg) {
       return;
     }
 
-    if (msg.name === "dom.click" || msg.name === "post.submit") {
+    if (msg.name === "dom.click" || msg.name === "dom.click_random" || msg.name === "post.submit") {
       const platform = String(payload.platform || "").toLowerCase();
       const isDraft = String(payload.mode || payload.publishMode || "").toLowerCase() === "draft";
       const submitSelectors = isDraft ? (DRAFT_SELECTORS[platform] || []) : (POST_SELECTORS[platform] || []);
       const candidates = msg.name === "post.submit"
         ? (submitSelectors.length ? submitSelectors : [payload.selector || "button"])
         : [payload.selector || "button"];
+      const useRandomMatch = msg.name === "dom.click_random";
       const result = await executeInTab(async (selectors, opts) => {
         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
         const isEnabled = (el) => {
@@ -172,8 +173,16 @@ async function handleCmd(msg) {
 
         const findCandidate = () => {
           for (const sel of selectors) {
-            const el = Array.from(document.querySelectorAll(sel)).find(isVisible) || document.querySelector(sel);
-            if (el) return { el, selector: sel };
+            const visibleMatches = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+            if (visibleMatches.length > 0) {
+              if (opts.useRandomMatch && visibleMatches.length > 1) {
+                const idx = Math.floor(Math.random() * visibleMatches.length);
+                return { el: visibleMatches[idx], selector: sel, randomIndex: idx, randomPoolSize: visibleMatches.length };
+              }
+              return { el: visibleMatches[0], selector: sel, randomIndex: 0, randomPoolSize: visibleMatches.length };
+            }
+            const fallback = document.querySelector(sel);
+            if (fallback) return { el: fallback, selector: sel, randomIndex: 0, randomPoolSize: 1 };
           }
           return null;
         };
@@ -194,7 +203,7 @@ async function handleCmd(msg) {
               clickTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
             });
             try { clickTarget.click?.(); } catch (_) {}
-            return { clicked: true, selector: found.selector, waitedMs: Date.now() - started };
+            return { clicked: true, selector: found.selector, waitedMs: Date.now() - started, randomIndex: found.randomIndex, randomPoolSize: found.randomPoolSize };
           }
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
@@ -213,7 +222,7 @@ async function handleCmd(msg) {
         const requestedTimeoutMs = Number(payload.timeoutMs || 0);
         const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
         const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
-        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform };
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform, useRandomMatch };
       })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
