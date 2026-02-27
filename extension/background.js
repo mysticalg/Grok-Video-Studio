@@ -184,6 +184,14 @@ async function handleCmd(msg) {
           });
           if (!match) return null;
 
+          const requestedWrapSelector = String(opts.closestSelector || "").trim();
+          if (requestedWrapSelector) {
+            const requestedWrapped = match.closest(requestedWrapSelector);
+            if (requestedWrapped && isVisible(requestedWrapped)) {
+              return { el: requestedWrapped, selector: `text:${targetText}:closest(${requestedWrapSelector})`, randomIndex: 0, randomPoolSize: 1 };
+            }
+          }
+
           const link = match.closest("a, [role='link']");
           if (link) {
             const linkWrappingDiv = link.parentElement?.closest("div");
@@ -195,8 +203,8 @@ async function handleCmd(msg) {
             }
           }
 
-          const wrapSelector = String(opts.closestSelector || "a, [role='link'], div, button, [role='button']");
-          const wrapped = match.closest(wrapSelector) || match.closest("a, [role='link'], div, button, [role='button']");
+          const wrapSelector = "a, [role='link'], div, button, [role='button']";
+          const wrapped = match.closest(wrapSelector);
           if (!wrapped) return null;
           return { el: wrapped, selector: `text:${targetText}`, randomIndex: 0, randomPoolSize: 1 };
         };

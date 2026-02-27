@@ -81,7 +81,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     _best_effort_click(executor, "instagram", _INSTAGRAM_CREATE_LINK_SELECTOR_ALT, timeout_ms=12000)
     _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)
 
-    _best_effort_click_wrapped_text(executor, "instagram", "Post", timeout_ms=12000)
+    _best_effort_click_wrapped_text(executor, "instagram", "Post", closest_selector="div", timeout_ms=12000)
     _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)
 
     _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]")
