@@ -99,6 +99,7 @@ MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = 60_000
 MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS = max(3, int(os.getenv("MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS", "30")))
+MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS = max(1, int(os.getenv("MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS", "2")))
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
@@ -2514,6 +2515,7 @@ class MainWindow(QMainWindow):
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
         self.manual_public_not_ready_count = 0
+        self.manual_public_moderation_count = 0
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
@@ -9684,6 +9686,7 @@ class MainWindow(QMainWindow):
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
         self.manual_public_not_ready_count = 0
+        self.manual_public_moderation_count = 0
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -10222,6 +10225,7 @@ class MainWindow(QMainWindow):
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
         self.manual_public_not_ready_count = 0
+        self.manual_public_moderation_count = 0
         self.continue_from_frame_active = False
         self.continue_from_frame_target_count = 0
         self.continue_from_frame_completed = 0
@@ -10255,11 +10259,24 @@ class MainWindow(QMainWindow):
         except PublicVideoModeratedError as exc:
             if output_path is not None and output_path.exists():
                 self._remove_file_best_effort(output_path, "direct-download cleanup")
-            self._abort_manual_video_generation_due_to_moderation(variant, str(exc))
+            self.manual_public_moderation_count += 1
+            if self.manual_public_moderation_count >= MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS:
+                self._abort_manual_video_generation_due_to_moderation(
+                    variant,
+                    f"public URL moderation signal persisted for {self.manual_public_moderation_count} checks ({exc})",
+                )
+                return False
+            self._append_log(
+                f"Variant {variant}: public video URL returned a moderation-style response ({exc}); "
+                f"confirming before abort ({self.manual_public_moderation_count}/{MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS})."
+            )
+            self.manual_download_click_sent = False
+            self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
             return False
         except PublicVideoNotReadyError as exc:
             if output_path is not None and output_path.exists():
                 self._remove_file_best_effort(output_path, "direct-download cleanup")
+            self.manual_public_moderation_count = 0
             self.manual_public_not_ready_count += 1
             if self.manual_public_not_ready_count >= MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS:
                 self._abort_manual_video_generation_due_to_moderation(
@@ -10277,6 +10294,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             if output_path is not None and output_path.exists():
                 self._remove_file_best_effort(output_path, "direct-download cleanup")
+            self.manual_public_moderation_count = 0
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
@@ -10294,6 +10312,7 @@ class MainWindow(QMainWindow):
             return False
 
         self.manual_public_not_ready_count = 0
+        self.manual_public_moderation_count = 0
         self._complete_manual_video_download(download_path, variant)
         return True
 
@@ -10362,18 +10381,26 @@ class MainWindow(QMainWindow):
     def _download_video_from_public_url(source_url: str, output_path: Path) -> Path:
         def _raise_if_not_ready(payload: str) -> None:
             text = str(payload or "").lower()
+            not_ready_markers = (
+                "<code>nosuchkey</code>",
+                "the specified key does not exist",
+                "<code>accessdenied</code>",
+                "access denied",
+                "request has expired",
+                "signaturedoesnotmatch",
+            )
+            if any(marker in text for marker in not_ready_markers):
+                raise PublicVideoNotReadyError("public object not ready")
+
             moderation_markers = (
-                "moderat",
+                "moderated",
                 "content policy",
                 "policy violation",
-                "safety",
-                "blocked",
-                "accessdenied",
+                "safety policy",
+                "violates policy",
             )
             if any(marker in text for marker in moderation_markers):
                 raise PublicVideoModeratedError("moderation/policy response")
-            if "<code>nosuchkey</code>" in text or "the specified key does not exist" in text:
-                raise PublicVideoNotReadyError("NoSuchKey")
 
         head_headers = {
             "Cache-Control": "no-cache, no-store, max-age=0",
@@ -10529,6 +10556,7 @@ class MainWindow(QMainWindow):
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
         self.manual_public_not_ready_count = 0
+        self.manual_public_moderation_count = 0
         if self.continue_from_frame_active:
             self.continue_from_frame_completed += 1
             if self.continue_from_frame_completed < self.continue_from_frame_target_count:
@@ -10743,6 +10771,7 @@ class MainWindow(QMainWindow):
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
         self.manual_public_not_ready_count = 0
+        self.manual_public_moderation_count = 0
         self._reset_automation_counter_tracking()
 
         self.continue_from_frame_active = False
