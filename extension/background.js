@@ -184,8 +184,19 @@ async function handleCmd(msg) {
           });
           if (!match) return null;
 
-          const wrapSelector = String(opts.closestSelector || "a, [role='link'], button, [role='button'], div");
-          const wrapped = match.closest(wrapSelector) || match.closest("a, [role='link'], button, [role='button'], div");
+          const link = match.closest("a, [role='link']");
+          if (link) {
+            const linkWrappingDiv = link.parentElement?.closest("div");
+            if (linkWrappingDiv && isVisible(linkWrappingDiv)) {
+              return { el: linkWrappingDiv, selector: `text:${targetText}:div_wrap_a`, randomIndex: 0, randomPoolSize: 1 };
+            }
+            if (isVisible(link)) {
+              return { el: link, selector: `text:${targetText}:a_wrap_span`, randomIndex: 0, randomPoolSize: 1 };
+            }
+          }
+
+          const wrapSelector = String(opts.closestSelector || "a, [role='link'], div, button, [role='button']");
+          const wrapped = match.closest(wrapSelector) || match.closest("a, [role='link'], div, button, [role='button']");
           if (!wrapped) return null;
           return { el: wrapped, selector: `text:${targetText}`, randomIndex: 0, randomPoolSize: 1 };
         };
