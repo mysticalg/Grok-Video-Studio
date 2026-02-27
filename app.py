@@ -2308,6 +2308,7 @@ class AutomationRuntimeWorker(QThread):
 class UdpWorkflowWorker(QThread):
     finished_with_result = Signal(str)
     failed = Signal(str)
+    progress = Signal(str)
 
     def __init__(
         self,
@@ -2319,6 +2320,7 @@ class UdpWorkflowWorker(QThread):
         action_delay_ms: int = 0,
         executor_mode: str = "udp",
         local_command_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+        tiktok_options: dict[str, Any] | None = None,
     ):
         super().__init__()
         self.platform_name = platform_name
@@ -2330,6 +2332,7 @@ class UdpWorkflowWorker(QThread):
         self.action_delay_ms = max(0, int(action_delay_ms))
         self.executor_mode = str(executor_mode or "udp").lower()
         self.local_command_handler = local_command_handler
+        self.tiktok_options = dict(tiktok_options or {})
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -2349,10 +2352,19 @@ class UdpWorkflowWorker(QThread):
 
         try:
             platform = self.platform_name.lower()
+
+            def _log_step(message: str) -> None:
+                self.progress.emit(str(message))
+
             if platform == "youtube":
                 result = udp_youtube_workflow.run(executor, self.video_path, self.title, self.caption)
             elif platform == "tiktok":
-                result = udp_tiktok_workflow.run(executor, self.video_path, self.caption)
+                result = udp_tiktok_workflow.run(
+                    executor,
+                    self.video_path,
+                    self.caption,
+                    {**self.tiktok_options, "_log_callback": _log_step},
+                )
             elif platform == "facebook":
                 result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title)
             elif platform == "instagram":
@@ -2466,6 +2478,13 @@ class MainWindow(QMainWindow):
         self.stitch_worker: StitchWorker | None = None
         self.upload_worker: UploadWorker | None = None
         self.social_upload_pending: dict[str, dict[str, Any]] = {}
+        self.tiktok_upload_automation_options: dict[str, Any] = {
+            "publish_mode": "draft",
+            "add_text_overlay": False,
+            "add_music": False,
+            "music_query": "",
+            "text_overlay": "",
+        }
         self._cdp_relay_temporarily_disabled = False
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self._manual_download_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manual-download")
@@ -4949,6 +4968,7 @@ class MainWindow(QMainWindow):
             "counter": self.count.value(),
             "automation_action_delay_ms": int(self.automation_action_delay_ms.value()),
             "automation_retry_attempts": int(self.automation_retry_attempts.value()),
+            "tiktok_upload_automation_options": dict(self.tiktok_upload_automation_options),
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
@@ -5153,6 +5173,18 @@ class MainWindow(QMainWindow):
                 self.automation_retry_attempts.setValue(int(preferences["automation_retry_attempts"]))
             except (TypeError, ValueError):
                 pass
+        if "tiktok_upload_automation_options" in preferences and isinstance(preferences["tiktok_upload_automation_options"], dict):
+            loaded_tiktok_options = preferences["tiktok_upload_automation_options"]
+            publish_mode = str(loaded_tiktok_options.get("publish_mode") or "draft").strip().lower()
+            if publish_mode not in {"draft", "post"}:
+                publish_mode = "draft"
+            self.tiktok_upload_automation_options = {
+                "publish_mode": publish_mode,
+                "add_text_overlay": bool(loaded_tiktok_options.get("add_text_overlay")),
+                "add_music": bool(loaded_tiktok_options.get("add_music")),
+                "music_query": str(loaded_tiktok_options.get("music_query") or "").strip(),
+                "text_overlay": str(loaded_tiktok_options.get("text_overlay") or "").strip(),
+            }
         if "video_resolution" in preferences:
             resolution_index = self.video_resolution.findData(str(preferences["video_resolution"]))
             if resolution_index >= 0:
@@ -5526,7 +5558,9 @@ class MainWindow(QMainWindow):
                 action_delay_ms=action_delay_ms,
                 executor_mode="local",
                 local_command_handler=runtime.execute_local_automation_command,
+                tiktok_options=dict(self.tiktok_upload_automation_options),
             )
+            worker.progress.connect(lambda message: self._append_automation_log(f"{platform_name} external automation step: {message}"))
             worker.finished_with_result.connect(
                 lambda result: self._append_automation_log(f"{platform_name} external automation result: {result}")
             )
@@ -13109,6 +13143,8 @@ class MainWindow(QMainWindow):
         filename_slogan = self.ai_social_metadata.tiktok_subheading.strip()
         renamed_video_path = self._stage_tiktok_browser_video(video_path, filename_title, filename_slogan, hashtags)
 
+        self.tiktok_upload_automation_options["text_overlay"] = self._tiktok_overlay_text()
+
         self._run_social_upload_via_mode(
             platform_name="TikTok",
             video_path=renamed_video_path,
@@ -15453,6 +15489,11 @@ class MainWindow(QMainWindow):
 
         return text[:max_chars].rstrip()
 
+    def _tiktok_overlay_text(self) -> str:
+        raw_text = str(self.ai_social_metadata.tiktok_subheading or "").strip()
+        no_tags = re.sub(r"(^|\s)#\w+", " ", raw_text)
+        return " ".join(no_tags.split()).strip()
+
     def _build_tiktok_filename_stem(self, title_text: str, slogan_text: str, hashtags: list[str], max_length: int) -> str:
         safe_title = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(title_text or "")).strip()
         safe_slogan = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(slogan_text or "")).strip()
@@ -15563,12 +15604,51 @@ class MainWindow(QMainWindow):
             dialog_layout.addWidget(QLabel("Audience"))
             dialog_layout.addWidget(audience_input)
 
+        tiktok_publish_mode_input = None
+        tiktok_add_text_input = None
+        tiktok_add_music_input = None
+        tiktok_music_query_input = None
+        if platform_name == "TikTok":
+            tiktok_options = dict(self.tiktok_upload_automation_options)
+            saved_publish_mode = str(tiktok_options.get("publish_mode") or "draft").strip().lower()
+            if saved_publish_mode not in {"draft", "post"}:
+                saved_publish_mode = "draft"
+
+            dialog_layout.addWidget(QLabel("TikTok Automation: Publish Mode"))
+            tiktok_publish_mode_input = QComboBox()
+            tiktok_publish_mode_input.addItem("Draft", "draft")
+            tiktok_publish_mode_input.addItem("Post", "post")
+            tiktok_publish_mode_index = tiktok_publish_mode_input.findData(saved_publish_mode)
+            tiktok_publish_mode_input.setCurrentIndex(tiktok_publish_mode_index if tiktok_publish_mode_index >= 0 else 0)
+            dialog_layout.addWidget(tiktok_publish_mode_input)
+
+            tiktok_add_text_input = QCheckBox("Open editor and add text overlay from caption")
+            tiktok_add_text_input.setChecked(bool(tiktok_options.get("add_text_overlay")))
+            dialog_layout.addWidget(tiktok_add_text_input)
+
+            tiktok_add_music_input = QCheckBox("Open editor and add music")
+            tiktok_add_music_input.setChecked(bool(tiktok_options.get("add_music")))
+            dialog_layout.addWidget(tiktok_add_music_input)
+
+            dialog_layout.addWidget(QLabel("Preferred music artist/term"))
+            tiktok_music_query_input = QLineEdit(str(tiktok_options.get("music_query") or "").strip())
+            tiktok_music_query_input.setPlaceholderText("Search sounds")
+            dialog_layout.addWidget(tiktok_music_query_input)
+
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
         dialog_layout.addWidget(button_box)
 
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        if accepted and platform_name == "TikTok" and tiktok_publish_mode_input is not None:
+            self.tiktok_upload_automation_options = {
+                "publish_mode": str(tiktok_publish_mode_input.currentData() or "draft"),
+                "add_text_overlay": bool(tiktok_add_text_input.isChecked()) if tiktok_add_text_input is not None else False,
+                "add_music": bool(tiktok_add_music_input.isChecked()) if tiktok_add_music_input is not None else False,
+                "music_query": tiktok_music_query_input.text().strip() if tiktok_music_query_input is not None else "",
+                "text_overlay": str(self.tiktok_upload_automation_options.get("text_overlay") or "").strip(),
+            }
         hashtags = [tag.strip().lstrip("#") for tag in hashtags_input.text().split(",") if tag.strip()]
         category_value = category_input.text().strip() if platform_name == "YouTube" else self.ai_social_metadata.category
         if platform_name == "YouTube":
