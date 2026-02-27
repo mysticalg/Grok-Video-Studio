@@ -34,6 +34,7 @@ def _must_click(
     log_fn: LogFn | None = None,
     text_contains: str = "",
     delay_s: float = 0.0,
+    single_click: bool = False,
 ) -> dict[str, Any]:
     _log(log_fn, f"{step or 'click'}: selector={selector} timeout_ms={timeout_ms}")
     result = executor.run(
@@ -43,6 +44,7 @@ def _must_click(
             "selector": selector,
             "timeoutMs": timeout_ms,
             "textContains": text_contains,
+            "singleClick": single_click,
         },
     )
     payload = result.get("payload") or {}
@@ -164,7 +166,15 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
 
     if add_text and text_overlay:
         _must_click(executor, "div[data-name='AddTextPresetPanel']", timeout_ms=60000, step="open_text_tab", log_fn=log_fn, delay_s=action_delay_s)
-        _must_click(executor, "button.AddTextPanel__addTextBasicButton", timeout_ms=60000, step="add_text_once", log_fn=log_fn, delay_s=action_delay_s)
+        _must_click(
+            executor,
+            "button.AddTextPanel__addTextBasicButton",
+            timeout_ms=60000,
+            step="add_text_once",
+            log_fn=log_fn,
+            delay_s=action_delay_s,
+            single_click=True,
+        )
         _must_type_any(
             executor,
             ["textarea[name='content']:focus", "textarea[name='content']"],
