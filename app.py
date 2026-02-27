@@ -2568,6 +2568,11 @@ class MainWindow(QMainWindow):
             "add_music": False,
             "music_query": "",
             "text_overlay": "",
+            "track_name_candidates_text": "",
+            "track_name_candidates_file": "",
+            "rotate_track_names": False,
+            "track_name_rotation_index": 0,
+            "music_query_effective": "",
         }
         self._cdp_relay_temporarily_disabled = False
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
@@ -4186,6 +4191,26 @@ class MainWindow(QMainWindow):
             self.tiktok_privacy_level.setCurrentIndex(privacy_index)
         tiktok_layout.addRow("TikTok Privacy", self.tiktok_privacy_level)
 
+        self.tiktok_track_candidates_file = QLineEdit()
+        self.tiktok_track_candidates_file.setPlaceholderText("Optional .txt file path (one track candidate per line)")
+        self.tiktok_track_candidates_file.setToolTip("Track candidates to combine with the music artist/term during TikTok sound search.")
+        self.tiktok_track_candidates_file.editingFinished.connect(self._sync_tiktok_track_settings_from_inputs)
+        tiktok_layout.addRow("TikTok Track List File", self.tiktok_track_candidates_file)
+
+        self.tiktok_track_candidates_text = QPlainTextEdit()
+        self.tiktok_track_candidates_text.setMaximumHeight(90)
+        self.tiktok_track_candidates_text.setPlaceholderText("Optional extra track candidates (one per line)")
+        self.tiktok_track_candidates_text.textChanged.connect(self._sync_tiktok_track_settings_from_inputs)
+        tiktok_layout.addRow("TikTok Track Candidates", self.tiktok_track_candidates_text)
+
+        self.tiktok_rotate_tracks = QCheckBox("Rotate track names across TikTok uploads")
+        self.tiktok_rotate_tracks.toggled.connect(self._sync_tiktok_track_settings_from_inputs)
+        tiktok_layout.addRow("TikTok Track Rotation", self.tiktok_rotate_tracks)
+
+        self.tiktok_reset_track_rotation_btn = QPushButton("Reset Track Rotation Progress")
+        self.tiktok_reset_track_rotation_btn.clicked.connect(self._reset_tiktok_track_rotation_progress)
+        tiktok_layout.addRow("TikTok Track Rotation Reset", self.tiktok_reset_track_rotation_btn)
+
         app_group = QGroupBox("App Preferences")
         app_layout = QFormLayout(app_group)
 
@@ -5074,7 +5099,7 @@ class MainWindow(QMainWindow):
             "counter": self.count.value(),
             "automation_action_delay_ms": int(self.automation_action_delay_ms.value()),
             "automation_retry_attempts": int(self.automation_retry_attempts.value()),
-            "tiktok_upload_automation_options": dict(self.tiktok_upload_automation_options),
+            "tiktok_upload_automation_options": {k: v for k, v in self.tiktok_upload_automation_options.items() if k != "music_query_effective"},
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
@@ -5291,7 +5316,15 @@ class MainWindow(QMainWindow):
                 "add_music": bool(loaded_tiktok_options.get("add_music")),
                 "music_query": str(loaded_tiktok_options.get("music_query") or "").strip(),
                 "text_overlay": str(loaded_tiktok_options.get("text_overlay") or "").strip(),
+                "track_name_candidates_text": str(loaded_tiktok_options.get("track_name_candidates_text") or "").strip(),
+                "track_name_candidates_file": str(loaded_tiktok_options.get("track_name_candidates_file") or "").strip(),
+                "rotate_track_names": bool(loaded_tiktok_options.get("rotate_track_names")),
+                "track_name_rotation_index": max(0, int(loaded_tiktok_options.get("track_name_rotation_index") or 0)),
+                "music_query_effective": "",
             }
+        self.tiktok_track_candidates_file.setText(str(self.tiktok_upload_automation_options.get("track_name_candidates_file") or ""))
+        self.tiktok_track_candidates_text.setPlainText(str(self.tiktok_upload_automation_options.get("track_name_candidates_text") or ""))
+        self.tiktok_rotate_tracks.setChecked(bool(self.tiktok_upload_automation_options.get("rotate_track_names")))
         if "video_resolution" in preferences:
             resolution_index = self.video_resolution.findData(str(preferences["video_resolution"]))
             if resolution_index >= 0:
@@ -5566,6 +5599,72 @@ class MainWindow(QMainWindow):
         if hasattr(self, "automation_log") and self.automation_log is not None:
             self.automation_log.append(f"[{timestamp}] {text}")
         self._append_log(f"Automation: {text}")
+
+    def _sync_tiktok_track_settings_from_inputs(self) -> None:
+        if not hasattr(self, "tiktok_track_candidates_file"):
+            return
+        self.tiktok_upload_automation_options["track_name_candidates_file"] = self.tiktok_track_candidates_file.text().strip()
+        self.tiktok_upload_automation_options["track_name_candidates_text"] = self.tiktok_track_candidates_text.toPlainText().strip()
+        self.tiktok_upload_automation_options["rotate_track_names"] = bool(self.tiktok_rotate_tracks.isChecked())
+
+    def _reset_tiktok_track_rotation_progress(self) -> None:
+        self.tiktok_upload_automation_options["track_name_rotation_index"] = 0
+        self._append_log("TikTok track rotation progress reset to first track.")
+        self._autosave_preferences_to_default_file()
+
+    def _collect_tiktok_track_candidates(self) -> list[str]:
+        file_candidates: list[str] = []
+        file_path_raw = str(self.tiktok_upload_automation_options.get("track_name_candidates_file") or "").strip()
+        if file_path_raw:
+            try:
+                file_path = Path(file_path_raw).expanduser()
+                if file_path.exists() and file_path.is_file():
+                    file_candidates = [line.strip() for line in file_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                else:
+                    self._append_log(f"TikTok track list file not found: {file_path}")
+            except Exception as exc:
+                self._append_log(f"TikTok track list file read failed ({file_path_raw}): {exc}")
+
+        text_blob = str(self.tiktok_upload_automation_options.get("track_name_candidates_text") or "")
+        text_candidates = [line.strip() for line in text_blob.splitlines() if line.strip()]
+
+        merged: list[str] = []
+        seen: set[str] = set()
+        for raw_track in [*file_candidates, *text_candidates]:
+            normalized = " ".join(raw_track.split())
+            if not normalized:
+                continue
+            key = normalized.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(normalized)
+        return merged
+
+    def _resolve_tiktok_music_query_for_upload(self) -> str:
+        base_query = str(self.tiktok_upload_automation_options.get("music_query") or "").strip()
+        if not base_query:
+            return ""
+
+        track_candidates = self._collect_tiktok_track_candidates()
+        if not track_candidates:
+            return base_query
+
+        rotate_tracks = bool(self.tiktok_upload_automation_options.get("rotate_track_names"))
+        rotation_index = int(self.tiktok_upload_automation_options.get("track_name_rotation_index") or 0)
+        if rotate_tracks:
+            chosen_index = rotation_index % len(track_candidates)
+            self.tiktok_upload_automation_options["track_name_rotation_index"] = rotation_index + 1
+            self._autosave_preferences_to_default_file()
+        else:
+            chosen_index = 0
+        chosen_track = track_candidates[chosen_index]
+        composed_query = f"{base_query} {chosen_track}".strip()
+        self._append_log(
+            f"TikTok music query composed from artist/term + track: '{composed_query}'"
+            f" (track {chosen_index + 1}/{len(track_candidates)}; rotate={'on' if rotate_tracks else 'off'})."
+        )
+        return composed_query
 
     def _ensure_automation_runtime(self) -> AutomationRuntimeWorker:
         if self.automation_runtime is None:
@@ -13317,6 +13416,7 @@ class MainWindow(QMainWindow):
         renamed_video_path = self._stage_tiktok_browser_video(video_path, filename_title, filename_slogan, hashtags)
 
         self.tiktok_upload_automation_options["text_overlay"] = self._tiktok_overlay_text()
+        self.tiktok_upload_automation_options["music_query_effective"] = self._resolve_tiktok_music_query_for_upload()
 
         self._run_social_upload_via_mode(
             platform_name="TikTok",
@@ -15821,6 +15921,11 @@ class MainWindow(QMainWindow):
                 "add_music": bool(tiktok_add_music_input.isChecked()) if tiktok_add_music_input is not None else False,
                 "music_query": tiktok_music_query_input.text().strip() if tiktok_music_query_input is not None else "",
                 "text_overlay": str(self.tiktok_upload_automation_options.get("text_overlay") or "").strip(),
+                "track_name_candidates_text": str(self.tiktok_upload_automation_options.get("track_name_candidates_text") or "").strip(),
+                "track_name_candidates_file": str(self.tiktok_upload_automation_options.get("track_name_candidates_file") or "").strip(),
+                "rotate_track_names": bool(self.tiktok_upload_automation_options.get("rotate_track_names")),
+                "track_name_rotation_index": max(0, int(self.tiktok_upload_automation_options.get("track_name_rotation_index") or 0)),
+                "music_query_effective": str(self.tiktok_upload_automation_options.get("music_query_effective") or "").strip(),
             }
         hashtags = [tag.strip().lstrip("#") for tag in hashtags_input.text().split(",") if tag.strip()]
         category_value = category_input.text().strip() if platform_name == "YouTube" else self.ai_social_metadata.category

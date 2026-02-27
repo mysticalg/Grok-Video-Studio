@@ -127,7 +127,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         publish_mode = "draft"
     add_text = bool(opts.get("add_text_overlay"))
     add_music = bool(opts.get("add_music"))
-    music_query = str(opts.get("music_query") or "").strip()
+    music_query = str(opts.get("music_query_effective") or opts.get("music_query") or "").strip()
     text_overlay = _overlay_text(opts, caption)
     action_delay_s = float(opts.get("action_delay_s") or 2.0)
     startup_delay_s = float(opts.get("startup_delay_s") or action_delay_s)
