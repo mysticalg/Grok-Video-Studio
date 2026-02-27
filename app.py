@@ -9731,17 +9731,26 @@ class MainWindow(QMainWindow):
                         const alt = clean(img.getAttribute("alt"));
                         const src = clean(img.getAttribute("src"));
                         const cls = clean(img.className || "");
-                        if (alt === "moderated") return true;
-                        if (src.includes("/imagine-public/images/") && /(\bblur\b|blur-lg)/.test(cls) && /saturate-0/.test(cls)) return true;
+                        const style = clean(img.getAttribute("style"));
+                        if (alt === "moderated" || alt.includes("moderated")) return true;
+                        if (/(\bblur\b|blur-lg)/.test(cls) && /(saturate-0|grayscale|grayscale-100)/.test(cls)) return true;
+                        if (src.includes("/imagine-public/images/") && /(\bblur\b|blur-lg)/.test(cls)) return true;
+                        if (/filter\s*:/.test(style) && /blur\(/.test(style) && /saturate\(0/.test(style)) return true;
                         return false;
                     };
                     const moderatedImage = [...document.querySelectorAll("img")].find(hasModeratedImageSignal) || null;
-                    const eyeOffIcon = document.querySelector("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off']");
-                    const moderated = !!moderatedImage || !!eyeOffIcon;
+                    const eyeOffIcon = document.querySelector("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off'], [aria-label*='moderated' i], [title*='moderated' i]");
+                    const crossedEyeGlyph = [...document.querySelectorAll("svg")].find((svg) => {
+                        const cls = clean(svg.className && svg.className.baseVal ? svg.className.baseVal : svg.className);
+                        if (cls.includes("eye-off") || cls.includes("lucide-eye-off")) return true;
+                        const markup = clean(svg.innerHTML || "");
+                        return markup.includes("line") && markup.includes("polyline") && markup.includes("eye");
+                    }) || null;
+                    const moderated = !!moderatedImage || !!eyeOffIcon || !!crossedEyeGlyph;
                     return {
                         moderated,
                         moderatedSrc: moderatedImage ? String(moderatedImage.getAttribute("src") || "").trim() : "",
-                        eyeOffDetected: !!eyeOffIcon,
+                        eyeOffDetected: !!eyeOffIcon || !!crossedEyeGlyph,
                     };
                 } catch (err) {
                     return { moderated: false, error: String(err && err.stack ? err.stack : err) };
@@ -9841,17 +9850,26 @@ class MainWindow(QMainWindow):
                     const alt = clean(img.getAttribute("alt"));
                     const src = clean(img.getAttribute("src"));
                     const cls = clean(img.className || "");
-                    if (alt === "moderated") return true;
-                    if (src.includes("/imagine-public/images/") && /(\bblur\b|blur-lg)/.test(cls) && /saturate-0/.test(cls)) return true;
+                    const style = clean(img.getAttribute("style"));
+                    if (alt === "moderated" || alt.includes("moderated")) return true;
+                    if (/(\bblur\b|blur-lg)/.test(cls) && /(saturate-0|grayscale|grayscale-100)/.test(cls)) return true;
+                    if (src.includes("/imagine-public/images/") && /(\bblur\b|blur-lg)/.test(cls)) return true;
+                    if (/filter\s*:/.test(style) && /blur\(/.test(style) && /saturate\(0/.test(style)) return true;
                     return false;
                 }};
                 const moderatedImage = [...document.querySelectorAll("img")].find((img) => hasModeratedImageSignal(img)) || null;
-                const eyeOffIcon = document.querySelector("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off']");
-                if (moderatedImage || eyeOffIcon) {{
+                const eyeOffIcon = document.querySelector("svg.lucide-eye-off, svg[class*='eye-off'], [data-lucide='eye-off'], [aria-label*='moderated' i], [title*='moderated' i]");
+                const crossedEyeGlyph = [...document.querySelectorAll("svg")].find((svg) => {{
+                    const cls = clean(svg.className && svg.className.baseVal ? svg.className.baseVal : svg.className);
+                    if (cls.includes("eye-off") || cls.includes("lucide-eye-off")) return true;
+                    const markup = clean(svg.innerHTML || "");
+                    return markup.includes("line") && markup.includes("polyline") && markup.includes("eye");
+                }}) || null;
+                if (moderatedImage || eyeOffIcon || crossedEyeGlyph) {{
                     return {{
                         status: "moderated",
                         moderatedSrc: moderatedImage ? String(moderatedImage.getAttribute("src") || "").trim() : "",
-                        eyeOffDetected: !!eyeOffIcon,
+                        eyeOffDetected: !!eyeOffIcon || !!crossedEyeGlyph,
                     }};
                 }}
 
@@ -10280,9 +10298,21 @@ class MainWindow(QMainWindow):
             )
             download_path = self._download_video_from_public_url(final_url, output_path)
         except PublicVideoNotReadyError as exc:
-            self._append_log(f"Variant {variant}: public video URL exists but is not ready yet ({exc}); will retry.")
+            self._append_log(f"Variant {variant}: public video URL exists but is not ready yet ({exc}); probing for moderation before retry.")
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+
+            def _after_not_ready_moderation_probe(probe_result: object) -> None:
+                if self.pending_manual_variant_for_download != variant:
+                    return
+                if isinstance(probe_result, dict) and probe_result.get("moderated"):
+                    moderated_src = str(probe_result.get("moderatedSrc") or "").strip()
+                    if bool(probe_result.get("eyeOffDetected")) and not moderated_src:
+                        moderated_src = "eye-off-overlay"
+                    self._cancel_manual_flow_due_to_moderation(variant, moderated_src)
+                    return
+                self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+
+            self._probe_manual_video_moderation(_after_not_ready_moderation_probe)
             return False
         except Exception as exc:
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
