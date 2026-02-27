@@ -35,7 +35,15 @@ def _must_click(executor: BaseExecutor, selector: str, timeout_ms: int = 30000, 
     return payload
 
 
-def _must_type(executor: BaseExecutor, selector: str, value: str, *, step: str = "", log_fn: LogFn | None = None) -> None:
+def _must_type(
+    executor: BaseExecutor,
+    selector: str,
+    value: str,
+    *,
+    step: str = "",
+    log_fn: LogFn | None = None,
+    submit: bool = False,
+) -> None:
     _log(log_fn, f"{step or 'type'}: selector={selector} chars={len(value)}")
     result = executor.run(
         "dom.type",
@@ -43,6 +51,7 @@ def _must_type(executor: BaseExecutor, selector: str, value: str, *, step: str =
             "platform": "tiktok",
             "selector": selector,
             "value": value,
+            "submit": submit,
         },
     )
     payload = result.get("payload") or {}
@@ -103,22 +112,21 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
 
     if add_music and music_query:
         _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=60000, step="open_music_tab", log_fn=log_fn)
-        _must_type(executor, "input[placeholder='Search sounds']", music_query, step="music_search_text", log_fn=log_fn)
-        _must_click(executor, ".search-bar-container .search-icon, button[aria-label*='search' i]", timeout_ms=30000, step="music_search_submit", log_fn=log_fn)
-        _log(log_fn, "music_pick_random_track: start")
-        random_track_result = executor.run(
-            "dom.click_random",
-            {
-                "platform": "tiktok",
-                "selector": "div.MusicPanelMusicItem__operation button[role='button']",
-                "timeoutMs": 60000,
-            },
+        _must_type(
+            executor,
+            "input[placeholder='Search sounds']",
+            music_query,
+            step="music_search_text",
+            log_fn=log_fn,
+            submit=True,
         )
-        random_track_payload = random_track_result.get("payload") or {}
-        if random_track_payload.get("clicked") is False:
-            reason = random_track_payload.get("reason") or "unknown"
-            raise RuntimeError(f"TikTok music_pick_random_track failed (reason={reason})")
-        _log(log_fn, f"music_pick_random_track: ok payload={random_track_payload}")
+        _must_click(
+            executor,
+            "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
+            timeout_ms=60000,
+            step="music_add_first_track",
+            log_fn=log_fn,
+        )
 
     if add_text or (add_music and music_query):
         _must_click(

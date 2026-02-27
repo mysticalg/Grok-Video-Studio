@@ -485,7 +485,32 @@ async function handleCmd(msg) {
         if (name === "dom.type") {
           const el = document.querySelector(p.selector || "");
           if (!el) return { typed: false, selector: p.selector || "" };
-          return { typed: setValue(el, p.value ?? p.text ?? ""), selector: p.selector || "" };
+          const typed = setValue(el, p.value ?? p.text ?? "");
+          if (typed && p.submit) {
+            try {
+              const submitEvent = new KeyboardEvent("keydown", {
+                key: "Enter",
+                code: "Enter",
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true,
+              });
+              el.dispatchEvent(submitEvent);
+            } catch (_) {}
+            try {
+              const target = el.closest("form") || el;
+              target.dispatchEvent(new KeyboardEvent("keyup", {
+                key: "Enter",
+                code: "Enter",
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true,
+              }));
+            } catch (_) {}
+          }
+          return { typed, selector: p.selector || "", submitted: Boolean(p.submit) };
         }
 
         const fields = p.fields || {};
