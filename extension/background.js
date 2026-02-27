@@ -106,7 +106,7 @@ async function handleCmd(msg) {
       return;
     }
 
-    if (msg.name === "dom.click" || msg.name === "dom.click_random" || msg.name === "post.submit") {
+    if (msg.name === "dom.click" || msg.name === "dom.click_random" || msg.name === "dom.hover" || msg.name === "post.submit") {
       const platform = String(payload.platform || "").toLowerCase();
       const isDraft = String(payload.mode || payload.publishMode || "").toLowerCase() === "draft";
       const submitSelectors = isDraft ? (DRAFT_SELECTORS[platform] || []) : (POST_SELECTORS[platform] || []);
@@ -114,6 +114,7 @@ async function handleCmd(msg) {
         ? (submitSelectors.length ? submitSelectors : [payload.selector || "button"])
         : [payload.selector || "button"];
       const useRandomMatch = msg.name === "dom.click_random";
+      const hoverOnly = msg.name === "dom.hover";
       const result = await executeInTab(async (selectors, opts) => {
         const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
         const isEnabled = (el) => {
@@ -191,6 +192,14 @@ async function handleCmd(msg) {
         const started = Date.now();
         while (Date.now() - started < timeoutMs) {
           const found = findCandidate();
+          if (found && opts.hoverOnly) {
+            const hoverTarget = found.el.closest("button, [role='button'], a, div") || found.el;
+            try { hoverTarget.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+            ["pointerover", "mouseover", "pointerenter", "mouseenter", "mousemove"].forEach((evt) => {
+              try { hoverTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+            });
+            return { clicked: true, selector: found.selector, waitedMs: Date.now() - started, mode: "hover" };
+          }
           if (found && isEnabled(found.el) && (!opts.waitForUpload || hasUploadReadySignal())) {
             const clickTarget = found.el.closest("button, [role='button']") || found.el;
             const clickText = String(clickTarget.textContent || "").trim().toLowerCase();
@@ -215,14 +224,14 @@ async function handleCmd(msg) {
 
         const found = findCandidate();
         if (!found) return { clicked: false, reason: "not_found", selectors };
-        if (!isEnabled(found.el)) return { clicked: false, reason: "disabled", selector: found.selector };
+        if (!opts.hoverOnly && !isEnabled(found.el)) return { clicked: false, reason: "disabled", selector: found.selector };
         if (opts.waitForUpload && !hasUploadReadySignal()) return { clicked: false, reason: "upload_not_ready", selector: found.selector };
         return { clicked: false, reason: "unknown", selector: found.selector };
       }, [candidates, (() => {
         const requestedTimeoutMs = Number(payload.timeoutMs || 0);
         const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
         const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
-        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform, useRandomMatch };
+        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform, useRandomMatch, hoverOnly };
       })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
@@ -713,7 +722,24 @@ async function handleCmd(msg) {
       }
       const tab = await findTargetTab(platform);
       const debuggee = { tabId: tab.id };
-      const selectorExpr = `(() => { const nodes = Array.from(document.querySelectorAll("input[type=\'file\']")); return nodes.find((n) => (n.offsetWidth || n.offsetHeight || n.getClientRects().length)) || nodes[0] || null; })()`;
+      const selectorExpr = `(() => {
+        const isVisible = (node) => Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
+        const isVideoInput = (node) => {
+          const accept = String(node?.getAttribute?.("accept") || "").toLowerCase();
+          if (accept.includes("video")) return true;
+          if (accept && !accept.includes("image")) return true;
+          const capture = String(node?.getAttribute?.("capture") || "").toLowerCase();
+          return capture.includes("camcorder") || capture.includes("video");
+        };
+
+        const nodes = Array.from(document.querySelectorAll("input[type='file']"));
+        const visibleVideo = nodes.find((node) => isVisible(node) && isVideoInput(node));
+        if (visibleVideo) return visibleVideo;
+        const anyVideo = nodes.find((node) => isVideoInput(node));
+        if (anyVideo) return anyVideo;
+        const visible = nodes.find((node) => isVisible(node));
+        return visible || nodes[0] || null;
+      })()`;
       let attached = false;
       try {
         await chrome.debugger.attach(debuggee, "1.3");

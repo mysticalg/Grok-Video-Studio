@@ -35,7 +35,16 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     )
     executor.run("platform.ensure_logged_in", {"platform": "instagram"})
 
-    # Start from profile/home page: open Create -> Post and then attach media.
+    # Start from profile/home page: hover the collapsed sidebar rail so Create is revealed,
+    # then open Create -> Post and attach media.
+    executor.run(
+        "dom.hover",
+        {
+            "platform": "instagram",
+            "selector": "div.x1cy8zhl.x9f619.x78zum5.xdt5ytf.x1gvbg2u.x1qughib[style*='width: 72px']",
+            "timeoutMs": 10000,
+        },
+    )
     _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=10000)
     _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=10000)
     _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)

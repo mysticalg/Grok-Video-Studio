@@ -838,7 +838,7 @@ class UdpAutomationService:
                 result = await self._youtube_publish_steps_via_cdp()
                 return {"ok": bool(result.get("ok", False)), "payload": result}
 
-            if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.type"}:
+            if name in {"post.submit", "post.status", "dom.query", "dom.click", "dom.hover", "dom.type"}:
                 platform = str(payload.get("platform") or "").lower()
                 if platform == "x" and name in {"post.submit", "post.status"}:
                     try:
