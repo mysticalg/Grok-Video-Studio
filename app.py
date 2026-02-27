@@ -98,6 +98,7 @@ QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = 60_000
 MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
+MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS = max(3, int(os.getenv("MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS", "12")))
 API_BASE_URL = os.getenv("XAI_API_BASE", "https://api.x.ai/v1")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 OPENAI_OAUTH_ISSUER = os.getenv("OPENAI_OAUTH_ISSUER", "https://auth.openai.com")
@@ -117,6 +118,10 @@ FACEBOOK_GRAPH_VERSION = os.getenv("FACEBOOK_GRAPH_VERSION", "v21.0")
 
 class PublicVideoNotReadyError(RuntimeError):
     """Raised when a public media URL resolves but backing object is not ready yet."""
+
+
+class PublicVideoModeratedError(RuntimeError):
+    """Raised when a public media URL resolves to a moderation/policy-block response."""
 FACEBOOK_OAUTH_AUTHORIZE_URL = f"https://www.facebook.com/{FACEBOOK_GRAPH_VERSION}/dialog/oauth"
 FACEBOOK_OAUTH_TOKEN_URL = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/oauth/access_token"
 FACEBOOK_OAUTH_CALLBACK_PORT = int(os.getenv("FACEBOOK_OAUTH_CALLBACK_PORT", "1456"))
@@ -2508,6 +2513,7 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
+        self.manual_public_not_ready_count = 0
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
@@ -2529,6 +2535,7 @@ class MainWindow(QMainWindow):
         self.last_extracted_frame_path: Path | None = None
         self.preview_muted = False
         self.preview_volume = 100
+        self.preview_loop_enabled = False
         self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
         self.last_update_prompt_ts = 0
@@ -3120,6 +3127,12 @@ class MainWindow(QMainWindow):
         self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
         preview_controls.addWidget(self.preview_fullscreen_btn)
+
+        self.preview_loop_checkbox = QCheckBox("🔁")
+        self.preview_loop_checkbox.setToolTip("Loop the preview video when playback reaches the end.")
+        self.preview_loop_checkbox.setChecked(self.preview_loop_enabled)
+        self.preview_loop_checkbox.toggled.connect(self._set_preview_loop_enabled)
+        preview_controls.addWidget(self.preview_loop_checkbox)
         preview_layout.addLayout(preview_controls)
 
         timeline_layout = QHBoxLayout()
@@ -3136,6 +3149,7 @@ class MainWindow(QMainWindow):
         self.audio_output.setVolume(self.preview_volume / 100)
         self.player.positionChanged.connect(self._on_preview_position_changed)
         self.player.durationChanged.connect(self._on_preview_duration_changed)
+        self.player.mediaStatusChanged.connect(self._on_preview_media_status_changed)
 
         bottom_splitter = QSplitter()
         bottom_splitter.setOpaqueResize(True)
@@ -4943,6 +4957,7 @@ class MainWindow(QMainWindow):
             "download_dir": str(self.download_dir),
             "preview_muted": self.preview_mute_checkbox.isChecked(),
             "preview_volume": self.preview_volume_slider.value(),
+            "preview_loop_enabled": self.preview_loop_checkbox.isChecked(),
             "training_start_url": self.training_start_url.text(),
             "training_output_dir": self.training_output_dir.text(),
             "training_timeout": self.training_timeout.value(),
@@ -5250,6 +5265,8 @@ class MainWindow(QMainWindow):
                 self.preview_volume_slider.setValue(int(preferences["preview_volume"]))
             except (TypeError, ValueError):
                 pass
+        if "preview_loop_enabled" in preferences:
+            self.preview_loop_checkbox.setChecked(bool(preferences["preview_loop_enabled"]))
         if "training_start_url" in preferences:
             self.training_start_url.setText(str(preferences["training_start_url"]))
         if "training_output_dir" in preferences:
@@ -9666,6 +9683,7 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
+        self.manual_public_not_ready_count = 0
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -10157,10 +10175,74 @@ class MainWindow(QMainWindow):
 
         self.browser.page().runJavaScript(script, after_poll)
 
+
+    def _remove_file_best_effort(self, file_path: Path, context: str) -> None:
+        path = Path(file_path)
+        if not path.exists():
+            return
+        last_error: Exception | None = None
+        for _ in range(4):
+            try:
+                path.unlink()
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.2)
+            except Exception as exc:
+                last_error = exc
+                break
+        if last_error is not None:
+            self._append_log(f"WARNING: Could not remove file '{path}' during {context}: {last_error}")
+
+    def _abort_manual_video_generation_due_to_moderation(self, variant: int, reason: str) -> None:
+        self._append_log(
+            f"ERROR: Variant {variant}: video appears moderated/unavailable ({reason}). Stopping create-video polling so you can start again."
+        )
+        self.manual_generation_queue.clear()
+        self.manual_download_poll_timer.stop()
+        self._clear_manual_direct_download_tracking()
+        self.pending_manual_variant_for_download = None
+        self.pending_manual_download_type = None
+        self.pending_manual_image_prompt = None
+        self.manual_download_click_sent = False
+        self.manual_download_request_pending = False
+        self.manual_video_start_click_sent = False
+        self.manual_video_make_click_fallback_used = False
+        self.manual_generating_indicator_seen = False
+        self.manual_refresh_after_generating_sent = False
+        self.manual_video_allow_make_click = True
+        self.manual_download_in_progress = False
+        self.manual_download_started_at = None
+        self.manual_download_deadline = None
+        self.manual_public_video_url = ""
+        self.manual_download_attempt_count = 0
+        self.manual_download_poll_attempt_count = 0
+        self.manual_download_last_status = ""
+        self.manual_download_last_status_log_at = 0.0
+        self.manual_public_not_ready_count = 0
+        self.continue_from_frame_active = False
+        self.continue_from_frame_target_count = 0
+        self.continue_from_frame_completed = 0
+        self.continue_from_frame_prompt = ""
+        self.continue_from_frame_current_source_video = ""
+        self.continue_from_frame_seed_image_path = None
+        self.continue_from_frame_waiting_for_reload = False
+        self._reset_automation_counter_tracking()
+        QMessageBox.warning(
+            self,
+            "Video Moderated",
+            "The generated video appears to be moderated/unavailable, so create-video polling has been stopped. "
+            "Please adjust your prompt and start again.",
+        )
+
     def _start_manual_direct_download(self, variant: int, source_url: str) -> bool:
+        output_path: Path | None = None
         try:
             self.download_dir.mkdir(parents=True, exist_ok=True)
-            filename = self._build_session_download_filename("video", variant, "mp4")
+            browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+            filename = self._build_session_download_filename("video", variant, "mp4", provider_override=browser_provider)
             output_path = self.download_dir / filename
             final_url = _ensure_public_download_query(source_url)
             post_polled_url = self._poll_post_page_for_media_url(final_url)
@@ -10170,12 +10252,31 @@ class MainWindow(QMainWindow):
                 f"Variant {variant}: downloading direct video URL to {output_path.name} using curl-style public URL polling ({final_url})."
             )
             download_path = self._download_video_from_public_url(final_url, output_path)
+        except PublicVideoModeratedError as exc:
+            if output_path is not None and output_path.exists():
+                self._remove_file_best_effort(output_path, "direct-download cleanup")
+            self._abort_manual_video_generation_due_to_moderation(variant, str(exc))
+            return False
         except PublicVideoNotReadyError as exc:
-            self._append_log(f"Variant {variant}: public video URL exists but is not ready yet ({exc}); will retry.")
+            if output_path is not None and output_path.exists():
+                self._remove_file_best_effort(output_path, "direct-download cleanup")
+            self.manual_public_not_ready_count += 1
+            if self.manual_public_not_ready_count >= MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS:
+                self._abort_manual_video_generation_due_to_moderation(
+                    variant,
+                    f"public URL not ready after {self.manual_public_not_ready_count} checks ({exc})",
+                )
+                return False
+            self._append_log(
+                f"Variant {variant}: public video URL exists but is not ready yet ({exc}); retry "
+                f"{self.manual_public_not_ready_count}/{MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS}."
+            )
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
             return False
         except Exception as exc:
+            if output_path is not None and output_path.exists():
+                self._remove_file_best_effort(output_path, "direct-download cleanup")
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
@@ -10184,14 +10285,15 @@ class MainWindow(QMainWindow):
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
             self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); retrying browser download flow."
+                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); discarding and retrying."
             )
             if download_path.exists():
-                download_path.unlink(missing_ok=True)
+                self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
             return False
 
+        self.manual_public_not_ready_count = 0
         self._complete_manual_video_download(download_path, variant)
         return True
 
@@ -10260,6 +10362,16 @@ class MainWindow(QMainWindow):
     def _download_video_from_public_url(source_url: str, output_path: Path) -> Path:
         def _raise_if_not_ready(payload: str) -> None:
             text = str(payload or "").lower()
+            moderation_markers = (
+                "moderat",
+                "content policy",
+                "policy violation",
+                "safety",
+                "blocked",
+                "accessdenied",
+            )
+            if any(marker in text for marker in moderation_markers):
+                raise PublicVideoModeratedError("moderation/policy response")
             if "<code>nosuchkey</code>" in text or "the specified key does not exist" in text:
                 raise PublicVideoNotReadyError("NoSuchKey")
 
@@ -10416,6 +10528,7 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
+        self.manual_public_not_ready_count = 0
         if self.continue_from_frame_active:
             self.continue_from_frame_completed += 1
             if self.continue_from_frame_completed < self.continue_from_frame_target_count:
@@ -10515,7 +10628,7 @@ class MainWindow(QMainWindow):
                         f"WARNING: Variant {variant}: clicked a non-video download target ({extension}); retrying with video download button."
                     )
                     if video_path.exists():
-                        video_path.unlink(missing_ok=True)
+                        self._remove_file_best_effort(video_path, "manual browser download cleanup")
                     self.manual_download_click_sent = False
                     self.manual_download_request_pending = False
                     self.manual_download_in_progress = False
@@ -10528,7 +10641,7 @@ class MainWindow(QMainWindow):
                         f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB); discarding and retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
                     )
                     if video_path.exists():
-                        video_path.unlink(missing_ok=True)
+                        self._remove_file_best_effort(video_path, "manual browser download cleanup")
                     self.manual_download_click_sent = False
                     self.manual_download_request_pending = False
                     self.manual_video_start_click_sent = False
@@ -10629,6 +10742,7 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
         self.manual_download_last_status_log_at = 0.0
+        self.manual_public_not_ready_count = 0
         self._reset_automation_counter_tracking()
 
         self.continue_from_frame_active = False
@@ -10786,7 +10900,8 @@ class MainWindow(QMainWindow):
         session_index = _next_session_download_count()
         normalized_type = _slugify_filename_part(download_type or "download")
         normalized_ext = _slugify_filename_part(extension or "mp4")
-        return f"{normalized_type}_{provider}_{resolution}_{aspect}_v{item_variant:02d}_d{session_index:03d}.{normalized_ext}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{normalized_type}_{provider}_{resolution}_{aspect}_v{item_variant:02d}_{timestamp}_d{session_index:03d}.{normalized_ext}"
 
     def _thumbnail_for_video(self, video_path: str) -> QIcon:
         source_path = Path(video_path)
@@ -10924,6 +11039,22 @@ class MainWindow(QMainWindow):
         self.show_selected_video(selected_index)
 
     def on_video_finished(self, video: dict) -> None:
+        video_path_raw = str(video.get("video_file_path") or "").strip()
+        if video_path_raw:
+            candidate_key = str(Path(video_path_raw).expanduser())
+            for index, existing in enumerate(self.videos):
+                existing_path_raw = str(existing.get("video_file_path") or "").strip()
+                if not existing_path_raw:
+                    continue
+                if str(Path(existing_path_raw).expanduser()) != candidate_key:
+                    continue
+                merged_video = dict(existing)
+                merged_video.update(video)
+                self.videos[index] = merged_video
+                self._refresh_video_picker(selected_index=index)
+                self._append_log(f"Skipped duplicate video entry and refreshed existing item: {video_path_raw}")
+                return
+
         self.videos.append(video)
         self._refresh_video_picker(selected_index=len(self.videos) - 1)
         self._append_log(f"Saved: {video['video_file_path']}")
@@ -11144,6 +11275,12 @@ class MainWindow(QMainWindow):
     def seek_preview(self, position: int) -> None:
         self.player.setPosition(max(0, int(position)))
 
+    def _on_preview_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
+        if status != QMediaPlayer.MediaStatus.EndOfMedia or not self.preview_loop_enabled:
+            return
+        self.player.setPosition(0)
+        self.player.play()
+
     def _ensure_preview_fullscreen_overlay(self) -> None:
         if self.preview_fullscreen_overlay_btn is not None:
             return
@@ -11267,6 +11404,10 @@ class MainWindow(QMainWindow):
         self.preview_volume = int(value)
         self.audio_output.setVolume(self.preview_volume / 100)
         self._append_log(f"Preview volume set to {self.preview_volume}%.")
+
+    def _set_preview_loop_enabled(self, enabled: bool) -> None:
+        self.preview_loop_enabled = bool(enabled)
+        self._append_log(f"Preview loop {'enabled' if self.preview_loop_enabled else 'disabled'}.")
 
     def _toggle_prompt_source_fields(self) -> None:
         prompt_source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
