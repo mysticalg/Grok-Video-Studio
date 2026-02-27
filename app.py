@@ -113,6 +113,7 @@ OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434/v1")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1:8b")
 AI_TEXT_TIMEOUT_SECONDS = max(30.0, float(os.getenv("AI_TEXT_TIMEOUT_SECONDS", "240")))
 AI_MAX_OUTPUT_TOKENS = max(256, int(os.getenv("AI_MAX_OUTPUT_TOKENS", "4096")))
+AI_MAX_OUTPUT_TOKENS_LOCAL = max(128, int(os.getenv("AI_MAX_OUTPUT_TOKENS_LOCAL", "768")))
 SEEDANCE_API_BASE = os.getenv("SEEDANCE_API_BASE", "https://api.seedance.ai/v2")
 FACEBOOK_GRAPH_VERSION = os.getenv("FACEBOOK_GRAPH_VERSION", "v21.0")
 
@@ -165,6 +166,12 @@ DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE = (
     "hashtags should be an array of 5-12 hashtag strings without # prefixes. "
     "category should be the best YouTube category id as a string (default 22 if unsure). "
     "Concept instruction: {instruction}"
+)
+DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT_LOCAL = ""
+DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE_LOCAL = (
+    "Return valid JSON only with keys: manual_prompt, title, medium_title, tiktok_subheading, description, x_post, hashtags, category. "
+    "Keep outputs short and simple. hashtags should be an array of 3-8 words without #. category should be a YouTube category id string. "
+    "Concept: {instruction}"
 )
 GROK_IMAGINE_URL = "https://grok.com/imagine"
 SORA_DRAFTS_URL = "https://sora.chatgpt.com/drafts"
@@ -930,8 +937,11 @@ class PromptGenerationWorker(QThread):
             else:
                 instruction = f"{self.concept} {instruction_template}".strip()
 
-            system = self.system.strip() or DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT
-            user_template = self.user_template.strip() or DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE
+            source_name = str(self.source).strip().lower()
+            default_system = DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT_LOCAL if source_name == "ollama" else DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT
+            default_user_template = DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE_LOCAL if source_name == "ollama" else DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE
+            system = self.system.strip() or default_system
+            user_template = self.user_template.strip() or default_user_template
             if "{instruction}" in user_template:
                 user = user_template.replace("{instruction}", instruction)
             else:
@@ -942,6 +952,11 @@ class PromptGenerationWorker(QThread):
             try:
                 parsed = _normalize_ai_social_metadata_payload(_parse_json_object_from_text(raw))
             except Exception as parse_exc:
+                if str(self.source).strip().lower() == "ollama":
+                    raise RuntimeError(
+                        "Could not parse Ollama response as JSON. Use 'Reset AI Concept Templates' in Model/API Settings and retry. "
+                        f"Parse error: {parse_exc}"
+                    ) from parse_exc
                 repair_system = (
                     "You repair malformed or wrapped model output into strict JSON. Return JSON only with no markdown."
                 )
@@ -4099,6 +4114,15 @@ class MainWindow(QMainWindow):
         self.ai_concept_user_prompt_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE)
         app_layout.addRow("AI Concept User Prompt Template", self.ai_concept_user_prompt_template_input)
 
+        self.reset_ai_concept_templates_btn = QPushButton("Reset AI Concept Templates")
+        self.reset_ai_concept_templates_btn.setToolTip("Restore recommended concept/system/user templates for the selected Prompt Source.")
+        self.reset_ai_concept_templates_btn.clicked.connect(self.reset_ai_concept_templates)
+        app_layout.addRow("AI Concept Defaults", self.reset_ai_concept_templates_btn)
+
+        self.custom_ai_hashtags_input = QLineEdit()
+        self.custom_ai_hashtags_input.setPlaceholderText("Optional custom hashtags to append (comma or space separated)")
+        app_layout.addRow("Append Custom AI Hashtags", self.custom_ai_hashtags_input)
+
         self.qtwebengine_remote_debug_enabled = QCheckBox("Enable QtWebEngine CDP remote debugging")
         self.qtwebengine_remote_debug_enabled.setChecked(_env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 0) > 0)
         app_layout.addRow("CDP Remote Debugging", self.qtwebengine_remote_debug_enabled)
@@ -4911,6 +4935,7 @@ class MainWindow(QMainWindow):
             "ai_concept_instruction_template": self.ai_concept_instruction_template_input.toPlainText(),
             "ai_concept_system_prompt": self.ai_concept_system_prompt_input.toPlainText(),
             "ai_concept_user_prompt_template": self.ai_concept_user_prompt_template_input.toPlainText(),
+            "custom_ai_hashtags": self.custom_ai_hashtags_input.text(),
             "qtwebengine_remote_debug_enabled": self.qtwebengine_remote_debug_enabled.isChecked(),
             "qtwebengine_remote_debug_port": int(self.qtwebengine_remote_debug_port.value()),
             "cdp_social_upload_relay_enabled": self.cdp_social_upload_relay_enabled.isChecked(),
@@ -5063,6 +5088,8 @@ class MainWindow(QMainWindow):
             self.ai_concept_system_prompt_input.setPlainText(str(preferences["ai_concept_system_prompt"]))
         if "ai_concept_user_prompt_template" in preferences:
             self.ai_concept_user_prompt_template_input.setPlainText(str(preferences["ai_concept_user_prompt_template"]))
+        if "custom_ai_hashtags" in preferences:
+            self.custom_ai_hashtags_input.setText(str(preferences["custom_ai_hashtags"]))
         if "qtwebengine_remote_debug_enabled" in preferences:
             self.qtwebengine_remote_debug_enabled.setChecked(bool(preferences["qtwebengine_remote_debug_enabled"]))
         if "qtwebengine_remote_debug_port" in preferences:
@@ -5345,6 +5372,18 @@ class MainWindow(QMainWindow):
 
         self._append_log(f"Loaded preferences from: {file_path}")
         return True
+
+    def reset_ai_concept_templates(self) -> None:
+        source = str(self.prompt_source.currentData() or "manual").strip().lower()
+        self.ai_concept_instruction_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE)
+        if source == "ollama":
+            self.ai_concept_system_prompt_input.setPlainText(DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT_LOCAL)
+            self.ai_concept_user_prompt_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE_LOCAL)
+            self._append_log("Reset AI concept templates to Ollama/local defaults (minimal JSON request, no system prompt).")
+        else:
+            self.ai_concept_system_prompt_input.setPlainText(DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT)
+            self.ai_concept_user_prompt_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE)
+            self._append_log("Reset AI concept templates to cloud defaults (strict JSON response).")
 
     def save_model_api_settings(self) -> None:
         if self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=True):
@@ -6404,11 +6443,13 @@ class MainWindow(QMainWindow):
     def _call_selected_ai(self, system: str, user: str) -> str:
         source = self.prompt_source.currentData()
         headers = {"Content-Type": "application/json"}
+        messages = []
+        clean_system = str(system or "").strip()
+        if clean_system:
+            messages.append({"role": "system", "content": clean_system})
+        messages.append({"role": "user", "content": user})
         payload = {
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
             "temperature": 0.4,
             "max_tokens": AI_MAX_OUTPUT_TOKENS,
         }
@@ -6429,8 +6470,8 @@ class MainWindow(QMainWindow):
             ollama_api_base = self.ollama_api_base.text().strip() or OLLAMA_API_BASE
             ollama_chat_model = self.ollama_chat_model.text().strip() or OLLAMA_CHAT_MODEL
             payload["model"] = ollama_chat_model
-            payload["max_tokens"] = AI_MAX_OUTPUT_TOKENS
-            payload["options"] = {"num_predict": AI_MAX_OUTPUT_TOKENS}
+            payload["max_tokens"] = AI_MAX_OUTPUT_TOKENS_LOCAL
+            payload["options"] = {"num_predict": AI_MAX_OUTPUT_TOKENS_LOCAL}
             endpoint = f"{ollama_api_base.rstrip('/')}/chat/completions"
             response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
             if not response.ok:
@@ -6469,7 +6510,8 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.setEnabled(False)
         self.generate_prompt_btn.setText("⏳ Generating Prompt + Social Metadata...")
         self._set_prompt_thinking_indicator(True, f"Thinking with {str(source).title()}…")
-        self._append_log(f"Generating prompt + social metadata using {str(source).title()} (max tokens: {AI_MAX_OUTPUT_TOKENS}, timeout: {int(AI_TEXT_TIMEOUT_SECONDS)}s)...")
+        max_tokens = AI_MAX_OUTPUT_TOKENS_LOCAL if str(source).strip().lower() == "ollama" else AI_MAX_OUTPUT_TOKENS
+        self._append_log(f"Generating prompt + social metadata using {str(source).title()} (max tokens: {max_tokens}, timeout: {int(AI_TEXT_TIMEOUT_SECONDS)}s)...")
 
         worker = PromptGenerationWorker(
             source=str(source),
@@ -6486,25 +6528,49 @@ class MainWindow(QMainWindow):
         self.prompt_generation_worker = worker
         worker.start()
 
+    def _custom_ai_hashtag_list(self) -> list[str]:
+        if not hasattr(self, "custom_ai_hashtags_input") or self.custom_ai_hashtags_input is None:
+            return []
+        return _parse_hashtags_from_text(self.custom_ai_hashtags_input.text())
+
+    @staticmethod
+    def _merge_hashtag_lists(primary: list[str], extra: list[str]) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for tag in [*primary, *extra]:
+            clean = str(tag).strip().lstrip("#")
+            if not clean:
+                continue
+            key = clean.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(clean)
+        return merged
+
     def _on_prompt_generation_success(self, parsed: dict) -> None:
         try:
             manual_prompt = str(parsed.get("manual_prompt", "")).strip()
             if not manual_prompt:
                 raise RuntimeError("AI response did not include a manual_prompt.")
+            ai_hashtags = list(parsed.get("hashtags", ["grok", "ai", "generated-video"]))
+            custom_hashtags = self._custom_ai_hashtag_list()
+            merged_hashtags = self._merge_hashtag_lists(ai_hashtags, custom_hashtags)
             self.ai_social_metadata = AISocialMetadata(
                 title=str(parsed.get("title", "AI Generated Video")),
                 medium_title=str(parsed.get("medium_title", "AI Generated Video Clip")),
                 tiktok_subheading=str(parsed.get("tiktok_subheading", "Swipe for more AI visuals.")),
                 description=str(parsed.get("description", "")),
                 x_post=str(parsed.get("x_post", "")),
-                hashtags=list(parsed.get("hashtags", ["grok", "ai", "generated-video"])),
+                hashtags=merged_hashtags,
                 category=str(parsed.get("category", "22")),
             )
             self.manual_prompt.setPlainText(manual_prompt)
+            appended_note = f" (+{len(custom_hashtags)} custom)" if custom_hashtags else ""
             self._append_log(
                 "AI updated Manual Prompt and social metadata defaults "
                 f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
-                f"{', '.join(self.ai_social_metadata.hashtags)})."
+                f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
             )
         except Exception as exc:
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
