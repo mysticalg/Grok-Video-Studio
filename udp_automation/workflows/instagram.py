@@ -9,6 +9,10 @@ _INSTAGRAM_NEXT_BUTTON_SELECTOR = (
     "div[role='button']:has-text('Next'), button:has-text('Next'), div[role='button'][tabindex='0']:has-text('Next')"
 )
 
+_INSTAGRAM_CREATE_LINK_SELECTOR = (
+    "a[role='link'][href='#'].x1i10hfl.x1qjc9v5.xjbqb8w.xjqpnuy.xc5r6h4.xqeqjp1.x1phubyo.x13fuv20"
+)
+
 
 def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, timeout_ms: int = 8000) -> None:
     try:
@@ -45,6 +49,8 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
             "timeoutMs": 10000,
         },
     )
+    # Prefer the explicit Create entry link in collapsed sidebar layouts.
+    _best_effort_click(executor, "instagram", _INSTAGRAM_CREATE_LINK_SELECTOR, timeout_ms=12000)
     _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=10000)
     _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=10000)
     _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)
