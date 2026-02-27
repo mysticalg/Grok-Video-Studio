@@ -835,6 +835,7 @@ def _script_for_platform(platform: str) -> str:
         ]);
         const captionFilled = setText(captionTarget, captionText || titleText);
         const shareButton = bySelectors([
+            'div[role="button"]:has-text("Share")',
             'button:has-text("Share")',
             'button[aria-label*="share" i]',
             'button[aria-label*="post" i]',

@@ -2315,6 +2315,7 @@ class UdpWorkflowWorker(QThread):
         video_path: str,
         title: str,
         caption: str,
+        platform_url: str = "",
         action_delay_ms: int = 0,
         executor_mode: str = "udp",
         local_command_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
@@ -2324,6 +2325,7 @@ class UdpWorkflowWorker(QThread):
         self.video_path = video_path
         self.title = title
         self.caption = caption
+        self.platform_url = str(platform_url or "").strip()
         self._stop_event = threading.Event()
         self.action_delay_ms = max(0, int(action_delay_ms))
         self.executor_mode = str(executor_mode or "udp").lower()
@@ -2354,7 +2356,7 @@ class UdpWorkflowWorker(QThread):
             elif platform == "facebook":
                 result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title)
             elif platform == "instagram":
-                result = udp_instagram_workflow.run(executor, self.video_path, self.caption)
+                result = udp_instagram_workflow.run(executor, self.video_path, self.caption, self.platform_url)
             elif platform == "x":
                 result = udp_x_workflow.run(executor, self.video_path, self.caption)
             else:
@@ -2623,8 +2625,8 @@ class MainWindow(QMainWindow):
         if not username:
             username = os.getenv("INSTAGRAM_USERNAME", "").strip()
         if username:
-            return f"https://www.instagram.com/{username}/reels/create"
-        return "https://www.instagram.com/create/reel/"
+            return f"https://www.instagram.com/{username}"
+        return "https://www.instagram.com/"
 
     def _refresh_instagram_upload_tab_url(self) -> None:
         instagram_browser = self.social_upload_browsers.get("Instagram")
@@ -4034,7 +4036,7 @@ class MainWindow(QMainWindow):
 
         self.instagram_username = QLineEdit(os.getenv("INSTAGRAM_USERNAME", ""))
         self.instagram_username.setPlaceholderText("e.g. funkymonk66")
-        self.instagram_username.setToolTip("Used for the Instagram web upload tab URL: https://www.instagram.com/<username>/reels/create")
+        self.instagram_username.setToolTip("Used for the Instagram web upload tab URL: https://www.instagram.com/<username>")
         self.instagram_username.editingFinished.connect(self._refresh_instagram_upload_tab_url)
         instagram_layout.addRow("Instagram Username (web upload URL)", self.instagram_username)
 
@@ -5520,6 +5522,7 @@ class MainWindow(QMainWindow):
                 video_path=video_path,
                 title=title,
                 caption=caption,
+                platform_url=target_url,
                 action_delay_ms=action_delay_ms,
                 executor_mode="local",
                 local_command_handler=runtime.execute_local_automation_command,

@@ -12,7 +12,7 @@ async function findTargetTab(platform = "") {
     // accidentally receive form.fill commands meant for the upload dialog.
     youtube: ["studio.youtube.com/channel", "studio.youtube.com"],
     facebook: ["facebook.com/reels/create", "facebook.com"],
-    instagram: ["instagram.com/create/reel", "instagram.com"],
+    instagram: ["instagram.com/", "instagram.com"],
     x: ["x.com/compose/post", "x.com/compose", "x.com"]
   };
 
@@ -46,7 +46,7 @@ const POST_SELECTORS = {
   ],
   youtube: ['#done-button', 'button[aria-label*="Publish"]'],
   facebook: ['div[aria-label*="Publish"]', 'button[aria-label*="Publish"]'],
-  instagram: ['button[aria-label*="Share" i]', 'button[type="submit"]'],
+  instagram: ['div[role="button"]:has-text("Share")', 'button:has-text("Share")', 'button[aria-label*="Share" i]', 'button[type="submit"]'],
   x: ['button[data-testid="tweetButton"]', 'button[data-testid="tweetButtonInline"]', 'div[data-testid="tweetButtonInline"]']
 };
 
