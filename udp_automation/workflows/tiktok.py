@@ -34,6 +34,7 @@ def _must_click(
     log_fn: LogFn | None = None,
     text_contains: str = "",
     delay_s: float = 0.0,
+    single_click: bool = False,
 ) -> dict[str, Any]:
     _log(log_fn, f"{step or 'click'}: selector={selector} timeout_ms={timeout_ms}")
     result = executor.run(
@@ -43,6 +44,7 @@ def _must_click(
             "selector": selector,
             "timeoutMs": timeout_ms,
             "textContains": text_contains,
+            "singleClick": single_click,
         },
     )
     payload = result.get("payload") or {}
@@ -79,6 +81,35 @@ def _must_type(
         raise RuntimeError(f"TikTok {step or 'type'} failed (selector={selector})")
     _log(log_fn, f"{step or 'type'}: ok payload={payload}")
     _pause(delay_s, step=f"{step or 'type'}_settle", log_fn=log_fn)
+
+
+def _must_type_any(
+    executor: BaseExecutor,
+    selectors: list[str],
+    value: str,
+    *,
+    step: str = "",
+    log_fn: LogFn | None = None,
+    submit: bool = False,
+    delay_s: float = 0.0,
+) -> None:
+    errors: list[str] = []
+    for selector in selectors:
+        try:
+            _must_type(
+                executor,
+                selector,
+                value,
+                step=step,
+                log_fn=log_fn,
+                submit=submit,
+                delay_s=delay_s,
+            )
+            return
+        except RuntimeError as exc:
+            errors.append(str(exc))
+            _log(log_fn, f"{step or 'type'}: selector failed ({selector}) err={exc}")
+    raise RuntimeError(f"TikTok {step or 'type'} failed for all selectors: {' | '.join(errors)}")
 
 
 def _overlay_text(opts: dict[str, Any], caption: str) -> str:
@@ -135,8 +166,23 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
 
     if add_text and text_overlay:
         _must_click(executor, "div[data-name='AddTextPresetPanel']", timeout_ms=60000, step="open_text_tab", log_fn=log_fn, delay_s=action_delay_s)
-        _must_click(executor, "button.AddTextPanel__addTextBasicButton", timeout_ms=60000, step="add_text_once", log_fn=log_fn, delay_s=action_delay_s)
-        _must_type(executor, "textarea[name='content']", text_overlay, step="set_overlay_text", log_fn=log_fn, delay_s=action_delay_s)
+        _must_click(
+            executor,
+            "button.AddTextPanel__addTextBasicButton",
+            timeout_ms=60000,
+            step="add_text_once",
+            log_fn=log_fn,
+            delay_s=action_delay_s,
+            single_click=True,
+        )
+        _must_type_any(
+            executor,
+            ["textarea[name='content']:focus", "textarea[name='content']"],
+            text_overlay,
+            step="set_overlay_text",
+            log_fn=log_fn,
+            delay_s=action_delay_s,
+        )
 
     if add_music and music_query:
         _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=60000, step="open_music_tab", log_fn=log_fn, delay_s=action_delay_s)

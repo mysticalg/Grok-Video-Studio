@@ -206,10 +206,16 @@ async function handleCmd(msg) {
               return { clicked: false, reason: "blacklisted_discard", selector: found.selector };
             }
             clickTarget.scrollIntoView({ block: "center", inline: "center" });
-            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
-              clickTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
-            });
-            try { clickTarget.click?.(); } catch (_) {}
+            if (opts.singleClick) {
+              try { clickTarget.click?.(); } catch (_) {
+                clickTarget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+              }
+            } else {
+              ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+                clickTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+              });
+              try { clickTarget.click?.(); } catch (_) {}
+            }
             return { clicked: true, selector: found.selector, waitedMs: Date.now() - started, randomIndex: found.randomIndex, randomPoolSize: found.randomPoolSize };
           }
           await new Promise((resolve) => setTimeout(resolve, 250));
@@ -236,6 +242,7 @@ async function handleCmd(msg) {
           platform,
           useRandomMatch,
           textContains: String(payload.textContains || "").trim().toLowerCase(),
+          singleClick: Boolean(payload.singleClick),
         };
       })()], platform);
       if (msg.name === "post.submit") {
