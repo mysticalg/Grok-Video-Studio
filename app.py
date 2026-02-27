@@ -2529,6 +2529,7 @@ class MainWindow(QMainWindow):
         self.last_extracted_frame_path: Path | None = None
         self.preview_muted = False
         self.preview_volume = 100
+        self.preview_loop_enabled = False
         self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
         self.last_update_prompt_ts = 0
@@ -3120,6 +3121,12 @@ class MainWindow(QMainWindow):
         self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
         preview_controls.addWidget(self.preview_fullscreen_btn)
+
+        self.preview_loop_checkbox = QCheckBox("🔁")
+        self.preview_loop_checkbox.setToolTip("Loop the preview video when playback reaches the end.")
+        self.preview_loop_checkbox.setChecked(self.preview_loop_enabled)
+        self.preview_loop_checkbox.toggled.connect(self._set_preview_loop_enabled)
+        preview_controls.addWidget(self.preview_loop_checkbox)
         preview_layout.addLayout(preview_controls)
 
         timeline_layout = QHBoxLayout()
@@ -3136,6 +3143,7 @@ class MainWindow(QMainWindow):
         self.audio_output.setVolume(self.preview_volume / 100)
         self.player.positionChanged.connect(self._on_preview_position_changed)
         self.player.durationChanged.connect(self._on_preview_duration_changed)
+        self.player.mediaStatusChanged.connect(self._on_preview_media_status_changed)
 
         bottom_splitter = QSplitter()
         bottom_splitter.setOpaqueResize(True)
@@ -4943,6 +4951,7 @@ class MainWindow(QMainWindow):
             "download_dir": str(self.download_dir),
             "preview_muted": self.preview_mute_checkbox.isChecked(),
             "preview_volume": self.preview_volume_slider.value(),
+            "preview_loop_enabled": self.preview_loop_checkbox.isChecked(),
             "training_start_url": self.training_start_url.text(),
             "training_output_dir": self.training_output_dir.text(),
             "training_timeout": self.training_timeout.value(),
@@ -5250,6 +5259,8 @@ class MainWindow(QMainWindow):
                 self.preview_volume_slider.setValue(int(preferences["preview_volume"]))
             except (TypeError, ValueError):
                 pass
+        if "preview_loop_enabled" in preferences:
+            self.preview_loop_checkbox.setChecked(bool(preferences["preview_loop_enabled"]))
         if "training_start_url" in preferences:
             self.training_start_url.setText(str(preferences["training_start_url"]))
         if "training_output_dir" in preferences:
@@ -11144,6 +11155,12 @@ class MainWindow(QMainWindow):
     def seek_preview(self, position: int) -> None:
         self.player.setPosition(max(0, int(position)))
 
+    def _on_preview_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
+        if status != QMediaPlayer.MediaStatus.EndOfMedia or not self.preview_loop_enabled:
+            return
+        self.player.setPosition(0)
+        self.player.play()
+
     def _ensure_preview_fullscreen_overlay(self) -> None:
         if self.preview_fullscreen_overlay_btn is not None:
             return
@@ -11267,6 +11284,10 @@ class MainWindow(QMainWindow):
         self.preview_volume = int(value)
         self.audio_output.setVolume(self.preview_volume / 100)
         self._append_log(f"Preview volume set to {self.preview_volume}%.")
+
+    def _set_preview_loop_enabled(self, enabled: bool) -> None:
+        self.preview_loop_enabled = bool(enabled)
+        self._append_log(f"Preview loop {'enabled' if self.preview_loop_enabled else 'disabled'}.")
 
     def _toggle_prompt_source_fields(self) -> None:
         prompt_source = self.prompt_source.currentData() if hasattr(self, "prompt_source") else "manual"
