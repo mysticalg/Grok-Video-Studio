@@ -10176,6 +10176,26 @@ class MainWindow(QMainWindow):
         self.browser.page().runJavaScript(script, after_poll)
 
 
+    def _remove_file_best_effort(self, file_path: Path, context: str) -> None:
+        path = Path(file_path)
+        if not path.exists():
+            return
+        last_error: Exception | None = None
+        for _ in range(4):
+            try:
+                path.unlink()
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.2)
+            except Exception as exc:
+                last_error = exc
+                break
+        if last_error is not None:
+            self._append_log(f"WARNING: Could not remove file '{path}' during {context}: {last_error}")
+
     def _abort_manual_video_generation_due_to_moderation(self, variant: int, reason: str) -> None:
         self._append_log(
             f"ERROR: Variant {variant}: video appears moderated/unavailable ({reason}). Stopping create-video polling so you can start again."
@@ -10233,12 +10253,12 @@ class MainWindow(QMainWindow):
             download_path = self._download_video_from_public_url(final_url, output_path)
         except PublicVideoModeratedError as exc:
             if output_path is not None and output_path.exists():
-                output_path.unlink(missing_ok=True)
+                self._remove_file_best_effort(output_path, "direct-download cleanup")
             self._abort_manual_video_generation_due_to_moderation(variant, str(exc))
             return False
         except PublicVideoNotReadyError as exc:
             if output_path is not None and output_path.exists():
-                output_path.unlink(missing_ok=True)
+                self._remove_file_best_effort(output_path, "direct-download cleanup")
             self.manual_public_not_ready_count += 1
             if self.manual_public_not_ready_count >= MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS:
                 self._abort_manual_video_generation_due_to_moderation(
@@ -10255,7 +10275,7 @@ class MainWindow(QMainWindow):
             return False
         except Exception as exc:
             if output_path is not None and output_path.exists():
-                output_path.unlink(missing_ok=True)
+                self._remove_file_best_effort(output_path, "direct-download cleanup")
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
@@ -10267,7 +10287,7 @@ class MainWindow(QMainWindow):
                 f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); discarding and retrying."
             )
             if download_path.exists():
-                download_path.unlink(missing_ok=True)
+                self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
             return False
@@ -10607,7 +10627,7 @@ class MainWindow(QMainWindow):
                         f"WARNING: Variant {variant}: clicked a non-video download target ({extension}); retrying with video download button."
                     )
                     if video_path.exists():
-                        video_path.unlink(missing_ok=True)
+                        self._remove_file_best_effort(video_path, "manual browser download cleanup")
                     self.manual_download_click_sent = False
                     self.manual_download_request_pending = False
                     self.manual_download_in_progress = False
@@ -10620,7 +10640,7 @@ class MainWindow(QMainWindow):
                         f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB); discarding and retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
                     )
                     if video_path.exists():
-                        video_path.unlink(missing_ok=True)
+                        self._remove_file_best_effort(video_path, "manual browser download cleanup")
                     self.manual_download_click_sent = False
                     self.manual_download_request_pending = False
                     self.manual_video_start_click_sent = False
