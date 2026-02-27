@@ -17,7 +17,7 @@ from udp_automation.protocol import event
 
 PLATFORM_URLS = {
     "youtube": "https://studio.youtube.com",
-    "tiktok": "https://www.tiktok.com/upload",
+    "tiktok": "https://www.tiktok.com/tiktokstudio/upload",
     "facebook": "https://www.facebook.com/reels/create",
     "instagram": "https://www.instagram.com/",
     "x": "https://x.com/compose/post",
