@@ -9912,9 +9912,19 @@ class MainWindow(QMainWindow):
                 }};
 
                 const directUrlCandidates = [anchorUrl, src];
+                const postUrlCandidates = [];
+                const pushPostCandidate = (rawUrl) => {{
+                    const candidate = normalizeAbsoluteUrl(rawUrl || "");
+                    if (!candidate) return;
+                    if (/[/]imagine[/]post[/][0-9a-fA-F-]{{8,}}/i.test(candidate)) {{
+                        postUrlCandidates.push(candidate);
+                    }}
+                }};
+                pushPostCandidate(window.location && window.location.href ? String(window.location.href) : "");
                 for (const anchor of document.querySelectorAll("a[href]")) {{
                     const candidate = normalizeAbsoluteUrl(anchor.getAttribute("href") || "");
                     if (candidate) directUrlCandidates.push(candidate);
+                    pushPostCandidate(candidate);
                 }}
                 for (const mediaEl of document.querySelectorAll("video[src], source[src], [data-video-url], [data-url], [data-src]")) {{
                     const attrs = [
@@ -9930,8 +9940,9 @@ class MainWindow(QMainWindow):
                 }}
 
                 const firstDirectUrl = directUrlCandidates.find((candidate) => isDirectVideoUrl(candidate));
+                const firstPostUrl = postUrlCandidates.find((candidate) => /[/]imagine[/]post[/][0-9a-fA-F-]{{8,}}/i.test(candidate)) || "";
                 if (firstDirectUrl) {{
-                    return {{ status: "direct-url-ready", src: firstDirectUrl, sourceType: "page-scan" }};
+                    return {{ status: "direct-url-ready", src: firstDirectUrl, sourceType: "page-scan", postUrl: firstPostUrl }};
                 }}
 
                 const isDownloadActionButton = (btn) => {{
@@ -10031,15 +10042,16 @@ class MainWindow(QMainWindow):
                     return {{
                         status: "download-visible",
                         directUrl,
+                        postUrl: firstPostUrl,
                     }};
                 }}
 
                 if (redoButton && !downloadButton && !src && !anchorUrl) {{
-                    return {{ status: "waiting-for-redo" }};
+                    return {{ status: "waiting-for-redo", postUrl: firstPostUrl }};
                 }}
 
                 if (!redoButton) {{
-                    return {{ status: "waiting-for-download" }};
+                    return {{ status: "waiting-for-download", postUrl: firstPostUrl }};
                 }}
 
                 const enoughData = !!(video && video.readyState >= 3 && Number(video.duration || 0) > 0);
@@ -10048,6 +10060,7 @@ class MainWindow(QMainWindow):
                     src,
                     readyState: video ? video.readyState : 0,
                     duration: video ? Number(video.duration || 0) : 0,
+                    postUrl: firstPostUrl,
                 }};
             }})()
         """
@@ -10086,6 +10099,11 @@ class MainWindow(QMainWindow):
                 return
 
             status = result.get("status", "waiting")
+            post_url = str(result.get("postUrl") or "").strip()
+            if post_url:
+                post_public_url = _public_video_url_from_post_url(post_url)
+                if post_public_url:
+                    self.manual_public_video_url = post_public_url
             progress_text = (result.get("progressText") or "").strip()
             self.manual_download_poll_attempt_count += 1
 
@@ -11694,8 +11712,8 @@ class MainWindow(QMainWindow):
                         return true;
                     } catch (_) {
                         return false;
-                    }
-                };
+                    }}
+                }};
 
                 const dispatchFileEvents = (target, dt) => {
                     try {
