@@ -125,6 +125,13 @@ async function handleCmd(msg) {
           return !(attrDisabled || dataDisabled || htmlDisabled || loading);
         };
 
+        const textMatches = (el, needle) => {
+          const expected = String(needle || "").trim().toLowerCase();
+          if (!expected) return true;
+          const text = String((el?.closest("button, [role='button']") || el)?.textContent || "").trim().toLowerCase();
+          return text.includes(expected);
+        };
+
         const hasUploadReadySignal = () => {
           const status = document.querySelector("div.info-status.success");
           if (status) {
@@ -173,7 +180,7 @@ async function handleCmd(msg) {
 
         const findCandidate = () => {
           for (const sel of selectors) {
-            const visibleMatches = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+            const visibleMatches = Array.from(document.querySelectorAll(sel)).filter((node) => isVisible(node) && textMatches(node, opts.textContains));
             if (visibleMatches.length > 0) {
               if (opts.useRandomMatch && visibleMatches.length > 1) {
                 const idx = Math.floor(Math.random() * visibleMatches.length);
@@ -182,7 +189,7 @@ async function handleCmd(msg) {
               return { el: visibleMatches[0], selector: sel, randomIndex: 0, randomPoolSize: visibleMatches.length };
             }
             const fallback = document.querySelector(sel);
-            if (fallback) return { el: fallback, selector: sel, randomIndex: 0, randomPoolSize: 1 };
+            if (fallback && textMatches(fallback, opts.textContains)) return { el: fallback, selector: sel, randomIndex: 0, randomPoolSize: 1 };
           }
           return null;
         };
@@ -222,7 +229,14 @@ async function handleCmd(msg) {
         const requestedTimeoutMs = Number(payload.timeoutMs || 0);
         const defaultTimeoutMs = msg.name === "post.submit" ? 60000 : 30000;
         const timeoutMs = Math.max(defaultTimeoutMs, requestedTimeoutMs || defaultTimeoutMs);
-        return { waitForUpload: Boolean(payload.waitForUpload), timeoutMs, isDraft, platform, useRandomMatch };
+        return {
+          waitForUpload: Boolean(payload.waitForUpload),
+          timeoutMs,
+          isDraft,
+          platform,
+          useRandomMatch,
+          textContains: String(payload.textContains || "").trim().toLowerCase(),
+        };
       })()], platform);
       if (msg.name === "post.submit") {
         if (platformState[platform]) {
@@ -485,7 +499,32 @@ async function handleCmd(msg) {
         if (name === "dom.type") {
           const el = document.querySelector(p.selector || "");
           if (!el) return { typed: false, selector: p.selector || "" };
-          return { typed: setValue(el, p.value ?? p.text ?? ""), selector: p.selector || "" };
+          const typed = setValue(el, p.value ?? p.text ?? "");
+          if (typed && p.submit) {
+            try {
+              const submitEvent = new KeyboardEvent("keydown", {
+                key: "Enter",
+                code: "Enter",
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true,
+              });
+              el.dispatchEvent(submitEvent);
+            } catch (_) {}
+            try {
+              const target = el.closest("form") || el;
+              target.dispatchEvent(new KeyboardEvent("keyup", {
+                key: "Enter",
+                code: "Enter",
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true,
+              }));
+            } catch (_) {}
+          }
+          return { typed, selector: p.selector || "", submitted: Boolean(p.submit) };
         }
 
         const fields = p.fields || {};
