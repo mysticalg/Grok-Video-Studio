@@ -666,11 +666,27 @@ def _openai_responses_payload(model: str, system: str, user: str) -> dict[str, o
     }
 
 
+def _openai_responses_payload_compat(model: str, system: str, user: str) -> dict[str, object]:
+    payload = _openai_responses_payload(model, system, user)
+    # Some OpenAI-compatible backends reject `max_output_tokens` for responses-style
+    # requests and still expect legacy `max_tokens`.
+    payload.pop("max_output_tokens", None)
+    payload["max_tokens"] = AI_MAX_OUTPUT_TOKENS
+    return payload
+
+
 def _openai_error_prefers_responses(response: requests.Response) -> bool:
     if response.status_code not in {400, 404, 422}:
         return False
     text = (response.text or "").lower()
     return "only supported in v1/responses" in text or "not in v1/chat/completions" in text
+
+
+def _openai_error_unsupported_max_output_tokens(response: requests.Response) -> bool:
+    if response.status_code not in {400, 404, 422}:
+        return False
+    text = (response.text or "").lower()
+    return "unsupported parameter" in text and "max_output_tokens" in text
 
 
 def _call_openai_chat_api(credential: str, model: str, system: str, user: str, temperature: float) -> str:
@@ -684,10 +700,22 @@ def _call_openai_chat_api(credential: str, model: str, system: str, user: str, t
 
     response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
 
+    if not response.ok and is_responses_api and _openai_error_unsupported_max_output_tokens(response):
+        compat_payload = _openai_responses_payload_compat(model, system, user)
+        response = requests.post(endpoint, headers=headers, json=compat_payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
+
     if not response.ok and not is_responses_api and _openai_error_prefers_responses(response):
         responses_endpoint = f"{OPENAI_API_BASE}/responses"
         retry_payload = _openai_responses_payload(model, system, user)
         retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
+        if not retry_response.ok and _openai_error_unsupported_max_output_tokens(retry_response):
+            retry_payload = _openai_responses_payload_compat(model, system, user)
+            retry_response = requests.post(
+                responses_endpoint,
+                headers=headers,
+                json=retry_payload,
+                timeout=AI_TEXT_TIMEOUT_SECONDS,
+            )
         if not retry_response.ok:
             raise RuntimeError(
                 f"OpenAI request failed: {retry_response.status_code} {retry_response.text[:500]}"
