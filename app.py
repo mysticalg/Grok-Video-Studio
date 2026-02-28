@@ -641,7 +641,7 @@ def _extract_text_from_responses_sse(raw_text: str) -> str:
 
     return "".join(text_chunks).strip()
 
-def _openai_chat_payload(model: str, system: str, user: str, temperature: float) -> dict[str, object]:
+def _openai_chat_payload(model: str, system: str, user: str, temperature: float, max_tokens: int) -> dict[str, object]:
     return {
         "model": model,
         "messages": [
@@ -649,21 +649,30 @@ def _openai_chat_payload(model: str, system: str, user: str, temperature: float)
             {"role": "user", "content": user},
         ],
         "temperature": temperature,
-        "max_tokens": AI_MAX_OUTPUT_TOKENS,
+        "max_tokens": max_tokens,
     }
 
 
-def _openai_responses_payload(model: str, system: str, user: str) -> dict[str, object]:
+def _openai_responses_payload(model: str, system: str, user: str, max_output_tokens: int) -> dict[str, object]:
     return {
         "model": model,
         "instructions": system,
         "input": [
             {"role": "user", "content": user},
         ],
-        "max_output_tokens": AI_MAX_OUTPUT_TOKENS,
+        "max_output_tokens": max_output_tokens,
         "store": False,
         "stream": True,
     }
+
+
+def _openai_responses_payload_compat(model: str, system: str, user: str, max_output_tokens: int) -> dict[str, object]:
+    payload = _openai_responses_payload(model, system, user, max_output_tokens)
+    # Some OpenAI-compatible backends reject `max_output_tokens` for responses-style
+    # requests and still expect legacy `max_tokens`.
+    payload.pop("max_output_tokens", None)
+    payload["max_tokens"] = max_output_tokens
+    return payload
 
 
 def _openai_error_prefers_responses(response: requests.Response) -> bool:
@@ -673,21 +682,48 @@ def _openai_error_prefers_responses(response: requests.Response) -> bool:
     return "only supported in v1/responses" in text or "not in v1/chat/completions" in text
 
 
-def _call_openai_chat_api(credential: str, model: str, system: str, user: str, temperature: float) -> str:
+def _openai_error_unsupported_max_output_tokens(response: requests.Response) -> bool:
+    if response.status_code not in {400, 404, 422}:
+        return False
+    text = (response.text or "").lower()
+    return "unsupported parameter" in text and "max_output_tokens" in text
+
+
+def _call_openai_chat_api(
+    credential: str,
+    model: str,
+    system: str,
+    user: str,
+    temperature: float,
+    max_output_tokens: int = AI_MAX_OUTPUT_TOKENS,
+    timeout_seconds: float = AI_TEXT_TIMEOUT_SECONDS,
+) -> str:
     endpoint, headers, is_responses_api = _openai_chat_target(credential)
 
     payload = (
-        _openai_responses_payload(model, system, user)
+        _openai_responses_payload(model, system, user, max_output_tokens)
         if is_responses_api
-        else _openai_chat_payload(model, system, user, temperature)
+        else _openai_chat_payload(model, system, user, temperature, max_output_tokens)
     )
 
-    response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
+    response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
+
+    if not response.ok and is_responses_api and _openai_error_unsupported_max_output_tokens(response):
+        compat_payload = _openai_responses_payload_compat(model, system, user, max_output_tokens)
+        response = requests.post(endpoint, headers=headers, json=compat_payload, timeout=timeout_seconds)
 
     if not response.ok and not is_responses_api and _openai_error_prefers_responses(response):
         responses_endpoint = f"{OPENAI_API_BASE}/responses"
-        retry_payload = _openai_responses_payload(model, system, user)
-        retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
+        retry_payload = _openai_responses_payload(model, system, user, max_output_tokens)
+        retry_response = requests.post(responses_endpoint, headers=headers, json=retry_payload, timeout=timeout_seconds)
+        if not retry_response.ok and _openai_error_unsupported_max_output_tokens(retry_response):
+            retry_payload = _openai_responses_payload_compat(model, system, user, max_output_tokens)
+            retry_response = requests.post(
+                responses_endpoint,
+                headers=headers,
+                json=retry_payload,
+                timeout=timeout_seconds,
+            )
         if not retry_response.ok:
             raise RuntimeError(
                 f"OpenAI request failed: {retry_response.status_code} {retry_response.text[:500]}"
@@ -980,6 +1016,9 @@ class PromptConfig:
     openai_api_key: str
     openai_access_token: str
     openai_chat_model: str
+    ai_timeout_seconds: int
+    ai_max_output_tokens: int
+    ai_max_output_tokens_local: int
     video_resolution: str
     video_resolution_label: str
     video_aspect_ratio: str
@@ -1133,7 +1172,7 @@ class GenerateWorker(QThread):
                 ],
                 "temperature": 0.9,
             },
-            timeout=90,
+            timeout=float(max(5, int(self.prompt_config.ai_timeout_seconds or AI_TEXT_TIMEOUT_SECONDS))),
         )
         if not response.ok:
             raise RuntimeError(f"Chat request failed: {response.status_code} {self._api_error_message(response)}")
@@ -1149,6 +1188,8 @@ class GenerateWorker(QThread):
             system=system,
             user=user,
             temperature=0.9,
+            max_output_tokens=int(max(128, self.prompt_config.ai_max_output_tokens or AI_MAX_OUTPUT_TOKENS)),
+            timeout_seconds=float(max(5, int(self.prompt_config.ai_timeout_seconds or AI_TEXT_TIMEOUT_SECONDS))),
         )
 
     def build_prompt(self, variant: int) -> str:
@@ -1591,7 +1632,7 @@ class GenerateWorker(QThread):
         last_error = ""
         for endpoint in endpoints:
             for payload in self._seedance_payload_variants(prompt):
-                response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
+                response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
                 if response.ok:
                     data = response.json() if response.content else {}
                     job_id = data.get("id") or data.get("job_id")
@@ -4079,6 +4120,25 @@ class MainWindow(QMainWindow):
         self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-5.1-codex"))
         ai_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
 
+        self.ai_timeout_seconds = QSpinBox()
+        self.ai_timeout_seconds.setRange(5, 3600)
+        self.ai_timeout_seconds.setValue(int(AI_TEXT_TIMEOUT_SECONDS))
+        self.ai_timeout_seconds.setSuffix(" s")
+        self.ai_timeout_seconds.setToolTip("Timeout used for AI text requests (Grok/OpenAI/Ollama prompt calls).")
+        ai_layout.addRow("AI Text Timeout", self.ai_timeout_seconds)
+
+        self.ai_max_output_tokens = QSpinBox()
+        self.ai_max_output_tokens.setRange(128, 65536)
+        self.ai_max_output_tokens.setValue(int(AI_MAX_OUTPUT_TOKENS))
+        self.ai_max_output_tokens.setToolTip("Max tokens for Grok/OpenAI text responses.")
+        ai_layout.addRow("AI Max Output Tokens", self.ai_max_output_tokens)
+
+        self.ai_max_output_tokens_local = QSpinBox()
+        self.ai_max_output_tokens_local.setRange(64, 65536)
+        self.ai_max_output_tokens_local.setValue(int(AI_MAX_OUTPUT_TOKENS_LOCAL))
+        self.ai_max_output_tokens_local.setToolTip("Max tokens for Ollama local responses.")
+        ai_layout.addRow("AI Max Output Tokens (Ollama)", self.ai_max_output_tokens_local)
+
         self.ollama_api_base = QLineEdit(os.getenv("OLLAMA_API_BASE", OLLAMA_API_BASE))
         self.ollama_api_base.setPlaceholderText("http://127.0.0.1:11434/v1")
         self.ollama_api_base.editingFinished.connect(self._refresh_ollama_chat_models)
@@ -5138,6 +5198,9 @@ class MainWindow(QMainWindow):
             "openai_api_key": self.openai_api_key.text(),
             "openai_access_token": self.openai_access_token.text(),
             "openai_chat_model": self.openai_chat_model.text(),
+            "ai_timeout_seconds": int(self.ai_timeout_seconds.value()),
+            "ai_max_output_tokens": int(self.ai_max_output_tokens.value()),
+            "ai_max_output_tokens_local": int(self.ai_max_output_tokens_local.value()),
             "ollama_api_base": self.ollama_api_base.text(),
             "ollama_chat_model": self.ollama_chat_model.currentText(),
             "seedance_api_key": self.seedance_api_key.text(),
@@ -5265,6 +5328,21 @@ class MainWindow(QMainWindow):
             self.openai_access_token.setText(str(preferences["openai_access_token"]))
         if "openai_chat_model" in preferences:
             self.openai_chat_model.setText(str(preferences["openai_chat_model"]))
+        if "ai_timeout_seconds" in preferences:
+            try:
+                self.ai_timeout_seconds.setValue(max(5, int(preferences["ai_timeout_seconds"])))
+            except (TypeError, ValueError):
+                pass
+        if "ai_max_output_tokens" in preferences:
+            try:
+                self.ai_max_output_tokens.setValue(max(128, int(preferences["ai_max_output_tokens"])))
+            except (TypeError, ValueError):
+                pass
+        if "ai_max_output_tokens_local" in preferences:
+            try:
+                self.ai_max_output_tokens_local.setValue(max(64, int(preferences["ai_max_output_tokens_local"])))
+            except (TypeError, ValueError):
+                pass
         if "ollama_api_base" in preferences:
             self.ollama_api_base.setText(str(preferences["ollama_api_base"]))
             self._refresh_ollama_chat_models(initial=True)
@@ -6296,6 +6374,9 @@ class MainWindow(QMainWindow):
             openai_api_key=self.openai_api_key.text().strip(),
             openai_access_token=self.openai_access_token.text().strip(),
             openai_chat_model=self.openai_chat_model.text().strip() or "gpt-5.1-codex",
+            ai_timeout_seconds=int(self.ai_timeout_seconds.value()),
+            ai_max_output_tokens=int(self.ai_max_output_tokens.value()),
+            ai_max_output_tokens_local=int(self.ai_max_output_tokens_local.value()),
             video_resolution=selected_resolution,
             video_resolution_label=selected_resolution_label,
             video_aspect_ratio=selected_aspect_ratio,
@@ -6830,10 +6911,13 @@ class MainWindow(QMainWindow):
         if clean_system:
             messages.append({"role": "system", "content": clean_system})
         messages.append({"role": "user", "content": user})
+        timeout_seconds = float(max(5, int(self.ai_timeout_seconds.value())))
+        max_tokens = int(max(128, self.ai_max_output_tokens.value()))
+        max_tokens_local = int(max(64, self.ai_max_output_tokens_local.value()))
         payload = {
             "messages": messages,
             "temperature": 0.4,
-            "max_tokens": AI_MAX_OUTPUT_TOKENS,
+            "max_tokens": max_tokens,
         }
 
         if source == "openai":
@@ -6846,16 +6930,18 @@ class MainWindow(QMainWindow):
                 system=system,
                 user=user,
                 temperature=0.4,
+                max_output_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
             )
 
         if source == "ollama":
             ollama_api_base = self.ollama_api_base.text().strip() or OLLAMA_API_BASE
             ollama_chat_model = self.ollama_chat_model.currentText().strip() or OLLAMA_CHAT_MODEL
             payload["model"] = ollama_chat_model
-            payload["max_tokens"] = AI_MAX_OUTPUT_TOKENS_LOCAL
-            payload["options"] = {"num_predict": AI_MAX_OUTPUT_TOKENS_LOCAL}
+            payload["max_tokens"] = max_tokens_local
+            payload["options"] = {"num_predict": max_tokens_local}
             endpoint = f"{ollama_api_base.rstrip('/')}/chat/completions"
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
             if not response.ok:
                 raise RuntimeError(f"Ollama request failed: {response.status_code} {response.text[:400]}")
             return response.json()["choices"][0]["message"]["content"].strip()
@@ -6867,7 +6953,7 @@ class MainWindow(QMainWindow):
             raise RuntimeError("Grok API key is required.")
         headers["Authorization"] = f"Bearer {grok_key}"
         payload["model"] = self.chat_model.text().strip() or "grok-3-mini"
-        response = requests.post(f"{API_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=AI_TEXT_TIMEOUT_SECONDS)
+        response = requests.post(f"{API_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=timeout_seconds)
         if not response.ok:
             raise RuntimeError(f"Grok request failed: {response.status_code} {response.text[:400]}")
         return response.json()["choices"][0]["message"]["content"].strip()
@@ -6892,8 +6978,9 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.setEnabled(False)
         self.generate_prompt_btn.setText("⏳ Generating Prompt + Social Metadata...")
         self._set_prompt_thinking_indicator(True, f"Thinking with {str(source).title()}…")
-        max_tokens = AI_MAX_OUTPUT_TOKENS_LOCAL if str(source).strip().lower() == "ollama" else AI_MAX_OUTPUT_TOKENS
-        self._append_log(f"Generating prompt + social metadata using {str(source).title()} (max tokens: {max_tokens}, timeout: {int(AI_TEXT_TIMEOUT_SECONDS)}s)...")
+        selected_max_tokens = int(max(64, self.ai_max_output_tokens_local.value())) if str(source).strip().lower() == "ollama" else int(max(128, self.ai_max_output_tokens.value()))
+        selected_timeout = int(max(5, self.ai_timeout_seconds.value()))
+        self._append_log(f"Generating prompt + social metadata using {str(source).title()} (max tokens: {selected_max_tokens}, timeout: {selected_timeout}s)...")
 
         worker = PromptGenerationWorker(
             source=str(source),
