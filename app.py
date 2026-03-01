@@ -10262,7 +10262,7 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
-                use_enter_submit = continue_last_video_mode or is_sora_manual_flow
+                use_enter_submit = True
                 if use_enter_submit:
                     enter_script = r"""
                         (() => {
@@ -10316,11 +10316,18 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 f"WARNING: Variant {variant}: could not confirm trailing Enter press after prompt entry. result={enter_result!r}"
                             )
-                        flow_label = "Sora" if is_sora_manual_flow else "continue-last-video"
+                        flow_label = "Sora" if is_sora_manual_flow else ("continue-last-video" if continue_last_video_mode else "standard")
+                        if isinstance(enter_result, dict) and enter_result.get("ok"):
+                            self._append_log(
+                                f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
+                            )
+                            QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            return
+
                         self._append_log(
-                            f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
+                            f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
                         )
-                        QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                        QTimer.singleShot(700, _run_flow_submit)
 
                     self.browser.page().runJavaScript(enter_script, _after_enter_press)
                     return
