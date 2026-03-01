@@ -649,8 +649,16 @@ def _openai_chat_payload(model: str, system: str, user: str, temperature: float,
             {"role": "user", "content": user},
         ],
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_completion_tokens": max_tokens,
     }
+
+
+def _openai_chat_payload_compat(model: str, system: str, user: str, temperature: float, max_tokens: int) -> dict[str, object]:
+    payload = _openai_chat_payload(model, system, user, temperature, max_tokens)
+    # Some OpenAI-compatible backends still expect legacy `max_tokens`.
+    payload.pop("max_completion_tokens", None)
+    payload["max_tokens"] = max_tokens
+    return payload
 
 
 def _openai_responses_payload(model: str, system: str, user: str, max_output_tokens: int) -> dict[str, object]:
@@ -689,6 +697,26 @@ def _openai_error_unsupported_max_output_tokens(response: requests.Response) -> 
     return "unsupported parameter" in text and "max_output_tokens" in text
 
 
+def _openai_error_unsupported_max_tokens(response: requests.Response) -> bool:
+    if response.status_code not in {400, 404, 422}:
+        return False
+    text = (response.text or "").lower()
+    return "unsupported parameter" in text and "max_tokens" in text
+
+
+def _openai_error_unsupported_max_completion_tokens(response: requests.Response) -> bool:
+    if response.status_code not in {400, 404, 422}:
+        return False
+    text = (response.text or "").lower()
+    return "unsupported parameter" in text and "max_completion_tokens" in text
+
+
+def _openai_responses_payload_without_token_limit(model: str, system: str, user: str) -> dict[str, object]:
+    payload = _openai_responses_payload(model, system, user, max_output_tokens=1)
+    payload.pop("max_output_tokens", None)
+    return payload
+
+
 def _call_openai_chat_api(
     credential: str,
     model: str,
@@ -711,6 +739,13 @@ def _call_openai_chat_api(
     if not response.ok and is_responses_api and _openai_error_unsupported_max_output_tokens(response):
         compat_payload = _openai_responses_payload_compat(model, system, user, max_output_tokens)
         response = requests.post(endpoint, headers=headers, json=compat_payload, timeout=timeout_seconds)
+        if not response.ok and _openai_error_unsupported_max_tokens(response):
+            no_limit_payload = _openai_responses_payload_without_token_limit(model, system, user)
+            response = requests.post(endpoint, headers=headers, json=no_limit_payload, timeout=timeout_seconds)
+
+    if not response.ok and (not is_responses_api) and _openai_error_unsupported_max_completion_tokens(response):
+        compat_payload = _openai_chat_payload_compat(model, system, user, temperature, max_output_tokens)
+        response = requests.post(endpoint, headers=headers, json=compat_payload, timeout=timeout_seconds)
 
     if not response.ok and not is_responses_api and _openai_error_prefers_responses(response):
         responses_endpoint = f"{OPENAI_API_BASE}/responses"
@@ -724,6 +759,14 @@ def _call_openai_chat_api(
                 json=retry_payload,
                 timeout=timeout_seconds,
             )
+            if not retry_response.ok and _openai_error_unsupported_max_tokens(retry_response):
+                retry_payload = _openai_responses_payload_without_token_limit(model, system, user)
+                retry_response = requests.post(
+                    responses_endpoint,
+                    headers=headers,
+                    json=retry_payload,
+                    timeout=timeout_seconds,
+                )
         if not retry_response.ok:
             raise RuntimeError(
                 f"OpenAI request failed: {retry_response.status_code} {retry_response.text[:500]}"
