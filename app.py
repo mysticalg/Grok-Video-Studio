@@ -11102,13 +11102,16 @@ class MainWindow(QMainWindow):
                 const emulateClick = (el) => {{
                     if (!el || !isVisible(el) || el.disabled) return false;
                     try {{ el.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }}); }} catch (_) {{}}
-                    try {{ el.dispatchEvent(new PointerEvent('pointerdown', clickCommon)); }} catch (_) {{}}
-                    el.dispatchEvent(new MouseEvent('mousedown', clickCommon));
-                    try {{ el.dispatchEvent(new PointerEvent('pointerup', clickCommon)); }} catch (_) {{}}
-                    el.dispatchEvent(new MouseEvent('mouseup', clickCommon));
-                    el.dispatchEvent(new MouseEvent('click', clickCommon));
-                    try {{ el.click(); }} catch (_) {{}}
-                    return true;
+                    try {{ el.focus({{ preventScroll: true }}); }} catch (_) {{ try {{ el.focus(); }} catch (_) {{}} }}
+                    try {{
+                        el.click();
+                        return true;
+                    }} catch (_) {{}}
+                    try {{
+                        el.dispatchEvent(new MouseEvent('click', clickCommon));
+                        return true;
+                    }} catch (_) {{}}
+                    return false;
                 }};
 
                 const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
