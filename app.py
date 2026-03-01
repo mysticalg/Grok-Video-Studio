@@ -2702,6 +2702,7 @@ class MainWindow(QMainWindow):
         self.multi_video_requested_clicks = 0
         self.multi_video_selection_complete = False
         self.multi_video_poll_in_flight = False
+        self.multi_video_probe_token = ""
         self.multi_video_download_future: concurrent.futures.Future | None = None
         self.multi_video_download_timer = QTimer(self)
         self.multi_video_download_timer.setSingleShot(True)
@@ -7192,6 +7193,7 @@ class MainWindow(QMainWindow):
         self.multi_video_requested_clicks = 0
         self.multi_video_selection_complete = False
         self.multi_video_poll_in_flight = False
+        self.multi_video_probe_token = str(int(time.time() * 1000))
         self.pending_manual_redirect_target = self._active_manual_browser_target()
         self._append_log(
             f"Starting Multi Video mode (count={target_count}, manual_pick={'on' if manual_pick else 'off'})."
@@ -10892,9 +10894,15 @@ class MainWindow(QMainWindow):
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const textOf = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
                 const postPattern = /\/imagine\/post\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
+                const generatedPattern = /\/generated\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})\//i;
                 const toPostUrl = (raw) => {{
                     const txt = String(raw || '').trim();
                     const m = txt.match(postPattern);
+                    return m ? `https://grok.com/imagine/post/${{m[1]}}` : '';
+                }};
+                const toPostUrlFromGenerated = (raw) => {{
+                    const txt = String(raw || '').trim();
+                    const m = txt.match(generatedPattern);
                     return m ? `https://grok.com/imagine/post/${{m[1]}}` : '';
                 }};
                 const extractPostUrlFromTile = (tile) => {{
@@ -10913,11 +10921,24 @@ class MainWindow(QMainWindow):
                         tile.getAttribute('title'),
                     ];
                     for (const value of attrs) {{
-                        const normalized = toPostUrl(value || '');
+                        const normalized = toPostUrl(value || '') || toPostUrlFromGenerated(value || '');
                         if (normalized) return normalized;
                     }}
+                    const mediaNodes = tile.querySelectorAll("img, source, video");
+                    for (const node of mediaNodes) {{
+                        const candidates = [
+                            node.getAttribute('src'),
+                            node.getAttribute('srcset'),
+                            node.getAttribute('poster'),
+                            node.currentSrc,
+                        ];
+                        for (const candidate of candidates) {{
+                            const normalized = toPostUrl(candidate || '') || toPostUrlFromGenerated(candidate || '');
+                            if (normalized) return normalized;
+                        }}
+                    }}
                     const html = String(tile.innerHTML || '');
-                    return toPostUrl(html);
+                    return toPostUrl(html) || toPostUrlFromGenerated(html);
                 }};
                 const clickCommon = {{ bubbles: true, cancelable: true, composed: true }};
                 const emulateClick = (el) => {{
@@ -10931,6 +10952,29 @@ class MainWindow(QMainWindow):
                     try {{ el.click(); }} catch (_) {{}}
                     return true;
                 }};
+                const findMakeVideoButton = (node) => {{
+                    const candidate = node?.closest?.("button, [role='button']");
+                    if (!candidate) return null;
+                    const label = (candidate.getAttribute('aria-label') || textOf(candidate) || '').toLowerCase();
+                    return /make\s+video/.test(label) ? candidate : null;
+                }};
+
+                if (!window.__multiVideoManualTracker || window.__multiVideoManualTracker.token !== {json.dumps(self.multi_video_probe_token)}) {{
+                    window.__multiVideoManualTracker = {{ token: {json.dumps(self.multi_video_probe_token)}, links: [], clickCount: 0 }};
+                }}
+                if (!window.__multiVideoManualTracker.bound) {{
+                    window.__multiVideoManualTracker.bound = true;
+                    document.addEventListener('click', (event) => {{
+                        const btn = findMakeVideoButton(event.target);
+                        if (!btn) return;
+                        const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
+                        const href = extractPostUrlFromTile(tile);
+                        window.__multiVideoManualTracker.clickCount += 1;
+                        if (href && !window.__multiVideoManualTracker.links.includes(href)) {{
+                            window.__multiVideoManualTracker.links.push(href);
+                        }}
+                    }}, true);
+                }}
 
                 const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
                     .filter((btn) => isVisible(btn) && /make\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
@@ -10956,7 +11000,16 @@ class MainWindow(QMainWindow):
                     }}
                 }}
 
-                return {{ links, makeVideoCount: makeButtons.length, clickedThisPass }};
+                for (const manualHref of (window.__multiVideoManualTracker?.links || [])) {{
+                    if (manualHref && !links.includes(manualHref)) links.push(manualHref);
+                }}
+
+                return {{
+                    links,
+                    makeVideoCount: makeButtons.length,
+                    clickedThisPass,
+                    manualClickCount: window.__multiVideoManualTracker?.clickCount || 0,
+                }};
             }})()
         """
 
@@ -10966,9 +11019,17 @@ class MainWindow(QMainWindow):
                 return
             links: list[str] = []
             clicked_this_pass = 0
+            manual_click_count = 0
             if isinstance(result, dict):
                 links = [str(url).strip() for url in (result.get("links") or []) if str(url).strip()]
                 clicked_this_pass = max(0, int(result.get("clickedThisPass") or 0))
+                manual_click_count = max(0, int(result.get("manualClickCount") or 0))
+
+            if self.multi_video_manual_pick and manual_click_count > self.multi_video_requested_clicks:
+                self.multi_video_requested_clicks = min(self.multi_video_target_count, manual_click_count)
+                self._append_log(
+                    f"Multi Video: detected {self.multi_video_requested_clicks}/{self.multi_video_target_count} manual Make video click(s)."
+                )
 
             if clicked_this_pass > 0:
                 self.multi_video_requested_clicks = min(
@@ -11069,6 +11130,7 @@ class MainWindow(QMainWindow):
             self.multi_video_requested_clicks = 0
             self.multi_video_selection_complete = False
             self.multi_video_poll_in_flight = False
+            self.multi_video_probe_token = ""
             return
 
         item = self.multi_video_pending_downloads[0]
