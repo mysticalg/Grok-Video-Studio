@@ -2691,6 +2691,18 @@ class MainWindow(QMainWindow):
         self._active_ffmpeg_process: subprocess.Popen[str] | None = None
         self.manual_generation_queue: list[dict] = []
         self.manual_image_generation_queue: list[dict] = []
+        self.multi_video_mode_active = False
+        self.multi_video_target_count = 0
+        self.multi_video_manual_pick = False
+        self.multi_video_prompt = ""
+        self.multi_video_collected_post_urls: list[str] = []
+        self.multi_video_pending_downloads: list[dict[str, Any]] = []
+        self.multi_video_completed_downloads = 0
+        self.multi_video_poll_retry_count = 0
+        self.multi_video_download_future: concurrent.futures.Future | None = None
+        self.multi_video_download_timer = QTimer(self)
+        self.multi_video_download_timer.setSingleShot(True)
+        self.multi_video_download_timer.timeout.connect(self._poll_multi_video_downloads)
         self.automation_counter_total = 0
         self.automation_counter_completed = 0
         self.pending_manual_variant_for_download: int | None = None
@@ -2933,6 +2945,13 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.generate_image_btn, self.start_image_generation)
         )
 
+        self.multi_video_btn = QPushButton("🎞️ Multi Video")
+        self.multi_video_btn.setToolTip("Generate multiple videos from one image prompt run and download in background.")
+        self.multi_video_btn.setCheckable(True)
+        self.multi_video_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.multi_video_btn, self.start_multi_video_generation)
+        )
+
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
         self.stop_all_btn.setCheckable(True)
@@ -2971,6 +2990,19 @@ class MainWindow(QMainWindow):
         self.browser_devtools_btn.clicked.connect(
             lambda: self._run_with_button_feedback(self.browser_devtools_btn, self.open_grok_browser_devtools)
         )
+
+        self.multi_video_count_spin = QSpinBox()
+        self.multi_video_count_spin.setRange(1, 10)
+        self.multi_video_count_spin.setValue(2)
+        self.multi_video_count_spin.setToolTip("How many generated image cards to convert to video in Multi Video mode.")
+
+        self.multi_video_manual_pick_checkbox = QCheckBox("Manual image pick")
+        self.multi_video_manual_pick_checkbox.setToolTip(
+            "When enabled, click generated image cards manually; automation will detect ready make-video cards and download in background."
+        )
+
+        self.multi_video_count_label = QLabel("Multi count")
+        self.multi_video_count_label.setToolTip("How many make-video actions Multi Video mode should collect.")
 
         self.sora_generate_image_btn = QPushButton("🎬 Create New Video")
         self.sora_generate_image_btn.setToolTip("Build and paste a video prompt into the Sora browser tab.")
@@ -3015,6 +3047,7 @@ class MainWindow(QMainWindow):
         )
 
         self.generate_image_btn.setMaximumWidth(170)
+        self.multi_video_btn.setMaximumWidth(170)
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
         self.browser_home_btn.setMaximumWidth(170)
@@ -3397,11 +3430,15 @@ class MainWindow(QMainWindow):
         grok_browser_layout = QVBoxLayout(self.grok_browser_tab)
         grok_browser_controls = QGridLayout()
         grok_browser_controls.addWidget(self.generate_image_btn, 0, 0)
-        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
-        grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
-        grok_browser_controls.addWidget(self.browser_home_btn, 0, 3)
-        grok_browser_controls.addWidget(self.browser_external_btn, 0, 4)
-        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 5)
+        grok_browser_controls.addWidget(self.multi_video_btn, 0, 1)
+        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 2)
+        grok_browser_controls.addWidget(self.continue_image_btn, 0, 3)
+        grok_browser_controls.addWidget(self.browser_home_btn, 0, 4)
+        grok_browser_controls.addWidget(self.browser_external_btn, 0, 5)
+        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 6)
+        grok_browser_controls.addWidget(self.multi_video_count_label, 1, 0)
+        grok_browser_controls.addWidget(self.multi_video_count_spin, 1, 1)
+        grok_browser_controls.addWidget(self.multi_video_manual_pick_checkbox, 1, 2, 1, 3)
 
         self.sora_browser_tab = QWidget()
         sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
@@ -3428,6 +3465,7 @@ class MainWindow(QMainWindow):
         self.video_aspect_ratio.addItem("9:16", "9:16")
         self.video_aspect_ratio.addItem("16:9", "16:9")
         self.video_aspect_ratio.setCurrentIndex(4)
+
         grok_browser_layout.addLayout(grok_browser_controls)
         grok_browser_layout.addWidget(self._build_browser_container(self.grok_browser_view), 1)
 
@@ -7131,6 +7169,29 @@ class MainWindow(QMainWindow):
         
         self._start_manual_browser_image_generation(manual_prompt, self.count.value())
 
+    def start_multi_video_generation(self) -> None:
+        self.stop_all_requested = False
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+        if not manual_prompt:
+            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            return
+
+        target_count = int(self.multi_video_count_spin.value())
+        manual_pick = bool(self.multi_video_manual_pick_checkbox.isChecked())
+        self.multi_video_mode_active = True
+        self.multi_video_target_count = target_count
+        self.multi_video_manual_pick = manual_pick
+        self.multi_video_prompt = manual_prompt
+        self.multi_video_collected_post_urls = []
+        self.multi_video_pending_downloads = []
+        self.multi_video_completed_downloads = 0
+        self.multi_video_poll_retry_count = 0
+        self.pending_manual_redirect_target = self._active_manual_browser_target()
+        self._append_log(
+            f"Starting Multi Video mode (count={target_count}, manual_pick={'on' if manual_pick else 'off'})."
+        )
+        self._start_manual_browser_image_generation(manual_prompt, 1)
+
     def start_sora_video_generation(self) -> None:
         self.stop_all_requested = False
         manual_prompt = self.manual_prompt.toPlainText().strip()
@@ -8824,6 +8885,16 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
                     self.pending_manual_download_type = "video"
+                    if self.multi_video_mode_active:
+                        if self.multi_video_manual_pick:
+                            self._append_log("Multi Video: submit accepted. Waiting for manual image picks and make-video cards.")
+                        else:
+                            self._append_log("Multi Video: submit accepted. Polling generated image cards to collect make-video targets.")
+                        self.pending_manual_variant_for_download = None
+                        self.pending_manual_download_type = None
+                        self.pending_manual_image_prompt = None
+                        QTimer.singleShot(1200, self._poll_multi_video_post_urls)
+                        return
                     self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                     return
 
@@ -10042,7 +10113,7 @@ class MainWindow(QMainWindow):
                         return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
                     };
 
-                    const menuMakeVideoTarget = (optionType === "type" && /make\s+video/i.test(targetLabel))
+                    const menuMakeVideoTarget = (optionType === "type" && /make\\s+video/i.test(targetLabel))
                         ? ([...document.querySelectorAll("[role='menuitem'], [role='menuitemradio']")]
                             .find((el) => {
                                 if (!isVisible(el) || el.disabled) return false;
@@ -10788,12 +10859,171 @@ class MainWindow(QMainWindow):
         if last_error is not None:
             self._append_log(f"WARNING: Could not remove file '{path}' during {context}: {last_error}")
 
+    def _poll_multi_video_post_urls(self) -> None:
+        if not self.multi_video_mode_active or self.stop_all_requested:
+            return
+        if self.multi_video_pending_downloads or len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
+            self._start_multi_video_background_downloads()
+            return
+
+        script = f"""
+            (() => {{
+                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const textOf = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
+                    .filter((btn) => isVisible(btn) && /make\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
+                const links = [];
+                for (const btn of makeButtons) {{
+                    const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
+                    const a = tile ? tile.querySelector("a[href*='/imagine/post/']") : null;
+                    const href = a?.href || '';
+                    if (!href) continue;
+                    if (!links.includes(href)) links.push(href);
+                    if (links.length >= {self.multi_video_target_count}) break;
+                }}
+                return {{ links, makeVideoCount: makeButtons.length }};
+            }})()
+        """
+
+        def _after_probe(result):
+            if not self.multi_video_mode_active or self.stop_all_requested:
+                return
+            links = []
+            if isinstance(result, dict):
+                links = [str(url).strip() for url in (result.get("links") or []) if str(url).strip()]
+            if links:
+                for url in links:
+                    if url not in self.multi_video_collected_post_urls:
+                        self.multi_video_collected_post_urls.append(url)
+                        if len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
+                            break
+                self._append_log(
+                    f"Multi Video: found {len(self.multi_video_collected_post_urls)}/{self.multi_video_target_count} make-video post targets."
+                )
+            else:
+                self.multi_video_poll_retry_count += 1
+                if self.multi_video_poll_retry_count % 3 == 0:
+                    self._append_log("Multi Video: waiting for generated image cards with Make video buttons...")
+
+            if len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
+                self._start_multi_video_background_downloads()
+                return
+            QTimer.singleShot(1800, self._poll_multi_video_post_urls)
+
+        self.browser.page().runJavaScript(script, _after_probe)
+
+    def _start_multi_video_background_downloads(self) -> None:
+        if not self.multi_video_mode_active or self.stop_all_requested:
+            return
+        if not self.multi_video_pending_downloads:
+            self.multi_video_pending_downloads = [
+                {"url": _ensure_public_download_query(url), "variant": idx + 1}
+                for idx, url in enumerate(self.multi_video_collected_post_urls[: self.multi_video_target_count])
+            ]
+            self._append_log(
+                f"Multi Video: starting background download polling for {len(self.multi_video_pending_downloads)} videos."
+            )
+            self._return_embedded_browser_after_download()
+        self.multi_video_download_timer.start(0)
+
+    def _poll_multi_video_downloads(self) -> None:
+        if not self.multi_video_mode_active or self.stop_all_requested:
+            return
+        if self.multi_video_download_future is not None and not self.multi_video_download_future.done():
+            self.multi_video_download_timer.start(1000)
+            return
+
+        while self.multi_video_pending_downloads:
+            candidate = self.multi_video_pending_downloads[0]
+            post_url = str(candidate.get("url") or "").strip()
+            if not post_url:
+                self.multi_video_pending_downloads.pop(0)
+                continue
+            polled = self._poll_post_page_for_media_url(post_url)
+            if polled:
+                candidate["url"] = _ensure_public_download_query(polled)
+            break
+
+        if not self.multi_video_pending_downloads:
+            self._append_log(
+                f"Multi Video complete: downloaded {self.multi_video_completed_downloads}/{self.multi_video_target_count} videos."
+            )
+            self.multi_video_mode_active = False
+            self.multi_video_target_count = 0
+            self.multi_video_manual_pick = False
+            self.multi_video_prompt = ""
+            self.multi_video_collected_post_urls = []
+            self.multi_video_pending_downloads = []
+            self.multi_video_completed_downloads = 0
+            self.multi_video_poll_retry_count = 0
+            return
+
+        item = self.multi_video_pending_downloads[0]
+        url = str(item.get("url") or "").strip()
+        variant = int(item.get("variant") or (self.multi_video_completed_downloads + 1))
+        browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+        filename = self._build_session_download_filename("video", variant, "mp4", provider_override=browser_provider)
+        output_path = self.download_dir / filename
+
+        def _download_task() -> tuple[bool, str]:
+            try:
+                final_url = _ensure_public_download_query(url)
+                download_path = self._download_video_from_public_url(final_url, output_path)
+                size = download_path.stat().st_size if download_path.exists() else 0
+                if size < MIN_VALID_VIDEO_BYTES:
+                    self._remove_file_best_effort(download_path, "multi-video cleanup")
+                    return False, "file too small"
+                return True, str(download_path)
+            except Exception as exc:
+                return False, str(exc)
+
+        self._append_log(f"Multi Video: polling + downloading variant {variant} in background.")
+        self.multi_video_download_future = self._manual_download_executor.submit(_download_task)
+
+        def _finish_download() -> None:
+            future = self.multi_video_download_future
+            if future is None:
+                return
+            if not future.done():
+                self.multi_video_download_timer.start(800)
+                return
+            self.multi_video_download_future = None
+            try:
+                ok, payload = future.result()
+            except Exception as exc:
+                ok, payload = False, str(exc)
+
+            if ok:
+                path = Path(payload)
+                self.multi_video_completed_downloads += 1
+                self.on_video_finished(
+                    {
+                        "title": f"Multi Video {variant}",
+                        "prompt": self.multi_video_prompt or self.manual_prompt.toPlainText().strip(),
+                        "resolution": "web",
+                        "video_file_path": str(path),
+                        "source_url": "browser-session-multi",
+                    }
+                )
+                self._append_log(
+                    f"Multi Video: downloaded variant {variant} ({self.multi_video_completed_downloads}/{self.multi_video_target_count})."
+                )
+                if self.multi_video_pending_downloads:
+                    self.multi_video_pending_downloads.pop(0)
+            else:
+                self._append_log(f"Multi Video: variant {variant} not ready yet ({payload}); retrying.")
+
+            self.multi_video_download_timer.start(1200)
+
+        QTimer.singleShot(200, _finish_download)
+
     def _abort_manual_video_generation_due_to_moderation(self, variant: int, reason: str) -> None:
         self._append_log(
             f"ERROR: Variant {variant}: video appears moderated/unavailable ({reason}). Stopping create-video polling so you can start again."
         )
         self.manual_generation_queue.clear()
         self.manual_download_poll_timer.stop()
+        self.multi_video_download_timer.stop()
         self._clear_manual_direct_download_tracking()
         self.pending_manual_variant_for_download = None
         self.pending_manual_download_type = None
@@ -11328,6 +11558,7 @@ class MainWindow(QMainWindow):
         self.manual_generation_queue.clear()
         self.manual_image_generation_queue.clear()
         self.manual_download_poll_timer.stop()
+        self.multi_video_download_timer.stop()
         self._clear_manual_direct_download_tracking()
         self.continue_from_frame_reload_timeout_timer.stop()
         self.pending_manual_variant_for_download = None
@@ -11362,6 +11593,15 @@ class MainWindow(QMainWindow):
         self.manual_public_not_ready_count = 0
         self.manual_public_moderation_count = 0
         self._reset_automation_counter_tracking()
+        self.multi_video_mode_active = False
+        self.multi_video_target_count = 0
+        self.multi_video_manual_pick = False
+        self.multi_video_prompt = ""
+        self.multi_video_collected_post_urls = []
+        self.multi_video_pending_downloads = []
+        self.multi_video_completed_downloads = 0
+        self.multi_video_poll_retry_count = 0
+        self.multi_video_download_future = None
 
         self.continue_from_frame_active = False
         self.continue_from_frame_target_count = 0
