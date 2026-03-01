@@ -10246,7 +10246,8 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
-                if continue_last_video_mode:
+                use_enter_submit = continue_last_video_mode or is_sora_manual_flow
+                if use_enter_submit:
                     enter_script = r"""
                         (() => {
                             try {
@@ -10285,8 +10286,9 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 f"WARNING: Variant {variant}: could not confirm trailing Enter press after prompt entry. result={enter_result!r}"
                             )
+                        flow_label = "Sora" if is_sora_manual_flow else "continue-last-video"
                         self._append_log(
-                            f"Variant {variant}: prompt populated with trailing Enter; moving to download polling (no extra option clicks or submit actions)."
+                            f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
                         )
                         QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
 
