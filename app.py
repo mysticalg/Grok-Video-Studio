@@ -7925,6 +7925,7 @@ class MainWindow(QMainWindow):
                     }
 
                     const submitButtons = [
+                        ...document.querySelectorAll("button:has(span.sr-only)"),
                         ...document.querySelectorAll("button[aria-label='Submit']"),
                         ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
                         ...document.querySelectorAll("button[type='submit']"),
@@ -7932,9 +7933,13 @@ class MainWindow(QMainWindow):
                     ]
                         .filter((el, idx, arr) => arr.indexOf(el) === idx)
                         .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
-                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
-                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
-                        || submitButtons[0]
+                    const isSearchButton = (el) => /(^|\s)search(\s|$)/i.test(clean(el?.getAttribute("aria-label")) || clean(el?.textContent));
+                    const hasCreateVideoSrOnly = (el) => /create\s+video/i.test(clean(el?.querySelector("span.sr-only")?.textContent || ""));
+                    const primarySubmit = submitButtons.find((el) => hasCreateVideoSrOnly(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => /^create\s+video$/i.test(clean(el.getAttribute("aria-label"))) && !isSearchButton(el))
+                        || submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit" && !isSearchButton(el))
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)) && !isSearchButton(el))
+                        || submitButtons.find((el) => !isSearchButton(el))
                         || null;
 
                     const recorderSelectors = [
@@ -9400,6 +9405,8 @@ class MainWindow(QMainWindow):
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         action_delay_ms = int(self.automation_action_delay_ms.value())
+        active_browser_target = self._active_manual_browser_target()
+        is_sora_manual_flow = active_browser_target == "sora"
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_duration_label = f"{selected_duration_seconds}s"
@@ -9410,11 +9417,17 @@ class MainWindow(QMainWindow):
             "1280x720": "720p",
         }
         selected_resolution_name = resolution_name_map.get(selected_resolution_value, "720p")
-        self._append_log(
-            f"Populating prompt for manual variant {variant} in browser, setting video options "
-            f"({selected_quality_label}, {selected_aspect_ratio}), then force submitting with {action_delay_ms}ms delays between each action. "
-            f"Remaining repeats after this: {remaining_count}."
-        )
+        if is_sora_manual_flow:
+            self._append_log(
+                f"Populating prompt for manual variant {variant} in Sora browser and submitting Create video directly "
+                f"(skipping Grok-only resolution/duration/aspect option flow). Remaining repeats after this: {remaining_count}."
+            )
+        else:
+            self._append_log(
+                f"Populating prompt for manual variant {variant} in browser, setting video options "
+                f"({selected_quality_label}, {selected_aspect_ratio}), then force submitting with {action_delay_ms}ms delays between each action. "
+                f"Remaining repeats after this: {remaining_count}."
+            )
 
         escaped_prompt = repr(prompt)
         script = rf"""
@@ -10032,7 +10045,12 @@ class MainWindow(QMainWindow):
                         return { fired, x, y };
                     };
 
-                    const coordinateClick = activateSubmitAtPoint(submitTarget);
+                    if (submitTarget && isSearchButton(submitTarget)) {
+                        return { ok: false, error: "Resolved submit target was Search button", status: "submit-target-search" };
+                    }
+
+                    const directClickFired = activateSubmit(submitTarget);
+                    const coordinateClick = directClickFired ? { fired: true, x: -1, y: -1 } : activateSubmitAtPoint(submitTarget);
 
                     return {
                         ok: !!coordinateClick.fired,
@@ -10042,10 +10060,10 @@ class MainWindow(QMainWindow):
                         formSubmitted: false,
                         usedPrimarySubmit: !!primarySubmit,
                         usedRecorderTarget: !!recorderSubmitTarget,
-                        usedCoordinatePlayback: !!coordinateClick.fired,
+                        usedCoordinatePlayback: !directClickFired && !!coordinateClick.fired,
                         clickX: coordinateClick.x,
                         clickY: coordinateClick.y,
-                        status: coordinateClick.fired ? "submit-coordinate-click-dispatched" : "submit-coordinate-click-failed"
+                        status: coordinateClick.fired ? (directClickFired ? "submit-direct-click-dispatched" : "submit-coordinate-click-dispatched") : "submit-coordinate-click-failed"
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -10280,7 +10298,12 @@ class MainWindow(QMainWindow):
             self.browser.page().runJavaScript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
-        if continue_last_video_mode:
+        if is_sora_manual_flow:
+            option_steps = []
+            self._append_log(
+                f"Variant {variant}: Sora tab detected; skipping Grok options flow and using Sora composer settings as-is."
+            )
+        elif continue_last_video_mode:
             option_steps = [
                 ("type", "Make Video"),
                 ("resolution", selected_quality_label),
@@ -10325,6 +10348,10 @@ class MainWindow(QMainWindow):
             self.browser.page().runJavaScript(open_options_script, _after_open)
 
         def _open_options_then_steps() -> None:
+            if not option_steps:
+                self._append_log(f"Variant {variant}: no staged options configured; continuing directly to prompt entry.")
+                QTimer.singleShot(0, _populate_prompt_then_submit)
+                return
             self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
             QTimer.singleShot(2000, lambda: _run_option_step(0))
 
