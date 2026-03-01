@@ -9473,11 +9473,27 @@ class MainWindow(QMainWindow):
                     input.dispatchEvent(new MouseEvent("click", common));
                     input.focus();
                     if (input.isContentEditable) {{
-                        // Only populate the field; do not synthesize Enter/submit key events.
-                        const paragraph = document.createElement("p");
-                        paragraph.textContent = prompt;
-                        input.replaceChildren(paragraph);
-                        input.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                        // Prefer user-like text insertion to avoid React/ProseMirror state desync.
+                        try {{
+                            const selection = window.getSelection && window.getSelection();
+                            if (selection) {{
+                                const range = document.createRange();
+                                range.selectNodeContents(input);
+                                selection.removeAllRanges();
+                                selection.addRange(range);
+                            }}
+                        }} catch (_) {{}}
+
+                        let inserted = false;
+                        try {{ inserted = !!document.execCommand && document.execCommand("insertText", false, prompt); }} catch (_) {{ inserted = false; }}
+
+                        if (!inserted) {{
+                            input.textContent = "";
+                            const textNode = document.createTextNode(prompt);
+                            input.appendChild(textNode);
+                        }}
+
+                        try {{ input.dispatchEvent(new InputEvent("input", {{ bubbles: true, inputType: "insertText", data: prompt }})); }} catch (_) {{ input.dispatchEvent(new Event("input", {{ bubbles: true }})); }}
                         input.dispatchEvent(new Event("change", {{ bubbles: true }}));
                     }} else {{
                         const proto = Object.getPrototypeOf(input);
@@ -10271,10 +10287,24 @@ class MainWindow(QMainWindow):
                                 if (!promptInput) return { ok: false, error: "prompt-input-not-found-for-enter" };
                                 try { promptInput.focus({ preventScroll: true }); } catch (_) {}
                                 const common = { bubbles: true, cancelable: true, composed: true };
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
-                                return { ok: true };
+                                let enterDispatched = false;
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
+
+                                // Fallback for forms that ignore synthetic keyboard events.
+                                let formSubmitted = false;
+                                if (!enterDispatched) {
+                                    const form = typeof promptInput.closest === "function" ? promptInput.closest("form") : null;
+                                    if (form) {
+                                        try { if (typeof form.requestSubmit === "function") { form.requestSubmit(); formSubmitted = true; } } catch (_) {}
+                                        if (!formSubmitted) {
+                                            try { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); formSubmitted = true; } catch (_) {}
+                                        }
+                                    }
+                                }
+
+                                return { ok: enterDispatched || formSubmitted, enterDispatched, formSubmitted };
                             } catch (err) {
                                 return { ok: false, error: String(err && err.stack ? err.stack : err) };
                             }
