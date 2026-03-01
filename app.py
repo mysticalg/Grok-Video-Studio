@@ -8651,7 +8651,7 @@ class MainWindow(QMainWindow):
                     const isSidebarControl = (el) => {{
                         if (!el) return false;
                         const label = ariaOf(el).toLowerCase();
-                        if (/^create\s+new\s+project$/.test(label)) return true;
+                        if (/^create\\s+new\\s+project$/.test(label)) return true;
                         if (el.matches?.("[data-sidebar], [data-sidebar='menu-button']")) return true;
                         if (el.closest?.("[data-sidebar], [data-sidebar='menu-button']")) return true;
                         if (el.closest?.("aside")) return true;
@@ -10919,8 +10919,8 @@ class MainWindow(QMainWindow):
         script = f"""
             (() => {{
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                const textOf = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
-                const postPattern = /\/imagine\/post\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
+                const textOf = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const postPattern = /\\/imagine\\/post\\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
                 const toPostUrl = (raw) => {{
                     const txt = String(raw || '').trim();
                     const m = txt.match(postPattern);
@@ -10962,7 +10962,7 @@ class MainWindow(QMainWindow):
                 }};
 
                 const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
-                    .filter((btn) => isVisible(btn) && /make\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
+                    .filter((btn) => isVisible(btn) && /make\\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
 
                 const links = [];
                 let clickedThisPass = 0;
