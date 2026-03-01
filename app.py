@@ -2702,6 +2702,7 @@ class MainWindow(QMainWindow):
         self.multi_video_manual_pick = False
         self.multi_video_prompt = ""
         self.multi_video_collected_post_urls: list[str] = []
+        self.multi_video_clicked_post_urls: set[str] = set()
         self.multi_video_pending_downloads: list[dict[str, Any]] = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
@@ -7227,6 +7228,7 @@ class MainWindow(QMainWindow):
         self.multi_video_manual_pick = manual_pick
         self.multi_video_prompt = manual_prompt
         self.multi_video_collected_post_urls = []
+        self.multi_video_clicked_post_urls = set()
         self.multi_video_pending_downloads = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
@@ -8130,6 +8132,7 @@ class MainWindow(QMainWindow):
                         self.multi_video_manual_pick = False
                         self.multi_video_prompt = ""
                         self.multi_video_collected_post_urls = []
+                        self.multi_video_clicked_post_urls = set()
                         self.multi_video_pending_downloads = []
                         self.multi_video_completed_downloads = 0
                         self.multi_video_poll_retry_count = 0
@@ -11023,10 +11026,14 @@ class MainWindow(QMainWindow):
 
         auto_click_enabled = not self.multi_video_manual_pick
         remaining_clicks = max(0, self.multi_video_target_count - self.multi_video_requested_clicks)
+        already_clicked_post_urls = sorted(
+            str(url).strip() for url in self.multi_video_clicked_post_urls if str(url).strip()
+        )
         script = f"""
             (() => {{
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const textOf = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const alreadyClicked = new Set({json.dumps(already_clicked_post_urls)});
                 const postPattern = /\\/imagine\\/post\\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
                 const toPostUrl = (raw) => {{
                     const txt = String(raw || '').trim();
@@ -11072,6 +11079,7 @@ class MainWindow(QMainWindow):
                     .filter((btn) => isVisible(btn) && /make\\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
 
                 const links = [];
+                const clickedLinks = [];
                 let clickedThisPass = 0;
                 for (const btn of makeButtons) {{
                     const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
@@ -11084,15 +11092,19 @@ class MainWindow(QMainWindow):
                         if (clickedThisPass >= {remaining_clicks}) break;
                         if (btn.dataset.multiVideoClicked === '1') continue;
                         const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
+                        const href = extractPostUrlFromTile(tile);
+                        if (!href) continue;
+                        if (alreadyClicked.has(href)) continue;
                         if (!emulateClick(btn)) continue;
                         btn.dataset.multiVideoClicked = '1';
+                        alreadyClicked.add(href);
+                        clickedLinks.push(href);
                         clickedThisPass += 1;
-                        const href = extractPostUrlFromTile(tile);
-                        if (href && !links.includes(href)) links.push(href);
+                        if (!links.includes(href)) links.push(href);
                     }}
                 }}
 
-                return {{ links, makeVideoCount: makeButtons.length, clickedThisPass }};
+                return {{ links, clickedLinks, makeVideoCount: makeButtons.length, clickedThisPass }};
             }})()
         """
 
@@ -11101,10 +11113,16 @@ class MainWindow(QMainWindow):
             if not self.multi_video_mode_active or self.stop_all_requested:
                 return
             links: list[str] = []
+            clicked_links: list[str] = []
             clicked_this_pass = 0
             if isinstance(result, dict):
                 links = [str(url).strip() for url in (result.get("links") or []) if str(url).strip()]
+                clicked_links = [str(url).strip() for url in (result.get("clickedLinks") or []) if str(url).strip()]
                 clicked_this_pass = max(0, int(result.get("clickedThisPass") or 0))
+
+            if clicked_links:
+                for clicked_url in clicked_links:
+                    self.multi_video_clicked_post_urls.add(clicked_url)
 
             if clicked_this_pass > 0:
                 self.multi_video_requested_clicks = min(
@@ -11199,6 +11217,7 @@ class MainWindow(QMainWindow):
             self.multi_video_manual_pick = False
             self.multi_video_prompt = ""
             self.multi_video_collected_post_urls = []
+            self.multi_video_clicked_post_urls = set()
             self.multi_video_pending_downloads = []
             self.multi_video_completed_downloads = 0
             self.multi_video_poll_retry_count = 0
@@ -11847,6 +11866,7 @@ class MainWindow(QMainWindow):
         self.multi_video_manual_pick = False
         self.multi_video_prompt = ""
         self.multi_video_collected_post_urls = []
+        self.multi_video_clicked_post_urls = set()
         self.multi_video_pending_downloads = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
