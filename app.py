@@ -2559,6 +2559,9 @@ class FilteredWebEnginePage(QWebEnginePage):
         "featureassets.org/v1/initialize",
         "auth-cdn.oaistatic.com/assets/statsig",
         "upgrade-insecure-requests' is ignored when delivered in a report-only policy",
+        "Failed to load resource: net::ERR_NAME_NOT_RESOLVED",
+        "browser-intake-datadoghq",
+        "Chrome is moving towards a new experience that allows users to choose to browse without third-party cookies.",
     )
 
     def __init__(
@@ -2583,9 +2586,11 @@ class FilteredWebEnginePage(QWebEnginePage):
                 popup_page = self._popup_handler(self, window_type)
                 if popup_page is not None:
                     return popup_page
+                return None
             except Exception as exc:
                 if self._on_console_message:
                     self._on_console_message(f"Browser popup handler error: {exc}")
+                return None
         return super().createWindow(window_type)
 
     def chooseFiles(self, mode, old_files, accepted_mime_types):  # type: ignore[override]
@@ -2659,6 +2664,7 @@ class MainWindow(QMainWindow):
             "music_query_effective": "",
         }
         self._cdp_relay_temporarily_disabled = False
+        self.browser_login_popups_enabled = bool(_env_int("GROK_BROWSER_LOGIN_POPUPS_ENABLED", 0))
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self._manual_download_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manual-download")
         self.social_upload_timers: dict[str, QTimer] = {}
@@ -2696,6 +2702,8 @@ class MainWindow(QMainWindow):
         self.multi_video_manual_pick = False
         self.multi_video_prompt = ""
         self.multi_video_collected_post_urls: list[str] = []
+        self.multi_video_clicked_post_urls: set[str] = set()
+        self.multi_video_clicked_target_signatures: set[str] = set()
         self.multi_video_pending_downloads: list[dict[str, Any]] = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
@@ -3253,38 +3261,67 @@ class MainWindow(QMainWindow):
             # Off-the-record profile avoids startup cache/quota errors on locked folders (common on synced drives).
             self.browser_profile = QWebEngineProfile(self)
 
+        popup_handler = self._open_popup_browser_window if self.browser_login_popups_enabled else None
+
         self.grok_browser_view.setPage(
             FilteredWebEnginePage(
                 self._append_log,
                 self.browser_profile,
                 self.grok_browser_view,
-                popup_handler=self._open_popup_browser_window,
+                popup_handler=popup_handler,
             )
         )
+
+        if QTWEBENGINE_USE_DISK_CACHE:
+            self.sora_browser_profile = QWebEngineProfile("grok-video-desktop-sora-profile", self)
+        else:
+            self.sora_browser_profile = QWebEngineProfile(self)
+
         self.sora_browser.setPage(
             FilteredWebEnginePage(
                 self._append_log,
-                self.browser_profile,
+                self.sora_browser_profile,
                 self.sora_browser,
-                popup_handler=self._open_popup_browser_window,
+                popup_handler=popup_handler,
             )
         )
         browser_profile = self.browser_profile
+        sora_browser_profile = self.sora_browser_profile
         if QTWEBENGINE_USE_DISK_CACHE:
             (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
             (CACHE_DIR / "cache").mkdir(parents=True, exist_ok=True)
+            (CACHE_DIR / "sora-profile").mkdir(parents=True, exist_ok=True)
+            (CACHE_DIR / "sora-cache").mkdir(parents=True, exist_ok=True)
             browser_profile.setPersistentStoragePath(str(CACHE_DIR / "profile"))
             browser_profile.setCachePath(str(CACHE_DIR / "cache"))
             browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
             browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
+
+            sora_browser_profile.setPersistentStoragePath(str(CACHE_DIR / "sora-profile"))
+            sora_browser_profile.setCachePath(str(CACHE_DIR / "sora-cache"))
+            sora_browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
+            sora_browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
+            sora_browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
         else:
-            browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
+            sora_browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
+            sora_browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
 
         embedded_ua = os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT
         browser_profile.setHttpUserAgent(embedded_ua)
-        self._append_log(f"Embedded browser user-agent set to: {embedded_ua}")
+        sora_embedded_ua = os.getenv("SORA_BROWSER_USER_AGENT", "").strip()
+        if sora_embedded_ua:
+            sora_browser_profile.setHttpUserAgent(sora_embedded_ua)
+            self._append_log(f"Sora embedded browser user-agent override set to: {sora_embedded_ua}")
+        else:
+            self._append_log("Sora embedded browser user-agent set to default QtWebEngine profile user-agent.")
+        self._append_log(f"Grok embedded browser user-agent set to: {embedded_ua}")
+        if self.browser_login_popups_enabled:
+            self._append_log("Browser login popups are enabled (GROK_BROWSER_LOGIN_POPUPS_ENABLED=1).")
+        else:
+            self._append_log("Browser login popups are disabled.")
 
         accelerated_canvas_enabled = bool(_env_int("GROK_BROWSER_ACCELERATED_2D_CANVAS", 0))
         webgl_enabled = bool(_env_int("GROK_BROWSER_WEBGL_ENABLED", 1))
@@ -3305,7 +3342,10 @@ class MainWindow(QMainWindow):
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
             js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
             if js_popups_attr is not None:
-                browser_settings.setAttribute(js_popups_attr, True)
+                browser_settings.setAttribute(js_popups_attr, self.browser_login_popups_enabled)
+            third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
+            if third_party_cookies_attr is not None:
+                browser_settings.setAttribute(third_party_cookies_attr, True)
             developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
             if developer_extras_attr is not None:
                 browser_settings.setAttribute(developer_extras_attr, True)
@@ -3683,7 +3723,10 @@ class MainWindow(QMainWindow):
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
         js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
         if js_popups_attr is not None:
-            browser.settings().setAttribute(js_popups_attr, True)
+            browser.settings().setAttribute(js_popups_attr, self.browser_login_popups_enabled)
+        third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
+        if third_party_cookies_attr is not None:
+            browser.settings().setAttribute(third_party_cookies_attr, True)
         developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
         if developer_extras_attr is not None:
             browser.settings().setAttribute(developer_extras_attr, True)
@@ -7186,6 +7229,8 @@ class MainWindow(QMainWindow):
         self.multi_video_manual_pick = manual_pick
         self.multi_video_prompt = manual_prompt
         self.multi_video_collected_post_urls = []
+        self.multi_video_clicked_post_urls = set()
+        self.multi_video_clicked_target_signatures = set()
         self.multi_video_pending_downloads = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
@@ -8068,9 +8113,69 @@ class MainWindow(QMainWindow):
             if attempts >= max_attempts:
                 self._append_log(
                     f"WARNING: Could not prepare manual image variant {variant} after {attempts} attempts; "
-                    "assuming submit already happened and continuing with image-ready polling."
+                    "trying one final direct submit click before deciding whether to poll for image results."
                 )
-                QTimer.singleShot(700, self._poll_for_manual_image)
+
+                def _attempt_native_submit_click_then_poll(reason: str) -> None:
+                    locate_submit_script = r"""
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const clean = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+                                const candidates = [
+                                    ...document.querySelectorAll("button[aria-label='Submit']"),
+                                    ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                                    ...document.querySelectorAll("button[type='submit']"),
+                                    ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                                    ...document.querySelectorAll("button")
+                                ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                                  .filter((el) => isVisible(el) && !el.disabled)
+                                  .filter((el) => {
+                                      const aria = clean(el.getAttribute('aria-label'));
+                                      const text = clean(el.textContent);
+                                      return aria === 'submit' || text === 'submit' || /create\s+video/.test(`${aria} ${text}`);
+                                  });
+                                const target = candidates[0] || null;
+                                if (!target) return { ok: false, error: "submit target not found", x: -1, y: -1 };
+                                const rect = target.getBoundingClientRect();
+                                const x = Math.floor(rect.left + Math.max(1, Math.min(rect.width - 2, rect.width * 0.3)));
+                                const y = Math.floor(rect.top + Math.max(1, Math.min(rect.height - 2, rect.height * 0.5)));
+                                return { ok: true, x, y, width: Math.round(rect.width), height: Math.round(rect.height) };
+                            } catch (err) {
+                                return { ok: false, error: String(err && err.stack ? err.stack : err), x: -1, y: -1 };
+                            }
+                        })()
+                    """
+
+                    def _after_locate_submit(result):
+                        x = float(result.get("x") or -1) if isinstance(result, dict) else -1
+                        y = float(result.get("y") or -1) if isinstance(result, dict) else -1
+                        native_clicked = False
+                        if x >= 0 and y >= 0:
+                            native_clicked = self._native_click_embedded_browser_at(x, y)
+                        self._append_log(
+                            f"Manual image variant {variant}: {reason}; native submit click "
+                            f"{'dispatched' if native_clicked else 'not available'} at ({int(x) if x >= 0 else -1},{int(y) if y >= 0 else -1})."
+                        )
+                        QTimer.singleShot(700, self._poll_for_manual_image)
+
+                    self.browser.page().runJavaScript(locate_submit_script, _after_locate_submit)
+
+                def _after_forced_submit(result):
+                    if isinstance(result, dict) and result.get("ok"):
+                        self._append_log(
+                            f"Manual image variant {variant}: final direct submit fallback succeeded; continuing with image-ready polling."
+                        )
+                        _after_submit(result)
+                        return
+
+                    self._append_log(
+                        f"WARNING: Manual image variant {variant}: final direct submit fallback could not be confirmed ({result!r}); "
+                        "attempting native submit click before image-ready polling."
+                    )
+                    _attempt_native_submit_click_then_poll("submit callback was unconfirmed")
+
+                self.browser.page().runJavaScript(submit_script, _after_forced_submit)
                 return
             self.manual_image_generation_queue.insert(0, item)
             QTimer.singleShot(1200, self._submit_next_manual_image_variant)
@@ -10953,10 +11058,18 @@ class MainWindow(QMainWindow):
 
         auto_click_enabled = not self.multi_video_manual_pick
         remaining_clicks = max(0, self.multi_video_target_count - self.multi_video_requested_clicks)
+        already_clicked_post_urls = sorted(
+            str(url).strip() for url in self.multi_video_clicked_post_urls if str(url).strip()
+        )
+        already_clicked_target_signatures = sorted(
+            str(sig).strip() for sig in self.multi_video_clicked_target_signatures if str(sig).strip()
+        )
         script = f"""
             (() => {{
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const textOf = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const alreadyClicked = new Set({json.dumps(already_clicked_post_urls)});
+                const alreadyClickedTargets = new Set({json.dumps(already_clicked_target_signatures)});
                 const postPattern = /\\/imagine\\/post\\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
                 const toPostUrl = (raw) => {{
                     const txt = String(raw || '').trim();
@@ -10989,19 +11102,34 @@ class MainWindow(QMainWindow):
                 const emulateClick = (el) => {{
                     if (!el || !isVisible(el) || el.disabled) return false;
                     try {{ el.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }}); }} catch (_) {{}}
-                    try {{ el.dispatchEvent(new PointerEvent('pointerdown', clickCommon)); }} catch (_) {{}}
-                    el.dispatchEvent(new MouseEvent('mousedown', clickCommon));
-                    try {{ el.dispatchEvent(new PointerEvent('pointerup', clickCommon)); }} catch (_) {{}}
-                    el.dispatchEvent(new MouseEvent('mouseup', clickCommon));
-                    el.dispatchEvent(new MouseEvent('click', clickCommon));
-                    try {{ el.click(); }} catch (_) {{}}
-                    return true;
+                    try {{ el.focus({{ preventScroll: true }}); }} catch (_) {{ try {{ el.focus(); }} catch (_) {{}} }}
+                    try {{
+                        el.click();
+                        return true;
+                    }} catch (_) {{}}
+                    try {{
+                        el.dispatchEvent(new MouseEvent('click', clickCommon));
+                        return true;
+                    }} catch (_) {{}}
+                    return false;
                 }};
 
                 const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
                     .filter((btn) => isVisible(btn) && /make\\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
 
+                const targetSignature = (btn, tile, index) => {{
+                    const image = tile?.querySelector?.("img") || null;
+                    const imgSrc = String(image?.getAttribute?.('src') || image?.currentSrc || '').trim();
+                    const aria = String(btn?.getAttribute?.('aria-label') || '').trim();
+                    const text = textOf(btn).slice(0, 80);
+                    const tileText = textOf(tile).slice(0, 80);
+                    const rect = btn?.getBoundingClientRect?.();
+                    const rectPart = rect ? `${{Math.round(rect.left)}}:${{Math.round(rect.top)}}:${{Math.round(rect.width)}}:${{Math.round(rect.height)}}` : '';
+                    return [imgSrc, aria, text, tileText, rectPart, String(index)].join('|');
+                }};
+
                 const links = [];
+                const clickedLinks = [];
                 let clickedThisPass = 0;
                 for (const btn of makeButtons) {{
                     const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
@@ -11009,20 +11137,33 @@ class MainWindow(QMainWindow):
                     if (href && !links.includes(href)) links.push(href);
                 }}
 
+                const currentPost = toPostUrl(String(location?.href || ''));
+                if (currentPost && !links.includes(currentPost)) links.push(currentPost);
+
                 if ({'true' if auto_click_enabled else 'false'}) {{
-                    for (const btn of makeButtons) {{
+                    for (const [index, btn] of makeButtons.entries()) {{
                         if (clickedThisPass >= {remaining_clicks}) break;
                         if (btn.dataset.multiVideoClicked === '1') continue;
                         const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
+                        const href = extractPostUrlFromTile(tile);
+                        const sig = targetSignature(btn, tile, index);
+                        if (sig && alreadyClickedTargets.has(sig)) continue;
+                        if (href && alreadyClicked.has(href)) continue;
                         if (!emulateClick(btn)) continue;
                         btn.dataset.multiVideoClicked = '1';
+                        if (sig) alreadyClickedTargets.add(sig);
+                        if (href) {{
+                            alreadyClicked.add(href);
+                            clickedLinks.push(href);
+                            if (!links.includes(href)) links.push(href);
+                        }} else if (sig) {{
+                            clickedLinks.push(`sig:${{sig}}`);
+                        }}
                         clickedThisPass += 1;
-                        const href = extractPostUrlFromTile(tile);
-                        if (href && !links.includes(href)) links.push(href);
                     }}
                 }}
 
-                return {{ links, makeVideoCount: makeButtons.length, clickedThisPass }};
+                return {{ links, clickedLinks, clickedTargetSignatures: [...alreadyClickedTargets], makeVideoCount: makeButtons.length, clickedThisPass }};
             }})()
         """
 
@@ -11031,10 +11172,24 @@ class MainWindow(QMainWindow):
             if not self.multi_video_mode_active or self.stop_all_requested:
                 return
             links: list[str] = []
+            clicked_links: list[str] = []
+            clicked_target_signatures: list[str] = []
             clicked_this_pass = 0
             if isinstance(result, dict):
                 links = [str(url).strip() for url in (result.get("links") or []) if str(url).strip()]
+                clicked_links = [str(url).strip() for url in (result.get("clickedLinks") or []) if str(url).strip()]
+                clicked_target_signatures = [str(sig).strip() for sig in (result.get("clickedTargetSignatures") or []) if str(sig).strip()]
                 clicked_this_pass = max(0, int(result.get("clickedThisPass") or 0))
+
+            if clicked_links:
+                for clicked_url in clicked_links:
+                    if clicked_url.startswith("sig:"):
+                        self.multi_video_clicked_target_signatures.add(clicked_url.removeprefix("sig:"))
+                    else:
+                        self.multi_video_clicked_post_urls.add(clicked_url)
+            if clicked_target_signatures:
+                for sig in clicked_target_signatures:
+                    self.multi_video_clicked_target_signatures.add(sig)
 
             if clicked_this_pass > 0:
                 self.multi_video_requested_clicks = min(
@@ -11064,6 +11219,10 @@ class MainWindow(QMainWindow):
                         self._append_log("Multi Video: waiting for Make video cards/post ids on the image pick page...")
 
             if self.multi_video_requested_clicks >= self.multi_video_target_count:
+                if len(self.multi_video_collected_post_urls) == 0:
+                    self._append_log("Multi Video: clicks sent, waiting for post id targets to appear before starting downloads...")
+                    QTimer.singleShot(1200, self._poll_multi_video_post_urls)
+                    return
                 self.multi_video_selection_complete = True
                 if len(self.multi_video_collected_post_urls) < self.multi_video_target_count:
                     self._append_log(
@@ -11129,6 +11288,8 @@ class MainWindow(QMainWindow):
             self.multi_video_manual_pick = False
             self.multi_video_prompt = ""
             self.multi_video_collected_post_urls = []
+            self.multi_video_clicked_post_urls = set()
+            self.multi_video_clicked_target_signatures = set()
             self.multi_video_pending_downloads = []
             self.multi_video_completed_downloads = 0
             self.multi_video_poll_retry_count = 0
@@ -11777,6 +11938,8 @@ class MainWindow(QMainWindow):
         self.multi_video_manual_pick = False
         self.multi_video_prompt = ""
         self.multi_video_collected_post_urls = []
+        self.multi_video_clicked_post_urls = set()
+        self.multi_video_clicked_target_signatures = set()
         self.multi_video_pending_downloads = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
@@ -13273,9 +13436,13 @@ class MainWindow(QMainWindow):
 
     def _open_popup_browser_window(
         self,
-        source_page: QWebEnginePage,
+        _source_page: QWebEnginePage,
         _window_type: QWebEnginePage.WebWindowType,
     ) -> QWebEnginePage | None:
+        if not self.browser_login_popups_enabled:
+            self._append_log("Blocked browser login popup (GROK_BROWSER_LOGIN_POPUPS_ENABLED=0).")
+            return None
+
         popup_window = QMainWindow(self)
         popup_window.setWindowTitle("Browser Login Popup")
         popup_window.resize(980, 760)
@@ -13286,7 +13453,7 @@ class MainWindow(QMainWindow):
             self.browser_profile,
             popup_view,
             auto_file_selector=self._resolve_social_auto_file_selection,
-            popup_handler=self._open_popup_browser_window,
+            popup_handler=self._open_popup_browser_window if self.browser_login_popups_enabled else None,
         )
         popup_view.setPage(popup_page)
         popup_window.setCentralWidget(popup_view)
@@ -13296,7 +13463,10 @@ class MainWindow(QMainWindow):
         popup_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
         js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
         if js_popups_attr is not None:
-            popup_settings.setAttribute(js_popups_attr, True)
+            popup_settings.setAttribute(js_popups_attr, self.browser_login_popups_enabled)
+        third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
+        if third_party_cookies_attr is not None:
+            popup_settings.setAttribute(third_party_cookies_attr, True)
         developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
         if developer_extras_attr is not None:
             popup_settings.setAttribute(developer_extras_attr, True)
