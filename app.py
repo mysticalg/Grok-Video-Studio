@@ -8116,6 +8116,51 @@ class MainWindow(QMainWindow):
                     "trying one final direct submit click before deciding whether to poll for image results."
                 )
 
+                def _attempt_native_submit_click_then_poll(reason: str) -> None:
+                    locate_submit_script = r"""
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const clean = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+                                const candidates = [
+                                    ...document.querySelectorAll("button[aria-label='Submit']"),
+                                    ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
+                                    ...document.querySelectorAll("button[type='submit']"),
+                                    ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                                    ...document.querySelectorAll("button")
+                                ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                                  .filter((el) => isVisible(el) && !el.disabled)
+                                  .filter((el) => {
+                                      const aria = clean(el.getAttribute('aria-label'));
+                                      const text = clean(el.textContent);
+                                      return aria === 'submit' || text === 'submit' || /create\s+video/.test(`${aria} ${text}`);
+                                  });
+                                const target = candidates[0] || null;
+                                if (!target) return { ok: false, error: "submit target not found", x: -1, y: -1 };
+                                const rect = target.getBoundingClientRect();
+                                const x = Math.floor(rect.left + Math.max(1, Math.min(rect.width - 2, rect.width * 0.3)));
+                                const y = Math.floor(rect.top + Math.max(1, Math.min(rect.height - 2, rect.height * 0.5)));
+                                return { ok: true, x, y, width: Math.round(rect.width), height: Math.round(rect.height) };
+                            } catch (err) {
+                                return { ok: false, error: String(err && err.stack ? err.stack : err), x: -1, y: -1 };
+                            }
+                        })()
+                    """
+
+                    def _after_locate_submit(result):
+                        x = float(result.get("x") or -1) if isinstance(result, dict) else -1
+                        y = float(result.get("y") or -1) if isinstance(result, dict) else -1
+                        native_clicked = False
+                        if x >= 0 and y >= 0:
+                            native_clicked = self._native_click_embedded_browser_at(x, y)
+                        self._append_log(
+                            f"Manual image variant {variant}: {reason}; native submit click "
+                            f"{'dispatched' if native_clicked else 'not available'} at ({int(x) if x >= 0 else -1},{int(y) if y >= 0 else -1})."
+                        )
+                        QTimer.singleShot(700, self._poll_for_manual_image)
+
+                    self.browser.page().runJavaScript(locate_submit_script, _after_locate_submit)
+
                 def _after_forced_submit(result):
                     if isinstance(result, dict) and result.get("ok"):
                         self._append_log(
@@ -8126,9 +8171,9 @@ class MainWindow(QMainWindow):
 
                     self._append_log(
                         f"WARNING: Manual image variant {variant}: final direct submit fallback could not be confirmed ({result!r}); "
-                        "continuing with image-ready polling to avoid false-negative aborts."
+                        "attempting native submit click before image-ready polling."
                     )
-                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    _attempt_native_submit_click_then_poll("submit callback was unconfirmed")
 
                 self.browser.page().runJavaScript(submit_script, _after_forced_submit)
                 return
