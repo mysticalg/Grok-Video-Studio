@@ -3261,30 +3261,53 @@ class MainWindow(QMainWindow):
                 popup_handler=self._open_popup_browser_window,
             )
         )
+
+        if QTWEBENGINE_USE_DISK_CACHE:
+            self.sora_browser_profile = QWebEngineProfile("grok-video-desktop-sora-profile", self)
+        else:
+            self.sora_browser_profile = QWebEngineProfile(self)
+
         self.sora_browser.setPage(
             FilteredWebEnginePage(
                 self._append_log,
-                self.browser_profile,
+                self.sora_browser_profile,
                 self.sora_browser,
                 popup_handler=self._open_popup_browser_window,
             )
         )
         browser_profile = self.browser_profile
+        sora_browser_profile = self.sora_browser_profile
         if QTWEBENGINE_USE_DISK_CACHE:
             (CACHE_DIR / "profile").mkdir(parents=True, exist_ok=True)
             (CACHE_DIR / "cache").mkdir(parents=True, exist_ok=True)
+            (CACHE_DIR / "sora-profile").mkdir(parents=True, exist_ok=True)
+            (CACHE_DIR / "sora-cache").mkdir(parents=True, exist_ok=True)
             browser_profile.setPersistentStoragePath(str(CACHE_DIR / "profile"))
             browser_profile.setCachePath(str(CACHE_DIR / "cache"))
             browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
             browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
+
+            sora_browser_profile.setPersistentStoragePath(str(CACHE_DIR / "sora-profile"))
+            sora_browser_profile.setCachePath(str(CACHE_DIR / "sora-cache"))
+            sora_browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
+            sora_browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
+            sora_browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
         else:
             browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
+            sora_browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            sora_browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
 
         embedded_ua = os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT
         browser_profile.setHttpUserAgent(embedded_ua)
-        self._append_log(f"Embedded browser user-agent set to: {embedded_ua}")
+        sora_embedded_ua = os.getenv("SORA_BROWSER_USER_AGENT", "").strip()
+        if sora_embedded_ua:
+            sora_browser_profile.setHttpUserAgent(sora_embedded_ua)
+            self._append_log(f"Sora embedded browser user-agent override set to: {sora_embedded_ua}")
+        else:
+            self._append_log("Sora embedded browser user-agent set to default QtWebEngine profile user-agent.")
+        self._append_log(f"Grok embedded browser user-agent set to: {embedded_ua}")
 
         accelerated_canvas_enabled = bool(_env_int("GROK_BROWSER_ACCELERATED_2D_CANVAS", 0))
         webgl_enabled = bool(_env_int("GROK_BROWSER_WEBGL_ENABLED", 1))
