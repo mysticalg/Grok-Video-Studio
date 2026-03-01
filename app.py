@@ -2559,6 +2559,9 @@ class FilteredWebEnginePage(QWebEnginePage):
         "featureassets.org/v1/initialize",
         "auth-cdn.oaistatic.com/assets/statsig",
         "upgrade-insecure-requests' is ignored when delivered in a report-only policy",
+        "Failed to load resource: net::ERR_NAME_NOT_RESOLVED",
+        "browser-intake-datadoghq",
+        "Chrome is moving towards a new experience that allows users to choose to browse without third-party cookies.",
     )
 
     def __init__(
@@ -3294,9 +3297,9 @@ class MainWindow(QMainWindow):
             sora_browser_profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
             sora_browser_profile.setHttpCacheMaximumSize(_env_int("GROK_BROWSER_DISK_CACHE_BYTES", 536870912))
         else:
-            browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
             browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
-            sora_browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            sora_browser_profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
             sora_browser_profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
 
         embedded_ua = os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT
@@ -3329,6 +3332,9 @@ class MainWindow(QMainWindow):
             js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
             if js_popups_attr is not None:
                 browser_settings.setAttribute(js_popups_attr, True)
+            third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
+            if third_party_cookies_attr is not None:
+                browser_settings.setAttribute(third_party_cookies_attr, True)
             developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
             if developer_extras_attr is not None:
                 browser_settings.setAttribute(developer_extras_attr, True)
@@ -3707,6 +3713,9 @@ class MainWindow(QMainWindow):
         js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
         if js_popups_attr is not None:
             browser.settings().setAttribute(js_popups_attr, True)
+        third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
+        if third_party_cookies_attr is not None:
+            browser.settings().setAttribute(third_party_cookies_attr, True)
         developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
         if developer_extras_attr is not None:
             browser.settings().setAttribute(developer_extras_attr, True)
@@ -13320,6 +13329,9 @@ class MainWindow(QMainWindow):
         js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
         if js_popups_attr is not None:
             popup_settings.setAttribute(js_popups_attr, True)
+        third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
+        if third_party_cookies_attr is not None:
+            popup_settings.setAttribute(third_party_cookies_attr, True)
         developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
         if developer_extras_attr is not None:
             popup_settings.setAttribute(developer_extras_attr, True)
