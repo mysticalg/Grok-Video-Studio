@@ -3250,11 +3250,22 @@ class MainWindow(QMainWindow):
         browser_profile.setHttpUserAgent(embedded_ua)
         self._append_log(f"Embedded browser user-agent set to: {embedded_ua}")
 
+        accelerated_canvas_enabled = bool(_env_int("GROK_BROWSER_ACCELERATED_2D_CANVAS", 0))
+        webgl_enabled = bool(_env_int("GROK_BROWSER_WEBGL_ENABLED", 1))
+        self._append_log(
+            "Embedded browser rendering mode: "
+            + f"accelerated_2d_canvas={'on' if accelerated_canvas_enabled else 'off'}, "
+            + f"webgl={'on' if webgl_enabled else 'off'}."
+        )
+
         for embedded_browser in (self.grok_browser_view, self.sora_browser):
             browser_settings = embedded_browser.settings()
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
-            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
-            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+            browser_settings.setAttribute(
+                QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled,
+                accelerated_canvas_enabled,
+            )
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, webgl_enabled)
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
             js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
             if js_popups_attr is not None:
