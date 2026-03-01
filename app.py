@@ -2699,6 +2699,7 @@ class MainWindow(QMainWindow):
         self.multi_video_pending_downloads: list[dict[str, Any]] = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
+        self.multi_video_requested_clicks = 0
         self.multi_video_download_future: concurrent.futures.Future | None = None
         self.multi_video_download_timer = QTimer(self)
         self.multi_video_download_timer.setSingleShot(True)
@@ -7186,6 +7187,7 @@ class MainWindow(QMainWindow):
         self.multi_video_pending_downloads = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
+        self.multi_video_requested_clicks = 0
         self.pending_manual_redirect_target = self._active_manual_browser_target()
         self._append_log(
             f"Starting Multi Video mode (count={target_count}, manual_pick={'on' if manual_pick else 'off'})."
@@ -8498,6 +8500,10 @@ class MainWindow(QMainWindow):
                 )
                 self.manual_post_submit_idle_token = -1
             QTimer.singleShot(min(remaining_ms, 1500), self._poll_for_manual_image)
+            return
+
+        if self.multi_video_mode_active:
+            QTimer.singleShot(200, self._poll_multi_video_post_urls)
             return
 
         prompt = self.pending_manual_image_prompt or ""
@@ -10119,7 +10125,7 @@ class MainWindow(QMainWindow):
                                 if (!isVisible(el) || el.disabled) return false;
                                 const txt = clean(el.textContent);
                                 const strongTxt = clean(el.querySelector("span.font-semibold.text-sm")?.textContent || "");
-                                return /make\s+video/i.test(strongTxt || txt);
+                                return /make\\s+video/i.test(strongTxt || txt);
                             }) || null)
                         : null;
 
@@ -10141,7 +10147,7 @@ class MainWindow(QMainWindow):
                                 clickedNodeTag = String(innerDiv.tagName || "").toLowerCase();
                             }
                         }
-                        if (!clicked && optionType === "type" && /make\s+video/i.test(targetLabel)) {
+                        if (!clicked && optionType === "type" && /make\\s+video/i.test(targetLabel)) {
                             clicked = click(target, true);
                             clickedNodeTag = String(target.tagName || "").toLowerCase();
                         }
@@ -10865,32 +10871,78 @@ class MainWindow(QMainWindow):
         if self.multi_video_pending_downloads or len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
             self._start_multi_video_background_downloads()
             return
+        if self.browser is None:
+            QTimer.singleShot(1200, self._poll_multi_video_post_urls)
+            return
 
+        auto_click_enabled = not self.multi_video_manual_pick
+        remaining_clicks = max(0, self.multi_video_target_count - self.multi_video_requested_clicks)
         script = f"""
             (() => {{
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const textOf = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const clickCommon = {{ bubbles: true, cancelable: true, composed: true }};
+                const emulateClick = (el) => {{
+                    if (!el || !isVisible(el) || el.disabled) return false;
+                    try {{ el.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }}); }} catch (_) {{}}
+                    try {{ el.dispatchEvent(new PointerEvent('pointerdown', clickCommon)); }} catch (_) {{}}
+                    el.dispatchEvent(new MouseEvent('mousedown', clickCommon));
+                    try {{ el.dispatchEvent(new PointerEvent('pointerup', clickCommon)); }} catch (_) {{}}
+                    el.dispatchEvent(new MouseEvent('mouseup', clickCommon));
+                    el.dispatchEvent(new MouseEvent('click', clickCommon));
+                    try {{ el.click(); }} catch (_) {{}}
+                    return true;
+                }};
                 const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
-                    .filter((btn) => isVisible(btn) && /make\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
+                    .filter((btn) => isVisible(btn) && /make\\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
                 const links = [];
+                let clickedThisPass = 0;
                 for (const btn of makeButtons) {{
                     const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
                     const a = tile ? tile.querySelector("a[href*='/imagine/post/']") : null;
-                    const href = a?.href || '';
-                    if (!href) continue;
-                    if (!links.includes(href)) links.push(href);
-                    if (links.length >= {self.multi_video_target_count}) break;
+                    const href = (a?.href || '').trim();
+                    if (href && !links.includes(href)) links.push(href);
                 }}
-                return {{ links, makeVideoCount: makeButtons.length }};
+                if ({'true' if auto_click_enabled else 'false'}) {{
+                    for (const btn of makeButtons) {{
+                        if (clickedThisPass >= {remaining_clicks}) break;
+                        if (btn.dataset.multiVideoClicked === '1') continue;
+                        if (!emulateClick(btn)) continue;
+                        btn.dataset.multiVideoClicked = '1';
+                        clickedThisPass += 1;
+                        const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
+                        const a = tile ? tile.querySelector("a[href*='/imagine/post/']") : null;
+                        const href = (a?.href || '').trim();
+                        if (href && !links.includes(href)) links.push(href);
+                    }}
+                }}
+                return {{
+                    links,
+                    makeVideoCount: makeButtons.length,
+                    clickedThisPass,
+                    autoClickEnabled: {'true' if auto_click_enabled else 'false'},
+                }};
             }})()
         """
 
         def _after_probe(result):
             if not self.multi_video_mode_active or self.stop_all_requested:
                 return
-            links = []
+            links: list[str] = []
+            clicked_this_pass = 0
             if isinstance(result, dict):
                 links = [str(url).strip() for url in (result.get("links") or []) if str(url).strip()]
+                clicked_this_pass = max(0, int(result.get("clickedThisPass") or 0))
+            if clicked_this_pass > 0:
+                self.multi_video_requested_clicks = min(
+                    self.multi_video_target_count,
+                    self.multi_video_requested_clicks + clicked_this_pass,
+                )
+                self._append_log(
+                    f"Multi Video: clicked {clicked_this_pass} Make video button(s) "
+                    f"({self.multi_video_requested_clicks}/{self.multi_video_target_count})."
+                )
+
             if links:
                 for url in links:
                     if url not in self.multi_video_collected_post_urls:
@@ -10898,17 +10950,20 @@ class MainWindow(QMainWindow):
                         if len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
                             break
                 self._append_log(
-                    f"Multi Video: found {len(self.multi_video_collected_post_urls)}/{self.multi_video_target_count} make-video post targets."
+                    f"Multi Video: gathered {len(self.multi_video_collected_post_urls)}/{self.multi_video_target_count} post id targets."
                 )
             else:
                 self.multi_video_poll_retry_count += 1
                 if self.multi_video_poll_retry_count % 3 == 0:
-                    self._append_log("Multi Video: waiting for generated image cards with Make video buttons...")
+                    if self.multi_video_manual_pick:
+                        self._append_log("Multi Video: waiting for your manual Make video picks and post ids...")
+                    else:
+                        self._append_log("Multi Video: waiting for more Make video cards/post ids on the image pick page...")
 
             if len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
                 self._start_multi_video_background_downloads()
                 return
-            QTimer.singleShot(1800, self._poll_multi_video_post_urls)
+            QTimer.singleShot(1500, self._poll_multi_video_post_urls)
 
         self.browser.page().runJavaScript(script, _after_probe)
 
@@ -10956,6 +11011,7 @@ class MainWindow(QMainWindow):
             self.multi_video_pending_downloads = []
             self.multi_video_completed_downloads = 0
             self.multi_video_poll_retry_count = 0
+            self.multi_video_requested_clicks = 0
             return
 
         item = self.multi_video_pending_downloads[0]
@@ -11601,6 +11657,7 @@ class MainWindow(QMainWindow):
         self.multi_video_pending_downloads = []
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
+        self.multi_video_requested_clicks = 0
         self.multi_video_download_future = None
 
         self.continue_from_frame_active = False
