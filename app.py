@@ -2701,6 +2701,7 @@ class MainWindow(QMainWindow):
         self.multi_video_poll_retry_count = 0
         self.multi_video_requested_clicks = 0
         self.multi_video_selection_complete = False
+        self.multi_video_poll_in_flight = False
         self.multi_video_download_future: concurrent.futures.Future | None = None
         self.multi_video_download_timer = QTimer(self)
         self.multi_video_download_timer.setSingleShot(True)
@@ -7190,6 +7191,7 @@ class MainWindow(QMainWindow):
         self.multi_video_poll_retry_count = 0
         self.multi_video_requested_clicks = 0
         self.multi_video_selection_complete = False
+        self.multi_video_poll_in_flight = False
         self.pending_manual_redirect_target = self._active_manual_browser_target()
         self._append_log(
             f"Starting Multi Video mode (count={target_count}, manual_pick={'on' if manual_pick else 'off'})."
@@ -10870,6 +10872,8 @@ class MainWindow(QMainWindow):
     def _poll_multi_video_post_urls(self) -> None:
         if not self.multi_video_mode_active or self.stop_all_requested:
             return
+        if self.multi_video_poll_in_flight:
+            return
         if self.multi_video_selection_complete:
             self._start_multi_video_background_downloads()
             return
@@ -10957,6 +10961,7 @@ class MainWindow(QMainWindow):
         """
 
         def _after_probe(result):
+            self.multi_video_poll_in_flight = False
             if not self.multi_video_mode_active or self.stop_all_requested:
                 return
             links: list[str] = []
@@ -11009,7 +11014,13 @@ class MainWindow(QMainWindow):
 
             QTimer.singleShot(1200, self._poll_multi_video_post_urls)
 
-        self.browser.page().runJavaScript(script, _after_probe)
+        self.multi_video_poll_in_flight = True
+        try:
+            self.browser.page().runJavaScript(script, _after_probe)
+        except Exception as exc:
+            self.multi_video_poll_in_flight = False
+            self._append_log(f"WARNING: Multi Video probe script failed: {exc}")
+            QTimer.singleShot(1200, self._poll_multi_video_post_urls)
 
     def _start_multi_video_background_downloads(self) -> None:
         if not self.multi_video_mode_active or self.stop_all_requested:
@@ -11057,6 +11068,7 @@ class MainWindow(QMainWindow):
             self.multi_video_poll_retry_count = 0
             self.multi_video_requested_clicks = 0
             self.multi_video_selection_complete = False
+            self.multi_video_poll_in_flight = False
             return
 
         item = self.multi_video_pending_downloads[0]
@@ -11704,6 +11716,7 @@ class MainWindow(QMainWindow):
         self.multi_video_poll_retry_count = 0
         self.multi_video_requested_clicks = 0
         self.multi_video_selection_complete = False
+        self.multi_video_poll_in_flight = False
         self.multi_video_download_future = None
 
         self.continue_from_frame_active = False
