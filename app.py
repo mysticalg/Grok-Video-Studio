@@ -2586,9 +2586,11 @@ class FilteredWebEnginePage(QWebEnginePage):
                 popup_page = self._popup_handler(self, window_type)
                 if popup_page is not None:
                     return popup_page
+                return None
             except Exception as exc:
                 if self._on_console_message:
                     self._on_console_message(f"Browser popup handler error: {exc}")
+                return None
         return super().createWindow(window_type)
 
     def chooseFiles(self, mode, old_files, accepted_mime_types):  # type: ignore[override]
@@ -2662,6 +2664,7 @@ class MainWindow(QMainWindow):
             "music_query_effective": "",
         }
         self._cdp_relay_temporarily_disabled = False
+        self.browser_login_popups_enabled = bool(_env_int("GROK_BROWSER_LOGIN_POPUPS_ENABLED", 0))
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self._manual_download_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manual-download")
         self.social_upload_timers: dict[str, QTimer] = {}
@@ -3256,12 +3259,14 @@ class MainWindow(QMainWindow):
             # Off-the-record profile avoids startup cache/quota errors on locked folders (common on synced drives).
             self.browser_profile = QWebEngineProfile(self)
 
+        popup_handler = self._open_popup_browser_window if self.browser_login_popups_enabled else None
+
         self.grok_browser_view.setPage(
             FilteredWebEnginePage(
                 self._append_log,
                 self.browser_profile,
                 self.grok_browser_view,
-                popup_handler=self._open_popup_browser_window,
+                popup_handler=popup_handler,
             )
         )
 
@@ -3275,7 +3280,7 @@ class MainWindow(QMainWindow):
                 self._append_log,
                 self.sora_browser_profile,
                 self.sora_browser,
-                popup_handler=self._open_popup_browser_window,
+                popup_handler=popup_handler,
             )
         )
         browser_profile = self.browser_profile
@@ -3311,6 +3316,10 @@ class MainWindow(QMainWindow):
         else:
             self._append_log("Sora embedded browser user-agent set to default QtWebEngine profile user-agent.")
         self._append_log(f"Grok embedded browser user-agent set to: {embedded_ua}")
+        if self.browser_login_popups_enabled:
+            self._append_log("Browser login popups are enabled (GROK_BROWSER_LOGIN_POPUPS_ENABLED=1).")
+        else:
+            self._append_log("Browser login popups are disabled.")
 
         accelerated_canvas_enabled = bool(_env_int("GROK_BROWSER_ACCELERATED_2D_CANVAS", 0))
         webgl_enabled = bool(_env_int("GROK_BROWSER_WEBGL_ENABLED", 1))
@@ -3331,7 +3340,7 @@ class MainWindow(QMainWindow):
             browser_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
             js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
             if js_popups_attr is not None:
-                browser_settings.setAttribute(js_popups_attr, True)
+                browser_settings.setAttribute(js_popups_attr, self.browser_login_popups_enabled)
             third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
             if third_party_cookies_attr is not None:
                 browser_settings.setAttribute(third_party_cookies_attr, True)
@@ -3712,7 +3721,7 @@ class MainWindow(QMainWindow):
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
         js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
         if js_popups_attr is not None:
-            browser.settings().setAttribute(js_popups_attr, True)
+            browser.settings().setAttribute(js_popups_attr, self.browser_login_popups_enabled)
         third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
         if third_party_cookies_attr is not None:
             browser.settings().setAttribute(third_party_cookies_attr, True)
@@ -13305,9 +13314,13 @@ class MainWindow(QMainWindow):
 
     def _open_popup_browser_window(
         self,
-        source_page: QWebEnginePage,
+        _source_page: QWebEnginePage,
         _window_type: QWebEnginePage.WebWindowType,
     ) -> QWebEnginePage | None:
+        if not self.browser_login_popups_enabled:
+            self._append_log("Blocked browser login popup (GROK_BROWSER_LOGIN_POPUPS_ENABLED=0).")
+            return None
+
         popup_window = QMainWindow(self)
         popup_window.setWindowTitle("Browser Login Popup")
         popup_window.resize(980, 760)
@@ -13318,7 +13331,7 @@ class MainWindow(QMainWindow):
             self.browser_profile,
             popup_view,
             auto_file_selector=self._resolve_social_auto_file_selection,
-            popup_handler=self._open_popup_browser_window,
+            popup_handler=self._open_popup_browser_window if self.browser_login_popups_enabled else None,
         )
         popup_view.setPage(popup_page)
         popup_window.setCentralWidget(popup_view)
@@ -13328,7 +13341,7 @@ class MainWindow(QMainWindow):
         popup_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
         js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
         if js_popups_attr is not None:
-            popup_settings.setAttribute(js_popups_attr, True)
+            popup_settings.setAttribute(js_popups_attr, self.browser_login_popups_enabled)
         third_party_cookies_attr = getattr(QWebEngineSettings.WebAttribute, "ThirdPartyCookiesEnabled", None)
         if third_party_cookies_attr is not None:
             popup_settings.setAttribute(third_party_cookies_attr, True)
