@@ -8123,25 +8123,10 @@ class MainWindow(QMainWindow):
                         return
 
                     self._append_log(
-                        f"ERROR: Manual image variant {variant}: final direct submit fallback failed ({result!r}); "
-                        "aborting this variant without image-ready polling to avoid duplicate generations."
+                        f"WARNING: Manual image variant {variant}: final direct submit fallback could not be confirmed ({result!r}); "
+                        "continuing with image-ready polling to avoid false-negative aborts."
                     )
-                    if self.multi_video_mode_active:
-                        self.multi_video_mode_active = False
-                        self.multi_video_target_count = 0
-                        self.multi_video_manual_pick = False
-                        self.multi_video_prompt = ""
-                        self.multi_video_collected_post_urls = []
-                        self.multi_video_clicked_post_urls = set()
-                        self.multi_video_pending_downloads = []
-                        self.multi_video_completed_downloads = 0
-                        self.multi_video_poll_retry_count = 0
-                        self.multi_video_requested_clicks = 0
-                        self.multi_video_selection_complete = False
-                        self.multi_video_poll_in_flight = False
-                        self.multi_video_download_future = None
-                        self._append_log("Multi Video: stopped because submit could not be confirmed.")
-                    QTimer.singleShot(0, self._submit_next_manual_image_variant)
+                    QTimer.singleShot(700, self._poll_for_manual_image)
 
                 self.browser.page().runJavaScript(submit_script, _after_forced_submit)
                 return
