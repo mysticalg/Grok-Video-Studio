@@ -2700,6 +2700,7 @@ class MainWindow(QMainWindow):
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
         self.multi_video_requested_clicks = 0
+        self.multi_video_selection_complete = False
         self.multi_video_download_future: concurrent.futures.Future | None = None
         self.multi_video_download_timer = QTimer(self)
         self.multi_video_download_timer.setSingleShot(True)
@@ -7188,6 +7189,7 @@ class MainWindow(QMainWindow):
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
         self.multi_video_requested_clicks = 0
+        self.multi_video_selection_complete = False
         self.pending_manual_redirect_target = self._active_manual_browser_target()
         self._append_log(
             f"Starting Multi Video mode (count={target_count}, manual_pick={'on' if manual_pick else 'off'})."
@@ -10868,7 +10870,11 @@ class MainWindow(QMainWindow):
     def _poll_multi_video_post_urls(self) -> None:
         if not self.multi_video_mode_active or self.stop_all_requested:
             return
+        if self.multi_video_selection_complete:
+            self._start_multi_video_background_downloads()
+            return
         if self.multi_video_pending_downloads or len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
+            self.multi_video_selection_complete = True
             self._start_multi_video_background_downloads()
             return
         if self.browser is None:
@@ -10880,7 +10886,35 @@ class MainWindow(QMainWindow):
         script = f"""
             (() => {{
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                const textOf = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const textOf = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
+                const postPattern = /\/imagine\/post\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
+                const toPostUrl = (raw) => {{
+                    const txt = String(raw || '').trim();
+                    const m = txt.match(postPattern);
+                    return m ? `https://grok.com/imagine/post/${{m[1]}}` : '';
+                }};
+                const extractPostUrlFromTile = (tile) => {{
+                    if (!tile) return '';
+                    const directAnchor = tile.querySelector("a[href*='/imagine/post/']");
+                    if (directAnchor && directAnchor.href) {{
+                        const normalized = toPostUrl(directAnchor.href);
+                        if (normalized) return normalized;
+                    }}
+                    const attrs = [
+                        tile.getAttribute('href'),
+                        tile.getAttribute('data-href'),
+                        tile.getAttribute('data-url'),
+                        tile.getAttribute('data-link'),
+                        tile.getAttribute('aria-label'),
+                        tile.getAttribute('title'),
+                    ];
+                    for (const value of attrs) {{
+                        const normalized = toPostUrl(value || '');
+                        if (normalized) return normalized;
+                    }}
+                    const html = String(tile.innerHTML || '');
+                    return toPostUrl(html);
+                }};
                 const clickCommon = {{ bubbles: true, cancelable: true, composed: true }};
                 const emulateClick = (el) => {{
                     if (!el || !isVisible(el) || el.disabled) return false;
@@ -10893,35 +10927,32 @@ class MainWindow(QMainWindow):
                     try {{ el.click(); }} catch (_) {{}}
                     return true;
                 }};
+
                 const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
-                    .filter((btn) => isVisible(btn) && /make\\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
+                    .filter((btn) => isVisible(btn) && /make\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
+
                 const links = [];
                 let clickedThisPass = 0;
                 for (const btn of makeButtons) {{
                     const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
-                    const a = tile ? tile.querySelector("a[href*='/imagine/post/']") : null;
-                    const href = (a?.href || '').trim();
+                    const href = extractPostUrlFromTile(tile);
                     if (href && !links.includes(href)) links.push(href);
                 }}
+
                 if ({'true' if auto_click_enabled else 'false'}) {{
                     for (const btn of makeButtons) {{
                         if (clickedThisPass >= {remaining_clicks}) break;
                         if (btn.dataset.multiVideoClicked === '1') continue;
+                        const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
                         if (!emulateClick(btn)) continue;
                         btn.dataset.multiVideoClicked = '1';
                         clickedThisPass += 1;
-                        const tile = btn.closest("article, li, div[data-testid], div[role='listitem'], div") || btn.parentElement;
-                        const a = tile ? tile.querySelector("a[href*='/imagine/post/']") : null;
-                        const href = (a?.href || '').trim();
+                        const href = extractPostUrlFromTile(tile);
                         if (href && !links.includes(href)) links.push(href);
                     }}
                 }}
-                return {{
-                    links,
-                    makeVideoCount: makeButtons.length,
-                    clickedThisPass,
-                    autoClickEnabled: {'true' if auto_click_enabled else 'false'},
-                }};
+
+                return {{ links, makeVideoCount: makeButtons.length, clickedThisPass }};
             }})()
         """
 
@@ -10933,6 +10964,7 @@ class MainWindow(QMainWindow):
             if isinstance(result, dict):
                 links = [str(url).strip() for url in (result.get("links") or []) if str(url).strip()]
                 clicked_this_pass = max(0, int(result.get("clickedThisPass") or 0))
+
             if clicked_this_pass > 0:
                 self.multi_video_requested_clicks = min(
                     self.multi_video_target_count,
@@ -10958,12 +10990,24 @@ class MainWindow(QMainWindow):
                     if self.multi_video_manual_pick:
                         self._append_log("Multi Video: waiting for your manual Make video picks and post ids...")
                     else:
-                        self._append_log("Multi Video: waiting for more Make video cards/post ids on the image pick page...")
+                        self._append_log("Multi Video: waiting for Make video cards/post ids on the image pick page...")
 
-            if len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
+            if self.multi_video_requested_clicks >= self.multi_video_target_count:
+                self.multi_video_selection_complete = True
+                if len(self.multi_video_collected_post_urls) < self.multi_video_target_count:
+                    self._append_log(
+                        f"Multi Video: Make video clicks complete ({self.multi_video_requested_clicks}/{self.multi_video_target_count}); "
+                        f"continuing with {len(self.multi_video_collected_post_urls)} collected post target(s)."
+                    )
                 self._start_multi_video_background_downloads()
                 return
-            QTimer.singleShot(1500, self._poll_multi_video_post_urls)
+
+            if len(self.multi_video_collected_post_urls) >= self.multi_video_target_count:
+                self.multi_video_selection_complete = True
+                self._start_multi_video_background_downloads()
+                return
+
+            QTimer.singleShot(1200, self._poll_multi_video_post_urls)
 
         self.browser.page().runJavaScript(script, _after_probe)
 
@@ -11012,6 +11056,7 @@ class MainWindow(QMainWindow):
             self.multi_video_completed_downloads = 0
             self.multi_video_poll_retry_count = 0
             self.multi_video_requested_clicks = 0
+            self.multi_video_selection_complete = False
             return
 
         item = self.multi_video_pending_downloads[0]
@@ -11658,6 +11703,7 @@ class MainWindow(QMainWindow):
         self.multi_video_completed_downloads = 0
         self.multi_video_poll_retry_count = 0
         self.multi_video_requested_clicks = 0
+        self.multi_video_selection_complete = False
         self.multi_video_download_future = None
 
         self.continue_from_frame_active = False
