@@ -11154,7 +11154,7 @@ class MainWindow(QMainWindow):
                             clickedLinks.push(href);
                             if (!links.includes(href)) links.push(href);
                         }} else if (sig) {{
-                            clickedLinks.push(`sig:${sig}`);
+                            clickedLinks.push(`sig:${{sig}}`);
                         }}
                         clickedThisPass += 1;
                     }}
