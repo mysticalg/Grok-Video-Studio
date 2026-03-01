@@ -7925,6 +7925,7 @@ class MainWindow(QMainWindow):
                     }
 
                     const submitButtons = [
+                        ...document.querySelectorAll("button:has(span.sr-only)"),
                         ...document.querySelectorAll("button[aria-label='Submit']"),
                         ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
                         ...document.querySelectorAll("button[type='submit']"),
@@ -7932,9 +7933,13 @@ class MainWindow(QMainWindow):
                     ]
                         .filter((el, idx, arr) => arr.indexOf(el) === idx)
                         .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
-                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
-                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
-                        || submitButtons[0]
+                    const isSearchButton = (el) => /(^|\s)search(\s|$)/i.test(clean(el?.getAttribute("aria-label")) || clean(el?.textContent));
+                    const hasCreateVideoSrOnly = (el) => /create\s+video/i.test(clean(el?.querySelector("span.sr-only")?.textContent || ""));
+                    const primarySubmit = submitButtons.find((el) => hasCreateVideoSrOnly(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => /^create\s+video$/i.test(clean(el.getAttribute("aria-label"))) && !isSearchButton(el))
+                        || submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit" && !isSearchButton(el))
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)) && !isSearchButton(el))
+                        || submitButtons.find((el) => !isSearchButton(el))
                         || null;
 
                     const recorderSelectors = [
@@ -8646,7 +8651,7 @@ class MainWindow(QMainWindow):
                     const isSidebarControl = (el) => {{
                         if (!el) return false;
                         const label = ariaOf(el).toLowerCase();
-                        if (/^create\s+new\s+project$/.test(label)) return true;
+                        if (/^create\\s+new\\s+project$/.test(label)) return true;
                         if (el.matches?.("[data-sidebar], [data-sidebar='menu-button']")) return true;
                         if (el.closest?.("[data-sidebar], [data-sidebar='menu-button']")) return true;
                         if (el.closest?.("aside")) return true;
@@ -9400,6 +9405,8 @@ class MainWindow(QMainWindow):
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         action_delay_ms = int(self.automation_action_delay_ms.value())
+        active_browser_target = self._active_manual_browser_target()
+        is_sora_manual_flow = active_browser_target == "sora"
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
         selected_duration_seconds = int(self.video_duration.currentData() or 10)
         selected_duration_label = f"{selected_duration_seconds}s"
@@ -9410,11 +9417,17 @@ class MainWindow(QMainWindow):
             "1280x720": "720p",
         }
         selected_resolution_name = resolution_name_map.get(selected_resolution_value, "720p")
-        self._append_log(
-            f"Populating prompt for manual variant {variant} in browser, setting video options "
-            f"({selected_quality_label}, {selected_aspect_ratio}), then force submitting with {action_delay_ms}ms delays between each action. "
-            f"Remaining repeats after this: {remaining_count}."
-        )
+        if is_sora_manual_flow:
+            self._append_log(
+                f"Populating prompt for manual variant {variant} in Sora browser and submitting Create video directly "
+                f"(skipping Grok-only resolution/duration/aspect option flow). Remaining repeats after this: {remaining_count}."
+            )
+        else:
+            self._append_log(
+                f"Populating prompt for manual variant {variant} in browser, setting video options "
+                f"({selected_quality_label}, {selected_aspect_ratio}), then force submitting with {action_delay_ms}ms delays between each action. "
+                f"Remaining repeats after this: {remaining_count}."
+            )
 
         escaped_prompt = repr(prompt)
         script = rf"""
@@ -9460,11 +9473,27 @@ class MainWindow(QMainWindow):
                     input.dispatchEvent(new MouseEvent("click", common));
                     input.focus();
                     if (input.isContentEditable) {{
-                        // Only populate the field; do not synthesize Enter/submit key events.
-                        const paragraph = document.createElement("p");
-                        paragraph.textContent = prompt;
-                        input.replaceChildren(paragraph);
-                        input.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                        // Prefer user-like text insertion to avoid React/ProseMirror state desync.
+                        try {{
+                            const selection = window.getSelection && window.getSelection();
+                            if (selection) {{
+                                const range = document.createRange();
+                                range.selectNodeContents(input);
+                                selection.removeAllRanges();
+                                selection.addRange(range);
+                            }}
+                        }} catch (_) {{}}
+
+                        let inserted = false;
+                        try {{ inserted = !!document.execCommand && document.execCommand("insertText", false, prompt); }} catch (_) {{ inserted = false; }}
+
+                        if (!inserted) {{
+                            input.textContent = "";
+                            const textNode = document.createTextNode(prompt);
+                            input.appendChild(textNode);
+                        }}
+
+                        try {{ input.dispatchEvent(new InputEvent("input", {{ bubbles: true, inputType: "insertText", data: prompt }})); }} catch (_) {{ input.dispatchEvent(new Event("input", {{ bubbles: true }})); }}
                         input.dispatchEvent(new Event("change", {{ bubbles: true }}));
                     }} else {{
                         const proto = Object.getPrototypeOf(input);
@@ -10032,7 +10061,12 @@ class MainWindow(QMainWindow):
                         return { fired, x, y };
                     };
 
-                    const coordinateClick = activateSubmitAtPoint(submitTarget);
+                    if (submitTarget && isSearchButton(submitTarget)) {
+                        return { ok: false, error: "Resolved submit target was Search button", status: "submit-target-search" };
+                    }
+
+                    const directClickFired = activateSubmit(submitTarget);
+                    const coordinateClick = directClickFired ? { fired: true, x: -1, y: -1 } : activateSubmitAtPoint(submitTarget);
 
                     return {
                         ok: !!coordinateClick.fired,
@@ -10042,10 +10076,10 @@ class MainWindow(QMainWindow):
                         formSubmitted: false,
                         usedPrimarySubmit: !!primarySubmit,
                         usedRecorderTarget: !!recorderSubmitTarget,
-                        usedCoordinatePlayback: !!coordinateClick.fired,
+                        usedCoordinatePlayback: !directClickFired && !!coordinateClick.fired,
                         clickX: coordinateClick.x,
                         clickY: coordinateClick.y,
-                        status: coordinateClick.fired ? "submit-coordinate-click-dispatched" : "submit-coordinate-click-failed"
+                        status: coordinateClick.fired ? (directClickFired ? "submit-direct-click-dispatched" : "submit-coordinate-click-dispatched") : "submit-coordinate-click-failed"
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -10228,7 +10262,8 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
-                if continue_last_video_mode:
+                use_enter_submit = True
+                if use_enter_submit:
                     enter_script = r"""
                         (() => {
                             try {
@@ -10252,10 +10287,24 @@ class MainWindow(QMainWindow):
                                 if (!promptInput) return { ok: false, error: "prompt-input-not-found-for-enter" };
                                 try { promptInput.focus({ preventScroll: true }); } catch (_) {}
                                 const common = { bubbles: true, cancelable: true, composed: true };
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); } catch (_) {}
-                                return { ok: true };
+                                let enterDispatched = false;
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
+
+                                // Fallback for forms that ignore synthetic keyboard events.
+                                let formSubmitted = false;
+                                if (!enterDispatched) {
+                                    const form = typeof promptInput.closest === "function" ? promptInput.closest("form") : null;
+                                    if (form) {
+                                        try { if (typeof form.requestSubmit === "function") { form.requestSubmit(); formSubmitted = true; } } catch (_) {}
+                                        if (!formSubmitted) {
+                                            try { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); formSubmitted = true; } catch (_) {}
+                                        }
+                                    }
+                                }
+
+                                return { ok: enterDispatched || formSubmitted, enterDispatched, formSubmitted };
                             } catch (err) {
                                 return { ok: false, error: String(err && err.stack ? err.stack : err) };
                             }
@@ -10267,10 +10316,18 @@ class MainWindow(QMainWindow):
                             self._append_log(
                                 f"WARNING: Variant {variant}: could not confirm trailing Enter press after prompt entry. result={enter_result!r}"
                             )
+                        flow_label = "Sora" if is_sora_manual_flow else ("continue-last-video" if continue_last_video_mode else "standard")
+                        if isinstance(enter_result, dict) and enter_result.get("ok"):
+                            self._append_log(
+                                f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
+                            )
+                            QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            return
+
                         self._append_log(
-                            f"Variant {variant}: prompt populated with trailing Enter; moving to download polling (no extra option clicks or submit actions)."
+                            f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
                         )
-                        QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                        QTimer.singleShot(700, _run_flow_submit)
 
                     self.browser.page().runJavaScript(enter_script, _after_enter_press)
                     return
@@ -10280,7 +10337,12 @@ class MainWindow(QMainWindow):
             self.browser.page().runJavaScript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
-        if continue_last_video_mode:
+        if is_sora_manual_flow:
+            option_steps = []
+            self._append_log(
+                f"Variant {variant}: Sora tab detected; skipping Grok options flow and using Sora composer settings as-is."
+            )
+        elif continue_last_video_mode:
             option_steps = [
                 ("type", "Make Video"),
                 ("resolution", selected_quality_label),
@@ -10325,6 +10387,10 @@ class MainWindow(QMainWindow):
             self.browser.page().runJavaScript(open_options_script, _after_open)
 
         def _open_options_then_steps() -> None:
+            if not option_steps:
+                self._append_log(f"Variant {variant}: no staged options configured; continuing directly to prompt entry.")
+                QTimer.singleShot(0, _populate_prompt_then_submit)
+                return
             self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
             QTimer.singleShot(2000, lambda: _run_option_step(0))
 
@@ -10890,8 +10956,8 @@ class MainWindow(QMainWindow):
         script = f"""
             (() => {{
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                const textOf = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
-                const postPattern = /\/imagine\/post\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
+                const textOf = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
+                const postPattern = /\\/imagine\\/post\\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
                 const toPostUrl = (raw) => {{
                     const txt = String(raw || '').trim();
                     const m = txt.match(postPattern);
@@ -10933,7 +10999,7 @@ class MainWindow(QMainWindow):
                 }};
 
                 const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
-                    .filter((btn) => isVisible(btn) && /make\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
+                    .filter((btn) => isVisible(btn) && /make\\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
 
                 const links = [];
                 let clickedThisPass = 0;

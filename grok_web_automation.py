@@ -46,7 +46,10 @@ def _get_selectors() -> dict[str, str]:
     return {
         "imagine_url": os.getenv("GROK_IMAGINE_URL", "https://grok.com/imagine"),
         "prompt": os.getenv("GROK_IMAGINE_PROMPT_SELECTOR", "textarea"),
-        "submit": os.getenv("GROK_IMAGINE_SUBMIT_SELECTOR", "button[type='submit'][aria-label='Submit']"),
+        "submit": os.getenv(
+            "GROK_IMAGINE_SUBMIT_SELECTOR",
+            "button:has(span.sr-only:has-text('Create video'))",
+        ),
         "video": os.getenv("GROK_IMAGINE_VIDEO_SELECTOR", "video"),
     }
 
@@ -105,10 +108,12 @@ def _fill_prompt(locator, prompt: str) -> None:
 def _resolve_submit_locator(page, preferred_selector: str, timeout_s: int):
     candidates = [
         preferred_selector,
+        "button:has(span.sr-only:has-text('Create video'))",
+        "button[data-state='closed']:has(span:has-text('Create video'))",
+        "button[data-disabled='false']:has(span:has-text('Create video'))",
         "button[type='submit'][aria-label='Submit']",
         "form button[type='submit']",
         "button[aria-label='Submit']",
-        "button:has(svg)",
         "button:has-text('Generate')",
     ]
 
@@ -118,6 +123,11 @@ def _resolve_submit_locator(page, preferred_selector: str, timeout_s: int):
         try:
             locator.wait_for(state="visible", timeout=max(2000, int(timeout_s * 1000 / len(candidates))))
             locator.wait_for(state="attached", timeout=2000)
+
+            aria_label = (locator.get_attribute("aria-label") or "").strip().lower()
+            if aria_label == "search":
+                raise RuntimeError("Matched Search button instead of Create video submit button")
+
             return locator, selector
         except Exception as exc:  # noqa: BLE001
             last_error = exc
