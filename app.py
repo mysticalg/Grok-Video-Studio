@@ -8109,9 +8109,38 @@ class MainWindow(QMainWindow):
             if attempts >= max_attempts:
                 self._append_log(
                     f"WARNING: Could not prepare manual image variant {variant} after {attempts} attempts; "
-                    "assuming submit already happened and continuing with image-ready polling."
+                    "trying one final direct submit click before deciding whether to poll for image results."
                 )
-                QTimer.singleShot(700, self._poll_for_manual_image)
+
+                def _after_forced_submit(result):
+                    if isinstance(result, dict) and result.get("ok"):
+                        self._append_log(
+                            f"Manual image variant {variant}: final direct submit fallback succeeded; continuing with image-ready polling."
+                        )
+                        _after_submit(result)
+                        return
+
+                    self._append_log(
+                        f"ERROR: Manual image variant {variant}: final direct submit fallback failed ({result!r}); "
+                        "aborting this variant without image-ready polling to avoid duplicate generations."
+                    )
+                    if self.multi_video_mode_active:
+                        self.multi_video_mode_active = False
+                        self.multi_video_target_count = 0
+                        self.multi_video_manual_pick = False
+                        self.multi_video_prompt = ""
+                        self.multi_video_collected_post_urls = []
+                        self.multi_video_pending_downloads = []
+                        self.multi_video_completed_downloads = 0
+                        self.multi_video_poll_retry_count = 0
+                        self.multi_video_requested_clicks = 0
+                        self.multi_video_selection_complete = False
+                        self.multi_video_poll_in_flight = False
+                        self.multi_video_download_future = None
+                        self._append_log("Multi Video: stopped because submit could not be confirmed.")
+                    QTimer.singleShot(0, self._submit_next_manual_image_variant)
+
+                self.browser.page().runJavaScript(submit_script, _after_forced_submit)
                 return
             self.manual_image_generation_queue.insert(0, item)
             QTimer.singleShot(1200, self._submit_next_manual_image_variant)
