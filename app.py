@@ -9183,9 +9183,10 @@ class MainWindow(QMainWindow):
                 return
 
             if status in ("callback-empty", "submit-in-flight"):
-                submit_ready_probe_script = """
-                    (() => {
-                        try {
+                submit_ready_probe_script = f"""
+                    (() => {{
+                        try {{
+                            const submitToken = {self.manual_image_submit_token};
                             const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                             const pathRaw = String((window.location && window.location.pathname) || "");
                             const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
@@ -9205,7 +9206,8 @@ class MainWindow(QMainWindow):
                                 .find((el) => isVisible(el) && /\bgenerating\b|\brendering\b|\bcancel\b/i.test((el.textContent || "").trim()));
                             const onPostViewReady = Boolean(validPostId);
                             const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || generationInProgress));
-                            return {
+                            const submitTokenSeen = Number(window.__grokManualImageSubmitToken || 0) === Number(submitToken || 0);
+                            return {{
                                 ok: true,
                                 readyForDownloadPolling,
                                 onPostViewReady,
@@ -9215,11 +9217,12 @@ class MainWindow(QMainWindow):
                                 hasVideoSource,
                                 makeVideoVisible,
                                 generationInProgress,
-                            };
-                        } catch (_) {
-                            return { ok: false, readyForDownloadPolling: false };
-                        }
-                    })()
+                                submitTokenSeen,
+                            }};
+                        }} catch (_) {{
+                            return {{ ok: false, readyForDownloadPolling: false, submitTokenSeen: false }};
+                        }}
+                    }})()
                 """
 
                 def _after_submit_ready_probe(probe_result):
@@ -9245,6 +9248,29 @@ class MainWindow(QMainWindow):
                         else submit_grace_seconds
                     )
 
+                    probe_submit_token_seen = bool(isinstance(probe_result, dict) and probe_result.get("submitTokenSeen"))
+                    current_url = self.browser.url().toString().strip() if self.browser is not None else ""
+                    current_post_id = self._extract_valid_grok_post_id(current_url)
+                    if (
+                        self.manual_image_submit_in_flight
+                        and submit_elapsed_seconds < submit_grace_seconds
+                        and probe_submit_token_seen
+                        and bool(current_post_id)
+                        and status in ("callback-empty", "submit-in-flight")
+                    ):
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: submit token confirmed on post URL ({current_post_id}) while callback is '{status}'; "
+                            "switching to download polling instead of waiting for grace timeout."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_in_flight = False
+                        self.manual_image_submit_in_flight_since = 0.0
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+
                     if self.manual_image_submit_in_flight and submit_elapsed_seconds < submit_grace_seconds:
                         self._append_log(
                             f"Variant {current_variant}: submit state unresolved ({status}); waiting {max(0.0, submit_grace_seconds - submit_elapsed_seconds):.1f}s before any re-submit."
@@ -9253,8 +9279,6 @@ class MainWindow(QMainWindow):
                         return
 
                     probe_post_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
-                    current_url = self.browser.url().toString().strip() if self.browser is not None else ""
-                    current_post_id = self._extract_valid_grok_post_id(current_url)
                     on_post_view_ready = probe_post_ready or bool(current_post_id)
                     if on_post_view_ready and status in ("callback-empty", "submit-in-flight"):
                         source = "probe" if probe_post_ready else "python-url"
