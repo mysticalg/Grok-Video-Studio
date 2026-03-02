@@ -10707,6 +10707,35 @@ class MainWindow(QMainWindow):
         )
         self.manual_download_poll_timer.start(0)
 
+    def _refresh_active_browser_page_before_download(self, variant: int, reason: str) -> None:
+        self._append_log(f"Variant {variant}: refreshing browser page before download detection ({reason}).")
+        refresh_script = """
+            (() => {
+                try {
+                    if (window.location && typeof window.location.reload === "function") {
+                        window.location.reload();
+                        return { ok: true, method: "location.reload" };
+                    }
+                    return { ok: false, error: "reload unavailable" };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _after_refresh(result) -> None:
+            if isinstance(result, dict) and result.get("ok"):
+                return
+            active_browser = getattr(self, "browser", None)
+            if active_browser is None:
+                return
+            try:
+                active_browser.reload()
+            except Exception:
+                pass
+
+        self._run_active_browser_javascript(refresh_script, _after_refresh)
+
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -11048,13 +11077,10 @@ class MainWindow(QMainWindow):
                 )
                 if not self.manual_refresh_after_generating_sent:
                     self.manual_refresh_after_generating_sent = True
-                    self._append_log(
-                        f"Variant {current_variant}: refreshing embedded browser now that 'Generating' disappeared."
+                    self._refresh_active_browser_page_before_download(
+                        current_variant,
+                        "'Generating' disappeared",
                     )
-                    try:
-                        self.browser.reload()
-                    except Exception:
-                        pass
                     self.manual_download_poll_timer.start(3000)
                     return
 
@@ -11083,13 +11109,10 @@ class MainWindow(QMainWindow):
                 progress_done = progress_text in {"100%", "100"}
                 if progress_done and not self.manual_refresh_after_progress_100_sent:
                     self.manual_refresh_after_progress_100_sent = True
-                    self._append_log(
-                        f"Variant {current_variant}: render reached 100%; refreshing page before download detection."
+                    self._refresh_active_browser_page_before_download(
+                        current_variant,
+                        "render reached 100%",
                     )
-                    try:
-                        self.browser.reload()
-                    except Exception:
-                        pass
                     self.manual_download_poll_timer.start(3000)
                     return
                 if progress_text:
