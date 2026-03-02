@@ -10341,23 +10341,27 @@ class MainWindow(QMainWindow):
                         return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
                     };
 
-                    const menuMakeVideoTarget = (optionType === "type" && /make\\s+video/i.test(targetLabel))
-                        ? ([...document.querySelectorAll("[role='menuitem'], [role='menuitemradio']")]
-                            .find((el) => {
-                                if (!isVisible(el) || el.disabled) return false;
-                                const txt = clean(el.textContent);
-                                const strongTxt = clean(el.querySelector("span.font-semibold.text-sm")?.textContent || "");
-                                return /make\\s+video/i.test(strongTxt || txt);
-                            }) || null)
+                    const menuOptionCandidates = [...document.querySelectorAll("[role='menuitem'], [role='menuitemradio']")]
+                        .filter((el) => isVisible(el) && !el.disabled);
+                    const menuMakeVideoTarget = (optionType === "type" && /make\s+video/i.test(targetLabel))
+                        ? (menuOptionCandidates.find((el) => {
+                            const txt = clean(el.textContent);
+                            const strongTxt = clean(el.querySelector("span.font-semibold.text-sm")?.textContent || "");
+                            return /make\s+video/i.test(strongTxt || txt);
+                        }) || null)
+                        : null;
+                    const strictTypeTarget = (optionType === "type")
+                        ? (menuOptionCandidates.find(exactMatch) || menuOptionCandidates.find(fuzzyMatch) || null)
                         : null;
 
-                    const target = menuMakeVideoTarget
-                        || ((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
+                    const target = (optionType === "type")
+                        ? (menuMakeVideoTarget || strictTypeTarget)
+                        : (((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
                             ? (buttonCandidates.find(exactMatch) || buttonCandidates.find(fuzzyMatch))
                             : null)
                         || candidates.find((el) => !isMakeVideoPrimaryButton(el) && exactMatch(el))
                         || candidates.find((el) => !isMakeVideoPrimaryButton(el) && fuzzyMatch(el))
-                        || null;
+                        || null);
 
                     let clicked = false;
                     let clickedNodeTag = "";
