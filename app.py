@@ -2744,6 +2744,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
@@ -10520,6 +10521,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = allow_make_video_click
@@ -10546,6 +10548,7 @@ class MainWindow(QMainWindow):
             self.manual_download_request_pending = False
             self.manual_video_start_click_sent = False
             self.manual_video_make_click_fallback_used = False
+            self.manual_make_video_awaiting_progress_count = 0
             self.manual_video_allow_make_click = True
             self.manual_download_in_progress = False
             self.manual_download_started_at = None
@@ -10889,6 +10892,7 @@ class MainWindow(QMainWindow):
                     return
 
             if status == "progress":
+                self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
@@ -10896,11 +10900,13 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "generating-indicator-visible":
+                self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
             if status == "make-video-clicked":
+                self.manual_make_video_awaiting_progress_count = 0
                 label = (result.get("buttonLabel") or "Make video").strip()
                 self._append_log(f"Variant {current_variant}: clicked '{label}' to start video generation.")
                 self.manual_video_start_click_sent = True
@@ -10909,6 +10915,15 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "make-video-awaiting-progress":
+                self.manual_make_video_awaiting_progress_count = int(getattr(self, "manual_make_video_awaiting_progress_count", 0)) + 1
+                if self.manual_make_video_awaiting_progress_count >= 2 and not self.manual_video_make_click_fallback_used:
+                    self._append_log(
+                        f"Variant {current_variant}: still waiting for render progress while 'Make video' is visible; retrying explicit click fallback."
+                    )
+                    self.manual_video_start_click_sent = False
+                    self.manual_video_allow_make_click = True
+                    self.manual_download_poll_timer.start(1200)
+                    return
                 self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
                 return
 
@@ -11304,6 +11319,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
@@ -11635,6 +11651,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
@@ -11851,6 +11868,7 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_video_allow_make_click = True
@@ -13425,7 +13443,8 @@ class MainWindow(QMainWindow):
         if self._active_ai_browser_external_control_enabled() and self._is_primary_ai_browser(active_browser):
             try:
                 runtime = self._ensure_automation_runtime()
-                runtime.start_chrome()
+                if runtime.chrome_instance is None:
+                    runtime.start_chrome()
                 runtime.ensure_cdp_connected()
                 result = runtime.run_javascript_in_automation_chrome(self._active_ai_browser_url_hint(), script)
             except Exception as exc:
@@ -13498,7 +13517,8 @@ class MainWindow(QMainWindow):
             if self._active_ai_browser_external_control_enabled():
                 try:
                     runtime = self._ensure_automation_runtime()
-                    runtime.start_chrome()
+                    if runtime.chrome_instance is None:
+                        runtime.start_chrome()
                     runtime.ensure_cdp_connected()
                     runtime.open_url_in_automation_chrome(GROK_IMAGINE_URL)
                     self._append_log(f"Opened external Automation Chrome tab: {GROK_IMAGINE_URL}")
@@ -13522,7 +13542,8 @@ class MainWindow(QMainWindow):
             if self._active_ai_browser_external_control_enabled():
                 try:
                     runtime = self._ensure_automation_runtime()
-                    runtime.start_chrome()
+                    if runtime.chrome_instance is None:
+                        runtime.start_chrome()
                     runtime.ensure_cdp_connected()
                     runtime.open_url_in_automation_chrome(SORA_DRAFTS_URL)
                     self._append_log(f"Opened external Automation Chrome tab: {SORA_DRAFTS_URL}")
