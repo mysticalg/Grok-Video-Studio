@@ -9182,22 +9182,6 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(2500, self._poll_for_manual_image)
                 return
 
-            current_url = self.browser.url().toString().strip() if self.browser is not None else ""
-            current_post_id = self._extract_valid_grok_post_id(current_url)
-            if current_post_id and status in ("callback-empty", "submit-in-flight"):
-                self._append_log(
-                    "WARNING: Variant "
-                    f"{current_variant}: submit callback is empty but current URL is a valid post ({current_post_id}); "
-                    "switching directly to video download polling to prevent submit-stage loop."
-                )
-                self.manual_image_video_submit_sent = True
-                self.manual_image_submit_in_flight = False
-                self.manual_image_submit_in_flight_since = 0.0
-                self.manual_image_submit_retry_count = 0
-                self.pending_manual_download_type = "video"
-                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                return
-
             if status in ("callback-empty", "submit-in-flight"):
                 submit_ready_probe_script = """
                     (() => {
@@ -9217,7 +9201,7 @@ class MainWindow(QMainWindow):
                             const makeVideoVisible = !![...document.querySelectorAll("button")]
                                 .find((btn) => isVisible(btn) && !btn.disabled && /make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
                             const onPostViewReady = Boolean(validPostId);
-                            const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || !makeVideoVisible));
+                            const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource));
                             return {
                                 ok: true,
                                 readyForDownloadPolling,
@@ -9241,20 +9225,6 @@ class MainWindow(QMainWindow):
                             f"{current_variant}: submit callback remained empty but post view indicates video is ready "
                             f"(downloadBtn={bool(probe_result.get('downloadButtonVisible'))}, "
                             f"videoSrc={bool(probe_result.get('hasVideoSource'))}); switching to download polling."
-                        )
-                        self.manual_image_video_submit_sent = True
-                        self.manual_image_submit_in_flight = False
-                        self.manual_image_submit_in_flight_since = 0.0
-                        self.manual_image_submit_retry_count = 0
-                        self.pending_manual_download_type = "video"
-                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                        return
-
-                    if isinstance(probe_result, dict) and probe_result.get("onPostViewReady"):
-                        self._append_log(
-                            "WARNING: Variant "
-                            f"{current_variant}: submit callback remained empty, but valid post URL is present; "
-                            "moving to download polling to avoid submit-stage deadlock."
                         )
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_in_flight = False
