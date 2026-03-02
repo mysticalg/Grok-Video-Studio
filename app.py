@@ -8664,11 +8664,6 @@ class MainWindow(QMainWindow):
                         }};
                     }}
 
-                    if (window.__grokManualPickObserverResult) {{
-                        window.__grokManualPickObserverResult = "";
-                        return {{ ok: true, status: "generated-image-clicked" }};
-                    }}
-
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
                         .filter((btn) => isVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
 
@@ -8938,7 +8933,7 @@ class MainWindow(QMainWindow):
                             )
                         else:
                             self._append_log(
-                                f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
+                                f"Variant {current_variant}: clicked generated image tile after Make video became available; preparing video prompt + submit."
                             )
                     self.manual_image_pick_clicked = True
                     self._run_active_browser_javascript("""
@@ -9190,8 +9185,11 @@ class MainWindow(QMainWindow):
                                     "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], " +
                                     "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                                 );
-                                const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i]")]
-                                    .find((btn) => !!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)));
+                                const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
+                                    .find((btn) => {
+                                        if (!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length))) return false;
+                                        return !!btn.closest("[role='listitem'], li, article, figure");
+                                    });
                                 const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
                                     .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
                                 const pathRaw = String((window.location && window.location.pathname) || "");
