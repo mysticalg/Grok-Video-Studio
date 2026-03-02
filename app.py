@@ -9056,7 +9056,15 @@ class MainWindow(QMainWindow):
                                 }
 
                                 if (!window.__grokManualPickObserver || window.__grokManualPickObserverDisconnected) {
+                                    const observerStartedAt = Date.now();
+                                    const MAX_OBSERVER_WINDOW_MS = 12000;
                                     const observer = new MutationObserver(() => {
+                                        if ((Date.now() - observerStartedAt) > MAX_OBSERVER_WINDOW_MS) {
+                                            try { observer.disconnect(); } catch (_) {}
+                                            window.__grokManualPickObserverDisconnected = true;
+                                            queueScrollWithRecheck();
+                                            return;
+                                        }
                                         if (window.__grokManualPickObserverResult) return;
                                         const outcome = tryClickFirstGeneratedTile();
                                         if (outcome) {
@@ -9074,7 +9082,6 @@ class MainWindow(QMainWindow):
                                     observer.observe(document.body || document.documentElement, {
                                         childList: true,
                                         subtree: true,
-                                        attributes: true,
                                     });
                                     window.__grokManualPickObserver = observer;
                                     window.__grokManualPickObserverDisconnected = false;
