@@ -9056,7 +9056,15 @@ class MainWindow(QMainWindow):
                                 }
 
                                 if (!window.__grokManualPickObserver || window.__grokManualPickObserverDisconnected) {
+                                    const observerStartedAt = Date.now();
+                                    const MAX_OBSERVER_WINDOW_MS = 12000;
                                     const observer = new MutationObserver(() => {
+                                        if ((Date.now() - observerStartedAt) > MAX_OBSERVER_WINDOW_MS) {
+                                            try { observer.disconnect(); } catch (_) {}
+                                            window.__grokManualPickObserverDisconnected = true;
+                                            queueScrollWithRecheck();
+                                            return;
+                                        }
                                         if (window.__grokManualPickObserverResult) return;
                                         const outcome = tryClickFirstGeneratedTile();
                                         if (outcome) {
@@ -9074,7 +9082,6 @@ class MainWindow(QMainWindow):
                                     observer.observe(document.body || document.documentElement, {
                                         childList: true,
                                         subtree: true,
-                                        attributes: true,
                                     });
                                     window.__grokManualPickObserver = observer;
                                     window.__grokManualPickObserverDisconnected = false;
@@ -9175,43 +9182,32 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(2500, self._poll_for_manual_image)
                 return
 
-            current_url = self.browser.url().toString().strip() if self.browser is not None else ""
-            current_post_id = self._extract_valid_grok_post_id(current_url)
-            if current_post_id and status in ("callback-empty", "submit-in-flight"):
-                self._append_log(
-                    "WARNING: Variant "
-                    f"{current_variant}: submit callback is empty but current URL is a valid post ({current_post_id}); "
-                    "switching directly to video download polling to prevent submit-stage loop."
-                )
-                self.manual_image_video_submit_sent = True
-                self.manual_image_submit_in_flight = False
-                self.manual_image_submit_in_flight_since = 0.0
-                self.manual_image_submit_retry_count = 0
-                self.pending_manual_download_type = "video"
-                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                return
-
             if status in ("callback-empty", "submit-in-flight"):
-                submit_ready_probe_script = """
-                    (() => {
-                        try {
+                submit_ready_probe_script = f"""
+                    (() => {{
+                        try {{
+                            const submitToken = {self.manual_image_submit_token};
                             const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                             const pathRaw = String((window.location && window.location.pathname) || "");
                             const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
                             const postId = postMatch ? String(postMatch[1] || "") : "";
                             const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                                 && !/^placeholder-/i.test(postId);
-                            const downloadButtonVisible = !![...document.querySelectorAll("button[aria-label='Download']")]
-                                .find((btn) => isVisible(btn) && !btn.disabled);
+                            const buttonDescriptor = (el) => ((el?.getAttribute?.("aria-label") || "") + " " + (el?.getAttribute?.("title") || "") + " " + (el?.textContent || "")).trim();
+                            const downloadButtonVisible = !![...document.querySelectorAll("button, [role='button'], a[download]")]
+                                .find((btn) => isVisible(btn) && !btn.disabled && /download/i.test(buttonDescriptor(btn)));
                             const video = document.querySelector("video");
                             const source = document.querySelector("video source");
                             const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
-                            const hasVideoSource = /^https?:[/][/]/i.test(String(src || "").trim());
+                            const hasVideoSource = /^(https?:[/][/]|blob:)/i.test(String(src || "").trim());
                             const makeVideoVisible = !![...document.querySelectorAll("button")]
                                 .find((btn) => isVisible(btn) && !btn.disabled && /make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                            const generationInProgress = !![...document.querySelectorAll("div, span, p, button")]
+                                .find((el) => isVisible(el) && /\bgenerating\b|\brendering\b|\bcancel\b/i.test((el.textContent || "").trim()));
                             const onPostViewReady = Boolean(validPostId);
-                            const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || !makeVideoVisible));
-                            return {
+                            const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || generationInProgress));
+                            const submitTokenSeen = Number(window.__grokManualImageSubmitToken || 0) === Number(submitToken || 0);
+                            return {{
                                 ok: true,
                                 readyForDownloadPolling,
                                 onPostViewReady,
@@ -9220,11 +9216,13 @@ class MainWindow(QMainWindow):
                                 downloadButtonVisible,
                                 hasVideoSource,
                                 makeVideoVisible,
-                            };
-                        } catch (_) {
-                            return { ok: false, readyForDownloadPolling: false };
-                        }
-                    })()
+                                generationInProgress,
+                                submitTokenSeen,
+                            }};
+                        }} catch (_) {{
+                            return {{ ok: false, readyForDownloadPolling: false, submitTokenSeen: false }};
+                        }}
+                    }})()
                 """
 
                 def _after_submit_ready_probe(probe_result):
@@ -9243,11 +9241,27 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
-                    if isinstance(probe_result, dict) and probe_result.get("onPostViewReady"):
+                    submit_grace_seconds = max(2.0, float(os.getenv("GROK_MANUAL_IMAGE_SUBMIT_GRACE_SECONDS", "12")))
+                    submit_elapsed_seconds = (
+                        max(0.0, time.time() - self.manual_image_submit_in_flight_since)
+                        if self.manual_image_submit_in_flight_since > 0
+                        else submit_grace_seconds
+                    )
+
+                    probe_submit_token_seen = bool(isinstance(probe_result, dict) and probe_result.get("submitTokenSeen"))
+                    current_url = self.browser.url().toString().strip() if self.browser is not None else ""
+                    current_post_id = self._extract_valid_grok_post_id(current_url)
+                    if (
+                        self.manual_image_submit_in_flight
+                        and submit_elapsed_seconds < submit_grace_seconds
+                        and probe_submit_token_seen
+                        and bool(current_post_id)
+                        and status in ("callback-empty", "submit-in-flight")
+                    ):
                         self._append_log(
                             "WARNING: Variant "
-                            f"{current_variant}: submit callback remained empty, but valid post URL is present; "
-                            "moving to download polling to avoid submit-stage deadlock."
+                            f"{current_variant}: submit token confirmed on post URL ({current_post_id}) while callback is '{status}'; "
+                            "switching to download polling instead of waiting for grace timeout."
                         )
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_in_flight = False
@@ -9257,21 +9271,47 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
+                    if self.manual_image_submit_in_flight and submit_elapsed_seconds < submit_grace_seconds:
+                        self._append_log(
+                            f"Variant {current_variant}: submit state unresolved ({status}); waiting {max(0.0, submit_grace_seconds - submit_elapsed_seconds):.1f}s before any re-submit."
+                        )
+                        QTimer.singleShot(1500, self._poll_for_manual_image)
+                        return
+
+                    probe_post_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
+                    on_post_view_ready = probe_post_ready or bool(current_post_id)
+                    if on_post_view_ready and status in ("callback-empty", "submit-in-flight"):
+                        source = "probe" if probe_post_ready else "python-url"
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: submit callback remained '{status}' after grace window on a valid post URL "
+                            f"({source}, post={current_post_id or 'unknown'}); switching to download polling to avoid submit-stage deadlock."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_in_flight = False
+                        self.manual_image_submit_in_flight_since = 0.0
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+
+                    self.manual_image_submit_in_flight = False
+                    self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count += 1
                     if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
                         self._append_log(
                             "WARNING: Variant "
                             f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so continuing image polling instead of forcing download."
+                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed after grace window, so retrying prompt submit."
                         )
                         self.manual_image_submit_retry_count = 0
-                        QTimer.singleShot(2000, self._poll_for_manual_image)
+                        QTimer.singleShot(1200, self._poll_for_manual_image)
                         return
 
                     self._append_log(
-                        f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying..."
+                        f"Variant {current_variant}: video submit stage not ready yet ({status}); rechecking before retry..."
                     )
-                    QTimer.singleShot(3000, self._poll_for_manual_image)
+                    QTimer.singleShot(1500, self._poll_for_manual_image)
 
                 self.browser.page().runJavaScript(submit_ready_probe_script, _after_submit_ready_probe)
                 return
