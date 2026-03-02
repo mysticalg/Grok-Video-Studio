@@ -9192,12 +9192,13 @@ class MainWindow(QMainWindow):
                             const postId = postMatch ? String(postMatch[1] || "") : "";
                             const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                                 && !/^placeholder-/i.test(postId);
-                            const downloadButtonVisible = !![...document.querySelectorAll("button[aria-label='Download']")]
+                            const buttonDescriptor = (el) => ((el?.getAttribute?.("aria-label") || "") + " " + (el?.getAttribute?.("title") || "") + " " + (el?.textContent || "")).trim();
+                            const downloadButtonVisible = !![...document.querySelectorAll("button, [role='button'], a[download]")]
                                 .find((btn) => isVisible(btn) && !btn.disabled);
                             const video = document.querySelector("video");
                             const source = document.querySelector("video source");
                             const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
-                            const hasVideoSource = /^https?:[/][/]/i.test(String(src || "").trim());
+                            const hasVideoSource = /^(https?:[/][/]|blob:)/i.test(String(src || "").trim());
                             const makeVideoVisible = !![...document.querySelectorAll("button")]
                                 .find((btn) => isVisible(btn) && !btn.disabled && /make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
                             const generationInProgress = !![...document.querySelectorAll("div, span, p, button")]
@@ -9249,6 +9250,22 @@ class MainWindow(QMainWindow):
                             f"Variant {current_variant}: submit state unresolved ({status}); waiting {max(0.0, submit_grace_seconds - submit_elapsed_seconds):.1f}s before any re-submit."
                         )
                         QTimer.singleShot(1500, self._poll_for_manual_image)
+                        return
+
+                    on_post_view_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
+                    extended_submit_wait_seconds = submit_grace_seconds * 2.0
+                    if on_post_view_ready and submit_elapsed_seconds >= extended_submit_wait_seconds:
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: submit callback remained '{status}' for {submit_elapsed_seconds:.1f}s on a valid post URL; "
+                            "switching to download polling to avoid submit-stage deadlock."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_in_flight = False
+                        self.manual_image_submit_in_flight_since = 0.0
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
                     self.manual_image_submit_in_flight = False
