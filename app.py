@@ -9194,7 +9194,7 @@ class MainWindow(QMainWindow):
                                 && !/^placeholder-/i.test(postId);
                             const buttonDescriptor = (el) => ((el?.getAttribute?.("aria-label") || "") + " " + (el?.getAttribute?.("title") || "") + " " + (el?.textContent || "")).trim();
                             const downloadButtonVisible = !![...document.querySelectorAll("button, [role='button'], a[download]")]
-                                .find((btn) => isVisible(btn) && !btn.disabled);
+                                .find((btn) => isVisible(btn) && !btn.disabled && /download/i.test(buttonDescriptor(btn)));
                             const video = document.querySelector("video");
                             const source = document.querySelector("video source");
                             const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
@@ -9253,11 +9253,10 @@ class MainWindow(QMainWindow):
                         return
 
                     on_post_view_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
-                    extended_submit_wait_seconds = submit_grace_seconds * 2.0
-                    if on_post_view_ready and submit_elapsed_seconds >= extended_submit_wait_seconds:
+                    if on_post_view_ready and status in ("callback-empty", "submit-in-flight"):
                         self._append_log(
                             "WARNING: Variant "
-                            f"{current_variant}: submit callback remained '{status}' for {submit_elapsed_seconds:.1f}s on a valid post URL; "
+                            f"{current_variant}: submit callback remained '{status}' after grace window on a valid post URL; "
                             "switching to download polling to avoid submit-stage deadlock."
                         )
                         self.manual_image_video_submit_sent = True
