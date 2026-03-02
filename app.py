@@ -96,7 +96,8 @@ THUMBNAILS_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
-MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = 60_000
+MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = max(10_000, int(os.getenv("MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS", "10000")))
+CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS = max(3000, int(os.getenv("CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS", "5000")))
 MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS = max(3, int(os.getenv("MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS", "30")))
 MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS = max(1, int(os.getenv("MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS", "2")))
@@ -2393,6 +2394,22 @@ class AutomationRuntimeWorker(QThread):
         self.log.emit(f"Automation Chrome opened URL: {opened_url}")
         return opened_url
 
+    def run_javascript_in_automation_chrome(self, url: str, script: str) -> Any:
+        target_url = str(url or "").strip()
+        if not target_url:
+            raise ValueError("URL is required")
+        if self.chrome_instance is None:
+            self.start_chrome()
+
+        async def _run_script() -> Any:
+            if self.cdp_controller is None:
+                self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+            page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=True)
+            await page.bring_to_front()
+            return await page.evaluate(script)
+
+        return self._run_coro(_run_script())
+
     def dom_ping(self) -> dict[str, Any]:
         if self.bus is None:
             raise RuntimeError("Control bus is not running")
@@ -2669,6 +2686,8 @@ class MainWindow(QMainWindow):
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
         self.browser_address_bars: dict[QWebEngineView, QLineEdit] = {}
+        self.browser_container_hosts: dict[QWebEngineView, QWidget] = {}
+        self.browser_roles: dict[QWebEngineView, str] = {}
         self.browser_training_worker: BrowserTrainingWorker | None = None
         self.overlay_worker: VideoOverlayWorker | None = None
         self.automation_runtime: AutomationRuntimeWorker | None = None
@@ -2728,9 +2747,12 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
+        self.manual_continue_setup_in_progress = False
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
         self.manual_public_video_url = ""
@@ -2766,6 +2788,7 @@ class MainWindow(QMainWindow):
         self.custom_music_file: Path | None = None
         self.last_update_prompt_ts = 0
         self.cdp_enabled = False
+        self.cdp_use_external_browser = False
         self.external_ai_browser_only = os.getenv("GROK_EXTERNAL_AI_BROWSER_ONLY", "0").strip().lower() not in {"0", "false", "no"}
         self.browser_tab_enabled = {
             "Grok": True,
@@ -3310,7 +3333,7 @@ class MainWindow(QMainWindow):
             if developer_extras_attr is not None:
                 browser_settings.setAttribute(developer_extras_attr, True)
 
-        if self.external_ai_browser_only:
+        if self._is_external_ai_browser_mode_active():
             self.grok_browser_view.setUrl(QUrl("about:blank"))
             self.sora_browser.setUrl(QUrl("about:blank"))
             self.grok_browser_view.setEnabled(False)
@@ -3470,10 +3493,10 @@ class MainWindow(QMainWindow):
         self.video_aspect_ratio.setCurrentIndex(4)
 
         grok_browser_layout.addLayout(grok_browser_controls)
-        grok_browser_layout.addWidget(self._build_browser_container(self.grok_browser_view), 1)
+        grok_browser_layout.addWidget(self._build_browser_container(self.grok_browser_view, role="ai"), 1)
 
         sora_browser_layout.addLayout(sora_browser_controls)
-        sora_browser_layout.addWidget(self._build_browser_container(self.sora_browser), 1)
+        sora_browser_layout.addWidget(self._build_browser_container(self.sora_browser, role="ai"), 1)
 
         self.browser_tabs = QTabWidget()
         self.grok_browser_tab_index = self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
@@ -3689,7 +3712,7 @@ class MainWindow(QMainWindow):
             browser.settings().setAttribute(developer_extras_attr, True)
         browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
-        layout.addWidget(self._build_browser_container(browser), 1)
+        layout.addWidget(self._build_browser_container(browser, role="social"), 1)
 
         self.social_upload_browsers[platform_name] = browser
         self.social_upload_status_labels[platform_name] = status_label
@@ -4693,10 +4716,17 @@ class MainWindow(QMainWindow):
         cdp_disabled_action.triggered.connect(lambda: self._set_cdp_enabled(False))
         cdp_settings_menu.addAction(cdp_disabled_action)
 
+        self.cdp_external_browser_action = QAction("Use External Browser (Grok/Sora Tabs)", self)
+        self.cdp_external_browser_action.setCheckable(True)
+        self.cdp_external_browser_action.toggled.connect(self._set_cdp_external_browser_enabled)
+        cdp_settings_menu.addSeparator()
+        cdp_settings_menu.addAction(self.cdp_external_browser_action)
+
         self.cdp_menu_actions = {
             True: cdp_enabled_action,
             False: cdp_disabled_action,
         }
+        self.cdp_external_browser_action.setChecked(self.cdp_use_external_browser)
         self._set_cdp_enabled(self.cdp_enabled)
 
         view_menu = menu_bar.addMenu("View")
@@ -5168,6 +5198,33 @@ class MainWindow(QMainWindow):
         if hasattr(self, "cdp_menu_actions"):
             self.cdp_menu_actions[True].setEnabled(not self.cdp_enabled)
             self.cdp_menu_actions[False].setEnabled(self.cdp_enabled)
+        self._refresh_ai_browser_mode()
+
+    def _set_cdp_external_browser_enabled(self, enabled: bool) -> None:
+        self.cdp_use_external_browser = bool(enabled)
+        self._refresh_ai_browser_mode()
+
+    def _is_external_ai_browser_mode_active(self) -> bool:
+        return self.external_ai_browser_only or (self.cdp_enabled and self.cdp_use_external_browser)
+
+    def _refresh_ai_browser_mode(self) -> None:
+        if not hasattr(self, "grok_browser_view") or not hasattr(self, "sora_browser"):
+            return
+        if self._is_external_ai_browser_mode_active():
+            self.grok_browser_view.setEnabled(False)
+            self.sora_browser.setEnabled(False)
+            self.grok_browser_view.setUrl(QUrl("about:blank"))
+            self.sora_browser.setUrl(QUrl("about:blank"))
+            self._append_log("Internal Grok/Sora embedded browsers are disabled (external-browser mode enabled).")
+            return
+
+        self.grok_browser_view.setEnabled(True)
+        self.sora_browser.setEnabled(True)
+        if self.grok_browser_view.url().toString().strip() in {"", "about:blank"}:
+            self.grok_browser_view.setUrl(QUrl(GROK_IMAGINE_URL))
+        if self.sora_browser.url().toString().strip() in {"", "about:blank"}:
+            self.sora_browser.setUrl(QUrl(SORA_DRAFTS_URL))
+        self._sync_embedded_browser_container_visibility()
 
     def open_buy_me_a_coffee(self) -> None:
         QDesktopServices.openUrl(QUrl(BUY_ME_A_COFFEE_URL))
@@ -5332,6 +5389,7 @@ class MainWindow(QMainWindow):
             "cdp_social_upload_relay_enabled": self.cdp_social_upload_relay_enabled.isChecked(),
             "cdp_social_upload_relay_url": self.cdp_social_upload_relay_url.text().strip(),
             "cdp_enabled": self.cdp_enabled,
+            "cdp_use_external_browser": self.cdp_use_external_browser,
             "browser_tab_enabled": dict(self.browser_tab_enabled),
             "quick_actions_toolbar_visible": self.quick_actions_toolbar.isVisible(),
             "automation_mode": self.automation_mode.currentData(),
@@ -5526,6 +5584,8 @@ class MainWindow(QMainWindow):
             self.cdp_social_upload_relay_url.setText(str(preferences["cdp_social_upload_relay_url"]))
         if "cdp_enabled" in preferences:
             self._set_cdp_enabled(bool(preferences["cdp_enabled"]))
+        if "cdp_use_external_browser" in preferences:
+            self._set_cdp_external_browser_enabled(bool(preferences["cdp_use_external_browser"]))
         if "browser_tab_enabled" in preferences and isinstance(preferences["browser_tab_enabled"], dict):
             for tab_key, enabled in preferences["browser_tab_enabled"].items():
                 if tab_key in self.browser_tab_enabled:
@@ -6072,6 +6132,7 @@ class MainWindow(QMainWindow):
 
     def _on_automation_mode_changed(self, _index: int) -> None:
         self._sync_social_embedded_browser_state_for_automation_mode(log_change=True)
+        self._sync_embedded_browser_container_visibility()
 
     def _sync_social_embedded_browser_state_for_automation_mode(self, log_change: bool = False) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded").strip().lower()
@@ -6116,7 +6177,7 @@ class MainWindow(QMainWindow):
             self.video_playback_hack_timer.start()
             self._ensure_browser_video_playback()
             if self.continue_from_frame_waiting_for_reload and self.continue_from_frame_active:
-                self.browser.page().runJavaScript(
+                self._run_active_browser_javascript(
                     "(() => ({ href: String((window.location && window.location.href) || '') }))()",
                     self._after_continue_reload_location_check,
                 )
@@ -6289,7 +6350,7 @@ class MainWindow(QMainWindow):
                 )
                 self._playback_hack_success_logged = True
 
-        self.browser.page().runJavaScript(script, after)
+        self._run_active_browser_javascript(script, after)
 
     def _aspect_ratio_from_video_size(self, size: str) -> str:
         mapping = {
@@ -7965,9 +8026,18 @@ class MainWindow(QMainWindow):
                         return null;
                     };
                     const recorderSubmitTarget = findRecorderSubmitTarget();
+                    const explicitCreateVideoButton = [...document.querySelectorAll("button")]
+                        .find((btn) => {
+                            if (!isVisible(btn) || btn.disabled) return false;
+                            const srOnly = clean(btn.querySelector("span.sr-only")?.textContent || "").toLowerCase();
+                            const aria = clean(btn.getAttribute("aria-label")).toLowerCase();
+                            const text = clean(btn.textContent).toLowerCase();
+                            if (/create\s+share\s+link|share\s+link/i.test(`${aria} ${text}`)) return false;
+                            return /create\s+video/.test(srOnly) || /^make\s+video$/.test(aria) || /^make\s+video$/.test(text);
+                        }) || null;
                     try { promptInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
 
-                    const submitTarget = recorderSubmitTarget || primarySubmit;
+                    const submitTarget = explicitCreateVideoButton || recorderSubmitTarget || primarySubmit;
                     const form = (submitTarget && submitTarget.form)
                         || (primarySubmit && primarySubmit.form)
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
@@ -8120,7 +8190,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Manual image variant {variant}: no manual submit detected within {manual_handoff_timeout_ms / 1000:.0f}s; resuming automated submit listener sequence."
                 )
-                self.browser.page().runJavaScript(submit_script, _after_submit)
+                self._run_active_browser_javascript(submit_script, _after_submit)
                 return
 
             check_script = f"""
@@ -8164,7 +8234,7 @@ class MainWindow(QMainWindow):
 
                 QTimer.singleShot(manual_handoff_poll_ms, _poll_for_manual_submit_handoff)
 
-            self.browser.page().runJavaScript(check_script, _after_manual_handoff_check)
+            self._run_active_browser_javascript(check_script, _after_manual_handoff_check)
 
         def _run_submit_attempt() -> None:
             nonlocal submit_attempts, manual_handoff_started_at_ms, manual_handoff_token
@@ -8284,7 +8354,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Manual image variant {variant}: could not arm manual submit handoff ({result!r}); running automated coordinate-click sequence."
                 )
-                self.browser.page().runJavaScript(submit_script, _after_submit)
+                self._run_active_browser_javascript(submit_script, _after_submit)
 
             def _after_dom_refresh(refresh_result):
                 if isinstance(refresh_result, dict) and refresh_result.get("ok"):
@@ -8295,9 +8365,9 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Manual image variant {variant}: DOM refresh probe failed before submit ({refresh_result!r}); continuing."
                     )
-                self.browser.page().runJavaScript(arm_script, _after_arm_manual_handoff)
+                self._run_active_browser_javascript(arm_script, _after_arm_manual_handoff)
 
-            self.browser.page().runJavaScript(dom_refresh_script, _after_dom_refresh)
+            self._run_active_browser_javascript(dom_refresh_script, _after_dom_refresh)
 
         def _after_submit(result):
             if isinstance(result, dict):
@@ -8362,7 +8432,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Manual image variant {variant}: video option selection is disabled; entering prompt and submitting without resolution/duration/aspect changes."
                 )
-                QTimer.singleShot(max(50, action_delay_ms), lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+                QTimer.singleShot(max(50, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
                 return
 
             self._append_log(
@@ -8387,7 +8457,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Manual image variant {variant}: staged option flow complete; moving to prompt population."
                     )
-                    QTimer.singleShot(step_pause_ms, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+                    QTimer.singleShot(step_pause_ms, lambda: self._run_active_browser_javascript(populate_script, _after_populate))
                     return
 
                 step_name, label = option_steps[step_index]
@@ -8407,9 +8477,9 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(step_pause_ms, lambda: _run_option_step(step_index + 1))
 
                 def _after_open(_open_result):
-                    self.browser.page().runJavaScript(step_script, _after_step)
+                    self._run_active_browser_javascript(step_script, _after_step)
 
-                self.browser.page().runJavaScript(open_options_script, _after_open)
+                self._run_active_browser_javascript(open_options_script, _after_open)
 
             QTimer.singleShot(step_pause_ms, lambda: _run_option_step(0))
 
@@ -8447,15 +8517,15 @@ class MainWindow(QMainWindow):
                     return
                 _retry_variant(f"enter key dispatch failed: {result!r}")
 
-            self.browser.page().runJavaScript(enter_script, _after_enter)
+            self._run_active_browser_javascript(enter_script, _after_enter)
 
         if disable_video_option_selection:
             self._append_log(
                 f"Manual image variant {variant}: skipping image/video option scripts and proceeding directly to prompt fill + submit."
             )
-            QTimer.singleShot(max(50, action_delay_ms), lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+            QTimer.singleShot(max(50, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
         else:
-            self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
+            self._run_active_browser_javascript(set_image_mode_script, _after_set_mode)
 
     def _set_manual_post_submit_idle_window(self) -> int:
         idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 12000))
@@ -8744,7 +8814,7 @@ class MainWindow(QMainWindow):
                     return {{ ok: false, status: "submit-in-flight" }};
                 }}
 
-                if (window.__grokManualImageSubmitToken === submitToken) {{
+                if (window.__grokManualVideoSubmitToken === submitToken) {{
                     return {{ ok: true, status: "video-submit-already-clicked" }};
                 }}
 
@@ -8753,13 +8823,21 @@ class MainWindow(QMainWindow):
                     "input[placeholder*='Type to customize video' i]",
                     "textarea[placeholder*='Type to imagine' i]",
                     "input[placeholder*='Type to imagine' i]",
+                    "textarea[aria-label*='Make a video' i]",
+                    "input[aria-label*='Make a video' i]",
                     "div.tiptap.ProseMirror[contenteditable='true']",
                     "[contenteditable='true'][aria-label*='Type to customize video' i]",
                     "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                    "[contenteditable='true'][aria-label*='Make a video' i]",
                     "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
                     "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                    "[contenteditable='true'][data-placeholder*='Customize video' i]",
                 ];
-                const promptInput = promptSelectors.map((sel) => document.querySelector(sel)).find(Boolean);
+                const promptCandidates = promptSelectors
+                    .flatMap((sel) => [...document.querySelectorAll(sel)])
+                    .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                    .filter((el) => isVisible(el) && !el.disabled);
+                const promptInput = promptCandidates[0] || null;
                 if (!promptInput) return {{ ok: false, status: "image-clicked-waiting-prompt-input" }};
 
                 promptInput.focus();
@@ -8784,33 +8862,82 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                let enterDispatched = false;
-                const enterEventCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                await sleep(ACTION_DELAY_MS);
+                const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
+                const scoreSubmit = (btn, index) => {{
+                    if (!isVisible(btn) || btn.disabled) return Number.MAX_SAFE_INTEGER;
+                    const aria = String(btn.getAttribute("aria-label") || "").trim();
+                    const txt = String(btn.textContent || "").trim();
+                    const raw = `${{aria}} ${{txt}}`.trim().toLowerCase();
+                    const hasArrowIcon = !!btn.querySelector("svg");
+                    let score = index * 25;
 
-                const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video|send|generate|create/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                    if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) score += 5000;
+                    if (/^make\\s+video$/i.test(aria) || /^make\\s+video$/i.test(txt)) score -= 4000;
+                    if (/submit|send|generate|make\\s+video/i.test(raw)) score -= 500;
+                    if (/\\bcreate\\b/i.test(raw) && !/make\\s+video/i.test(raw)) score += 300;
+                    if (hasArrowIcon) score -= 120;
 
-                let submitted = false;
-                let submitLabel = "enter-key";
-                if (submitButton) {{
-                    await sleep(ACTION_DELAY_MS);
-                    submitted = emulateClick(submitButton);
-                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || submitLabel;
-                }} else if (enterDispatched) {{
-                    submitted = true;
+                    if (promptRect && typeof btn.getBoundingClientRect === "function") {{
+                        const rect = btn.getBoundingClientRect();
+                        const cx = rect.left + rect.width / 2;
+                        const cy = rect.top + rect.height / 2;
+                        const pCx = promptRect.left + promptRect.width / 2;
+                        const pCy = promptRect.top + promptRect.height / 2;
+                        score += Math.hypot(cx - pCx, cy - pCy);
+                        if (cx > pCx) score -= 60;
+                    }}
+                    return score;
+                }};
+
+                const explicitMakeVideoButton = [...document.querySelectorAll("button[aria-label='Make video'], button[aria-label='make video']")]
+                    .find((btn) => isVisible(btn) && !btn.disabled);
+
+                const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
+                    .filter((btn) => isVisible(btn) && !btn.disabled)
+                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"))
+                    .filter((btn) => !/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(`${{btn.getAttribute("aria-label") || ""}} ${{btn.textContent || ""}}`));
+                let submitButton = explicitMakeVideoButton || null;
+                let submitScore = explicitMakeVideoButton ? -99999 : Number.MAX_SAFE_INTEGER;
+                if (!submitButton) {{
+                    submitCandidates.forEach((btn, idx) => {{
+                        const score = scoreSubmit(btn, idx);
+                        if (score < submitScore) {{
+                            submitScore = score;
+                            submitButton = btn;
+                        }}
+                    }});
                 }}
 
-                if (submitted) window.__grokManualImageSubmitToken = submitToken;
+                let submitted = false;
+                let submitLabel = "";
+                if (submitButton && submitScore < Number.MAX_SAFE_INTEGER) {{
+                    await sleep(ACTION_DELAY_MS);
+                    submitted = emulateClick(submitButton);
+                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "submit-button";
+                }}
+
+                let enterDispatched = false;
+                if (!submitted) {{
+                    const enterEventCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
+                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                    await sleep(ACTION_DELAY_MS);
+                    submitted = enterDispatched;
+                    submitLabel = submitLabel || "enter-key";
+                }}
+
+                const postUrlNow = String((window.location && window.location.href) || "");
+                const onPostUrlNow = /\\/imagine\\/post\\//i.test(postUrlNow);
+                if (submitted) window.__grokManualVideoSubmitToken = submitToken;
                 return {{
                     ok: submitted,
                     status: submitted ? "video-submit-clicked" : "submit-click-failed",
                     buttonLabel: submitLabel,
                     enterDispatched,
                     filledLength: typedValue.length,
+                    onPostUrlNow,
+                    submitScore,
                 }};
             }})()
         """
@@ -8834,7 +8961,7 @@ class MainWindow(QMainWindow):
                                 f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
                             )
                     self.manual_image_pick_clicked = True
-                    self.browser.page().runJavaScript("""
+                    self._run_active_browser_javascript("""
                         (() => {
                             try {
                                 if (window.__grokManualPickObserver) {
@@ -8881,7 +9008,7 @@ class MainWindow(QMainWindow):
 
                     if not self.manual_image_video_submit_sent:
                         self._append_log(f"Variant {current_variant}: {message}.")
-                    self.browser.page().runJavaScript("""
+                    self._run_active_browser_javascript("""
                         (() => {
                             try {
                                 if (window.__grokManualPickObserver) {
@@ -9097,7 +9224,7 @@ class MainWindow(QMainWindow):
                             }
                         })()
                     """
-                    self.browser.page().runJavaScript(scroll_to_bottom_script)
+                    self._run_active_browser_javascript(scroll_to_bottom_script)
                     QTimer.singleShot(3000, self._poll_for_manual_image)
 
                 if status == "callback-empty":
@@ -9156,7 +9283,7 @@ class MainWindow(QMainWindow):
                             return
                         _queue_pick_retry(status)
 
-                    self.browser.page().runJavaScript(pick_ready_probe_script, _after_pick_ready_probe)
+                    self._run_active_browser_javascript(pick_ready_probe_script, _after_pick_ready_probe)
                     return
 
                 _queue_pick_retry(status)
@@ -9206,7 +9333,7 @@ class MainWindow(QMainWindow):
                                 .find((el) => isVisible(el) && /\bgenerating\b|\brendering\b|\bcancel\b/i.test((el.textContent || "").trim()));
                             const onPostViewReady = Boolean(validPostId);
                             const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || generationInProgress));
-                            const submitTokenSeen = Number(window.__grokManualImageSubmitToken || 0) === Number(submitToken || 0);
+                            const submitTokenSeen = Number(window.__grokManualVideoSubmitToken || 0) === Number(submitToken || 0);
                             return {{
                                 ok: true,
                                 readyForDownloadPolling,
@@ -9313,7 +9440,7 @@ class MainWindow(QMainWindow):
                     )
                     QTimer.singleShot(1500, self._poll_for_manual_image)
 
-                self.browser.page().runJavaScript(submit_ready_probe_script, _after_submit_ready_probe)
+                self._run_active_browser_javascript(submit_ready_probe_script, _after_submit_ready_probe)
                 return
 
             if status not in ("callback-empty", "submit-in-flight"):
@@ -9336,7 +9463,7 @@ class MainWindow(QMainWindow):
             )
             QTimer.singleShot(3000, self._poll_for_manual_image)
 
-        self.browser.page().runJavaScript(script, _after_poll)
+        self._run_active_browser_javascript(script, _after_poll)
         if phase == "submit" and submit_attempt_allowed:
             self.manual_image_submit_in_flight = True
             self.manual_image_submit_in_flight_since = time.time()
@@ -9994,12 +10121,19 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("button[type='submit'][aria-label='Submit']"),
                         ...document.querySelectorAll("button[type='submit']"),
                         ...document.querySelectorAll("main button.group[aria-label='Submit']"),
+                        ...document.querySelectorAll("button:has(span.sr-only)"),
                     ]
                         .filter((el, idx, arr) => arr.indexOf(el) === idx)
                         .filter((el) => isVisible(el) && !el.disabled && !isMenuToggle(el));
-                    const primarySubmit = submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit")
-                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)))
-                        || submitButtons[0]
+                    const isShareLinkButton = (el) => /create\s+share\s+link|share\s+link|copy\s+link/i.test(
+                        `${clean(el?.getAttribute("aria-label"))} ${clean(el?.textContent)}`
+                    );
+                    const hasCreateVideoSrOnly = (el) => /create\s+video/i.test(clean(el?.querySelector("span.sr-only")?.textContent || ""));
+                    const primarySubmit = submitButtons.find((el) => hasCreateVideoSrOnly(el) && !isShareLinkButton(el))
+                        || submitButtons.find((el) => /^make\s+video$/i.test(clean(el.getAttribute("aria-label"))) && !isShareLinkButton(el))
+                        || submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit" && !isShareLinkButton(el))
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)) && !isShareLinkButton(el))
+                        || submitButtons.find((el) => !isShareLinkButton(el))
                         || null;
 
                     const recorderSelectors = [
@@ -10025,9 +10159,18 @@ class MainWindow(QMainWindow):
                         return null;
                     };
                     const recorderSubmitTarget = findRecorderSubmitTarget();
+                    const explicitCreateVideoButton = [...document.querySelectorAll("button")]
+                        .find((btn) => {
+                            if (!isVisible(btn) || btn.disabled) return false;
+                            const srOnly = clean(btn.querySelector("span.sr-only")?.textContent || "").toLowerCase();
+                            const aria = clean(btn.getAttribute("aria-label")).toLowerCase();
+                            const text = clean(btn.textContent).toLowerCase();
+                            if (/create\s+share\s+link|share\s+link|copy\s+link/i.test(`${aria} ${text}`)) return false;
+                            return /create\s+video/.test(srOnly) || /^make\s+video$/.test(aria) || /^make\s+video$/.test(text);
+                        }) || null;
                     try { promptInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
 
-                    const submitTarget = recorderSubmitTarget || primarySubmit;
+                    const submitTarget = explicitCreateVideoButton || recorderSubmitTarget || primarySubmit;
                     const form = (submitTarget && submitTarget.form)
                         || (primarySubmit && primarySubmit.form)
                         || (promptInput && typeof promptInput.closest === "function" ? promptInput.closest("form") : null)
@@ -10178,7 +10321,7 @@ class MainWindow(QMainWindow):
                         if (tag !== "button") return false;
                         const aria = clean(el.getAttribute("aria-label"));
                         const txt = clean(el.textContent);
-                        if (!/^make\s+video$/i.test(aria || txt)) return false;
+                        if (!/^make\\s+video$/i.test(aria || txt)) return false;
                         const role = clean(el.getAttribute("role")).toLowerCase();
                         if (role === "menuitem" || role === "menuitemradio") return false;
                         return true;
@@ -10257,7 +10400,7 @@ class MainWindow(QMainWindow):
 
         def _run_flow_submit() -> None:
             self._append_log(f"Variant {variant}: submitting after prompt population delay.")
-            self.browser.page().runJavaScript(submit_script, _after_final_submit)
+            self._run_active_browser_javascript(submit_script, _after_final_submit)
 
         def _after_final_submit(submit_result):
             if not isinstance(submit_result, dict) or not submit_result.get("ok"):
@@ -10269,6 +10412,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
+            self.manual_continue_setup_in_progress = False
             self._trigger_browser_video_download(variant)
 
         def _click_make_video_after_prompt() -> None:
@@ -10284,13 +10428,14 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Variant {variant}: 'Make Video' selection attempted; polling for download readiness without extra submit clicks."
                 )
+                self.manual_continue_setup_in_progress = False
                 self._trigger_browser_video_download(variant, allow_make_video_click=False)
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking type option 'Make Video'.")
-                self.browser.page().runJavaScript(step_script, _after_step)
+                self._run_active_browser_javascript(step_script, _after_step)
 
-            self.browser.page().runJavaScript(open_options_script, _after_open)
+            self._run_active_browser_javascript(open_options_script, _after_open)
 
         def _populate_prompt_then_submit() -> None:
             self._append_log(f"Variant {variant}: entering prompt text now.")
@@ -10302,11 +10447,74 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
-                use_enter_submit = True
-                if use_enter_submit:
-                    enter_script = r"""
+                if continue_last_video_mode:
+                    submit_guard_token = json.dumps(f"continue-last-video-submit-variant-{variant}")
+                    make_video_click_script = r"""
                         (() => {
                             try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const clean = (v) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
+                                const submitGuardToken = __SUBMIT_GUARD_TOKEN__;
+                                if (window.__grokContinueSubmitGuardToken === submitGuardToken) {
+                                    return { ok: true, guarded: true, status: "already-clicked" };
+                                }
+                                const candidates = [...document.querySelectorAll("button")]
+                                    .filter((btn) => isVisible(btn) && !btn.disabled);
+                                const target = candidates.find((btn) => {
+                                    const aria = clean(btn.getAttribute("aria-label"));
+                                    const text = clean(btn.textContent);
+                                    const sr = clean(btn.querySelector("span.sr-only")?.textContent || "");
+                                    if (/create\s+share\s+link|share\s+link|copy\s+link/.test(`${aria} ${text} ${sr}`)) return false;
+                                    return /^make\s+video$/.test(aria) || /^make\s+video$/.test(text) || /create\s+video/.test(sr);
+                                }) || null;
+                                if (!target) return { ok: false, error: "make-video-button-not-found" };
+
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                try { target.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                                target.dispatchEvent(new MouseEvent("mousedown", common));
+                                try { target.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                                target.dispatchEvent(new MouseEvent("mouseup", common));
+                                target.dispatchEvent(new MouseEvent("click", common));
+                                try { target.click(); } catch (_) {}
+                                window.__grokContinueSubmitGuardToken = submitGuardToken;
+                                return { ok: true, guarded: false, status: "clicked", label: (target.getAttribute("aria-label") || target.textContent || "").trim() };
+                            } catch (err) {
+                                return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                            }
+                        })()
+                    """
+
+                    def _after_make_video_click(click_result):
+                        if isinstance(click_result, dict) and click_result.get("ok"):
+                            if click_result.get("guarded"):
+                                self._append_log(
+                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate Make Video click; proceeding with download polling."
+                                )
+                            else:
+                                detail = click_result.get("label") or "Make video"
+                                self._append_log(
+                                    f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
+                                )
+                            self.manual_continue_setup_in_progress = False
+                            QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            return
+
+                        self._append_log(
+                            f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
+                        )
+                        self.manual_continue_setup_in_progress = False
+                        QTimer.singleShot(700, _run_flow_submit)
+
+                    self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
+                    return
+
+                use_enter_submit = True
+                if use_enter_submit:
+                    enter_script = f"""
+                        (() => {{
+                            try {{
+                                const continueLastVideoMode = {'true' if continue_last_video_mode else 'false'};
+                                const submitGuardToken = {json.dumps(f"variant-{variant}")};
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                                 const selectors = [
                                     "textarea[placeholder*='Type to imagine' i]",
@@ -10324,31 +10532,38 @@ class MainWindow(QMainWindow):
                                 const promptInput = selectors
                                     .flatMap((selector) => [...document.querySelectorAll(selector)])
                                     .find((el) => isVisible(el));
-                                if (!promptInput) return { ok: false, error: "prompt-input-not-found-for-enter" };
-                                try { promptInput.focus({ preventScroll: true }); } catch (_) {}
-                                const common = { bubbles: true, cancelable: true, composed: true };
+                                if (!promptInput) return {{ ok: false, error: "prompt-input-not-found-for-enter" }};
+
+                                if (continueLastVideoMode && window.__grokContinueSubmitGuardToken === submitGuardToken) {{
+                                    return {{ ok: true, enterDispatched: false, formSubmitted: false, guarded: true }};
+                                }}
+
+                                try {{ promptInput.focus({{ preventScroll: true }}); }} catch (_) {{}}
+                                const common = {{ bubbles: true, cancelable: true, composed: true }};
                                 let enterDispatched = false;
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
+                                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", ...common }})); enterDispatched = true; }} catch (_) {{}}
 
-                                // Fallback for forms that ignore synthetic keyboard events.
+                                // For continue-last-video mode, avoid additional synthetic key events that can trigger duplicate submits.
                                 let formSubmitted = false;
-                                if (!enterDispatched) {
+                                if (!enterDispatched && !continueLastVideoMode) {{
                                     const form = typeof promptInput.closest === "function" ? promptInput.closest("form") : null;
-                                    if (form) {
-                                        try { if (typeof form.requestSubmit === "function") { form.requestSubmit(); formSubmitted = true; } } catch (_) {}
-                                        if (!formSubmitted) {
-                                            try { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); formSubmitted = true; } catch (_) {}
-                                        }
-                                    }
-                                }
+                                    if (form) {{
+                                        try {{ if (typeof form.requestSubmit === "function") {{ form.requestSubmit(); formSubmitted = true; }} }} catch (_) {{}}
+                                        if (!formSubmitted) {{
+                                            try {{ form.dispatchEvent(new Event("submit", {{ bubbles: true, cancelable: true }})); formSubmitted = true; }} catch (_) {{}}
+                                        }}
+                                    }}
+                                }}
 
-                                return { ok: enterDispatched || formSubmitted, enterDispatched, formSubmitted };
-                            } catch (err) {
-                                return { ok: false, error: String(err && err.stack ? err.stack : err) };
-                            }
-                        })()
+                                if (continueLastVideoMode && (enterDispatched || formSubmitted)) {{
+                                    window.__grokContinueSubmitGuardToken = submitGuardToken;
+                                }}
+
+                                return {{ ok: enterDispatched || formSubmitted, enterDispatched, formSubmitted, guarded: false }};
+                            }} catch (err) {{
+                                return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                            }}
+                        }})()
                     """
 
                     def _after_enter_press(enter_result):
@@ -10358,25 +10573,33 @@ class MainWindow(QMainWindow):
                             )
                         flow_label = "Sora" if is_sora_manual_flow else ("continue-last-video" if continue_last_video_mode else "standard")
                         if isinstance(enter_result, dict) and enter_result.get("ok"):
-                            self._append_log(
-                                f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
-                            )
+                            if enter_result.get("guarded"):
+                                self._append_log(
+                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate Enter-submit; proceeding with download polling."
+                                )
+                            else:
+                                self._append_log(
+                                    f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
+                                )
+                            self.manual_continue_setup_in_progress = False
                             QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
                         )
+                        self.manual_continue_setup_in_progress = False
                         QTimer.singleShot(700, _run_flow_submit)
 
-                    self.browser.page().runJavaScript(enter_script, _after_enter_press)
+                    self._run_active_browser_javascript(enter_script, _after_enter_press)
                     return
 
                 QTimer.singleShot(2000, _run_flow_submit)
 
-            self.browser.page().runJavaScript(script, _after_prompt_populate)
+            self._run_active_browser_javascript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+        self.manual_continue_setup_in_progress = bool(continue_last_video_mode)
         if is_sora_manual_flow:
             option_steps = []
             self._append_log(
@@ -10384,13 +10607,13 @@ class MainWindow(QMainWindow):
             )
         elif continue_last_video_mode:
             option_steps = [
-                ("type", "Make Video"),
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
                 ("ratio", selected_aspect_ratio),
+                ("type", "Make Video"),
             ]
             self._append_log(
-                f"Variant {variant}: continue-last-video mode detected; applying 'Make Video' first, then resolution, duration, and aspect ratio before prompt entry."
+                f"Variant {variant}: continue-last-video mode detected; applying resolution, duration, and aspect ratio first, then 'Make Video' last before prompt entry."
             )
         else:
             option_steps = [
@@ -10422,9 +10645,9 @@ class MainWindow(QMainWindow):
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
-                self.browser.page().runJavaScript(step_script, _after_step)
+                self._run_active_browser_javascript(step_script, _after_step)
 
-            self.browser.page().runJavaScript(open_options_script, _after_open)
+            self._run_active_browser_javascript(open_options_script, _after_open)
 
         def _open_options_then_steps() -> None:
             if not option_steps:
@@ -10448,10 +10671,15 @@ class MainWindow(QMainWindow):
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
                 QTimer.singleShot(2000, _open_options_then_steps)
 
-        self.browser.page().runJavaScript(
+        self._run_active_browser_javascript(
             "(() => ({ href: String((window.location && window.location.href) || '') }))()",
             _after_location_check,
         )
+
+    def _manual_download_poll_interval_ms(self) -> int:
+        if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
+            return CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS
+        return MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
@@ -10467,13 +10695,15 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
         self._append_log(
-            f"Variant {variant}: manual download attempts are rate-limited to every {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000} seconds."
+            f"Variant {variant}: manual download attempts are rate-limited to every {self._manual_download_poll_interval_ms() // 1000} seconds."
         )
         self.manual_download_poll_timer.start(0)
 
@@ -10493,11 +10723,13 @@ class MainWindow(QMainWindow):
             self.manual_download_request_pending = False
             self.manual_video_start_click_sent = False
             self.manual_video_make_click_fallback_used = False
+            self.manual_make_video_awaiting_progress_count = 0
             self.manual_video_allow_make_click = True
             self.manual_download_in_progress = False
             self.manual_download_started_at = None
             self.manual_download_deadline = None
             self.manual_refresh_after_generating_sent = False
+            self.manual_refresh_after_progress_100_sent = False
             self.manual_public_video_url = ""
             self.manual_download_attempt_count = 0
             self.manual_download_poll_attempt_count = 0
@@ -10512,7 +10744,8 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_prompt = ""
             return
 
-        allow_make_video_click = "true" if (self.manual_video_allow_make_click and not self.manual_video_start_click_sent) else "false"
+        setup_in_progress = bool(getattr(self, "manual_continue_setup_in_progress", False))
+        allow_make_video_click = "true" if (self.manual_video_allow_make_click and not self.manual_video_start_click_sent and not setup_in_progress) else "false"
         script = f"""
             (() => {{
                 const allowMakeVideoClick = {allow_make_video_click};
@@ -10544,10 +10777,17 @@ class MainWindow(QMainWindow):
                         return /^\\d{{1,3}}%$/.test(normalized);
                     }});
                 if (percentNode) {{
+                    window.__grokManualDownloadClicked = false;
                     return {{
                         status: "progress",
                         progressText: normalizeProgressText(percentNode.textContent || ""),
                     }};
+                }}
+
+                const moderationIcon = [...document.querySelectorAll("svg.lucide-eye-off, svg[class*='lucide-eye-off'], svg.lucide.lucide-eye-off")]
+                    .find((el) => isVisible(el));
+                if (moderationIcon) {{
+                    return {{ status: "moderated-content-detected" }};
                 }}
 
                 const generatingIndicator = [...document.querySelectorAll("span")]
@@ -10559,6 +10799,7 @@ class MainWindow(QMainWindow):
                         return /animate-pulse/.test(cls) || /font-semibold/.test(cls);
                     }});
                 if (generatingIndicator) {{
+                    window.__grokManualDownloadClicked = false;
                     return {{ status: "generating-indicator-visible", progressText: "Generating" }};
                 }}
 
@@ -10703,6 +10944,7 @@ class MainWindow(QMainWindow):
                 }}
 
                 if (makeVideoButton) {{
+                    window.__grokManualDownloadClicked = false;
                     const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
                     if (allowMakeVideoClick) {{
                         return {{
@@ -10741,6 +10983,7 @@ class MainWindow(QMainWindow):
                     return {{
                         status: "download-visible",
                         directUrl,
+                        clickedNow: false,
                     }};
                 }}
 
@@ -10767,32 +11010,11 @@ class MainWindow(QMainWindow):
             if current_variant is None:
                 return
 
-            try:
-                active_url = str(self.browser.url().toString() or "").strip()
-            except Exception:
-                active_url = ""
-            post_derived_public_url = _public_video_url_from_post_url(active_url)
-            if post_derived_public_url:
-                self.manual_public_video_url = post_derived_public_url
-                if self.manual_download_poll_attempt_count <= 2:
-                    self._append_log(
-                        f"Variant {current_variant}: derived public video URL from post id for probing: {post_derived_public_url}"
-                    )
-            if active_url and _looks_like_public_video_url(active_url):
-                self.manual_public_video_url = _ensure_public_download_query(active_url)
-
             if not isinstance(result, dict):
-                if self.manual_public_video_url:
-                    self._append_log(
-                        f"Variant {current_variant}: poll returned no structured page state; probing known public URL directly."
-                    )
-                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
-                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
-                else:
-                    self._append_log(
-                        f"Variant {current_variant}: poll returned no structured page state and no public video URL is known yet; waiting for direct URL signal."
-                    )
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self._append_log(
+                    f"Variant {current_variant}: poll returned no structured page state; waiting for render/download controls."
+                )
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             status = result.get("status", "waiting")
@@ -10818,6 +11040,7 @@ class MainWindow(QMainWindow):
                     )
                 self.manual_generating_indicator_seen = True
                 self.manual_refresh_after_generating_sent = False
+                self.manual_refresh_after_progress_100_sent = False
             elif was_generating:
                 self.manual_generating_indicator_seen = False
                 self._append_log(
@@ -10835,124 +11058,148 @@ class MainWindow(QMainWindow):
                     self.manual_download_poll_timer.start(3000)
                     return
 
+            if status == "moderated-content-detected":
+                self._append_log(
+                    f"Variant {current_variant}: moderation indicator detected (eye-off icon). Aborting this flow and returning to homepage."
+                )
+                self.pending_manual_variant_for_download = None
+                self.pending_manual_download_type = None
+                self.manual_download_click_sent = False
+                self.manual_download_request_pending = False
+                self.manual_download_in_progress = False
+                self.manual_download_started_at = None
+                self.manual_download_deadline = None
+                self.manual_video_start_click_sent = False
+                self.manual_video_make_click_fallback_used = False
+                self.manual_make_video_awaiting_progress_count = 0
+                self.manual_video_allow_make_click = True
+                self.continue_from_frame_active = False
+                QTimer.singleShot(0, self.show_browser_page)
+                return
+
             if status == "progress":
+                self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
+                progress_done = progress_text in {"100%", "100"}
+                if progress_done and not self.manual_refresh_after_progress_100_sent:
+                    self.manual_refresh_after_progress_100_sent = True
+                    self._append_log(
+                        f"Variant {current_variant}: render reached 100%; refreshing page before download detection."
+                    )
+                    try:
+                        self.browser.reload()
+                    except Exception:
+                        pass
+                    self.manual_download_poll_timer.start(3000)
+                    return
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "generating-indicator-visible":
+                self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_refresh_after_progress_100_sent = False
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "make-video-clicked":
+                self.manual_make_video_awaiting_progress_count = 0
                 label = (result.get("buttonLabel") or "Make video").strip()
                 self._append_log(f"Variant {current_variant}: clicked '{label}' to start video generation.")
                 self.manual_video_start_click_sent = True
                 self.manual_video_make_click_fallback_used = True
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "make-video-awaiting-progress":
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_make_video_awaiting_progress_count = int(getattr(self, "manual_make_video_awaiting_progress_count", 0)) + 1
+                if bool(getattr(self, "manual_continue_setup_in_progress", False)):
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                    return
+                if self.manual_make_video_awaiting_progress_count >= 2 and not self.manual_video_make_click_fallback_used:
+                    self._append_log(
+                        f"Variant {current_variant}: still waiting for render progress while 'Make video' is visible; retrying explicit click fallback."
+                    )
+                    self.manual_video_start_click_sent = False
+                    self.manual_video_allow_make_click = True
+                    self.manual_download_poll_timer.start(1200)
+                    return
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "make-video-visible":
                 self._append_log(f"Variant {current_variant}: '{result.get('buttonLabel') or 'Make video'}' is visible but click did not register; retrying.")
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
                 self.manual_video_start_click_sent = True
-                if self.manual_public_video_url:
-                    self._append_log(
-                        f"Variant {current_variant}: status={status}; probing known public URL directly."
-                    )
-                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
-                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
-                else:
-                    self._append_log(
-                        f"Variant {current_variant}: status={status}; waiting for public video URL to appear."
-                    )
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self._append_log(
+                    f"Variant {current_variant}: status={status}; waiting for download control readiness."
+                )
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status in ("download-clicked", "download-visible"):
                 self.manual_download_attempt_count += 1
-                direct_url = (result.get("directUrl") or "").strip()
-                self._append_log(
-                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL extraction (manual browser download bypass enabled)."
-                )
-
-                if direct_url:
-                    self.manual_public_video_url = _ensure_public_download_query(direct_url)
-                    self._append_log(
-                        f"Variant {current_variant}: found direct video URL from Download control; downloading without browser click."
-                    )
-                    if self._start_manual_direct_download(current_variant, direct_url):
-                        self.manual_download_click_sent = True
-                        self.manual_download_in_progress = True
-                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                if status == "download-clicked":
+                    self.manual_download_click_sent = True
+                    self.manual_download_in_progress = True
+                else:
+                    self.manual_download_click_sent = False
+                    self.manual_download_in_progress = False
+                direct_url = str(result.get("directUrl") or "").strip()
+                if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
+                    self.manual_public_video_url = direct_url
+                    if self.manual_download_attempt_count >= 2:
+                        self._append_log(
+                            f"Variant {current_variant}: download control is visible but browser download event is still pending; polling the public URL directly (attempt #{self.manual_download_attempt_count})."
+                        )
+                        if self._start_manual_direct_download(current_variant, direct_url):
+                            self.manual_download_click_sent = True
                         return
-
-                if self.manual_public_video_url:
-                    self._append_log(
-                        f"Variant {current_variant}: Download control is visible; probing known public URL directly."
-                    )
-                    if self._start_manual_direct_download(current_variant, self.manual_public_video_url):
-                        self.manual_download_click_sent = True
-                        self.manual_download_in_progress = True
-                        self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
-                        return
-
                 self._append_log(
-                    f"Variant {current_variant}: Download control is visible but no public direct URL is known yet; waiting for URL discovery."
+                    f"Variant {current_variant}: download control is visible; waiting for public URL detection (attempt #{self.manual_download_attempt_count})."
                 )
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
-                return
-
-            src = result.get("src") or ""
-            if status == "video-buffering":
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
-                return
-
-            min_wait_elapsed = self.manual_download_started_at is not None and (time.time() - self.manual_download_started_at) >= 8
-            if status not in ("video-src-ready", "direct-url-ready") or not src or not min_wait_elapsed:
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "direct-url-ready":
                 self.manual_download_attempt_count += 1
-                self.manual_public_video_url = _ensure_public_download_query(src)
-                self._append_log(
-                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL detection."
-                )
-                if self.manual_download_request_pending:
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                direct_url = str(result.get("src") or "").strip()
+                if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
+                    self.manual_public_video_url = direct_url
+                    self._append_log(
+                        f"Variant {current_variant}: direct URL detected; polling/fetching the public URL directly (attempt #{self.manual_download_attempt_count})."
+                    )
+                    if self._start_manual_direct_download(current_variant, direct_url):
+                        self.manual_download_click_sent = True
                     return
-                source_type = result.get("sourceType") or "video-link"
-                self._append_log(f"Variant {current_variant} ready; downloading directly from detected video URL ({source_type}).")
-                if self._start_manual_direct_download(current_variant, src):
-                    self.manual_download_click_sent = True
-                    self.manual_download_in_progress = True
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+
+                fallback_source_url = str(self.manual_public_video_url or "").strip()
+                if fallback_source_url and re.match(r"^https?://", fallback_source_url, re.IGNORECASE):
+                    self._append_log(
+                        f"Variant {current_variant}: direct URL status reported without a fresh URL; retrying public URL polling via last known source (attempt #{self.manual_download_attempt_count})."
+                    )
+                    if self._start_manual_direct_download(current_variant, fallback_source_url):
+                        self.manual_download_click_sent = True
+                    return
+
+                self._append_log(
+                    f"Variant {current_variant}: direct URL status reported without usable URL; waiting for next public URL probe (attempt #{self.manual_download_attempt_count})."
+                )
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
-            if not self.manual_download_click_sent:
-                self.manual_download_attempt_count += 1
-                self.manual_public_video_url = _ensure_public_download_query(src)
-                self._append_log(
-                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via video source URL direct download (manual browser download bypass enabled)."
-                )
-                if self._start_manual_direct_download(current_variant, src):
-                    self.manual_download_click_sent = True
-                    self.manual_download_in_progress = True
+            if status == "video-buffering":
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                return
 
-            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
 
-        self.browser.page().runJavaScript(script, after_poll)
+        self._run_active_browser_javascript(script, after_poll)
 
 
     def _remove_file_best_effort(self, file_path: Path, context: str) -> None:
@@ -11122,7 +11369,7 @@ class MainWindow(QMainWindow):
 
         self.multi_video_poll_in_flight = True
         try:
-            self.browser.page().runJavaScript(script, _after_probe)
+            self._run_active_browser_javascript(script, _after_probe)
         except Exception as exc:
             self.multi_video_poll_in_flight = False
             self._append_log(f"WARNING: Multi Video probe script failed: {exc}")
@@ -11251,8 +11498,10 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -11335,18 +11584,19 @@ class MainWindow(QMainWindow):
             self.manual_public_moderation_count = 0
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
 
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
             self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); discarding and retrying."
+                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); reloading the active post page before retry."
             )
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
+            self._reload_active_browser_post_page(source_url, variant)
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+            self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
             return False
 
         self.manual_public_not_ready_count = 0
@@ -11354,9 +11604,65 @@ class MainWindow(QMainWindow):
         self._complete_manual_video_download(download_path, variant)
         return True
 
+    @staticmethod
+    def _resolve_grok_post_page_url(source_url: str) -> str:
+        raw = str(source_url or "").strip()
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        if re.search(r"^https?://(?:www\.)?grok\.com/imagine/post/[0-9a-fA-F-]{8,}", raw, re.IGNORECASE):
+            return raw
+        id_match = re.search(r"/([0-9a-fA-F-]{8,})\.mp4(?:$|[?#])", parsed.path, re.IGNORECASE)
+        if id_match:
+            return f"https://grok.com/imagine/post/{id_match.group(1)}"
+        return ""
+
+    def _reload_active_browser_post_page(self, source_url: str, variant: int) -> None:
+        post_url = self._resolve_grok_post_page_url(source_url)
+        if not post_url:
+            self._append_log(
+                f"Variant {variant}: could not derive Grok post URL from source for reload; continuing with polling."
+            )
+            return
+        refresh_url = post_url + ("&" if "?" in post_url else "?") + f"refresh={int(time.time())}"
+        self._append_log(
+            f"Variant {variant}: reloading active browser post page before retry ({post_url})."
+        )
+        reload_script = f"""
+            (() => {{
+                try {{
+                    const target = {json.dumps(refresh_url)};
+                    const current = String((window.location && window.location.href) || "");
+                    if (current.replace(/[#?].*$/, "") === target.replace(/[#?].*$/, "")) {{
+                        try {{ window.location.reload(); }} catch (_) {{ window.location.href = target; }}
+                    }} else {{
+                        window.location.href = target;
+                    }}
+                    return {{ ok: true, target }};
+                }} catch (err) {{
+                    return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                }}
+            }})()
+        """
+        self._run_active_browser_javascript(reload_script)
+
     def _clear_manual_direct_download_tracking(self) -> None:
         self._manual_direct_download_future = None
         self._manual_direct_download_context = None
+
+    @staticmethod
+    def _extract_public_video_url_from_html(html_payload: str) -> str:
+        if not html_payload:
+            return ""
+        html_normalized = str(html_payload).replace("\\/", "/").replace("\\u002F", "/")
+        match = re.search(
+            r"https?://imagine-public[.]x[.]ai/imagine-public/share-videos/[0-9a-fA-F-]{8,}\.mp4(?:[^\s\"'<>]*)",
+            html_normalized,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return match.group(0).strip()
+        return ""
 
     @staticmethod
     def _poll_post_page_for_media_url(source_url: str) -> str:
@@ -11402,18 +11708,7 @@ class MainWindow(QMainWindow):
             if result.returncode == 0:
                 html_payload = result.stdout or ""
 
-        if not html_payload:
-            return ""
-
-        html_normalized = html_payload.replace("\\/", "/").replace("\\u002F", "/")
-        match = re.search(
-            r"https?://imagine-public[.]x[.]ai/imagine-public/share-videos/[0-9a-fA-F-]{8,}\.mp4(?:[^\s\"'<>]*)",
-            html_normalized,
-            flags=re.IGNORECASE,
-        )
-        if match:
-            return match.group(0).strip()
-        return ""
+        return MainWindow._extract_public_video_url_from_html(html_payload)
 
     @staticmethod
     def _download_video_from_public_url(source_url: str, output_path: Path) -> Path:
@@ -11582,8 +11877,10 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -11699,12 +11996,12 @@ class MainWindow(QMainWindow):
                     self.manual_download_request_pending = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = time.time()
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                     return
 
                 if video_size < MIN_VALID_VIDEO_BYTES:
                     self._append_log(
-                        f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB); discarding and retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
+                        f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB); discarding and retrying in {self._manual_download_poll_interval_ms() // 1000}s."
                     )
                     if video_path.exists():
                         self._remove_file_best_effort(video_path, "manual browser download cleanup")
@@ -11715,7 +12012,7 @@ class MainWindow(QMainWindow):
                     self.manual_video_allow_make_click = True
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = time.time()
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                     return
 
                 self._complete_manual_video_download(video_path, variant)
@@ -11744,7 +12041,7 @@ class MainWindow(QMainWindow):
                     )
                     if self._start_manual_direct_download(variant, interrupted_url):
                         self.manual_download_click_sent = True
-                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                         return
 
                 self._append_log(f"ERROR: Download interrupted for manual variant {variant}; no usable fallback URL.")
@@ -11798,8 +12095,10 @@ class MainWindow(QMainWindow):
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
         self.manual_video_make_click_fallback_used = False
+        self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -12790,7 +13089,7 @@ class MainWindow(QMainWindow):
             if callable(on_uploaded):
                 on_uploaded()
 
-        self.browser.page().runJavaScript(upload_script, after_focus)
+        self._run_active_browser_javascript(upload_script, after_focus)
 
     def _wait_for_continue_upload_reload(self) -> None:
         self.continue_from_frame_waiting_for_reload = True
@@ -12994,7 +13293,7 @@ class MainWindow(QMainWindow):
               return true;
             })();
         """
-        self.browser.page().runJavaScript(script)
+        self._run_active_browser_javascript(script)
 
     def _poll_embedded_training_events(self) -> None:
         if not self.embedded_training_active:
@@ -13011,7 +13310,7 @@ class MainWindow(QMainWindow):
                 if isinstance(item, dict):
                     self._record_embedded_training_event(item)
 
-        self.browser.page().runJavaScript(script, _after_poll)
+        self._run_active_browser_javascript(script, _after_poll)
 
     def _record_embedded_training_event(self, event: dict) -> None:
         if not self.embedded_training_active or self.embedded_training_output_dir is None:
@@ -13116,7 +13415,7 @@ class MainWindow(QMainWindow):
             return
 
         self.embedded_training_poll_timer.stop()
-        self.browser.page().runJavaScript(
+        self._run_active_browser_javascript(
             "(() => { if (window.__grokTrainer && window.__grokTrainer.cleanup) { window.__grokTrainer.cleanup(); } return true; })();"
         )
 
@@ -13195,7 +13494,30 @@ class MainWindow(QMainWindow):
         elif index == getattr(self, "sora_browser_tab_index", -1):
             self.browser = self.sora_browser
 
-    def _build_browser_container(self, browser: QWebEngineView) -> QWidget:
+    def _should_hide_embedded_browser_container(self, browser: QWebEngineView) -> bool:
+        role = self.browser_roles.get(browser, "")
+        if role == "ai":
+            return self._is_external_ai_browser_mode_active()
+        if role == "social":
+            mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded").strip().lower()
+            return mode == "external"
+        return False
+
+    def _sync_embedded_browser_container_visibility(self) -> None:
+        for browser in list(self.browser_address_bars.keys()):
+            self._sync_single_browser_container_visibility(browser)
+
+    def _sync_single_browser_container_visibility(self, browser: QWebEngineView) -> None:
+        address_bar = self.browser_address_bars.get(browser)
+        host = self.browser_container_hosts.get(browser)
+        if address_bar is None or host is None:
+            return
+        hide = self._should_hide_embedded_browser_container(browser)
+        address_bar.setVisible(not hide)
+        address_bar.setEnabled(not hide)
+        host.setVisible(not hide)
+
+    def _build_browser_container(self, browser: QWebEngineView, role: str = "generic") -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -13206,22 +13528,18 @@ class MainWindow(QMainWindow):
         address_bar.returnPressed.connect(lambda b=browser, bar=address_bar: self._navigate_browser_from_address_bar(b, bar))
         layout.addWidget(address_bar)
 
-        is_primary_ai_browser = browser in {getattr(self, "grok_browser_view", None), getattr(self, "sora_browser", None)}
-        if self.external_ai_browser_only and is_primary_ai_browser:
-            browser_notice = QLabel(
-                "Internal browser is turned off for this tab.\n"
-                "Use the Homepage/External buttons to open this page in your system browser."
-            )
-            browser_notice.setWordWrap(True)
-            browser_notice.setStyleSheet("color: #9fb3c8; padding: 16px;")
-            browser_notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(browser_notice, 1)
-            address_bar.setEnabled(False)
-        else:
-            layout.addWidget(browser, 1)
+        browser_host = QWidget(container)
+        host_layout = QVBoxLayout(browser_host)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+        host_layout.setSpacing(0)
+        host_layout.addWidget(browser, 1)
+        layout.addWidget(browser_host, 1)
 
         self.browser_address_bars[browser] = address_bar
+        self.browser_container_hosts[browser] = browser_host
+        self.browser_roles[browser] = str(role or "generic").lower()
         self._connect_browser_signals(browser)
+        self._sync_single_browser_container_visibility(browser)
         return container
 
     def _connect_browser_signals(self, browser: QWebEngineView) -> None:
@@ -13357,6 +13675,40 @@ class MainWindow(QMainWindow):
         self._append_log("Opened browser popup window for login/authorization flow.")
         return popup_page
 
+    def _is_primary_ai_browser(self, browser: QWebEngineView | None) -> bool:
+        return browser in {getattr(self, "grok_browser_view", None), getattr(self, "sora_browser", None)}
+
+    def _active_ai_browser_external_control_enabled(self) -> bool:
+        return self._is_external_ai_browser_mode_active() and bool(getattr(self, "cdp_enabled", False))
+
+    def _active_ai_browser_url_hint(self) -> str:
+        browser_provider = "sora" if self.browser is self.sora_browser else "grok"
+        return SORA_DRAFTS_URL if browser_provider == "sora" else GROK_IMAGINE_URL
+
+    def _run_active_browser_javascript(self, script: str, callback=None) -> None:
+        active_browser = getattr(self, "browser", None)
+        if self._active_ai_browser_external_control_enabled() and self._is_primary_ai_browser(active_browser):
+            try:
+                runtime = self._ensure_automation_runtime()
+                if runtime.chrome_instance is None:
+                    runtime.start_chrome()
+                runtime.ensure_cdp_connected()
+                result = runtime.run_javascript_in_automation_chrome(self._active_ai_browser_url_hint(), script)
+            except Exception as exc:
+                self._append_log(f"External browser automation script failed: {exc}")
+                if callback is not None:
+                    callback(None)
+                return
+            if callback is not None:
+                callback(result)
+            return
+
+        if active_browser is None:
+            if callback is not None:
+                callback(None)
+            return
+        active_browser.page().runJavaScript(script, callback) if callback is not None else active_browser.page().runJavaScript(script)
+
     def open_current_browser_devtools(self) -> None:
         index = self.browser_tabs.currentIndex()
         target_browser = self._browser_for_tab_index(index)
@@ -13408,8 +13760,18 @@ class MainWindow(QMainWindow):
             self._append_log("Grok Browser tab is disabled. Re-enable it from View → Browser Tabs.")
             return
         self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
-        if self.external_ai_browser_only:
-            if QDesktopServices.openUrl(QUrl(GROK_IMAGINE_URL)):
+        if self._is_external_ai_browser_mode_active():
+            if self._active_ai_browser_external_control_enabled():
+                try:
+                    runtime = self._ensure_automation_runtime()
+                    if runtime.chrome_instance is None:
+                        runtime.start_chrome()
+                    runtime.ensure_cdp_connected()
+                    runtime.open_url_in_automation_chrome(GROK_IMAGINE_URL)
+                    self._append_log(f"Opened external Automation Chrome tab: {GROK_IMAGINE_URL}")
+                except Exception as exc:
+                    self._append_log(f"Failed to open external Automation Chrome tab for URL {GROK_IMAGINE_URL}: {exc}")
+            elif QDesktopServices.openUrl(QUrl(GROK_IMAGINE_URL)):
                 self._append_log(f"Opened external browser: {GROK_IMAGINE_URL}")
             else:
                 self._append_log(f"Failed to open external browser for URL: {GROK_IMAGINE_URL}")
@@ -13423,8 +13785,18 @@ class MainWindow(QMainWindow):
             self._append_log("Sora Browser tab is disabled. Re-enable it from View → Browser Tabs.")
             return
         self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
-        if self.external_ai_browser_only:
-            if QDesktopServices.openUrl(QUrl(SORA_DRAFTS_URL)):
+        if self._is_external_ai_browser_mode_active():
+            if self._active_ai_browser_external_control_enabled():
+                try:
+                    runtime = self._ensure_automation_runtime()
+                    if runtime.chrome_instance is None:
+                        runtime.start_chrome()
+                    runtime.ensure_cdp_connected()
+                    runtime.open_url_in_automation_chrome(SORA_DRAFTS_URL)
+                    self._append_log(f"Opened external Automation Chrome tab: {SORA_DRAFTS_URL}")
+                except Exception as exc:
+                    self._append_log(f"Failed to open external Automation Chrome tab for URL {SORA_DRAFTS_URL}: {exc}")
+            elif QDesktopServices.openUrl(QUrl(SORA_DRAFTS_URL)):
                 self._append_log(f"Opened external browser: {SORA_DRAFTS_URL}")
             else:
                 self._append_log(f"Failed to open external browser for URL: {SORA_DRAFTS_URL}")
