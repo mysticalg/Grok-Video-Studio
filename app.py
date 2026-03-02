@@ -2752,6 +2752,7 @@ class MainWindow(QMainWindow):
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
+        self.manual_continue_setup_in_progress = False
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
         self.manual_public_video_url = ""
@@ -10411,6 +10412,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
+            self.manual_continue_setup_in_progress = False
             self._trigger_browser_video_download(variant)
 
         def _click_make_video_after_prompt() -> None:
@@ -10426,6 +10428,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Variant {variant}: 'Make Video' selection attempted; polling for download readiness without extra submit clicks."
                 )
+                self.manual_continue_setup_in_progress = False
                 self._trigger_browser_video_download(variant, allow_make_video_click=False)
 
             def _after_open(_open_result):
@@ -10492,12 +10495,14 @@ class MainWindow(QMainWindow):
                                 self._append_log(
                                     f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
                                 )
+                            self.manual_continue_setup_in_progress = False
                             QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
                         )
+                        self.manual_continue_setup_in_progress = False
                         QTimer.singleShot(700, _run_flow_submit)
 
                     self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
@@ -10576,12 +10581,14 @@ class MainWindow(QMainWindow):
                                 self._append_log(
                                     f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
                                 )
+                            self.manual_continue_setup_in_progress = False
                             QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
                         )
+                        self.manual_continue_setup_in_progress = False
                         QTimer.singleShot(700, _run_flow_submit)
 
                     self._run_active_browser_javascript(enter_script, _after_enter_press)
@@ -10592,6 +10599,7 @@ class MainWindow(QMainWindow):
             self._run_active_browser_javascript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+        self.manual_continue_setup_in_progress = bool(continue_last_video_mode)
         if is_sora_manual_flow:
             option_steps = []
             self._append_log(
@@ -10736,7 +10744,8 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_prompt = ""
             return
 
-        allow_make_video_click = "true" if (self.manual_video_allow_make_click and not self.manual_video_start_click_sent) else "false"
+        setup_in_progress = bool(getattr(self, "manual_continue_setup_in_progress", False))
+        allow_make_video_click = "true" if (self.manual_video_allow_make_click and not self.manual_video_start_click_sent and not setup_in_progress) else "false"
         script = f"""
             (() => {{
                 const allowMakeVideoClick = {allow_make_video_click};
@@ -11109,6 +11118,9 @@ class MainWindow(QMainWindow):
 
             if status == "make-video-awaiting-progress":
                 self.manual_make_video_awaiting_progress_count = int(getattr(self, "manual_make_video_awaiting_progress_count", 0)) + 1
+                if bool(getattr(self, "manual_continue_setup_in_progress", False)):
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                    return
                 if self.manual_make_video_awaiting_progress_count >= 2 and not self.manual_video_make_click_fallback_used:
                     self._append_log(
                         f"Variant {current_variant}: still waiting for render progress while 'Make video' is visible; retrying explicit click fallback."
