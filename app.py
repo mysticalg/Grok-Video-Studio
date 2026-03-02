@@ -10738,6 +10738,45 @@ class MainWindow(QMainWindow):
 
         self._run_active_browser_javascript(refresh_script, _after_refresh)
 
+    @staticmethod
+    def _extract_grok_video_id_from_url(url: str) -> str:
+        raw = str(url or "").strip()
+        if not raw:
+            return ""
+        patterns = (
+            r"/imagine/post/([0-9a-fA-F-]{8,})(?:$|[/?#])",
+            r"/share-videos/([0-9a-fA-F-]{8,})\.mp4(?:$|[?#])",
+            r"/generated/([0-9a-fA-F-]{8,})/generated_video\.mp4(?:$|[?#])",
+            r"/([0-9a-fA-F-]{8,})\.mp4(?:$|[?#])",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, raw, re.IGNORECASE)
+            if match:
+                return str(match.group(1) or "").strip()
+        return ""
+
+    def _resolve_manual_retry_source_url(self, variant: int, candidate_url: str, reason: str) -> str:
+        candidate = str(candidate_url or "").strip()
+        pinned_post_url = str(getattr(self, "manual_last_generated_post_url", "") or "").strip()
+        pinned_id = self._extract_grok_video_id_from_url(pinned_post_url)
+        candidate_id = self._extract_grok_video_id_from_url(candidate)
+
+        if pinned_id:
+            pinned_public = f"https://imagine-public.x.ai/imagine-public/share-videos/{pinned_id}.mp4"
+            pinned_public = _ensure_public_download_query(pinned_public)
+            self.manual_public_video_url = pinned_public
+            if candidate_id and candidate_id != pinned_id:
+                self._append_log(
+                    f"Variant {variant}: ignoring mismatched detected video ID {candidate_id} during {reason}; using pinned generated post ID {pinned_id}."
+                )
+            return pinned_public
+
+        if candidate and re.match(r"^https?://", candidate, re.IGNORECASE):
+            return candidate
+
+        fallback = str(getattr(self, "manual_public_video_url", "") or "").strip()
+        return fallback if re.match(r"^https?://", fallback, re.IGNORECASE) else ""
+
     def _capture_active_post_url_before_download_retry(self, variant: int, reason: str, on_complete: Callable[[], None] | None = None) -> None:
         capture_script = r"""
             (() => {
@@ -11221,13 +11260,17 @@ class MainWindow(QMainWindow):
                     self.manual_download_click_sent = False
                     self.manual_download_in_progress = False
                 direct_url = str(result.get("directUrl") or "").strip()
-                if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
-                    self.manual_public_video_url = direct_url
+                resolved_url = self._resolve_manual_retry_source_url(
+                    current_variant,
+                    direct_url,
+                    "download-visible",
+                )
+                if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
                     if self.manual_download_attempt_count >= 2:
                         self._append_log(
                             f"Variant {current_variant}: download control is visible but browser download event is still pending; polling the public URL directly (attempt #{self.manual_download_attempt_count})."
                         )
-                        if self._start_manual_direct_download(current_variant, direct_url):
+                        if self._start_manual_direct_download(current_variant, resolved_url):
                             self.manual_download_click_sent = True
                         return
                 self._append_log(
@@ -11239,12 +11282,16 @@ class MainWindow(QMainWindow):
             if status == "direct-url-ready":
                 self.manual_download_attempt_count += 1
                 direct_url = str(result.get("src") or "").strip()
-                if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
-                    self.manual_public_video_url = direct_url
+                resolved_url = self._resolve_manual_retry_source_url(
+                    current_variant,
+                    direct_url,
+                    "direct-url-ready",
+                )
+                if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
                     self._append_log(
                         f"Variant {current_variant}: direct URL detected; polling/fetching the public URL directly (attempt #{self.manual_download_attempt_count})."
                     )
-                    if self._start_manual_direct_download(current_variant, direct_url):
+                    if self._start_manual_direct_download(current_variant, resolved_url):
                         self.manual_download_click_sent = True
                     return
 
