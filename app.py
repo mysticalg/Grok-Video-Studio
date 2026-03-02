@@ -2784,6 +2784,7 @@ class MainWindow(QMainWindow):
         self.last_extracted_frame_path: Path | None = None
         self.preview_muted = False
         self.preview_volume = 100
+        self.browser_audio_muted = False
         self.preview_loop_enabled = False
         self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
@@ -3154,6 +3155,10 @@ class MainWindow(QMainWindow):
         self.stitch_mute_original_checkbox = QCheckBox("Mute original video audio when music is used")
         self.stitch_mute_original_checkbox.setToolTip("If enabled, only the selected music is audible in the stitched output.")
 
+        self.browser_audio_mute_checkbox = QCheckBox("Mute all embedded browser audio")
+        self.browser_audio_mute_checkbox.setToolTip("Silence all embedded browser tabs and popup windows.")
+        self.browser_audio_mute_checkbox.toggled.connect(self._set_all_browser_audio_muted)
+
         self.stitch_original_audio_volume = QSpinBox()
         self.stitch_original_audio_volume.setRange(0, 200)
         self.stitch_original_audio_volume.setValue(100)
@@ -3333,6 +3338,7 @@ class MainWindow(QMainWindow):
             developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
             if developer_extras_attr is not None:
                 browser_settings.setAttribute(developer_extras_attr, True)
+            embedded_browser.page().setAudioMuted(self.browser_audio_muted)
 
         if self._is_external_ai_browser_mode_active():
             self.grok_browser_view.setUrl(QUrl("about:blank"))
@@ -3711,6 +3717,7 @@ class MainWindow(QMainWindow):
         developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
         if developer_extras_attr is not None:
             browser.settings().setAttribute(developer_extras_attr, True)
+        browser.page().setAudioMuted(self.browser_audio_muted)
         browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
         layout.addWidget(self._build_browser_container(browser, role="social"), 1)
@@ -4935,6 +4942,7 @@ class MainWindow(QMainWindow):
         self._add_widget_to_menu(self.video_grok_settings_menu, grok_aspect_widget)
 
         self._add_widget_to_menu(self.audio_settings_menu, self.stitch_mute_original_checkbox)
+        self._add_widget_to_menu(self.audio_settings_menu, self.browser_audio_mute_checkbox)
         self.audio_settings_menu.addSeparator()
         self._add_widget_to_menu(self.audio_settings_menu, self.stitch_original_audio_volume)
         self._add_widget_to_menu(self.audio_settings_menu, self.stitch_music_volume)
@@ -5435,6 +5443,7 @@ class MainWindow(QMainWindow):
             "download_dir": str(self.download_dir),
             "preview_muted": self.preview_mute_checkbox.isChecked(),
             "preview_volume": self.preview_volume_slider.value(),
+            "browser_audio_muted": self.browser_audio_mute_checkbox.isChecked(),
             "preview_loop_enabled": self.preview_loop_checkbox.isChecked(),
             "training_start_url": self.training_start_url.text(),
             "training_output_dir": self.training_output_dir.text(),
@@ -5796,6 +5805,8 @@ class MainWindow(QMainWindow):
                 self.preview_volume_slider.setValue(int(preferences["preview_volume"]))
             except (TypeError, ValueError):
                 pass
+        if "browser_audio_muted" in preferences:
+            self.browser_audio_mute_checkbox.setChecked(bool(preferences["browser_audio_muted"]))
         if "preview_loop_enabled" in preferences:
             self.preview_loop_checkbox.setChecked(bool(preferences["preview_loop_enabled"]))
         if "training_start_url" in preferences:
@@ -13806,6 +13817,17 @@ class MainWindow(QMainWindow):
     def _apply_browser_zoom(self, browser: QWebEngineView) -> None:
         browser.setZoomFactor(self.browser_zoom_factor)
 
+    def _set_all_browser_audio_muted(self, muted: bool) -> None:
+        self.browser_audio_muted = bool(muted)
+        for browser in self.browser_tab_webviews.values():
+            if browser is not None and browser.page() is not None:
+                browser.page().setAudioMuted(self.browser_audio_muted)
+        for popup_window in self.browser_popup_windows:
+            popup_view = popup_window.centralWidget()
+            if isinstance(popup_view, QWebEngineView) and popup_view.page() is not None:
+                popup_view.page().setAudioMuted(self.browser_audio_muted)
+        self._append_log(f"Embedded browser audio {'muted' if self.browser_audio_muted else 'unmuted'} for all tabs.")
+
     def _browser_for_tab_index(self, index: int) -> QWebEngineView | None:
         if index == getattr(self, "grok_browser_tab_index", -1):
             return self.grok_browser_view
@@ -13882,6 +13904,7 @@ class MainWindow(QMainWindow):
         developer_extras_attr = getattr(QWebEngineSettings.WebAttribute, "DeveloperExtrasEnabled", None)
         if developer_extras_attr is not None:
             popup_settings.setAttribute(developer_extras_attr, True)
+        popup_view.page().setAudioMuted(self.browser_audio_muted)
 
         self._apply_browser_zoom(popup_view)
 
