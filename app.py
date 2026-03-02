@@ -9200,8 +9200,10 @@ class MainWindow(QMainWindow):
                             const hasVideoSource = /^https?:[/][/]/i.test(String(src || "").trim());
                             const makeVideoVisible = !![...document.querySelectorAll("button")]
                                 .find((btn) => isVisible(btn) && !btn.disabled && /make\\s+video/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                            const generationInProgress = !![...document.querySelectorAll("div, span, p, button")]
+                                .find((el) => isVisible(el) && /\bgenerating\b|\brendering\b|\bcancel\b/i.test((el.textContent || "").trim()));
                             const onPostViewReady = Boolean(validPostId);
-                            const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource));
+                            const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || generationInProgress));
                             return {
                                 ok: true,
                                 readyForDownloadPolling,
@@ -9211,6 +9213,7 @@ class MainWindow(QMainWindow):
                                 downloadButtonVisible,
                                 hasVideoSource,
                                 makeVideoVisible,
+                                generationInProgress,
                             };
                         } catch (_) {
                             return { ok: false, readyForDownloadPolling: false };
@@ -9234,6 +9237,20 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
+                    submit_grace_seconds = max(2.0, float(os.getenv("GROK_MANUAL_IMAGE_SUBMIT_GRACE_SECONDS", "12")))
+                    submit_elapsed_seconds = (
+                        max(0.0, time.time() - self.manual_image_submit_in_flight_since)
+                        if self.manual_image_submit_in_flight_since > 0
+                        else submit_grace_seconds
+                    )
+
+                    if self.manual_image_submit_in_flight and submit_elapsed_seconds < submit_grace_seconds:
+                        self._append_log(
+                            f"Variant {current_variant}: submit state unresolved ({status}); waiting {max(0.0, submit_grace_seconds - submit_elapsed_seconds):.1f}s before any re-submit."
+                        )
+                        QTimer.singleShot(1500, self._poll_for_manual_image)
+                        return
+
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count += 1
@@ -9241,14 +9258,14 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             "WARNING: Variant "
                             f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so retrying prompt submit."
+                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed after grace window, so retrying prompt submit."
                         )
                         self.manual_image_submit_retry_count = 0
                         QTimer.singleShot(1200, self._poll_for_manual_image)
                         return
 
                     self._append_log(
-                        f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying prompt submit..."
+                        f"Variant {current_variant}: video submit stage not ready yet ({status}); rechecking before retry..."
                     )
                     QTimer.singleShot(1500, self._poll_for_manual_image)
 
