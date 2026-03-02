@@ -8075,14 +8075,12 @@ class MainWindow(QMainWindow):
                         emitMouse(el, "mouseenter");
                         emitPointer(el, "pointerover");
                         emitMouse(el, "mouseover");
-                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) { try { el.focus(); fired = true; } catch (_) {} }
-                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); fired = true; } catch (_) {}
-                        emitPointer(el, "pointerdown");
-                        emitMouse(el, "mousedown");
-                        emitPointer(el, "pointerup");
-                        emitMouse(el, "mouseup");
-                        emitMouse(el, "click");
+                        try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (_) {} }
+                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); } catch (_) {}
                         try { el.click(); fired = true; } catch (_) {}
+                        if (!fired) {
+                            try { fired = el.dispatchEvent(new MouseEvent("click", { ...common, button: 0, buttons: 0 })); } catch (_) { fired = false; }
+                        }
                         return fired;
                     };
                     const activateSubmitAtPoint = (el) => {
@@ -8102,12 +8100,10 @@ class MainWindow(QMainWindow):
                             emitMouse(clickTarget, "mouseenter");
                             emitPointer(clickTarget, "pointerover");
                             emitMouse(clickTarget, "mouseover");
-                            emitPointer(clickTarget, "pointerdown");
-                            emitMouse(clickTarget, "mousedown");
-                            emitPointer(clickTarget, "pointerup");
-                            emitMouse(clickTarget, "mouseup");
-                            emitMouse(clickTarget, "click");
                             try { clickTarget.click(); fired = true; } catch (_) {}
+                            if (!fired) {
+                                try { fired = clickTarget.dispatchEvent(new MouseEvent("click", { ...common, button: 0, buttons: 0 })); } catch (_) { fired = false; }
+                            }
                         } catch (_) {}
                         return { fired, x, y };
                     };
@@ -10212,14 +10208,12 @@ class MainWindow(QMainWindow):
                         emitMouse(el, "mouseenter");
                         emitPointer(el, "pointerover");
                         emitMouse(el, "mouseover");
-                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) { try { el.focus(); fired = true; } catch (_) {} }
-                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); fired = true; } catch (_) {}
-                        emitPointer(el, "pointerdown");
-                        emitMouse(el, "mousedown");
-                        emitPointer(el, "pointerup");
-                        emitMouse(el, "mouseup");
-                        emitMouse(el, "click");
+                        try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (_) {} }
+                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); } catch (_) {}
                         try { el.click(); fired = true; } catch (_) {}
+                        if (!fired) {
+                            try { fired = el.dispatchEvent(new MouseEvent("click", { ...common, button: 0, buttons: 0 })); } catch (_) { fired = false; }
+                        }
                         return fired;
                     };
                     const activateSubmitAtPoint = (el) => {
@@ -10239,12 +10233,10 @@ class MainWindow(QMainWindow):
                             emitMouse(clickTarget, "mouseenter");
                             emitPointer(clickTarget, "pointerover");
                             emitMouse(clickTarget, "mouseover");
-                            emitPointer(clickTarget, "pointerdown");
-                            emitMouse(clickTarget, "mousedown");
-                            emitPointer(clickTarget, "pointerup");
-                            emitMouse(clickTarget, "mouseup");
-                            emitMouse(clickTarget, "click");
                             try { clickTarget.click(); fired = true; } catch (_) {}
+                            if (!fired) {
+                                try { fired = clickTarget.dispatchEvent(new MouseEvent("click", { ...common, button: 0, buttons: 0 })); } catch (_) { fired = false; }
+                            }
                         } catch (_) {}
                         return { fired, x, y };
                     };
