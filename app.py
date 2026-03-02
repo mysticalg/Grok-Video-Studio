@@ -8536,7 +8536,7 @@ class MainWindow(QMainWindow):
             self._run_active_browser_javascript(set_image_mode_script, _after_set_mode)
 
     def _set_manual_post_submit_idle_window(self) -> int:
-        idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 12000))
+        idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 200))
         if idle_ms <= 0:
             self.manual_post_submit_idle_until = 0.0
             self.manual_post_submit_idle_token = -1
@@ -8553,7 +8553,7 @@ class MainWindow(QMainWindow):
             self.manual_post_submit_idle_until = 0.0
             self.manual_post_submit_idle_token = -1
             return False, 0
-        remaining_ms = max(250, int(remaining_s * 1000))
+        remaining_ms = max(1, int(remaining_s * 1000))
         return True, remaining_ms
 
     def _extract_valid_grok_post_id(self, url: str) -> str:
@@ -8664,13 +8664,8 @@ class MainWindow(QMainWindow):
                         }};
                     }}
 
-                    if (window.__grokManualPickObserverResult) {{
-                        window.__grokManualPickObserverResult = "";
-                        return {{ ok: true, status: "generated-image-clicked" }};
-                    }}
-
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isVisible(btn) && !btn.disabled && listItemReady(btn));
+                        .filter((btn) => isVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -8690,35 +8685,7 @@ class MainWindow(QMainWindow):
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
 
-                    const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
-                        .filter((img) => {{
-                            if (!isVisible(img) || !listItemReady(img)) return false;
-                            const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
-                            const title = (img.getAttribute("title") || "").trim().toLowerCase();
-                            const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
-                            const descriptor = (alt + " " + title + " " + aria).trim();
-                            if (/\bedit\\s+image\b/i.test(descriptor)) return false;
-                            const width = img.naturalWidth || img.width || img.clientWidth || 0;
-                            const height = img.naturalHeight || img.height || img.clientHeight || 0;
-                            return width >= 220 && height >= 220;
-                        }});
-
-                    if (!listItemImages.length) return {{ ok: false, status: "waiting-for-generated-image" }};
-
-                    listItemImages.sort((a, b) => {{
-                        const ar = a.getBoundingClientRect();
-                        const br = b.getBoundingClientRect();
-                        const rowDelta = Math.abs(ar.top - br.top);
-                        if (rowDelta > 20) return ar.top - br.top;
-                        return ar.left - br.left;
-                    }});
-
-                    const firstImage = listItemImages[0];
-                    const listItem = listItemOf(firstImage) || firstImage.closest("button, [role='button']") || firstImage.parentElement;
-                    const clickedImage = emulateClick(firstImage) || emulateClick(listItem);
-                    if (!clickedImage) return {{ ok: false, status: "generated-image-click-failed" }};
-                    await sleep(ACTION_DELAY_MS);
-                    return {{ ok: true, status: "generated-image-clicked" }};
+                    return {{ ok: false, status: "waiting-for-make-video-button" }};
                 }}
 
                 if (phase === "video-mode") {{
@@ -8966,7 +8933,7 @@ class MainWindow(QMainWindow):
                             )
                         else:
                             self._append_log(
-                                f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
+                                f"Variant {current_variant}: clicked generated image tile after Make video became available; preparing video prompt + submit."
                             )
                     self.manual_image_pick_clicked = True
                     self._run_active_browser_javascript("""
@@ -9095,11 +9062,19 @@ class MainWindow(QMainWindow):
                                 const SCROLL_PAUSE_MS = 8000;
 
                                 const scrollBottom = () => {
+                                    const fullWidthContainers = [...document.querySelectorAll("div.w-full")];
+                                    for (const el of fullWidthContainers) {
+                                        try {
+                                            el.style.overflowY = "scroll";
+                                        } catch (_) {}
+                                    }
+
                                     const scrollTargets = [
                                         document.scrollingElement,
                                         document.documentElement,
                                         document.body,
-                                        ...document.querySelectorAll(".w-full, [data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
+                                        ...fullWidthContainers,
+                                        ...document.querySelectorAll("[data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
                                     ].filter((el, idx, arr) => el && arr.indexOf(el) === idx);
 
                                     for (const target of scrollTargets) {
@@ -9115,7 +9090,7 @@ class MainWindow(QMainWindow):
 
                                 const tryClickFirstGeneratedTile = () => {
                                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                                        .filter((btn) => isVisible(btn) && !btn.disabled && listItemReady(btn));
+                                        .filter((btn) => isVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
 
                                     if (makeVideoButtons.length) {
                                         makeVideoButtons.sort((a, b) => {
@@ -9132,32 +9107,7 @@ class MainWindow(QMainWindow):
                                         return (emulateClick(tileImage) || emulateClick(tile)) ? "generated-image-clicked" : "";
                                     }
 
-                                    const listItemImages = [...document.querySelectorAll("[role='listitem'] img")]
-                                        .filter((img) => {
-                                            if (!isVisible(img) || !listItemReady(img)) return false;
-                                            const alt = (img.getAttribute("alt") || "").trim().toLowerCase();
-                                            const title = (img.getAttribute("title") || "").trim().toLowerCase();
-                                            const aria = (img.getAttribute("aria-label") || "").trim().toLowerCase();
-                                            const descriptor = (alt + " " + title + " " + aria).trim();
-                                            if (/\\bedit\\s+image\\b/i.test(descriptor)) return false;
-                                            const width = img.naturalWidth || img.width || img.clientWidth || 0;
-                                            const height = img.naturalHeight || img.height || img.clientHeight || 0;
-                                            return width >= 220 && height >= 220;
-                                        });
-
-                                    if (!listItemImages.length) return "";
-
-                                    listItemImages.sort((a, b) => {
-                                        const ar = a.getBoundingClientRect();
-                                        const br = b.getBoundingClientRect();
-                                        const rowDelta = Math.abs(ar.top - br.top);
-                                        if (rowDelta > 20) return ar.top - br.top;
-                                        return ar.left - br.left;
-                                    });
-
-                                    const firstImage = listItemImages[0];
-                                    const listItem = listItemOf(firstImage) || firstImage.closest("button, [role='button']") || firstImage.parentElement;
-                                    return (emulateClick(firstImage) || emulateClick(listItem)) ? "generated-image-clicked" : "";
+                                    return "";
                                 };
 
                                 const queueScrollWithRecheck = () => {
@@ -9243,8 +9193,11 @@ class MainWindow(QMainWindow):
                                     "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], " +
                                     "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                                 );
-                                const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i]")]
-                                    .find((btn) => !!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)));
+                                const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
+                                    .find((btn) => {
+                                        if (!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length))) return false;
+                                        return !!btn.closest("[role='listitem'], li, article, figure");
+                                    });
                                 const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
                                     .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
                                 const pathRaw = String((window.location && window.location.pathname) || "");
