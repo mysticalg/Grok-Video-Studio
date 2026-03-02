@@ -10987,6 +10987,11 @@ class MainWindow(QMainWindow):
                     if (/[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|\\/)/i.test(lowered)) return true;
                     if (/[?&](?:format|ext)=mp4(?:$|[&#])/i.test(lowered)) return true;
                     if (/[/](?:video|videos|render|download|media)[/]/i.test(lowered) && /[?&](?:token|sig|signature|expires|x-amz-)/i.test(lowered)) return true;
+                    if (/^https?:[/][/]videos[.]openai[.]com[/]/i.test(lowered)) {{
+                        if (/[/](?:drvs[/]md[/]raw|raw)(?:$|[/?#])/i.test(lowered)) return true;
+                        if (/%2fraw(?:$|[&#?])/i.test(lowered)) return true;
+                        if (/[?&](?:sig|se|sv|sr|sp)=/i.test(lowered)) return true;
+                    }}
                     return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
                 }};
 
