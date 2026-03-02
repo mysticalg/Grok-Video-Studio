@@ -2686,6 +2686,8 @@ class MainWindow(QMainWindow):
         self.social_upload_progress_bars: dict[str, QProgressBar] = {}
         self.social_upload_tab_indices: dict[str, int] = {}
         self.browser_address_bars: dict[QWebEngineView, QLineEdit] = {}
+        self.browser_container_hosts: dict[QWebEngineView, QWidget] = {}
+        self.browser_roles: dict[QWebEngineView, str] = {}
         self.browser_training_worker: BrowserTrainingWorker | None = None
         self.overlay_worker: VideoOverlayWorker | None = None
         self.automation_runtime: AutomationRuntimeWorker | None = None
@@ -3489,10 +3491,10 @@ class MainWindow(QMainWindow):
         self.video_aspect_ratio.setCurrentIndex(4)
 
         grok_browser_layout.addLayout(grok_browser_controls)
-        grok_browser_layout.addWidget(self._build_browser_container(self.grok_browser_view), 1)
+        grok_browser_layout.addWidget(self._build_browser_container(self.grok_browser_view, role="ai"), 1)
 
         sora_browser_layout.addLayout(sora_browser_controls)
-        sora_browser_layout.addWidget(self._build_browser_container(self.sora_browser), 1)
+        sora_browser_layout.addWidget(self._build_browser_container(self.sora_browser, role="ai"), 1)
 
         self.browser_tabs = QTabWidget()
         self.grok_browser_tab_index = self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
@@ -3708,7 +3710,7 @@ class MainWindow(QMainWindow):
             browser.settings().setAttribute(developer_extras_attr, True)
         browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
-        layout.addWidget(self._build_browser_container(browser), 1)
+        layout.addWidget(self._build_browser_container(browser, role="social"), 1)
 
         self.social_upload_browsers[platform_name] = browser
         self.social_upload_status_labels[platform_name] = status_label
@@ -5220,6 +5222,7 @@ class MainWindow(QMainWindow):
             self.grok_browser_view.setUrl(QUrl(GROK_IMAGINE_URL))
         if self.sora_browser.url().toString().strip() in {"", "about:blank"}:
             self.sora_browser.setUrl(QUrl(SORA_DRAFTS_URL))
+        self._sync_embedded_browser_container_visibility()
 
     def open_buy_me_a_coffee(self) -> None:
         QDesktopServices.openUrl(QUrl(BUY_ME_A_COFFEE_URL))
@@ -6127,6 +6130,7 @@ class MainWindow(QMainWindow):
 
     def _on_automation_mode_changed(self, _index: int) -> None:
         self._sync_social_embedded_browser_state_for_automation_mode(log_change=True)
+        self._sync_embedded_browser_container_visibility()
 
     def _sync_social_embedded_browser_state_for_automation_mode(self, log_change: bool = False) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded").strip().lower()
@@ -13375,7 +13379,30 @@ class MainWindow(QMainWindow):
         elif index == getattr(self, "sora_browser_tab_index", -1):
             self.browser = self.sora_browser
 
-    def _build_browser_container(self, browser: QWebEngineView) -> QWidget:
+    def _should_hide_embedded_browser_container(self, browser: QWebEngineView) -> bool:
+        role = self.browser_roles.get(browser, "")
+        if role == "ai":
+            return self._is_external_ai_browser_mode_active()
+        if role == "social":
+            mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded").strip().lower()
+            return mode == "external"
+        return False
+
+    def _sync_embedded_browser_container_visibility(self) -> None:
+        for browser in list(self.browser_address_bars.keys()):
+            self._sync_single_browser_container_visibility(browser)
+
+    def _sync_single_browser_container_visibility(self, browser: QWebEngineView) -> None:
+        address_bar = self.browser_address_bars.get(browser)
+        host = self.browser_container_hosts.get(browser)
+        if address_bar is None or host is None:
+            return
+        hide = self._should_hide_embedded_browser_container(browser)
+        address_bar.setVisible(not hide)
+        address_bar.setEnabled(not hide)
+        host.setVisible(not hide)
+
+    def _build_browser_container(self, browser: QWebEngineView, role: str = "generic") -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -13386,22 +13413,18 @@ class MainWindow(QMainWindow):
         address_bar.returnPressed.connect(lambda b=browser, bar=address_bar: self._navigate_browser_from_address_bar(b, bar))
         layout.addWidget(address_bar)
 
-        is_primary_ai_browser = browser in {getattr(self, "grok_browser_view", None), getattr(self, "sora_browser", None)}
-        if self._is_external_ai_browser_mode_active() and is_primary_ai_browser:
-            browser_notice = QLabel(
-                "Internal browser is turned off for this tab.\n"
-                "Use the Homepage/External buttons to open this page in your system browser."
-            )
-            browser_notice.setWordWrap(True)
-            browser_notice.setStyleSheet("color: #9fb3c8; padding: 16px;")
-            browser_notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(browser_notice, 1)
-            address_bar.setEnabled(False)
-        else:
-            layout.addWidget(browser, 1)
+        browser_host = QWidget(container)
+        host_layout = QVBoxLayout(browser_host)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+        host_layout.setSpacing(0)
+        host_layout.addWidget(browser, 1)
+        layout.addWidget(browser_host, 1)
 
         self.browser_address_bars[browser] = address_bar
+        self.browser_container_hosts[browser] = browser_host
+        self.browser_roles[browser] = str(role or "generic").lower()
         self._connect_browser_signals(browser)
+        self._sync_single_browser_container_visibility(browser)
         return container
 
     def _connect_browser_signals(self, browser: QWebEngineView) -> None:
