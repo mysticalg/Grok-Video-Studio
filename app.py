@@ -8536,7 +8536,7 @@ class MainWindow(QMainWindow):
             self._run_active_browser_javascript(set_image_mode_script, _after_set_mode)
 
     def _set_manual_post_submit_idle_window(self) -> int:
-        idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 12000))
+        idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 200))
         if idle_ms <= 0:
             self.manual_post_submit_idle_until = 0.0
             self.manual_post_submit_idle_token = -1
@@ -8553,7 +8553,7 @@ class MainWindow(QMainWindow):
             self.manual_post_submit_idle_until = 0.0
             self.manual_post_submit_idle_token = -1
             return False, 0
-        remaining_ms = max(250, int(remaining_s * 1000))
+        remaining_ms = max(1, int(remaining_s * 1000))
         return True, remaining_ms
 
     def _extract_valid_grok_post_id(self, url: str) -> str:
