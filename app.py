@@ -2756,6 +2756,7 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -10685,6 +10686,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -10706,6 +10708,117 @@ class MainWindow(QMainWindow):
             f"Variant {variant}: manual download attempts are rate-limited to every {self._manual_download_poll_interval_ms() // 1000} seconds."
         )
         self.manual_download_poll_timer.start(0)
+
+    def _refresh_active_browser_page_before_download(self, variant: int, reason: str) -> None:
+        self._append_log(f"Variant {variant}: refreshing browser page before download detection ({reason}).")
+        refresh_script = """
+            (() => {
+                try {
+                    if (window.location && typeof window.location.reload === "function") {
+                        window.location.reload();
+                        return { ok: true, method: "location.reload" };
+                    }
+                    return { ok: false, error: "reload unavailable" };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _after_refresh(result) -> None:
+            if isinstance(result, dict) and result.get("ok"):
+                return
+            active_browser = getattr(self, "browser", None)
+            if active_browser is None:
+                return
+            try:
+                active_browser.reload()
+            except Exception:
+                pass
+
+        self._run_active_browser_javascript(refresh_script, _after_refresh)
+
+    @staticmethod
+    def _extract_grok_video_id_from_url(url: str) -> str:
+        raw = str(url or "").strip()
+        if not raw:
+            return ""
+        patterns = (
+            r"/imagine/post/([0-9a-fA-F-]{8,})(?:$|[/?#])",
+            r"/share-videos/([0-9a-fA-F-]{8,})\.mp4(?:$|[?#])",
+            r"/generated/([0-9a-fA-F-]{8,})/generated_video\.mp4(?:$|[?#])",
+            r"/([0-9a-fA-F-]{8,})\.mp4(?:$|[?#])",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, raw, re.IGNORECASE)
+            if match:
+                return str(match.group(1) or "").strip()
+        return ""
+
+    def _resolve_manual_retry_source_url(self, variant: int, candidate_url: str, reason: str) -> str:
+        candidate = str(candidate_url or "").strip()
+        pinned_post_url = str(getattr(self, "manual_last_generated_post_url", "") or "").strip()
+        pinned_id = self._extract_grok_video_id_from_url(pinned_post_url)
+        pinned_public_url = str(getattr(self, "manual_public_video_url", "") or "").strip()
+        pinned_public_id = self._extract_grok_video_id_from_url(pinned_public_url)
+        candidate_id = self._extract_grok_video_id_from_url(candidate)
+
+        authoritative_id = pinned_public_id or pinned_id
+        if authoritative_id:
+            authoritative_public = _ensure_public_download_query(
+                f"https://imagine-public.x.ai/imagine-public/share-videos/{authoritative_id}.mp4"
+            )
+            self.manual_public_video_url = authoritative_public
+            if candidate_id and candidate_id != authoritative_id:
+                self._append_log(
+                    f"Variant {variant}: ignoring mismatched detected video ID {candidate_id} during {reason}; using pinned generated post ID {authoritative_id}."
+                )
+            if pinned_id and pinned_public_id and pinned_id != pinned_public_id:
+                self._append_log(
+                    f"Variant {variant}: pinned post ID {pinned_id} disagreed with pinned public URL ID {pinned_public_id}; using latest pinned public ID."
+                )
+            return authoritative_public
+
+        if candidate and re.match(r"^https?://", candidate, re.IGNORECASE):
+            return candidate
+
+        return pinned_public_url if re.match(r"^https?://", pinned_public_url, re.IGNORECASE) else ""
+
+    def _capture_active_post_url_before_download_retry(self, variant: int, reason: str, on_complete: Callable[[], None] | None = None) -> None:
+        capture_script = r"""
+            (() => {
+                try {
+                    const currentUrl = String((window.location && window.location.href) || "").trim();
+                    const match = currentUrl.match(/https?:\/\/(?:www\.)?grok\.com\/imagine\/post\/([0-9a-fA-F-]{8,})/i)
+                        || currentUrl.match(/\/imagine\/post\/([0-9a-fA-F-]{8,})/i);
+                    const postId = match ? String(match[1] || "").trim() : "";
+                    const postUrl = postId ? `https://grok.com/imagine/post/${postId}` : "";
+                    const publicUrl = postId ? `https://imagine-public.x.ai/imagine-public/share-videos/${postId}.mp4` : "";
+                    return { ok: true, currentUrl, postId, postUrl, publicUrl };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _after_capture(result) -> None:
+            if isinstance(result, dict) and result.get("ok"):
+                post_url = str(result.get("postUrl") or "").strip()
+                public_url = _ensure_public_download_query(str(result.get("publicUrl") or "").strip())
+                if post_url:
+                    self.manual_last_generated_post_url = post_url
+                    self._append_log(
+                        f"Variant {variant}: captured current generated post URL before retry ({reason}): {post_url}."
+                    )
+                if public_url:
+                    self.manual_public_video_url = public_url
+                    self._append_log(
+                        f"Variant {variant}: pinned public download URL before retry ({reason}): {public_url}."
+                    )
+            if on_complete is not None:
+                on_complete()
+
+        self._run_active_browser_javascript(capture_script, _after_capture)
 
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
@@ -10731,6 +10844,7 @@ class MainWindow(QMainWindow):
             self.manual_refresh_after_generating_sent = False
             self.manual_refresh_after_progress_100_sent = False
             self.manual_public_video_url = ""
+            self.manual_last_generated_post_url = ""
             self.manual_download_attempt_count = 0
             self.manual_download_poll_attempt_count = 0
             self.manual_download_last_status = ""
@@ -11048,13 +11162,10 @@ class MainWindow(QMainWindow):
                 )
                 if not self.manual_refresh_after_generating_sent:
                     self.manual_refresh_after_generating_sent = True
-                    self._append_log(
-                        f"Variant {current_variant}: refreshing embedded browser now that 'Generating' disappeared."
+                    self._refresh_active_browser_page_before_download(
+                        current_variant,
+                        "'Generating' disappeared",
                     )
-                    try:
-                        self.browser.reload()
-                    except Exception:
-                        pass
                     self.manual_download_poll_timer.start(3000)
                     return
 
@@ -11083,14 +11194,19 @@ class MainWindow(QMainWindow):
                 progress_done = progress_text in {"100%", "100"}
                 if progress_done and not self.manual_refresh_after_progress_100_sent:
                     self.manual_refresh_after_progress_100_sent = True
-                    self._append_log(
-                        f"Variant {current_variant}: render reached 100%; refreshing page before download detection."
+
+                    def _after_capture_progress_100() -> None:
+                        self._refresh_active_browser_page_before_download(
+                            current_variant,
+                            "render reached 100%",
+                        )
+                        self.manual_download_poll_timer.start(3000)
+
+                    self._capture_active_post_url_before_download_retry(
+                        current_variant,
+                        "progress reached 100%",
+                        _after_capture_progress_100,
                     )
-                    try:
-                        self.browser.reload()
-                    except Exception:
-                        pass
-                    self.manual_download_poll_timer.start(3000)
                     return
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
@@ -11151,13 +11267,17 @@ class MainWindow(QMainWindow):
                     self.manual_download_click_sent = False
                     self.manual_download_in_progress = False
                 direct_url = str(result.get("directUrl") or "").strip()
-                if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
-                    self.manual_public_video_url = direct_url
+                resolved_url = self._resolve_manual_retry_source_url(
+                    current_variant,
+                    direct_url,
+                    "download-visible",
+                )
+                if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
                     if self.manual_download_attempt_count >= 2:
                         self._append_log(
                             f"Variant {current_variant}: download control is visible but browser download event is still pending; polling the public URL directly (attempt #{self.manual_download_attempt_count})."
                         )
-                        if self._start_manual_direct_download(current_variant, direct_url):
+                        if self._start_manual_direct_download(current_variant, resolved_url):
                             self.manual_download_click_sent = True
                         return
                 self._append_log(
@@ -11169,12 +11289,16 @@ class MainWindow(QMainWindow):
             if status == "direct-url-ready":
                 self.manual_download_attempt_count += 1
                 direct_url = str(result.get("src") or "").strip()
-                if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
-                    self.manual_public_video_url = direct_url
+                resolved_url = self._resolve_manual_retry_source_url(
+                    current_variant,
+                    direct_url,
+                    "direct-url-ready",
+                )
+                if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
                     self._append_log(
                         f"Variant {current_variant}: direct URL detected; polling/fetching the public URL directly (attempt #{self.manual_download_attempt_count})."
                     )
-                    if self._start_manual_direct_download(current_variant, direct_url):
+                    if self._start_manual_direct_download(current_variant, resolved_url):
                         self.manual_download_click_sent = True
                     return
 
@@ -11507,6 +11631,7 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -11590,11 +11715,11 @@ class MainWindow(QMainWindow):
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
             self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); reloading the active post page before retry."
+                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
             )
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
-            self._reload_active_browser_post_page(source_url, variant)
+            self._load_grok_homepage_then_return_to_post(source_url, variant)
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
             return False
@@ -11616,6 +11741,74 @@ class MainWindow(QMainWindow):
         if id_match:
             return f"https://grok.com/imagine/post/{id_match.group(1)}"
         return ""
+
+    def _load_grok_homepage_then_return_to_post(self, source_url: str, variant: int) -> None:
+        post_url = str(getattr(self, "manual_last_generated_post_url", "") or "").strip()
+        if not post_url:
+            post_url = self._resolve_grok_post_page_url(source_url)
+        self._append_log(
+            f"Variant {variant}: checking active URL for post ID, loading Grok homepage, then returning to post before retry."
+        )
+        hop_script = rf"""
+            (() => {{
+                try {{
+                    const home = {json.dumps(GROK_IMAGINE_URL)};
+                    const preferredPost = {json.dumps(post_url)};
+                    const currentUrl = String((window.location && window.location.href) || "");
+                    const postFromCurrentMatch = currentUrl.match(/imagine\/post\/([0-9a-fA-F-]{{8,}})/i);
+                    const postFromCurrent = postFromCurrentMatch
+                        ? `https://grok.com/imagine/post/${{postFromCurrentMatch[1]}}`
+                        : "";
+                    const targetPost = preferredPost || postFromCurrent;
+                    const postIdMatch = (targetPost || "").match(/imagine\/post\/([0-9a-fA-F-]{{8,}})/i);
+                    const postId = postIdMatch ? postIdMatch[1] : "";
+                    const publicUrl = postId
+                        ? `https://imagine-public.x.ai/imagine-public/share-videos/${{postId}}.mp4`
+                        : "";
+
+                    window.location.href = home + (home.includes('?') ? '&' : '?') + 'refresh=' + String(Date.now());
+                    if (targetPost) {{
+                        setTimeout(() => {{
+                            try {{
+                                window.location.href = targetPost + (targetPost.includes('?') ? '&' : '?') + 'refresh=' + String(Date.now());
+                            }} catch (_) {{}}
+                        }}, 1200);
+                    }}
+                    return {{ ok: true, home, currentUrl, targetPost, postId, publicUrl }};
+                }} catch (err) {{
+                    return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                }}
+            }})()
+        """
+
+        def _after_hop(result) -> None:
+            if not isinstance(result, dict):
+                return
+            target_post = str(result.get("targetPost") or "").strip()
+            current_url = str(result.get("currentUrl") or "").strip()
+            public_url = _ensure_public_download_query(str(result.get("publicUrl") or "").strip())
+            if public_url:
+                self.manual_public_video_url = public_url
+                resolved_post = target_post
+                if not resolved_post:
+                    captured_id = self._extract_grok_video_id_from_url(public_url)
+                    if captured_id:
+                        resolved_post = f"https://grok.com/imagine/post/{captured_id}"
+                if resolved_post:
+                    self.manual_last_generated_post_url = resolved_post
+                self._append_log(
+                    f"Variant {variant}: captured post/public URL from active page before homepage hop; will retry via {public_url}."
+                )
+            elif target_post:
+                self._append_log(
+                    f"Variant {variant}: returned to post page after homepage hop ({target_post}), but no public URL could be derived yet."
+                )
+            else:
+                self._append_log(
+                    f"Variant {variant}: homepage hop executed without a resolved post URL (current URL was: {current_url or 'unknown'})."
+                )
+
+        self._run_active_browser_javascript(hop_script, _after_hop)
 
     def _reload_active_browser_post_page(self, source_url: str, variant: int) -> None:
         post_url = self._resolve_grok_post_page_url(source_url)
@@ -11886,6 +12079,7 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -12104,6 +12298,7 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
