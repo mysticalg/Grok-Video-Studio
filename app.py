@@ -11590,8 +11590,31 @@ class MainWindow(QMainWindow):
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
             self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); discarding and retrying."
+                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); attempting headless post refresh before retry."
             )
+            refreshed_url = self._poll_post_page_for_media_url(source_url, prefer_headless_refresh=True)
+            if refreshed_url:
+                refreshed_final_url = _ensure_public_download_query(refreshed_url)
+                self._append_log(
+                    f"Variant {variant}: headless refresh found refreshed public URL; retrying direct download now ({refreshed_final_url})."
+                )
+                if download_path.exists():
+                    self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
+                try:
+                    second_path = self._download_video_from_public_url(refreshed_final_url, output_path)
+                    second_size = second_path.stat().st_size if second_path.exists() else 0
+                    if second_size >= MIN_VALID_VIDEO_BYTES:
+                        self.manual_public_not_ready_count = 0
+                        self.manual_public_moderation_count = 0
+                        self._complete_manual_video_download(second_path, variant)
+                        return True
+                    self._append_log(
+                        f"WARNING: Variant {variant}: post-refresh direct download is still tiny ({second_size} bytes); scheduling another poll."
+                    )
+                except Exception as exc:
+                    self._append_log(
+                        f"WARNING: Variant {variant}: post-refresh direct download failed ({exc}); scheduling another poll."
+                    )
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
             self.manual_download_click_sent = False
@@ -11608,7 +11631,60 @@ class MainWindow(QMainWindow):
         self._manual_direct_download_context = None
 
     @staticmethod
-    def _poll_post_page_for_media_url(source_url: str) -> str:
+    def _extract_public_video_url_from_html(html_payload: str) -> str:
+        if not html_payload:
+            return ""
+        html_normalized = str(html_payload).replace("\\/", "/").replace("\\u002F", "/")
+        match = re.search(
+            r"https?://imagine-public[.]x[.]ai/imagine-public/share-videos/[0-9a-fA-F-]{8,}\.mp4(?:[^\s\"'<>]*)",
+            html_normalized,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return match.group(0).strip()
+        return ""
+
+    @staticmethod
+    def _fetch_post_page_html_via_headless_browser(page_url: str) -> str:
+        browser_candidates = [
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "chrome",
+        ]
+        browser_cmd = next((shutil.which(name) for name in browser_candidates if shutil.which(name)), None)
+        if not browser_cmd:
+            return ""
+
+        try:
+            result = subprocess.run(
+                [
+                    browser_cmd,
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--virtual-time-budget=12000",
+                    "--run-all-compositor-stages-before-draw",
+                    "--dump-dom",
+                    page_url,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=35,
+                check=False,
+            )
+            if result.returncode != 0:
+                return ""
+            return result.stdout or ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _poll_post_page_for_media_url(source_url: str, prefer_headless_refresh: bool = False) -> str:
         raw = str(source_url or "").strip()
         if not raw:
             return ""
@@ -11623,46 +11699,40 @@ class MainWindow(QMainWindow):
         if not page_url:
             return ""
 
-        curl_command = shutil.which("curl")
         html_payload = ""
-        if curl_command:
-            result = subprocess.run(
-                [
-                    curl_command,
-                    "--silent",
-                    "--show-error",
-                    "--location",
-                    "--connect-timeout",
-                    "20",
-                    "--max-time",
-                    "30",
-                    "--user-agent",
-                    os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
-                    "--referer",
-                    "https://grok.com/",
-                    page_url,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
-            if result.returncode == 0:
-                html_payload = result.stdout or ""
+        if prefer_headless_refresh:
+            refresh_url = page_url + ("&" if "?" in page_url else "?") + f"refresh={int(time.time())}"
+            html_payload = MainWindow._fetch_post_page_html_via_headless_browser(refresh_url)
 
         if not html_payload:
-            return ""
+            curl_command = shutil.which("curl")
+            if curl_command:
+                result = subprocess.run(
+                    [
+                        curl_command,
+                        "--silent",
+                        "--show-error",
+                        "--location",
+                        "--connect-timeout",
+                        "20",
+                        "--max-time",
+                        "30",
+                        "--user-agent",
+                        os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT,
+                        "--referer",
+                        "https://grok.com/",
+                        page_url,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                if result.returncode == 0:
+                    html_payload = result.stdout or ""
 
-        html_normalized = html_payload.replace("\\/", "/").replace("\\u002F", "/")
-        match = re.search(
-            r"https?://imagine-public[.]x[.]ai/imagine-public/share-videos/[0-9a-fA-F-]{8,}\.mp4(?:[^\s\"'<>]*)",
-            html_normalized,
-            flags=re.IGNORECASE,
-        )
-        if match:
-            return match.group(0).strip()
-        return ""
+        return MainWindow._extract_public_video_url_from_html(html_payload)
 
     @staticmethod
     def _download_video_from_public_url(source_url: str, output_path: Path) -> Path:
