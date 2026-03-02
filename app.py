@@ -11613,11 +11613,11 @@ class MainWindow(QMainWindow):
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
             self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); reloading the active post page before retry."
+                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
             )
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
-            self._reload_active_browser_post_page(source_url, variant)
+            self._load_grok_homepage_then_return_to_post(source_url, variant)
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
             return False
@@ -11639,6 +11639,38 @@ class MainWindow(QMainWindow):
         if id_match:
             return f"https://grok.com/imagine/post/{id_match.group(1)}"
         return ""
+
+    def _load_grok_homepage_then_return_to_post(self, source_url: str, variant: int) -> None:
+        post_url = self._resolve_grok_post_page_url(source_url)
+        if not post_url:
+            self._append_log(
+                f"Variant {variant}: post URL unavailable; loading Grok homepage before retry."
+            )
+            fallback_script = f"(() => {{ try {{ window.location.href = {json.dumps(GROK_IMAGINE_URL)}; return {{ ok: true }}; }} catch (err) {{ return {{ ok: false, error: String(err && err.stack ? err.stack : err) }}; }} }})()"
+            self._run_active_browser_javascript(fallback_script)
+            return
+
+        self._append_log(
+            f"Variant {variant}: loading Grok homepage, then returning to post URL before retry ({post_url})."
+        )
+        hop_script = f"""
+            (() => {{
+                try {{
+                    const home = {json.dumps(GROK_IMAGINE_URL)};
+                    const post = {json.dumps(post_url)};
+                    window.location.href = home + (home.includes('?') ? '&' : '?') + 'refresh=' + String(Date.now());
+                    setTimeout(() => {{
+                        try {{
+                            window.location.href = post + (post.includes('?') ? '&' : '?') + 'refresh=' + String(Date.now());
+                        }} catch (_) {{}}
+                    }}, 1200);
+                    return {{ ok: true, home, post }};
+                }} catch (err) {{
+                    return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                }}
+            }})()
+        """
+        self._run_active_browser_javascript(hop_script)
 
     def _reload_active_browser_post_page(self, source_url: str, variant: int) -> None:
         post_url = self._resolve_grok_post_page_url(source_url)
