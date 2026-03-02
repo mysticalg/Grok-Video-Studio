@@ -97,6 +97,7 @@ CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = 60_000
+CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS = max(3000, int(os.getenv("CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS", "5000")))
 MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS = max(3, int(os.getenv("MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS", "30")))
 MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS = max(1, int(os.getenv("MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS", "2")))
@@ -10551,6 +10552,11 @@ class MainWindow(QMainWindow):
             _after_location_check,
         )
 
+    def _manual_download_poll_interval_ms(self) -> int:
+        if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
+            return CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS
+        return MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS
+
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
@@ -10572,7 +10578,7 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
         self._append_log(
-            f"Variant {variant}: manual download attempts are rate-limited to every {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000} seconds."
+            f"Variant {variant}: manual download attempts are rate-limited to every {self._manual_download_poll_interval_ms() // 1000} seconds."
         )
         self.manual_download_poll_timer.start(0)
 
@@ -10892,7 +10898,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Variant {current_variant}: poll returned no structured page state and no public video URL is known yet; waiting for direct URL signal."
                     )
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             status = result.get("status", "waiting")
@@ -10940,13 +10946,13 @@ class MainWindow(QMainWindow):
                 self.manual_video_start_click_sent = True
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "generating-indicator-visible":
                 self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "make-video-clicked":
@@ -10955,7 +10961,7 @@ class MainWindow(QMainWindow):
                 self._append_log(f"Variant {current_variant}: clicked '{label}' to start video generation.")
                 self.manual_video_start_click_sent = True
                 self.manual_video_make_click_fallback_used = True
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "make-video-awaiting-progress":
@@ -10968,12 +10974,12 @@ class MainWindow(QMainWindow):
                     self.manual_video_allow_make_click = True
                     self.manual_download_poll_timer.start(1200)
                     return
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "make-video-visible":
                 self._append_log(f"Variant {current_variant}: '{result.get('buttonLabel') or 'Make video'}' is visible but click did not register; retrying.")
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
@@ -10988,7 +10994,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Variant {current_variant}: status={status}; waiting for public video URL to appear."
                     )
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status in ("download-clicked", "download-visible"):
@@ -11006,7 +11012,7 @@ class MainWindow(QMainWindow):
                     if self._start_manual_direct_download(current_variant, direct_url):
                         self.manual_download_click_sent = True
                         self.manual_download_in_progress = True
-                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                         return
 
                 if self.manual_public_video_url:
@@ -11022,17 +11028,17 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Variant {current_variant}: Download control is visible but no public direct URL is known yet; waiting for URL discovery."
                 )
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             src = result.get("src") or ""
             if status == "video-buffering":
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             min_wait_elapsed = self.manual_download_started_at is not None and (time.time() - self.manual_download_started_at) >= 8
             if status not in ("video-src-ready", "direct-url-ready") or not src or not min_wait_elapsed:
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status == "direct-url-ready":
@@ -11042,14 +11048,14 @@ class MainWindow(QMainWindow):
                     f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL detection."
                 )
                 if self.manual_download_request_pending:
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                     return
                 source_type = result.get("sourceType") or "video-link"
                 self._append_log(f"Variant {current_variant} ready; downloading directly from detected video URL ({source_type}).")
                 if self._start_manual_direct_download(current_variant, src):
                     self.manual_download_click_sent = True
                     self.manual_download_in_progress = True
-                self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if not self.manual_download_click_sent:
@@ -11062,7 +11068,7 @@ class MainWindow(QMainWindow):
                     self.manual_download_click_sent = True
                     self.manual_download_in_progress = True
 
-            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
 
         self._run_active_browser_javascript(script, after_poll)
 
@@ -11448,7 +11454,7 @@ class MainWindow(QMainWindow):
             self.manual_public_moderation_count = 0
             self._append_log(f"WARNING: Direct URL download failed for variant {variant}: {exc}")
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
 
         file_size = download_path.stat().st_size if download_path.exists() else 0
@@ -11459,7 +11465,7 @@ class MainWindow(QMainWindow):
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
 
         self.manual_public_not_ready_count = 0
@@ -11813,12 +11819,12 @@ class MainWindow(QMainWindow):
                     self.manual_download_request_pending = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = time.time()
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                     return
 
                 if video_size < MIN_VALID_VIDEO_BYTES:
                     self._append_log(
-                        f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB); discarding and retrying in {MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS // 1000}s."
+                        f"WARNING: Downloaded manual variant {variant} is only {video_size} bytes (< 1MB); discarding and retrying in {self._manual_download_poll_interval_ms() // 1000}s."
                     )
                     if video_path.exists():
                         self._remove_file_best_effort(video_path, "manual browser download cleanup")
@@ -11829,7 +11835,7 @@ class MainWindow(QMainWindow):
                     self.manual_video_allow_make_click = True
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = time.time()
-                    self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                     return
 
                 self._complete_manual_video_download(video_path, variant)
@@ -11858,7 +11864,7 @@ class MainWindow(QMainWindow):
                     )
                     if self._start_manual_direct_download(variant, interrupted_url):
                         self.manual_download_click_sent = True
-                        self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                         return
 
                 self._append_log(f"ERROR: Download interrupted for manual variant {variant}; no usable fallback URL.")
