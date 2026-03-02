@@ -7415,9 +7415,10 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const emulateClick = (el) => {
-                        if (!el || !isVisible(el) || el.disabled) return false;
+                        if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
                         try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
                         el.dispatchEvent(new MouseEvent("mousedown", common));
                         try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
@@ -7426,7 +7427,7 @@ class MainWindow(QMainWindow):
                         return true;
                     };
                     const emulateActivate = (el) => {
-                        if (!el || !isVisible(el) || el.disabled) return false;
+                        if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
                         const common = { bubbles: true, cancelable: true, composed: true, view: window };
                         let fired = false;
                         try { el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
@@ -7513,6 +7514,7 @@ class MainWindow(QMainWindow):
                     const desiredQuality = "{selected_quality_label}";
                     const desiredDuration = "{selected_duration_label}";
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                     const interactiveSelector = "button, [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='menuitemradio'], [role='radio'], [data-radix-collection-item], label, span, div";
                     const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
                     const clickableAncestor = (el) => {
@@ -7539,7 +7541,7 @@ class MainWindow(QMainWindow):
                         });
 
                     const emulateClick = (el) => {
-                        if (!el || !isVisible(el) || el.disabled) return false;
+                        if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
                         const common = { bubbles: true, cancelable: true, composed: true };
                         try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
                         el.dispatchEvent(new MouseEvent("mousedown", common));
@@ -7549,7 +7551,7 @@ class MainWindow(QMainWindow):
                         return true;
                     };
                     const emulateActivate = (el) => {
-                        if (!el || !isVisible(el) || el.disabled) return false;
+                        if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
                         let fired = emulateClick(el);
                         try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
                         try { el.focus({ preventScroll: true }); fired = true; } catch (_) {}
@@ -7862,10 +7864,11 @@ class MainWindow(QMainWindow):
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                     const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
                     const common = { bubbles: true, cancelable: true, composed: true };
                     const click = (el) => {
-                        if (!el || !isVisible(el) || el.disabled) return false;
+                        if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
                         try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
                         try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
                         el.dispatchEvent(new MouseEvent("mousedown", common));
@@ -8626,9 +8629,10 @@ class MainWindow(QMainWindow):
                 const ACTION_DELAY_MS = 200;
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
                 const emulateClick = (el) => {{
-                    if (!el || !isVisible(el) || el.disabled) return false;
+                    if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
                     try {{ el.dispatchEvent(new PointerEvent("pointerdown", common)); }} catch (_) {{}}
                     el.dispatchEvent(new MouseEvent("mousedown", common));
                     try {{ el.dispatchEvent(new PointerEvent("pointerup", common)); }} catch (_) {{}}
@@ -8665,7 +8669,7 @@ class MainWindow(QMainWindow):
                     }}
 
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+                        .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -8865,10 +8869,10 @@ class MainWindow(QMainWindow):
                 }};
 
                 const explicitMakeVideoButton = [...document.querySelectorAll("button[aria-label='Make video'], button[aria-label='make video']")]
-                    .find((btn) => isVisible(btn) && !btn.disabled);
+                    .find((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled);
 
                 const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
-                    .filter((btn) => isVisible(btn) && !btn.disabled)
+                    .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
                     .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"))
                     .filter((btn) => !/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(`${{btn.getAttribute("aria-label") || ""}} ${{btn.textContent || ""}}`));
                 let submitButton = explicitMakeVideoButton || null;
@@ -9043,9 +9047,10 @@ class MainWindow(QMainWindow):
                         (() => {
                             try {
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                                 const common = { bubbles: true, cancelable: true, composed: true };
                                 const emulateClick = (el) => {
-                                    if (!el || !isVisible(el) || el.disabled) return false;
+                                    if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
                                     try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
                                     el.dispatchEvent(new MouseEvent("mousedown", common));
                                     try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
@@ -9090,7 +9095,7 @@ class MainWindow(QMainWindow):
 
                                 const tryClickFirstGeneratedTile = () => {
                                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                                        .filter((btn) => isVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+                                        .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
 
                                     if (makeVideoButtons.length) {
                                         makeVideoButtons.sort((a, b) => {
@@ -9196,6 +9201,7 @@ class MainWindow(QMainWindow):
                                 const makeVideoButtonVisible = !![...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
                                     .find((btn) => {
                                         if (!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length))) return false;
+                                        if (btn.closest("div.invisible")) return false;
                                         return !!btn.closest("[role='listitem'], li, article, figure");
                                     });
                                 const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
@@ -10832,9 +10838,10 @@ class MainWindow(QMainWindow):
             (() => {{
                 const allowMakeVideoClick = {allow_make_video_click};
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
                 const emulateClick = (el) => {{
-                    if (!el || !isVisible(el) || el.disabled) return false;
+                    if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
                     try {{
                         el.dispatchEvent(new PointerEvent("pointerdown", common));
                         el.dispatchEvent(new MouseEvent("mousedown", common));
@@ -11389,6 +11396,7 @@ class MainWindow(QMainWindow):
         script = f"""
             (() => {{
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                 const textOf = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
                 const postPattern = /\\/imagine\\/post\\/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})/i;
                 const toPostUrl = (raw) => {{
@@ -11432,7 +11440,7 @@ class MainWindow(QMainWindow):
                 }};
 
                 const makeButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i], button")]
-                    .filter((btn) => isVisible(btn) && /make\\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
+                    .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && /make\\s+video/i.test((btn.getAttribute('aria-label') || textOf(btn) || '')));
 
                 const links = [];
                 let clickedThisPass = 0;
