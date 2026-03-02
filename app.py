@@ -1028,7 +1028,7 @@ def _configure_qtwebengine_runtime() -> None:
         "--enable-zero-copy",
         "--ignore-gpu-blocklist",
         "--disable-renderer-backgrounding",
-        "--autoplay-policy=no-user-gesture-required",
+        "--autoplay-policy=user-gesture-required",
         f"--media-cache-size={_env_int('GROK_BROWSER_MEDIA_CACHE_BYTES', 268435456)}",
         f"--disk-cache-size={_env_int('GROK_BROWSER_DISK_CACHE_BYTES', 536870912)}",
     ]
@@ -3325,7 +3325,7 @@ class MainWindow(QMainWindow):
 
         for embedded_browser in (self.grok_browser_view, self.sora_browser):
             browser_settings = embedded_browser.settings()
-            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+            browser_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, True)
             browser_settings.setAttribute(
                 QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled,
                 accelerated_canvas_enabled,
@@ -3710,7 +3710,7 @@ class MainWindow(QMainWindow):
             )
         )
         browser.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+        browser.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, True)
         js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
         if js_popups_attr is not None:
             browser.settings().setAttribute(js_popups_attr, True)
@@ -13897,7 +13897,7 @@ class MainWindow(QMainWindow):
 
         popup_settings = popup_view.settings()
         popup_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        popup_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+        popup_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, True)
         js_popups_attr = getattr(QWebEngineSettings.WebAttribute, "JavascriptCanOpenWindows", None)
         if js_popups_attr is not None:
             popup_settings.setAttribute(js_popups_attr, True)
