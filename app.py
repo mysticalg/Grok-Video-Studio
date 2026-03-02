@@ -10444,6 +10444,65 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
+                if continue_last_video_mode:
+                    submit_guard_token = json.dumps(f"continue-last-video-submit-variant-{variant}")
+                    make_video_click_script = r"""
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const clean = (v) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
+                                const submitGuardToken = __SUBMIT_GUARD_TOKEN__;
+                                if (window.__grokContinueSubmitGuardToken === submitGuardToken) {
+                                    return { ok: true, guarded: true, status: "already-clicked" };
+                                }
+                                const candidates = [...document.querySelectorAll("button")]
+                                    .filter((btn) => isVisible(btn) && !btn.disabled);
+                                const target = candidates.find((btn) => {
+                                    const aria = clean(btn.getAttribute("aria-label"));
+                                    const text = clean(btn.textContent);
+                                    const sr = clean(btn.querySelector("span.sr-only")?.textContent || "");
+                                    if (/create\s+share\s+link|share\s+link|copy\s+link/.test(`${aria} ${text} ${sr}`)) return false;
+                                    return /^make\s+video$/.test(aria) || /^make\s+video$/.test(text) || /create\s+video/.test(sr);
+                                }) || null;
+                                if (!target) return { ok: false, error: "make-video-button-not-found" };
+
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                try { target.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                                target.dispatchEvent(new MouseEvent("mousedown", common));
+                                try { target.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                                target.dispatchEvent(new MouseEvent("mouseup", common));
+                                target.dispatchEvent(new MouseEvent("click", common));
+                                try { target.click(); } catch (_) {}
+                                window.__grokContinueSubmitGuardToken = submitGuardToken;
+                                return { ok: true, guarded: false, status: "clicked", label: (target.getAttribute("aria-label") || target.textContent || "").trim() };
+                            } catch (err) {
+                                return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                            }
+                        })()
+                    """
+
+                    def _after_make_video_click(click_result):
+                        if isinstance(click_result, dict) and click_result.get("ok"):
+                            if click_result.get("guarded"):
+                                self._append_log(
+                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate Make Video click; proceeding with download polling."
+                                )
+                            else:
+                                detail = click_result.get("label") or "Make video"
+                                self._append_log(
+                                    f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
+                                )
+                            QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            return
+
+                        self._append_log(
+                            f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
+                        )
+                        QTimer.singleShot(700, _run_flow_submit)
+
+                    self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
+                    return
+
                 use_enter_submit = True
                 if use_enter_submit:
                     enter_script = f"""
