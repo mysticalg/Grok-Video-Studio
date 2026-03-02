@@ -9252,12 +9252,16 @@ class MainWindow(QMainWindow):
                         QTimer.singleShot(1500, self._poll_for_manual_image)
                         return
 
-                    on_post_view_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
+                    probe_post_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
+                    current_url = self.browser.url().toString().strip() if self.browser is not None else ""
+                    current_post_id = self._extract_valid_grok_post_id(current_url)
+                    on_post_view_ready = probe_post_ready or bool(current_post_id)
                     if on_post_view_ready and status in ("callback-empty", "submit-in-flight"):
+                        source = "probe" if probe_post_ready else "python-url"
                         self._append_log(
                             "WARNING: Variant "
-                            f"{current_variant}: submit callback remained '{status}' after grace window on a valid post URL; "
-                            "switching to download polling to avoid submit-stage deadlock."
+                            f"{current_variant}: submit callback remained '{status}' after grace window on a valid post URL "
+                            f"({source}, post={current_post_id or 'unknown'}); switching to download polling to avoid submit-stage deadlock."
                         )
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_in_flight = False
