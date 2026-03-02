@@ -10759,23 +10759,30 @@ class MainWindow(QMainWindow):
         candidate = str(candidate_url or "").strip()
         pinned_post_url = str(getattr(self, "manual_last_generated_post_url", "") or "").strip()
         pinned_id = self._extract_grok_video_id_from_url(pinned_post_url)
+        pinned_public_url = str(getattr(self, "manual_public_video_url", "") or "").strip()
+        pinned_public_id = self._extract_grok_video_id_from_url(pinned_public_url)
         candidate_id = self._extract_grok_video_id_from_url(candidate)
 
-        if pinned_id:
-            pinned_public = f"https://imagine-public.x.ai/imagine-public/share-videos/{pinned_id}.mp4"
-            pinned_public = _ensure_public_download_query(pinned_public)
-            self.manual_public_video_url = pinned_public
-            if candidate_id and candidate_id != pinned_id:
+        authoritative_id = pinned_public_id or pinned_id
+        if authoritative_id:
+            authoritative_public = _ensure_public_download_query(
+                f"https://imagine-public.x.ai/imagine-public/share-videos/{authoritative_id}.mp4"
+            )
+            self.manual_public_video_url = authoritative_public
+            if candidate_id and candidate_id != authoritative_id:
                 self._append_log(
-                    f"Variant {variant}: ignoring mismatched detected video ID {candidate_id} during {reason}; using pinned generated post ID {pinned_id}."
+                    f"Variant {variant}: ignoring mismatched detected video ID {candidate_id} during {reason}; using pinned generated post ID {authoritative_id}."
                 )
-            return pinned_public
+            if pinned_id and pinned_public_id and pinned_id != pinned_public_id:
+                self._append_log(
+                    f"Variant {variant}: pinned post ID {pinned_id} disagreed with pinned public URL ID {pinned_public_id}; using latest pinned public ID."
+                )
+            return authoritative_public
 
         if candidate and re.match(r"^https?://", candidate, re.IGNORECASE):
             return candidate
 
-        fallback = str(getattr(self, "manual_public_video_url", "") or "").strip()
-        return fallback if re.match(r"^https?://", fallback, re.IGNORECASE) else ""
+        return pinned_public_url if re.match(r"^https?://", pinned_public_url, re.IGNORECASE) else ""
 
     def _capture_active_post_url_before_download_retry(self, variant: int, reason: str, on_complete: Callable[[], None] | None = None) -> None:
         capture_script = r"""
@@ -11782,6 +11789,13 @@ class MainWindow(QMainWindow):
             public_url = _ensure_public_download_query(str(result.get("publicUrl") or "").strip())
             if public_url:
                 self.manual_public_video_url = public_url
+                resolved_post = target_post
+                if not resolved_post:
+                    captured_id = self._extract_grok_video_id_from_url(public_url)
+                    if captured_id:
+                        resolved_post = f"https://grok.com/imagine/post/{captured_id}"
+                if resolved_post:
+                    self.manual_last_generated_post_url = resolved_post
                 self._append_log(
                     f"Variant {variant}: captured post/public URL from active page before homepage hop; will retry via {public_url}."
                 )
