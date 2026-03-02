@@ -8075,14 +8075,12 @@ class MainWindow(QMainWindow):
                         emitMouse(el, "mouseenter");
                         emitPointer(el, "pointerover");
                         emitMouse(el, "mouseover");
-                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) { try { el.focus(); fired = true; } catch (_) {} }
-                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); fired = true; } catch (_) {}
-                        emitPointer(el, "pointerdown");
-                        emitMouse(el, "mousedown");
-                        emitPointer(el, "pointerup");
-                        emitMouse(el, "mouseup");
-                        emitMouse(el, "click");
+                        try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (_) {} }
+                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); } catch (_) {}
                         try { el.click(); fired = true; } catch (_) {}
+                        if (!fired) {
+                            try { fired = el.dispatchEvent(new MouseEvent("click", { ...common, button: 0, buttons: 0 })); } catch (_) { fired = false; }
+                        }
                         return fired;
                     };
                     const activateSubmitAtPoint = (el) => {
@@ -8102,12 +8100,10 @@ class MainWindow(QMainWindow):
                             emitMouse(clickTarget, "mouseenter");
                             emitPointer(clickTarget, "pointerover");
                             emitMouse(clickTarget, "mouseover");
-                            emitPointer(clickTarget, "pointerdown");
-                            emitMouse(clickTarget, "mousedown");
-                            emitPointer(clickTarget, "pointerup");
-                            emitMouse(clickTarget, "mouseup");
-                            emitMouse(clickTarget, "click");
                             try { clickTarget.click(); fired = true; } catch (_) {}
+                            if (!fired) {
+                                try { fired = clickTarget.dispatchEvent(new MouseEvent("click", { ...common, button: 0, buttons: 0 })); } catch (_) { fired = false; }
+                            }
                         } catch (_) {}
                         return { fired, x, y };
                     };
@@ -10129,12 +10125,15 @@ class MainWindow(QMainWindow):
                     const isShareLinkButton = (el) => /create\s+share\s+link|share\s+link|copy\s+link/i.test(
                         `${clean(el?.getAttribute("aria-label"))} ${clean(el?.textContent)}`
                     );
+                    const isSearchButton = (el) => /(^|\s)search(\s|$)/i.test(
+                        `${clean(el?.getAttribute("aria-label"))} ${clean(el?.textContent)} ${clean(el?.querySelector("span.sr-only")?.textContent || "")}`
+                    );
                     const hasCreateVideoSrOnly = (el) => /create\s+video/i.test(clean(el?.querySelector("span.sr-only")?.textContent || ""));
-                    const primarySubmit = submitButtons.find((el) => hasCreateVideoSrOnly(el) && !isShareLinkButton(el))
-                        || submitButtons.find((el) => /^make\s+video$/i.test(clean(el.getAttribute("aria-label"))) && !isShareLinkButton(el))
-                        || submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit" && !isShareLinkButton(el))
-                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)) && !isShareLinkButton(el))
-                        || submitButtons.find((el) => !isShareLinkButton(el))
+                    const primarySubmit = submitButtons.find((el) => hasCreateVideoSrOnly(el) && !isShareLinkButton(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => /^make\s+video$/i.test(clean(el.getAttribute("aria-label"))) && !isShareLinkButton(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit" && !isShareLinkButton(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)) && !isShareLinkButton(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => !isShareLinkButton(el) && !isSearchButton(el))
                         || null;
 
                     const recorderSelectors = [
@@ -10167,6 +10166,7 @@ class MainWindow(QMainWindow):
                             const aria = clean(btn.getAttribute("aria-label")).toLowerCase();
                             const text = clean(btn.textContent).toLowerCase();
                             if (/create\s+share\s+link|share\s+link|copy\s+link/i.test(`${aria} ${text}`)) return false;
+                            if (/search/.test(`${aria} ${text} ${srOnly}`)) return false;
                             return /create\s+video/.test(srOnly) || /^make\s+video$/.test(aria) || /^make\s+video$/.test(text);
                         }) || null;
                     try { promptInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
@@ -10208,14 +10208,12 @@ class MainWindow(QMainWindow):
                         emitMouse(el, "mouseenter");
                         emitPointer(el, "pointerover");
                         emitMouse(el, "mouseover");
-                        try { el.focus({ preventScroll: true }); fired = true; } catch (_) { try { el.focus(); fired = true; } catch (_) {} }
-                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); fired = true; } catch (_) {}
-                        emitPointer(el, "pointerdown");
-                        emitMouse(el, "mousedown");
-                        emitPointer(el, "pointerup");
-                        emitMouse(el, "mouseup");
-                        emitMouse(el, "click");
+                        try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (_) {} }
+                        try { el.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })); } catch (_) {}
                         try { el.click(); fired = true; } catch (_) {}
+                        if (!fired) {
+                            try { fired = el.dispatchEvent(new MouseEvent("click", { ...common, button: 0, buttons: 0 })); } catch (_) { fired = false; }
+                        }
                         return fired;
                     };
                     const activateSubmitAtPoint = (el) => {
@@ -10235,12 +10233,10 @@ class MainWindow(QMainWindow):
                             emitMouse(clickTarget, "mouseenter");
                             emitPointer(clickTarget, "pointerover");
                             emitMouse(clickTarget, "mouseover");
-                            emitPointer(clickTarget, "pointerdown");
-                            emitMouse(clickTarget, "mousedown");
-                            emitPointer(clickTarget, "pointerup");
-                            emitMouse(clickTarget, "mouseup");
-                            emitMouse(clickTarget, "click");
                             try { clickTarget.click(); fired = true; } catch (_) {}
+                            if (!fired) {
+                                try { fired = clickTarget.dispatchEvent(new MouseEvent("click", { ...common, button: 0, buttons: 0 })); } catch (_) { fired = false; }
+                            }
                         } catch (_) {}
                         return { fired, x, y };
                     };
@@ -10408,6 +10404,7 @@ class MainWindow(QMainWindow):
             self._run_active_browser_javascript(submit_script, _after_final_submit)
 
         def _after_final_submit(submit_result):
+            submit_ok = bool(isinstance(submit_result, dict) and submit_result.get("ok"))
             if not isinstance(submit_result, dict) or not submit_result.get("ok"):
                 error_detail = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
                 if error_detail not in (None, "", "callback-empty"):
@@ -10418,7 +10415,9 @@ class MainWindow(QMainWindow):
                 f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
             self.manual_continue_setup_in_progress = False
-            self._trigger_browser_video_download(variant)
+            # Avoid duplicate submit clicks: if button-submit succeeded, polling should only wait for
+            # progress/download controls and must not click Make/Create video again.
+            self._trigger_browser_video_download(variant, allow_make_video_click=not submit_ok)
 
         def _click_make_video_after_prompt() -> None:
             step_script = click_option_script_template.replace('"{target_label}"', json.dumps("Make Video"))
@@ -10943,6 +10942,26 @@ class MainWindow(QMainWindow):
                         if (/redo/i.test(combined)) return false;
                         return /make\\s+video/i.test(combined);
                     }});
+                const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
+                const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+                const createVideoSubmitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label='Submit'], button[aria-label='submit']")]
+                    .find((btn) => {{
+                        if (!isVisible(btn) || btn.disabled) return false;
+                        if (btn.closest("[role='dialog'], dialog, [aria-modal='true']")) return false;
+                        const aria = clean(btn.getAttribute("aria-label"));
+                        const txt = clean(btn.textContent);
+                        const srOnly = clean(btn.querySelector(".sr-only")?.textContent || "");
+                        const descriptor = `${{aria}} ${{txt}} ${{srOnly}}`;
+                        if (/search/.test(descriptor)) return false;
+                        if (/create\\s+video|make\\s+video/.test(descriptor)) return true;
+                        if (aria === "submit" && /create\\s+video|make\\s+video/.test(srOnly)) return true;
+                        if (aria === "submit" && promptInput) {{
+                            const promptContainer = promptInput.closest("form, section, main, [data-radix-scroll-area-viewport]") || promptInput.parentElement;
+                            if (promptContainer && promptContainer.contains(btn)) return true;
+                        }}
+                        return false;
+                    }});
+                const startVideoButton = makeVideoButton || createVideoSubmitButton;
 
                 const video = document.querySelector("video");
                 const source = document.querySelector("video source");
@@ -11062,12 +11081,17 @@ class MainWindow(QMainWindow):
                     return {{ status: "rendering-cancel-visible" }};
                 }}
 
-                if (makeVideoButton) {{
+                if (startVideoButton) {{
                     window.__grokManualDownloadClicked = false;
-                    const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
+                    const buttonLabel = (
+                        startVideoButton.getAttribute("aria-label")
+                        || startVideoButton.querySelector(".sr-only")?.textContent
+                        || startVideoButton.textContent
+                        || ""
+                    ).trim();
                     if (allowMakeVideoClick) {{
                         return {{
-                            status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
+                            status: emulateClick(startVideoButton) ? "make-video-clicked" : "make-video-visible",
                             buttonLabel,
                         }};
                     }}
