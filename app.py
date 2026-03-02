@@ -2756,6 +2756,7 @@ class MainWindow(QMainWindow):
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -10685,6 +10686,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -10736,6 +10738,42 @@ class MainWindow(QMainWindow):
 
         self._run_active_browser_javascript(refresh_script, _after_refresh)
 
+    def _capture_active_post_url_before_download_retry(self, variant: int, reason: str, on_complete: Callable[[], None] | None = None) -> None:
+        capture_script = r"""
+            (() => {
+                try {
+                    const currentUrl = String((window.location && window.location.href) || "").trim();
+                    const match = currentUrl.match(/https?:\/\/(?:www\.)?grok\.com\/imagine\/post\/([0-9a-fA-F-]{8,})/i)
+                        || currentUrl.match(/\/imagine\/post\/([0-9a-fA-F-]{8,})/i);
+                    const postId = match ? String(match[1] || "").trim() : "";
+                    const postUrl = postId ? `https://grok.com/imagine/post/${postId}` : "";
+                    const publicUrl = postId ? `https://imagine-public.x.ai/imagine-public/share-videos/${postId}.mp4` : "";
+                    return { ok: true, currentUrl, postId, postUrl, publicUrl };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _after_capture(result) -> None:
+            if isinstance(result, dict) and result.get("ok"):
+                post_url = str(result.get("postUrl") or "").strip()
+                public_url = _ensure_public_download_query(str(result.get("publicUrl") or "").strip())
+                if post_url:
+                    self.manual_last_generated_post_url = post_url
+                    self._append_log(
+                        f"Variant {variant}: captured current generated post URL before retry ({reason}): {post_url}."
+                    )
+                if public_url:
+                    self.manual_public_video_url = public_url
+                    self._append_log(
+                        f"Variant {variant}: pinned public download URL before retry ({reason}): {public_url}."
+                    )
+            if on_complete is not None:
+                on_complete()
+
+        self._run_active_browser_javascript(capture_script, _after_capture)
+
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -10760,6 +10798,7 @@ class MainWindow(QMainWindow):
             self.manual_refresh_after_generating_sent = False
             self.manual_refresh_after_progress_100_sent = False
             self.manual_public_video_url = ""
+            self.manual_last_generated_post_url = ""
             self.manual_download_attempt_count = 0
             self.manual_download_poll_attempt_count = 0
             self.manual_download_last_status = ""
@@ -11109,11 +11148,19 @@ class MainWindow(QMainWindow):
                 progress_done = progress_text in {"100%", "100"}
                 if progress_done and not self.manual_refresh_after_progress_100_sent:
                     self.manual_refresh_after_progress_100_sent = True
-                    self._refresh_active_browser_page_before_download(
+
+                    def _after_capture_progress_100() -> None:
+                        self._refresh_active_browser_page_before_download(
+                            current_variant,
+                            "render reached 100%",
+                        )
+                        self.manual_download_poll_timer.start(3000)
+
+                    self._capture_active_post_url_before_download_retry(
                         current_variant,
-                        "render reached 100%",
+                        "progress reached 100%",
+                        _after_capture_progress_100,
                     )
-                    self.manual_download_poll_timer.start(3000)
                     return
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
@@ -11530,6 +11577,7 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -11641,7 +11689,9 @@ class MainWindow(QMainWindow):
         return ""
 
     def _load_grok_homepage_then_return_to_post(self, source_url: str, variant: int) -> None:
-        post_url = self._resolve_grok_post_page_url(source_url)
+        post_url = str(getattr(self, "manual_last_generated_post_url", "") or "").strip()
+        if not post_url:
+            post_url = self._resolve_grok_post_page_url(source_url)
         self._append_log(
             f"Variant {variant}: checking active URL for post ID, loading Grok homepage, then returning to post before retry."
         )
@@ -11968,6 +12018,7 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
@@ -12186,6 +12237,7 @@ class MainWindow(QMainWindow):
         self.manual_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
+        self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
         self.manual_download_poll_attempt_count = 0
         self.manual_download_last_status = ""
