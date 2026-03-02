@@ -11149,6 +11149,16 @@ class MainWindow(QMainWindow):
                 self.manual_download_attempt_count += 1
                 self.manual_download_click_sent = True
                 self.manual_download_in_progress = True
+                direct_url = str(result.get("directUrl") or "").strip()
+                if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
+                    self.manual_public_video_url = direct_url
+                    if self.manual_download_attempt_count >= 2:
+                        self._append_log(
+                            f"Variant {current_variant}: download control is visible but browser download event is still pending; polling the public URL directly (attempt #{self.manual_download_attempt_count})."
+                        )
+                        if self._start_manual_direct_download(current_variant, direct_url):
+                            self.manual_download_click_sent = True
+                        return
                 click_state = "clicked" if status == "download-clicked" else "visible"
                 self._append_log(
                     f"Variant {current_variant}: download control is {click_state}; waiting for browser download event (attempt #{self.manual_download_attempt_count})."
@@ -11158,9 +11168,19 @@ class MainWindow(QMainWindow):
 
             if status == "direct-url-ready":
                 self.manual_download_attempt_count += 1
+                direct_url = str(result.get("src") or "").strip()
+                if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
+                    self.manual_public_video_url = direct_url
+                    self._append_log(
+                        f"Variant {current_variant}: direct URL detected; polling/fetching the public URL directly (attempt #{self.manual_download_attempt_count})."
+                    )
+                    if self._start_manual_direct_download(current_variant, direct_url):
+                        self.manual_download_click_sent = True
+                    return
+
                 if not self.manual_download_click_sent:
                     self._append_log(
-                        f"Variant {current_variant}: direct URL detected; triggering Download button click and waiting for browser download event (attempt #{self.manual_download_attempt_count})."
+                        f"Variant {current_variant}: direct URL status reported without usable URL; triggering Download button click (attempt #{self.manual_download_attempt_count})."
                     )
                     click_download_script = r"""
                         (() => {
