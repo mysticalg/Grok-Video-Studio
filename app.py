@@ -2731,6 +2731,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type: str | None = None
         self.pending_manual_image_prompt: str | None = None
         self.pending_manual_redirect_target = "grok"
+        self.manual_browser_locked_target: str | None = None
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
@@ -7334,6 +7335,8 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = "image"
         self.pending_manual_image_prompt = prompt
         self.pending_manual_redirect_target = self._active_manual_browser_target()
+        self.manual_browser_locked_target = self.pending_manual_redirect_target
+        self.browser = self.sora_browser if self.manual_browser_locked_target == "sora" else self.grok_browser_view
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
@@ -9566,6 +9569,8 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download = variant
         self.pending_manual_download_type = "video"
         self.pending_manual_redirect_target = self._active_manual_browser_target()
+        self.manual_browser_locked_target = self.pending_manual_redirect_target
+        self.browser = self.sora_browser if self.manual_browser_locked_target == "sora" else self.grok_browser_view
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         action_delay_ms = int(self.automation_action_delay_ms.value())
@@ -12103,6 +12108,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = None
         self.pending_manual_image_prompt = None
         self.pending_manual_redirect_target = "grok"
+        self.manual_browser_locked_target = None
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
@@ -12321,6 +12327,8 @@ class MainWindow(QMainWindow):
         self.pending_manual_variant_for_download = None
         self.pending_manual_download_type = None
         self.pending_manual_image_prompt = None
+        self.pending_manual_redirect_target = "grok"
+        self.manual_browser_locked_target = None
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
@@ -13731,9 +13739,20 @@ class MainWindow(QMainWindow):
         )
 
     def _on_browser_tab_changed(self, index: int) -> None:
+        tab_target: str | None = None
         if index == getattr(self, "grok_browser_tab_index", -1):
-            self.browser = self.grok_browser_view
+            tab_target = "grok"
         elif index == getattr(self, "sora_browser_tab_index", -1):
+            tab_target = "sora"
+
+        locked_target = (self.manual_browser_locked_target or "").strip().lower()
+        if tab_target and locked_target in {"grok", "sora"} and tab_target != locked_target:
+            self._append_log(
+                f"Manual automation is locked to {locked_target} tab; keeping automation actions isolated from active tab switch to {tab_target}."
+            )
+        elif tab_target == "grok":
+            self.browser = self.grok_browser_view
+        elif tab_target == "sora":
             self.browser = self.sora_browser
             current_url = self.sora_browser.url().toString().strip().lower()
             if current_url.startswith("https://grok.com") or current_url.startswith("http://grok.com"):
