@@ -84,6 +84,7 @@ class AutomationChromeManager:
             "--no-default-browser-check",
             "--disable-popup-blocking",
             "--disable-features=Translate",
+            "--autoplay-policy=user-gesture-required",
             f"--load-extension={extension_dir}",
         ]
         self.process = subprocess.Popen(args)
