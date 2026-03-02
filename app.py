@@ -10515,13 +10515,13 @@ class MainWindow(QMainWindow):
             )
         elif continue_last_video_mode:
             option_steps = [
-                ("type", "Make Video"),
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
                 ("ratio", selected_aspect_ratio),
+                ("type", "Make Video"),
             ]
             self._append_log(
-                f"Variant {variant}: continue-last-video mode detected; applying 'Make Video' first, then resolution, duration, and aspect ratio before prompt entry."
+                f"Variant {variant}: continue-last-video mode detected; applying resolution, duration, and aspect ratio first, then 'Make Video' last before prompt entry."
             )
         else:
             option_steps = [
