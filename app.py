@@ -10950,6 +10950,7 @@ class MainWindow(QMainWindow):
                     if (/[.](?:mp4|webm|mov|m4v)(?:$|[?#])/i.test(lowered)) return true;
                     if (/[?&](?:mime|content_type|content-type|response-content-type)=video(?:%2[fF]|\\/)/i.test(lowered)) return true;
                     if (/[?&](?:format|ext)=mp4(?:$|[&#])/i.test(lowered)) return true;
+                    if (/^https?:[/][/]videos[.]openai[.]com[/]/i.test(lowered) && /[/](?:drvs|thumbnail|raw)(?:[/]|[?#])/i.test(lowered)) return true;
                     if (/[/](?:video|videos|render|download|media)[/]/i.test(lowered) && /[?&](?:token|sig|signature|expires|x-amz-)/i.test(lowered)) return true;
                     return /(^|[?&])(?:type|kind)=video(?:$|[&#])/i.test(lowered);
                 }};
@@ -10985,6 +10986,26 @@ class MainWindow(QMainWindow):
                 const firstDirectUrl = directUrlCandidates.find((candidate) => isDirectVideoUrl(candidate));
                 if (firstDirectUrl) {{
                     return {{ status: "direct-url-ready", src: firstDirectUrl, sourceType: "page-scan" }};
+                }}
+
+                const firstDraftCell = document.querySelector('div.w-full [data-index="0"]');
+                if (firstDraftCell) {{
+                    const firstDraftVideo = firstDraftCell.querySelector("video[src], source[src], [data-video-url], [data-url], [data-src]");
+                    const firstDraftVideoSrc = normalizeAbsoluteUrl(
+                        firstDraftVideo?.getAttribute?.("src")
+                        || firstDraftVideo?.getAttribute?.("data-video-url")
+                        || firstDraftVideo?.getAttribute?.("data-url")
+                        || firstDraftVideo?.getAttribute?.("data-src")
+                        || ""
+                    );
+                    if (isDirectVideoUrl(firstDraftVideoSrc)) {{
+                        return {{ status: "direct-url-ready", src: firstDraftVideoSrc, sourceType: "first-draft-card" }};
+                    }}
+
+                    const firstDraftAnchorHref = normalizeAbsoluteUrl(firstDraftCell.querySelector("a[href]")?.getAttribute?.("href") || "");
+                    if (/[/]d[/]gen_/i.test(firstDraftAnchorHref) && firstDraftVideoSrc) {{
+                        return {{ status: "draft-ready-no-direct-download", href: firstDraftAnchorHref, src: firstDraftVideoSrc }};
+                    }}
                 }}
 
                 const isDownloadActionButton = (btn) => {{
@@ -11279,13 +11300,13 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
-            if status == "direct-url-ready":
+            if status in ("direct-url-ready", "draft-ready-no-direct-download"):
                 self.manual_download_attempt_count += 1
                 direct_url = str(result.get("src") or "").strip()
                 resolved_url = self._resolve_manual_retry_source_url(
                     current_variant,
                     direct_url,
-                    "direct-url-ready",
+                    status,
                 )
                 if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
                     if self.manual_download_attempt_count == 1:
