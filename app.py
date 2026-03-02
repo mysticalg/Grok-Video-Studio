@@ -13722,6 +13722,10 @@ class MainWindow(QMainWindow):
             self.browser = self.grok_browser_view
         elif index == getattr(self, "sora_browser_tab_index", -1):
             self.browser = self.sora_browser
+            current_url = self.sora_browser.url().toString().strip().lower()
+            if current_url.startswith("https://grok.com") or current_url.startswith("http://grok.com"):
+                self.sora_browser.setUrl(QUrl(SORA_DRAFTS_URL))
+                self._append_log("Sora tab had a Grok URL loaded; restoring sora.chatgpt.com/drafts.")
 
     def _should_hide_embedded_browser_container(self, browser: QWebEngineView) -> bool:
         role = self.browser_roles.get(browser, "")
