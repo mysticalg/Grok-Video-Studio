@@ -9234,21 +9234,23 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
+                    self.manual_image_submit_in_flight = False
+                    self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count += 1
                     if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
                         self._append_log(
                             "WARNING: Variant "
                             f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so continuing image polling instead of forcing download."
+                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so retrying prompt submit."
                         )
                         self.manual_image_submit_retry_count = 0
-                        QTimer.singleShot(2000, self._poll_for_manual_image)
+                        QTimer.singleShot(1200, self._poll_for_manual_image)
                         return
 
                     self._append_log(
-                        f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying..."
+                        f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying prompt submit..."
                     )
-                    QTimer.singleShot(3000, self._poll_for_manual_image)
+                    QTimer.singleShot(1500, self._poll_for_manual_image)
 
                 self.browser.page().runJavaScript(submit_ready_probe_script, _after_submit_ready_probe)
                 return
