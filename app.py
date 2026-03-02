@@ -10938,6 +10938,26 @@ class MainWindow(QMainWindow):
                         if (/redo/i.test(combined)) return false;
                         return /make\\s+video/i.test(combined);
                     }});
+                const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
+                const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+                const createVideoSubmitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label='Submit'], button[aria-label='submit']")]
+                    .find((btn) => {{
+                        if (!isVisible(btn) || btn.disabled) return false;
+                        if (btn.closest("[role='dialog'], dialog, [aria-modal='true']")) return false;
+                        const aria = clean(btn.getAttribute("aria-label"));
+                        const txt = clean(btn.textContent);
+                        const srOnly = clean(btn.querySelector(".sr-only")?.textContent || "");
+                        const descriptor = `${{aria}} ${{txt}} ${{srOnly}}`;
+                        if (/search/.test(descriptor)) return false;
+                        if (/create\\s+video|make\\s+video/.test(descriptor)) return true;
+                        if (aria === "submit" && /create\\s+video|make\\s+video/.test(srOnly)) return true;
+                        if (aria === "submit" && promptInput) {{
+                            const promptContainer = promptInput.closest("form, section, main, [data-radix-scroll-area-viewport]") || promptInput.parentElement;
+                            if (promptContainer && promptContainer.contains(btn)) return true;
+                        }}
+                        return false;
+                    }});
+                const startVideoButton = makeVideoButton || createVideoSubmitButton;
 
                 const video = document.querySelector("video");
                 const source = document.querySelector("video source");
@@ -11057,12 +11077,17 @@ class MainWindow(QMainWindow):
                     return {{ status: "rendering-cancel-visible" }};
                 }}
 
-                if (makeVideoButton) {{
+                if (startVideoButton) {{
                     window.__grokManualDownloadClicked = false;
-                    const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
+                    const buttonLabel = (
+                        startVideoButton.getAttribute("aria-label")
+                        || startVideoButton.querySelector(".sr-only")?.textContent
+                        || startVideoButton.textContent
+                        || ""
+                    ).trim();
                     if (allowMakeVideoClick) {{
                         return {{
-                            status: emulateClick(makeVideoButton) ? "make-video-clicked" : "make-video-visible",
+                            status: emulateClick(startVideoButton) ? "make-video-clicked" : "make-video-visible",
                             buttonLabel,
                         }};
                     }}
