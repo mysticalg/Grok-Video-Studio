@@ -8807,13 +8807,21 @@ class MainWindow(QMainWindow):
                     "input[placeholder*='Type to customize video' i]",
                     "textarea[placeholder*='Type to imagine' i]",
                     "input[placeholder*='Type to imagine' i]",
+                    "textarea[aria-label*='Make a video' i]",
+                    "input[aria-label*='Make a video' i]",
                     "div.tiptap.ProseMirror[contenteditable='true']",
                     "[contenteditable='true'][aria-label*='Type to customize video' i]",
                     "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                    "[contenteditable='true'][aria-label*='Make a video' i]",
                     "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
                     "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                    "[contenteditable='true'][data-placeholder*='Customize video' i]",
                 ];
-                const promptInput = promptSelectors.map((sel) => document.querySelector(sel)).find(Boolean);
+                const promptCandidates = promptSelectors
+                    .flatMap((sel) => [...document.querySelectorAll(sel)])
+                    .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                    .filter((el) => isVisible(el) && !el.disabled);
+                const promptInput = promptCandidates[0] || null;
                 if (!promptInput) return {{ ok: false, status: "image-clicked-waiting-prompt-input" }};
 
                 promptInput.focus();
@@ -8838,26 +8846,60 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                let enterDispatched = false;
-                const enterEventCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                await sleep(ACTION_DELAY_MS);
+                const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
+                const scoreSubmit = (btn, index) => {{
+                    if (!isVisible(btn) || btn.disabled) return Number.MAX_SAFE_INTEGER;
+                    const raw = `${{btn.getAttribute("aria-label") || ""}} ${{btn.textContent || ""}}`.trim().toLowerCase();
+                    const hasArrowIcon = !!btn.querySelector("svg");
+                    let score = index * 25;
+                    if (/submit|send|generate|create|make\\s+video/.test(raw)) score -= 400;
+                    if (hasArrowIcon) score -= 120;
+                    if (promptRect && typeof btn.getBoundingClientRect === "function") {{
+                        const rect = btn.getBoundingClientRect();
+                        const cx = rect.left + rect.width / 2;
+                        const cy = rect.top + rect.height / 2;
+                        const pCx = promptRect.left + promptRect.width / 2;
+                        const pCy = promptRect.top + promptRect.height / 2;
+                        score += Math.hypot(cx - pCx, cy - pCy);
+                        if (cx > pCx) score -= 60;
+                    }}
+                    return score;
+                }};
 
-                const submitButton = [...document.querySelectorAll("button[type='submit'], button[aria-label*='submit' i], button")]
-                    .find((btn) => isVisible(btn) && !btn.disabled && /submit|make\\s+video|send|generate|create/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
+                    .filter((btn) => isVisible(btn) && !btn.disabled)
+                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
+                let submitButton = null;
+                let submitScore = Number.MAX_SAFE_INTEGER;
+                submitCandidates.forEach((btn, idx) => {{
+                    const score = scoreSubmit(btn, idx);
+                    if (score < submitScore) {{
+                        submitScore = score;
+                        submitButton = btn;
+                    }}
+                }});
 
                 let submitted = false;
-                let submitLabel = "enter-key";
-                if (submitButton) {{
+                let submitLabel = "";
+                if (submitButton && submitScore < Number.MAX_SAFE_INTEGER) {{
                     await sleep(ACTION_DELAY_MS);
                     submitted = emulateClick(submitButton);
-                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || submitLabel;
-                }} else if (enterDispatched) {{
-                    submitted = true;
+                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "submit-button";
                 }}
 
+                let enterDispatched = false;
+                if (!submitted) {{
+                    const enterEventCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
+                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                    await sleep(ACTION_DELAY_MS);
+                    submitted = enterDispatched;
+                    submitLabel = submitLabel || "enter-key";
+                }}
+
+                const postUrlNow = String((window.location && window.location.href) || "");
+                const onPostUrlNow = /\\/imagine\\/post\\//i.test(postUrlNow);
                 if (submitted) window.__grokManualImageSubmitToken = submitToken;
                 return {{
                     ok: submitted,
@@ -8865,6 +8907,8 @@ class MainWindow(QMainWindow):
                     buttonLabel: submitLabel,
                     enterDispatched,
                     filledLength: typedValue.length,
+                    onPostUrlNow,
+                    submitScore,
                 }};
             }})()
         """
@@ -10232,7 +10276,7 @@ class MainWindow(QMainWindow):
                         if (tag !== "button") return false;
                         const aria = clean(el.getAttribute("aria-label"));
                         const txt = clean(el.textContent);
-                        if (!/^make\s+video$/i.test(aria || txt)) return false;
+                        if (!/^make\\s+video$/i.test(aria || txt)) return false;
                         const role = clean(el.getAttribute("role")).toLowerCase();
                         if (role === "menuitem" || role === "menuitemradio") return false;
                         return true;
