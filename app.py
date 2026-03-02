@@ -96,7 +96,7 @@ THUMBNAILS_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
-MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = 60_000
+MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = max(10_000, int(os.getenv("MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS", "10000")))
 CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS = max(3000, int(os.getenv("CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS", "5000")))
 MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS = max(3, int(os.getenv("MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS", "30")))
@@ -11082,6 +11082,38 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Variant {current_variant}: download control is {click_state}; waiting for browser download event (attempt #{self.manual_download_attempt_count})."
                 )
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                return
+
+            if status == "direct-url-ready":
+                self.manual_download_attempt_count += 1
+                if not self.manual_download_click_sent:
+                    self._append_log(
+                        f"Variant {current_variant}: direct URL detected; triggering Download button click and waiting for browser download event (attempt #{self.manual_download_attempt_count})."
+                    )
+                    click_download_script = r"""
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const btn = [...document.querySelectorAll("button[aria-label='Download'], [role='button'][aria-label='Download']")]
+                                    .find((el) => isVisible(el) && !el.disabled);
+                                if (!btn) return { ok: false, status: 'download-button-not-found' };
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                try { btn.dispatchEvent(new PointerEvent('pointerdown', common)); } catch (_) {}
+                                btn.dispatchEvent(new MouseEvent('mousedown', common));
+                                try { btn.dispatchEvent(new PointerEvent('pointerup', common)); } catch (_) {}
+                                btn.dispatchEvent(new MouseEvent('mouseup', common));
+                                btn.dispatchEvent(new MouseEvent('click', common));
+                                try { btn.click(); } catch (_) {}
+                                return { ok: true, status: 'download-clicked' };
+                            } catch (err) {
+                                return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                            }
+                        })()
+                    """
+                    self._run_active_browser_javascript(click_download_script)
+                    self.manual_download_click_sent = True
+                    self.manual_download_in_progress = True
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
