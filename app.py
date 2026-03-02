@@ -10650,10 +10650,17 @@ class MainWindow(QMainWindow):
                         return /^\\d{{1,3}}%$/.test(normalized);
                     }});
                 if (percentNode) {{
+                    window.__grokManualDownloadClicked = false;
                     return {{
                         status: "progress",
                         progressText: normalizeProgressText(percentNode.textContent || ""),
                     }};
+                }}
+
+                const moderationIcon = [...document.querySelectorAll("svg.lucide-eye-off, svg[class*='lucide-eye-off'], svg.lucide.lucide-eye-off")]
+                    .find((el) => isVisible(el));
+                if (moderationIcon) {{
+                    return {{ status: "moderated-content-detected" }};
                 }}
 
                 const generatingIndicator = [...document.querySelectorAll("span")]
@@ -10665,6 +10672,7 @@ class MainWindow(QMainWindow):
                         return /animate-pulse/.test(cls) || /font-semibold/.test(cls);
                     }});
                 if (generatingIndicator) {{
+                    window.__grokManualDownloadClicked = false;
                     return {{ status: "generating-indicator-visible", progressText: "Generating" }};
                 }}
 
@@ -10809,6 +10817,7 @@ class MainWindow(QMainWindow):
                 }}
 
                 if (makeVideoButton) {{
+                    window.__grokManualDownloadClicked = false;
                     const buttonLabel = (makeVideoButton.getAttribute("aria-label") || makeVideoButton.textContent || "").trim();
                     if (allowMakeVideoClick) {{
                         return {{
@@ -10844,9 +10853,13 @@ class MainWindow(QMainWindow):
                         }}
                     }} catch (_) {{}}
                     const directUrl = directUrlCandidatesForDownload.find((candidate) => isDirectVideoUrl(candidate)) || "";
+                    const alreadyClicked = window.__grokManualDownloadClicked === true;
+                    const clickedNow = !directUrl && !alreadyClicked ? emulateClick(downloadButton) : false;
+                    if (clickedNow) window.__grokManualDownloadClicked = true;
                     return {{
-                        status: "download-visible",
+                        status: clickedNow ? "download-clicked" : "download-visible",
                         directUrl,
+                        clickedNow,
                     }};
                 }}
 
@@ -10940,6 +10953,25 @@ class MainWindow(QMainWindow):
                         pass
                     self.manual_download_poll_timer.start(3000)
                     return
+
+            if status == "moderated-content-detected":
+                self._append_log(
+                    f"Variant {current_variant}: moderation indicator detected (eye-off icon). Aborting this flow and returning to homepage."
+                )
+                self.pending_manual_variant_for_download = None
+                self.pending_manual_download_type = None
+                self.manual_download_click_sent = False
+                self.manual_download_request_pending = False
+                self.manual_download_in_progress = False
+                self.manual_download_started_at = None
+                self.manual_download_deadline = None
+                self.manual_video_start_click_sent = False
+                self.manual_video_make_click_fallback_used = False
+                self.manual_make_video_awaiting_progress_count = 0
+                self.manual_video_allow_make_click = True
+                self.continue_from_frame_active = False
+                QTimer.singleShot(0, self.show_browser_page)
+                return
 
             if status == "progress":
                 self.manual_make_video_awaiting_progress_count = 0
