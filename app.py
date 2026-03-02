@@ -10980,13 +10980,10 @@ class MainWindow(QMainWindow):
                         }}
                     }} catch (_) {{}}
                     const directUrl = directUrlCandidatesForDownload.find((candidate) => isDirectVideoUrl(candidate)) || "";
-                    const alreadyClicked = window.__grokManualDownloadClicked === true;
-                    const clickedNow = !directUrl && !alreadyClicked ? emulateClick(downloadButton) : false;
-                    if (clickedNow) window.__grokManualDownloadClicked = true;
                     return {{
-                        status: clickedNow ? "download-clicked" : "download-visible",
+                        status: "download-visible",
                         directUrl,
-                        clickedNow,
+                        clickedNow: false,
                     }};
                 }}
 
@@ -11147,8 +11144,12 @@ class MainWindow(QMainWindow):
 
             if status in ("download-clicked", "download-visible"):
                 self.manual_download_attempt_count += 1
-                self.manual_download_click_sent = True
-                self.manual_download_in_progress = True
+                if status == "download-clicked":
+                    self.manual_download_click_sent = True
+                    self.manual_download_in_progress = True
+                else:
+                    self.manual_download_click_sent = False
+                    self.manual_download_in_progress = False
                 direct_url = str(result.get("directUrl") or "").strip()
                 if direct_url and re.match(r"^https?://", direct_url, re.IGNORECASE):
                     self.manual_public_video_url = direct_url
@@ -11159,9 +11160,8 @@ class MainWindow(QMainWindow):
                         if self._start_manual_direct_download(current_variant, direct_url):
                             self.manual_download_click_sent = True
                         return
-                click_state = "clicked" if status == "download-clicked" else "visible"
                 self._append_log(
-                    f"Variant {current_variant}: download control is {click_state}; waiting for browser download event (attempt #{self.manual_download_attempt_count})."
+                    f"Variant {current_variant}: download control is visible; waiting for public URL detection (attempt #{self.manual_download_attempt_count})."
                 )
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
@@ -11178,33 +11178,18 @@ class MainWindow(QMainWindow):
                         self.manual_download_click_sent = True
                     return
 
-                if not self.manual_download_click_sent:
+                fallback_source_url = str(self.manual_public_video_url or "").strip()
+                if fallback_source_url and re.match(r"^https?://", fallback_source_url, re.IGNORECASE):
                     self._append_log(
-                        f"Variant {current_variant}: direct URL status reported without usable URL; triggering Download button click (attempt #{self.manual_download_attempt_count})."
+                        f"Variant {current_variant}: direct URL status reported without a fresh URL; retrying public URL polling via last known source (attempt #{self.manual_download_attempt_count})."
                     )
-                    click_download_script = r"""
-                        (() => {
-                            try {
-                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                                const btn = [...document.querySelectorAll("button[aria-label='Download'], [role='button'][aria-label='Download']")]
-                                    .find((el) => isVisible(el) && !el.disabled);
-                                if (!btn) return { ok: false, status: 'download-button-not-found' };
-                                const common = { bubbles: true, cancelable: true, composed: true };
-                                try { btn.dispatchEvent(new PointerEvent('pointerdown', common)); } catch (_) {}
-                                btn.dispatchEvent(new MouseEvent('mousedown', common));
-                                try { btn.dispatchEvent(new PointerEvent('pointerup', common)); } catch (_) {}
-                                btn.dispatchEvent(new MouseEvent('mouseup', common));
-                                btn.dispatchEvent(new MouseEvent('click', common));
-                                try { btn.click(); } catch (_) {}
-                                return { ok: true, status: 'download-clicked' };
-                            } catch (err) {
-                                return { ok: false, error: String(err && err.stack ? err.stack : err) };
-                            }
-                        })()
-                    """
-                    self._run_active_browser_javascript(click_download_script)
-                    self.manual_download_click_sent = True
-                    self.manual_download_in_progress = True
+                    if self._start_manual_direct_download(current_variant, fallback_source_url):
+                        self.manual_download_click_sent = True
+                    return
+
+                self._append_log(
+                    f"Variant {current_variant}: direct URL status reported without usable URL; waiting for next public URL probe (attempt #{self.manual_download_attempt_count})."
+                )
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
