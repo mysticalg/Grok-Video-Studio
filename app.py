@@ -2393,6 +2393,22 @@ class AutomationRuntimeWorker(QThread):
         self.log.emit(f"Automation Chrome opened URL: {opened_url}")
         return opened_url
 
+    def run_javascript_in_automation_chrome(self, url: str, script: str) -> Any:
+        target_url = str(url or "").strip()
+        if not target_url:
+            raise ValueError("URL is required")
+        if self.chrome_instance is None:
+            self.start_chrome()
+
+        async def _run_script() -> Any:
+            if self.cdp_controller is None:
+                self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+            page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=True)
+            await page.bring_to_front()
+            return await page.evaluate(script)
+
+        return self._run_coro(_run_script())
+
     def dom_ping(self) -> dict[str, Any]:
         if self.bus is None:
             raise RuntimeError("Control bus is not running")
@@ -6153,7 +6169,7 @@ class MainWindow(QMainWindow):
             self.video_playback_hack_timer.start()
             self._ensure_browser_video_playback()
             if self.continue_from_frame_waiting_for_reload and self.continue_from_frame_active:
-                self.browser.page().runJavaScript(
+                self._run_active_browser_javascript(
                     "(() => ({ href: String((window.location && window.location.href) || '') }))()",
                     self._after_continue_reload_location_check,
                 )
@@ -6326,7 +6342,7 @@ class MainWindow(QMainWindow):
                 )
                 self._playback_hack_success_logged = True
 
-        self.browser.page().runJavaScript(script, after)
+        self._run_active_browser_javascript(script, after)
 
     def _aspect_ratio_from_video_size(self, size: str) -> str:
         mapping = {
@@ -8157,7 +8173,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Manual image variant {variant}: no manual submit detected within {manual_handoff_timeout_ms / 1000:.0f}s; resuming automated submit listener sequence."
                 )
-                self.browser.page().runJavaScript(submit_script, _after_submit)
+                self._run_active_browser_javascript(submit_script, _after_submit)
                 return
 
             check_script = f"""
@@ -8201,7 +8217,7 @@ class MainWindow(QMainWindow):
 
                 QTimer.singleShot(manual_handoff_poll_ms, _poll_for_manual_submit_handoff)
 
-            self.browser.page().runJavaScript(check_script, _after_manual_handoff_check)
+            self._run_active_browser_javascript(check_script, _after_manual_handoff_check)
 
         def _run_submit_attempt() -> None:
             nonlocal submit_attempts, manual_handoff_started_at_ms, manual_handoff_token
@@ -8321,7 +8337,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Manual image variant {variant}: could not arm manual submit handoff ({result!r}); running automated coordinate-click sequence."
                 )
-                self.browser.page().runJavaScript(submit_script, _after_submit)
+                self._run_active_browser_javascript(submit_script, _after_submit)
 
             def _after_dom_refresh(refresh_result):
                 if isinstance(refresh_result, dict) and refresh_result.get("ok"):
@@ -8332,9 +8348,9 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Manual image variant {variant}: DOM refresh probe failed before submit ({refresh_result!r}); continuing."
                     )
-                self.browser.page().runJavaScript(arm_script, _after_arm_manual_handoff)
+                self._run_active_browser_javascript(arm_script, _after_arm_manual_handoff)
 
-            self.browser.page().runJavaScript(dom_refresh_script, _after_dom_refresh)
+            self._run_active_browser_javascript(dom_refresh_script, _after_dom_refresh)
 
         def _after_submit(result):
             if isinstance(result, dict):
@@ -8399,7 +8415,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Manual image variant {variant}: video option selection is disabled; entering prompt and submitting without resolution/duration/aspect changes."
                 )
-                QTimer.singleShot(max(50, action_delay_ms), lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+                QTimer.singleShot(max(50, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
                 return
 
             self._append_log(
@@ -8424,7 +8440,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Manual image variant {variant}: staged option flow complete; moving to prompt population."
                     )
-                    QTimer.singleShot(step_pause_ms, lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+                    QTimer.singleShot(step_pause_ms, lambda: self._run_active_browser_javascript(populate_script, _after_populate))
                     return
 
                 step_name, label = option_steps[step_index]
@@ -8444,9 +8460,9 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(step_pause_ms, lambda: _run_option_step(step_index + 1))
 
                 def _after_open(_open_result):
-                    self.browser.page().runJavaScript(step_script, _after_step)
+                    self._run_active_browser_javascript(step_script, _after_step)
 
-                self.browser.page().runJavaScript(open_options_script, _after_open)
+                self._run_active_browser_javascript(open_options_script, _after_open)
 
             QTimer.singleShot(step_pause_ms, lambda: _run_option_step(0))
 
@@ -8484,15 +8500,15 @@ class MainWindow(QMainWindow):
                     return
                 _retry_variant(f"enter key dispatch failed: {result!r}")
 
-            self.browser.page().runJavaScript(enter_script, _after_enter)
+            self._run_active_browser_javascript(enter_script, _after_enter)
 
         if disable_video_option_selection:
             self._append_log(
                 f"Manual image variant {variant}: skipping image/video option scripts and proceeding directly to prompt fill + submit."
             )
-            QTimer.singleShot(max(50, action_delay_ms), lambda: self.browser.page().runJavaScript(populate_script, _after_populate))
+            QTimer.singleShot(max(50, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
         else:
-            self.browser.page().runJavaScript(set_image_mode_script, _after_set_mode)
+            self._run_active_browser_javascript(set_image_mode_script, _after_set_mode)
 
     def _set_manual_post_submit_idle_window(self) -> int:
         idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 12000))
@@ -8871,7 +8887,7 @@ class MainWindow(QMainWindow):
                                 f"Variant {current_variant}: clicked first generated image tile; preparing video prompt + submit."
                             )
                     self.manual_image_pick_clicked = True
-                    self.browser.page().runJavaScript("""
+                    self._run_active_browser_javascript("""
                         (() => {
                             try {
                                 if (window.__grokManualPickObserver) {
@@ -8918,7 +8934,7 @@ class MainWindow(QMainWindow):
 
                     if not self.manual_image_video_submit_sent:
                         self._append_log(f"Variant {current_variant}: {message}.")
-                    self.browser.page().runJavaScript("""
+                    self._run_active_browser_javascript("""
                         (() => {
                             try {
                                 if (window.__grokManualPickObserver) {
@@ -9134,7 +9150,7 @@ class MainWindow(QMainWindow):
                             }
                         })()
                     """
-                    self.browser.page().runJavaScript(scroll_to_bottom_script)
+                    self._run_active_browser_javascript(scroll_to_bottom_script)
                     QTimer.singleShot(3000, self._poll_for_manual_image)
 
                 if status == "callback-empty":
@@ -9193,7 +9209,7 @@ class MainWindow(QMainWindow):
                             return
                         _queue_pick_retry(status)
 
-                    self.browser.page().runJavaScript(pick_ready_probe_script, _after_pick_ready_probe)
+                    self._run_active_browser_javascript(pick_ready_probe_script, _after_pick_ready_probe)
                     return
 
                 _queue_pick_retry(status)
@@ -9350,7 +9366,7 @@ class MainWindow(QMainWindow):
                     )
                     QTimer.singleShot(1500, self._poll_for_manual_image)
 
-                self.browser.page().runJavaScript(submit_ready_probe_script, _after_submit_ready_probe)
+                self._run_active_browser_javascript(submit_ready_probe_script, _after_submit_ready_probe)
                 return
 
             if status not in ("callback-empty", "submit-in-flight"):
@@ -9373,7 +9389,7 @@ class MainWindow(QMainWindow):
             )
             QTimer.singleShot(3000, self._poll_for_manual_image)
 
-        self.browser.page().runJavaScript(script, _after_poll)
+        self._run_active_browser_javascript(script, _after_poll)
         if phase == "submit" and submit_attempt_allowed:
             self.manual_image_submit_in_flight = True
             self.manual_image_submit_in_flight_since = time.time()
@@ -10294,7 +10310,7 @@ class MainWindow(QMainWindow):
 
         def _run_flow_submit() -> None:
             self._append_log(f"Variant {variant}: submitting after prompt population delay.")
-            self.browser.page().runJavaScript(submit_script, _after_final_submit)
+            self._run_active_browser_javascript(submit_script, _after_final_submit)
 
         def _after_final_submit(submit_result):
             if not isinstance(submit_result, dict) or not submit_result.get("ok"):
@@ -10325,9 +10341,9 @@ class MainWindow(QMainWindow):
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking type option 'Make Video'.")
-                self.browser.page().runJavaScript(step_script, _after_step)
+                self._run_active_browser_javascript(step_script, _after_step)
 
-            self.browser.page().runJavaScript(open_options_script, _after_open)
+            self._run_active_browser_javascript(open_options_script, _after_open)
 
         def _populate_prompt_then_submit() -> None:
             self._append_log(f"Variant {variant}: entering prompt text now.")
@@ -10406,12 +10422,12 @@ class MainWindow(QMainWindow):
                         )
                         QTimer.singleShot(700, _run_flow_submit)
 
-                    self.browser.page().runJavaScript(enter_script, _after_enter_press)
+                    self._run_active_browser_javascript(enter_script, _after_enter_press)
                     return
 
                 QTimer.singleShot(2000, _run_flow_submit)
 
-            self.browser.page().runJavaScript(script, _after_prompt_populate)
+            self._run_active_browser_javascript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
         if is_sora_manual_flow:
@@ -10459,9 +10475,9 @@ class MainWindow(QMainWindow):
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
-                self.browser.page().runJavaScript(step_script, _after_step)
+                self._run_active_browser_javascript(step_script, _after_step)
 
-            self.browser.page().runJavaScript(open_options_script, _after_open)
+            self._run_active_browser_javascript(open_options_script, _after_open)
 
         def _open_options_then_steps() -> None:
             if not option_steps:
@@ -10485,7 +10501,7 @@ class MainWindow(QMainWindow):
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
                 QTimer.singleShot(2000, _open_options_then_steps)
 
-        self.browser.page().runJavaScript(
+        self._run_active_browser_javascript(
             "(() => ({ href: String((window.location && window.location.href) || '') }))()",
             _after_location_check,
         )
@@ -10989,7 +11005,7 @@ class MainWindow(QMainWindow):
 
             self.manual_download_poll_timer.start(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
 
-        self.browser.page().runJavaScript(script, after_poll)
+        self._run_active_browser_javascript(script, after_poll)
 
 
     def _remove_file_best_effort(self, file_path: Path, context: str) -> None:
@@ -11159,7 +11175,7 @@ class MainWindow(QMainWindow):
 
         self.multi_video_poll_in_flight = True
         try:
-            self.browser.page().runJavaScript(script, _after_probe)
+            self._run_active_browser_javascript(script, _after_probe)
         except Exception as exc:
             self.multi_video_poll_in_flight = False
             self._append_log(f"WARNING: Multi Video probe script failed: {exc}")
@@ -12827,7 +12843,7 @@ class MainWindow(QMainWindow):
             if callable(on_uploaded):
                 on_uploaded()
 
-        self.browser.page().runJavaScript(upload_script, after_focus)
+        self._run_active_browser_javascript(upload_script, after_focus)
 
     def _wait_for_continue_upload_reload(self) -> None:
         self.continue_from_frame_waiting_for_reload = True
@@ -13031,7 +13047,7 @@ class MainWindow(QMainWindow):
               return true;
             })();
         """
-        self.browser.page().runJavaScript(script)
+        self._run_active_browser_javascript(script)
 
     def _poll_embedded_training_events(self) -> None:
         if not self.embedded_training_active:
@@ -13048,7 +13064,7 @@ class MainWindow(QMainWindow):
                 if isinstance(item, dict):
                     self._record_embedded_training_event(item)
 
-        self.browser.page().runJavaScript(script, _after_poll)
+        self._run_active_browser_javascript(script, _after_poll)
 
     def _record_embedded_training_event(self, event: dict) -> None:
         if not self.embedded_training_active or self.embedded_training_output_dir is None:
@@ -13153,7 +13169,7 @@ class MainWindow(QMainWindow):
             return
 
         self.embedded_training_poll_timer.stop()
-        self.browser.page().runJavaScript(
+        self._run_active_browser_javascript(
             "(() => { if (window.__grokTrainer && window.__grokTrainer.cleanup) { window.__grokTrainer.cleanup(); } return true; })();"
         )
 
@@ -13394,6 +13410,39 @@ class MainWindow(QMainWindow):
         self._append_log("Opened browser popup window for login/authorization flow.")
         return popup_page
 
+    def _is_primary_ai_browser(self, browser: QWebEngineView | None) -> bool:
+        return browser in {getattr(self, "grok_browser_view", None), getattr(self, "sora_browser", None)}
+
+    def _active_ai_browser_external_control_enabled(self) -> bool:
+        return self._is_external_ai_browser_mode_active() and bool(getattr(self, "cdp_enabled", False))
+
+    def _active_ai_browser_url_hint(self) -> str:
+        browser_provider = "sora" if self.browser is self.sora_browser else "grok"
+        return SORA_DRAFTS_URL if browser_provider == "sora" else GROK_IMAGINE_URL
+
+    def _run_active_browser_javascript(self, script: str, callback=None) -> None:
+        active_browser = getattr(self, "browser", None)
+        if self._active_ai_browser_external_control_enabled() and self._is_primary_ai_browser(active_browser):
+            try:
+                runtime = self._ensure_automation_runtime()
+                runtime.start_chrome()
+                runtime.ensure_cdp_connected()
+                result = runtime.run_javascript_in_automation_chrome(self._active_ai_browser_url_hint(), script)
+            except Exception as exc:
+                self._append_log(f"External browser automation script failed: {exc}")
+                if callback is not None:
+                    callback(None)
+                return
+            if callback is not None:
+                callback(result)
+            return
+
+        if active_browser is None:
+            if callback is not None:
+                callback(None)
+            return
+        active_browser.page().runJavaScript(script, callback) if callback is not None else active_browser.page().runJavaScript(script)
+
     def open_current_browser_devtools(self) -> None:
         index = self.browser_tabs.currentIndex()
         target_browser = self._browser_for_tab_index(index)
@@ -13446,7 +13495,16 @@ class MainWindow(QMainWindow):
             return
         self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
         if self._is_external_ai_browser_mode_active():
-            if QDesktopServices.openUrl(QUrl(GROK_IMAGINE_URL)):
+            if self._active_ai_browser_external_control_enabled():
+                try:
+                    runtime = self._ensure_automation_runtime()
+                    runtime.start_chrome()
+                    runtime.ensure_cdp_connected()
+                    runtime.open_url_in_automation_chrome(GROK_IMAGINE_URL)
+                    self._append_log(f"Opened external Automation Chrome tab: {GROK_IMAGINE_URL}")
+                except Exception as exc:
+                    self._append_log(f"Failed to open external Automation Chrome tab for URL {GROK_IMAGINE_URL}: {exc}")
+            elif QDesktopServices.openUrl(QUrl(GROK_IMAGINE_URL)):
                 self._append_log(f"Opened external browser: {GROK_IMAGINE_URL}")
             else:
                 self._append_log(f"Failed to open external browser for URL: {GROK_IMAGINE_URL}")
@@ -13461,7 +13519,16 @@ class MainWindow(QMainWindow):
             return
         self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
         if self._is_external_ai_browser_mode_active():
-            if QDesktopServices.openUrl(QUrl(SORA_DRAFTS_URL)):
+            if self._active_ai_browser_external_control_enabled():
+                try:
+                    runtime = self._ensure_automation_runtime()
+                    runtime.start_chrome()
+                    runtime.ensure_cdp_connected()
+                    runtime.open_url_in_automation_chrome(SORA_DRAFTS_URL)
+                    self._append_log(f"Opened external Automation Chrome tab: {SORA_DRAFTS_URL}")
+                except Exception as exc:
+                    self._append_log(f"Failed to open external Automation Chrome tab for URL {SORA_DRAFTS_URL}: {exc}")
+            elif QDesktopServices.openUrl(QUrl(SORA_DRAFTS_URL)):
                 self._append_log(f"Opened external browser: {SORA_DRAFTS_URL}")
             else:
                 self._append_log(f"Failed to open external browser for URL: {SORA_DRAFTS_URL}")
