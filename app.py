@@ -2766,6 +2766,7 @@ class MainWindow(QMainWindow):
         self.custom_music_file: Path | None = None
         self.last_update_prompt_ts = 0
         self.cdp_enabled = False
+        self.cdp_use_external_browser = False
         self.external_ai_browser_only = os.getenv("GROK_EXTERNAL_AI_BROWSER_ONLY", "0").strip().lower() not in {"0", "false", "no"}
         self.browser_tab_enabled = {
             "Grok": True,
@@ -3310,7 +3311,7 @@ class MainWindow(QMainWindow):
             if developer_extras_attr is not None:
                 browser_settings.setAttribute(developer_extras_attr, True)
 
-        if self.external_ai_browser_only:
+        if self._is_external_ai_browser_mode_active():
             self.grok_browser_view.setUrl(QUrl("about:blank"))
             self.sora_browser.setUrl(QUrl("about:blank"))
             self.grok_browser_view.setEnabled(False)
@@ -4693,10 +4694,17 @@ class MainWindow(QMainWindow):
         cdp_disabled_action.triggered.connect(lambda: self._set_cdp_enabled(False))
         cdp_settings_menu.addAction(cdp_disabled_action)
 
+        self.cdp_external_browser_action = QAction("Use External Browser (Grok/Sora Tabs)", self)
+        self.cdp_external_browser_action.setCheckable(True)
+        self.cdp_external_browser_action.toggled.connect(self._set_cdp_external_browser_enabled)
+        cdp_settings_menu.addSeparator()
+        cdp_settings_menu.addAction(self.cdp_external_browser_action)
+
         self.cdp_menu_actions = {
             True: cdp_enabled_action,
             False: cdp_disabled_action,
         }
+        self.cdp_external_browser_action.setChecked(self.cdp_use_external_browser)
         self._set_cdp_enabled(self.cdp_enabled)
 
         view_menu = menu_bar.addMenu("View")
@@ -5168,6 +5176,32 @@ class MainWindow(QMainWindow):
         if hasattr(self, "cdp_menu_actions"):
             self.cdp_menu_actions[True].setEnabled(not self.cdp_enabled)
             self.cdp_menu_actions[False].setEnabled(self.cdp_enabled)
+        self._refresh_ai_browser_mode()
+
+    def _set_cdp_external_browser_enabled(self, enabled: bool) -> None:
+        self.cdp_use_external_browser = bool(enabled)
+        self._refresh_ai_browser_mode()
+
+    def _is_external_ai_browser_mode_active(self) -> bool:
+        return self.external_ai_browser_only or (self.cdp_enabled and self.cdp_use_external_browser)
+
+    def _refresh_ai_browser_mode(self) -> None:
+        if not hasattr(self, "grok_browser_view") or not hasattr(self, "sora_browser"):
+            return
+        if self._is_external_ai_browser_mode_active():
+            self.grok_browser_view.setEnabled(False)
+            self.sora_browser.setEnabled(False)
+            self.grok_browser_view.setUrl(QUrl("about:blank"))
+            self.sora_browser.setUrl(QUrl("about:blank"))
+            self._append_log("Internal Grok/Sora embedded browsers are disabled (external-browser mode enabled).")
+            return
+
+        self.grok_browser_view.setEnabled(True)
+        self.sora_browser.setEnabled(True)
+        if self.grok_browser_view.url().toString().strip() in {"", "about:blank"}:
+            self.grok_browser_view.setUrl(QUrl(GROK_IMAGINE_URL))
+        if self.sora_browser.url().toString().strip() in {"", "about:blank"}:
+            self.sora_browser.setUrl(QUrl(SORA_DRAFTS_URL))
 
     def open_buy_me_a_coffee(self) -> None:
         QDesktopServices.openUrl(QUrl(BUY_ME_A_COFFEE_URL))
@@ -5332,6 +5366,7 @@ class MainWindow(QMainWindow):
             "cdp_social_upload_relay_enabled": self.cdp_social_upload_relay_enabled.isChecked(),
             "cdp_social_upload_relay_url": self.cdp_social_upload_relay_url.text().strip(),
             "cdp_enabled": self.cdp_enabled,
+            "cdp_use_external_browser": self.cdp_use_external_browser,
             "browser_tab_enabled": dict(self.browser_tab_enabled),
             "quick_actions_toolbar_visible": self.quick_actions_toolbar.isVisible(),
             "automation_mode": self.automation_mode.currentData(),
@@ -5526,6 +5561,8 @@ class MainWindow(QMainWindow):
             self.cdp_social_upload_relay_url.setText(str(preferences["cdp_social_upload_relay_url"]))
         if "cdp_enabled" in preferences:
             self._set_cdp_enabled(bool(preferences["cdp_enabled"]))
+        if "cdp_use_external_browser" in preferences:
+            self._set_cdp_external_browser_enabled(bool(preferences["cdp_use_external_browser"]))
         if "browser_tab_enabled" in preferences and isinstance(preferences["browser_tab_enabled"], dict):
             for tab_key, enabled in preferences["browser_tab_enabled"].items():
                 if tab_key in self.browser_tab_enabled:
@@ -13207,7 +13244,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(address_bar)
 
         is_primary_ai_browser = browser in {getattr(self, "grok_browser_view", None), getattr(self, "sora_browser", None)}
-        if self.external_ai_browser_only and is_primary_ai_browser:
+        if self._is_external_ai_browser_mode_active() and is_primary_ai_browser:
             browser_notice = QLabel(
                 "Internal browser is turned off for this tab.\n"
                 "Use the Homepage/External buttons to open this page in your system browser."
@@ -13408,7 +13445,7 @@ class MainWindow(QMainWindow):
             self._append_log("Grok Browser tab is disabled. Re-enable it from View → Browser Tabs.")
             return
         self.browser_tabs.setCurrentIndex(self.grok_browser_tab_index)
-        if self.external_ai_browser_only:
+        if self._is_external_ai_browser_mode_active():
             if QDesktopServices.openUrl(QUrl(GROK_IMAGINE_URL)):
                 self._append_log(f"Opened external browser: {GROK_IMAGINE_URL}")
             else:
@@ -13423,7 +13460,7 @@ class MainWindow(QMainWindow):
             self._append_log("Sora Browser tab is disabled. Re-enable it from View → Browser Tabs.")
             return
         self.browser_tabs.setCurrentIndex(self.sora_browser_tab_index)
-        if self.external_ai_browser_only:
+        if self._is_external_ai_browser_mode_active():
             if QDesktopServices.openUrl(QUrl(SORA_DRAFTS_URL)):
                 self._append_log(f"Opened external browser: {SORA_DRAFTS_URL}")
             else:
