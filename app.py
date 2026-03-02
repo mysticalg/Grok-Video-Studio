@@ -10403,9 +10403,11 @@ class MainWindow(QMainWindow):
                         )
                 use_enter_submit = True
                 if use_enter_submit:
-                    enter_script = r"""
-                        (() => {
-                            try {
+                    enter_script = f"""
+                        (() => {{
+                            try {{
+                                const continueLastVideoMode = {'true' if continue_last_video_mode else 'false'};
+                                const submitGuardToken = {json.dumps(f"variant-{variant}")};
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                                 const selectors = [
                                     "textarea[placeholder*='Type to imagine' i]",
@@ -10423,31 +10425,38 @@ class MainWindow(QMainWindow):
                                 const promptInput = selectors
                                     .flatMap((selector) => [...document.querySelectorAll(selector)])
                                     .find((el) => isVisible(el));
-                                if (!promptInput) return { ok: false, error: "prompt-input-not-found-for-enter" };
-                                try { promptInput.focus({ preventScroll: true }); } catch (_) {}
-                                const common = { bubbles: true, cancelable: true, composed: true };
+                                if (!promptInput) return {{ ok: false, error: "prompt-input-not-found-for-enter" }};
+
+                                if (continueLastVideoMode && window.__grokContinueSubmitGuardToken === submitGuardToken) {{
+                                    return {{ ok: true, enterDispatched: false, formSubmitted: false, guarded: true }};
+                                }}
+
+                                try {{ promptInput.focus({{ preventScroll: true }}); }} catch (_) {{}}
+                                const common = {{ bubbles: true, cancelable: true, composed: true }};
                                 let enterDispatched = false;
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
-                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); enterDispatched = true; } catch (_) {}
+                                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", ...common }})); enterDispatched = true; }} catch (_) {{}}
 
-                                // Fallback for forms that ignore synthetic keyboard events.
+                                // For continue-last-video mode, avoid additional synthetic key events that can trigger duplicate submits.
                                 let formSubmitted = false;
-                                if (!enterDispatched) {
+                                if (!enterDispatched && !continueLastVideoMode) {{
                                     const form = typeof promptInput.closest === "function" ? promptInput.closest("form") : null;
-                                    if (form) {
-                                        try { if (typeof form.requestSubmit === "function") { form.requestSubmit(); formSubmitted = true; } } catch (_) {}
-                                        if (!formSubmitted) {
-                                            try { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); formSubmitted = true; } catch (_) {}
-                                        }
-                                    }
-                                }
+                                    if (form) {{
+                                        try {{ if (typeof form.requestSubmit === "function") {{ form.requestSubmit(); formSubmitted = true; }} }} catch (_) {{}}
+                                        if (!formSubmitted) {{
+                                            try {{ form.dispatchEvent(new Event("submit", {{ bubbles: true, cancelable: true }})); formSubmitted = true; }} catch (_) {{}}
+                                        }}
+                                    }}
+                                }}
 
-                                return { ok: enterDispatched || formSubmitted, enterDispatched, formSubmitted };
-                            } catch (err) {
-                                return { ok: false, error: String(err && err.stack ? err.stack : err) };
-                            }
-                        })()
+                                if (continueLastVideoMode && (enterDispatched || formSubmitted)) {{
+                                    window.__grokContinueSubmitGuardToken = submitGuardToken;
+                                }}
+
+                                return {{ ok: enterDispatched || formSubmitted, enterDispatched, formSubmitted, guarded: false }};
+                            }} catch (err) {{
+                                return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
+                            }}
+                        }})()
                     """
 
                     def _after_enter_press(enter_result):
@@ -10457,9 +10466,14 @@ class MainWindow(QMainWindow):
                             )
                         flow_label = "Sora" if is_sora_manual_flow else ("continue-last-video" if continue_last_video_mode else "standard")
                         if isinstance(enter_result, dict) and enter_result.get("ok"):
-                            self._append_log(
-                                f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
-                            )
+                            if enter_result.get("guarded"):
+                                self._append_log(
+                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate Enter-submit; proceeding with download polling."
+                                )
+                            else:
+                                self._append_log(
+                                    f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
+                                )
                             QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
