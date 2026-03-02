@@ -11642,35 +11642,62 @@ class MainWindow(QMainWindow):
 
     def _load_grok_homepage_then_return_to_post(self, source_url: str, variant: int) -> None:
         post_url = self._resolve_grok_post_page_url(source_url)
-        if not post_url:
-            self._append_log(
-                f"Variant {variant}: post URL unavailable; loading Grok homepage before retry."
-            )
-            fallback_script = f"(() => {{ try {{ window.location.href = {json.dumps(GROK_IMAGINE_URL)}; return {{ ok: true }}; }} catch (err) {{ return {{ ok: false, error: String(err && err.stack ? err.stack : err) }}; }} }})()"
-            self._run_active_browser_javascript(fallback_script)
-            return
-
         self._append_log(
-            f"Variant {variant}: loading Grok homepage, then returning to post URL before retry ({post_url})."
+            f"Variant {variant}: checking active URL for post ID, loading Grok homepage, then returning to post before retry."
         )
-        hop_script = f"""
+        hop_script = rf"""
             (() => {{
                 try {{
                     const home = {json.dumps(GROK_IMAGINE_URL)};
-                    const post = {json.dumps(post_url)};
+                    const preferredPost = {json.dumps(post_url)};
+                    const currentUrl = String((window.location && window.location.href) || "");
+                    const postFromCurrentMatch = currentUrl.match(/imagine\/post\/([0-9a-fA-F-]{{8,}})/i);
+                    const postFromCurrent = postFromCurrentMatch
+                        ? `https://grok.com/imagine/post/${{postFromCurrentMatch[1]}}`
+                        : "";
+                    const targetPost = preferredPost || postFromCurrent;
+                    const postIdMatch = (targetPost || "").match(/imagine\/post\/([0-9a-fA-F-]{{8,}})/i);
+                    const postId = postIdMatch ? postIdMatch[1] : "";
+                    const publicUrl = postId
+                        ? `https://imagine-public.x.ai/imagine-public/share-videos/${{postId}}.mp4`
+                        : "";
+
                     window.location.href = home + (home.includes('?') ? '&' : '?') + 'refresh=' + String(Date.now());
-                    setTimeout(() => {{
-                        try {{
-                            window.location.href = post + (post.includes('?') ? '&' : '?') + 'refresh=' + String(Date.now());
-                        }} catch (_) {{}}
-                    }}, 1200);
-                    return {{ ok: true, home, post }};
+                    if (targetPost) {{
+                        setTimeout(() => {{
+                            try {{
+                                window.location.href = targetPost + (targetPost.includes('?') ? '&' : '?') + 'refresh=' + String(Date.now());
+                            }} catch (_) {{}}
+                        }}, 1200);
+                    }}
+                    return {{ ok: true, home, currentUrl, targetPost, postId, publicUrl }};
                 }} catch (err) {{
                     return {{ ok: false, error: String(err && err.stack ? err.stack : err) }};
                 }}
             }})()
         """
-        self._run_active_browser_javascript(hop_script)
+
+        def _after_hop(result) -> None:
+            if not isinstance(result, dict):
+                return
+            target_post = str(result.get("targetPost") or "").strip()
+            current_url = str(result.get("currentUrl") or "").strip()
+            public_url = _ensure_public_download_query(str(result.get("publicUrl") or "").strip())
+            if public_url:
+                self.manual_public_video_url = public_url
+                self._append_log(
+                    f"Variant {variant}: captured post/public URL from active page before homepage hop; will retry via {public_url}."
+                )
+            elif target_post:
+                self._append_log(
+                    f"Variant {variant}: returned to post page after homepage hop ({target_post}), but no public URL could be derived yet."
+                )
+            else:
+                self._append_log(
+                    f"Variant {variant}: homepage hop executed without a resolved post URL (current URL was: {current_url or 'unknown'})."
+                )
+
+        self._run_active_browser_javascript(hop_script, _after_hop)
 
     def _reload_active_browser_post_page(self, source_url: str, variant: int) -> None:
         post_url = self._resolve_grok_post_page_url(source_url)
