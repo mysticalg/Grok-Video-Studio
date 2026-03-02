@@ -10456,6 +10456,11 @@ class MainWindow(QMainWindow):
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                                 const clean = (v) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
                                 const submitGuardToken = __SUBMIT_GUARD_TOKEN__;
+                                const now = Date.now();
+                                const lastClickedAt = Number(window.__grokContinueSubmitClickedAt || 0);
+                                if (lastClickedAt > 0 && (now - lastClickedAt) < 4000) {
+                                    return { ok: true, guarded: true, status: "cooldown-active", cooldownMsRemaining: Math.max(0, 4000 - (now - lastClickedAt)) };
+                                }
                                 if (window.__grokContinueSubmitGuardToken === submitGuardToken) {
                                     return { ok: true, guarded: true, status: "already-clicked" };
                                 }
@@ -10469,15 +10474,11 @@ class MainWindow(QMainWindow):
                                     return /^make\s+video$/.test(aria) || /^make\s+video$/.test(text) || /create\s+video/.test(sr);
                                 }) || null;
                                 if (!target) return { ok: false, error: "make-video-button-not-found" };
-
-                                const common = { bubbles: true, cancelable: true, composed: true };
-                                try { target.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
-                                target.dispatchEvent(new MouseEvent("mousedown", common));
-                                try { target.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
-                                target.dispatchEvent(new MouseEvent("mouseup", common));
-                                target.dispatchEvent(new MouseEvent("click", common));
-                                try { target.click(); } catch (_) {}
+                                try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                                try { target.focus({ preventScroll: true }); } catch (_) {}
+                                try { target.click(); } catch (_) { return { ok: false, error: "make-video-click-failed" }; }
                                 window.__grokContinueSubmitGuardToken = submitGuardToken;
+                                window.__grokContinueSubmitClickedAt = now;
                                 return { ok: true, guarded: false, status: "clicked", label: (target.getAttribute("aria-label") || target.textContent || "").trim() };
                             } catch (err) {
                                 return { ok: false, error: String(err && err.stack ? err.stack : err) };
