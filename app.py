@@ -8850,11 +8850,18 @@ class MainWindow(QMainWindow):
                 const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
                 const scoreSubmit = (btn, index) => {{
                     if (!isVisible(btn) || btn.disabled) return Number.MAX_SAFE_INTEGER;
-                    const raw = `${{btn.getAttribute("aria-label") || ""}} ${{btn.textContent || ""}}`.trim().toLowerCase();
+                    const aria = String(btn.getAttribute("aria-label") || "").trim();
+                    const txt = String(btn.textContent || "").trim();
+                    const raw = `${{aria}} ${{txt}}`.trim().toLowerCase();
                     const hasArrowIcon = !!btn.querySelector("svg");
                     let score = index * 25;
-                    if (/submit|send|generate|create|make\\s+video/.test(raw)) score -= 400;
+
+                    if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) score += 5000;
+                    if (/^make\\s+video$/i.test(aria) || /^make\\s+video$/i.test(txt)) score -= 4000;
+                    if (/submit|send|generate|make\\s+video/i.test(raw)) score -= 500;
+                    if (/\\bcreate\\b/i.test(raw) && !/make\\s+video/i.test(raw)) score += 300;
                     if (hasArrowIcon) score -= 120;
+
                     if (promptRect && typeof btn.getBoundingClientRect === "function") {{
                         const rect = btn.getBoundingClientRect();
                         const cx = rect.left + rect.width / 2;
@@ -8867,18 +8874,24 @@ class MainWindow(QMainWindow):
                     return score;
                 }};
 
+                const explicitMakeVideoButton = [...document.querySelectorAll("button[aria-label='Make video'], button[aria-label='make video']")]
+                    .find((btn) => isVisible(btn) && !btn.disabled);
+
                 const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
                     .filter((btn) => isVisible(btn) && !btn.disabled)
-                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
-                let submitButton = null;
-                let submitScore = Number.MAX_SAFE_INTEGER;
-                submitCandidates.forEach((btn, idx) => {{
-                    const score = scoreSubmit(btn, idx);
-                    if (score < submitScore) {{
-                        submitScore = score;
-                        submitButton = btn;
-                    }}
-                }});
+                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"))
+                    .filter((btn) => !/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(`${{btn.getAttribute("aria-label") || ""}} ${{btn.textContent || ""}}`));
+                let submitButton = explicitMakeVideoButton || null;
+                let submitScore = explicitMakeVideoButton ? -99999 : Number.MAX_SAFE_INTEGER;
+                if (!submitButton) {{
+                    submitCandidates.forEach((btn, idx) => {{
+                        const score = scoreSubmit(btn, idx);
+                        if (score < submitScore) {{
+                            submitScore = score;
+                            submitButton = btn;
+                        }}
+                    }});
+                }}
 
                 let submitted = false;
                 let submitLabel = "";
