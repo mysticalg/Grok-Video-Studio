@@ -11748,12 +11748,19 @@ class MainWindow(QMainWindow):
 
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
-            self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
-            )
+            active_target = (self.pending_manual_redirect_target or "grok").lower()
+            if active_target == "sora":
+                self._append_log(
+                    f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB) in Sora flow; skipping Grok homepage hop and continuing Sora-only download polling."
+                )
+            else:
+                self._append_log(
+                    f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
+                )
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
-            self._load_grok_homepage_then_return_to_post(source_url, variant)
+            if active_target != "sora":
+                self._load_grok_homepage_then_return_to_post(source_url, variant)
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
             return False
@@ -11777,6 +11784,12 @@ class MainWindow(QMainWindow):
         return ""
 
     def _load_grok_homepage_then_return_to_post(self, source_url: str, variant: int) -> None:
+        active_target = (self.pending_manual_redirect_target or "grok").lower()
+        if active_target == "sora":
+            self._append_log(
+                f"Variant {variant}: skipping Grok homepage hop because active manual browser target is Sora."
+            )
+            return
         post_url = str(getattr(self, "manual_last_generated_post_url", "") or "").strip()
         if not post_url:
             post_url = self._resolve_grok_post_page_url(source_url)
