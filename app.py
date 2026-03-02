@@ -9062,11 +9062,19 @@ class MainWindow(QMainWindow):
                                 const SCROLL_PAUSE_MS = 8000;
 
                                 const scrollBottom = () => {
+                                    const fullWidthContainers = [...document.querySelectorAll("div.w-full")];
+                                    for (const el of fullWidthContainers) {
+                                        try {
+                                            el.style.overflowY = "scroll";
+                                        } catch (_) {}
+                                    }
+
                                     const scrollTargets = [
                                         document.scrollingElement,
                                         document.documentElement,
                                         document.body,
-                                        ...document.querySelectorAll(".w-full, [data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
+                                        ...fullWidthContainers,
+                                        ...document.querySelectorAll("[data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
                                     ].filter((el, idx, arr) => el && arr.indexOf(el) === idx);
 
                                     for (const target of scrollTargets) {
