@@ -11335,6 +11335,14 @@ class MainWindow(QMainWindow):
                     "direct-url-ready",
                 )
                 if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
+                    if self.manual_download_attempt_count == 1:
+                        self._append_log(
+                            f"Variant {current_variant}: direct URL detected; loading Grok homepage before starting public URL polling/download attempts."
+                        )
+                        self._load_grok_homepage_then_return_to_post(resolved_url, current_variant)
+                        self.manual_download_click_sent = False
+                        self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
+                        return
                     self._append_log(
                         f"Variant {current_variant}: direct URL detected; polling/fetching the public URL directly (attempt #{self.manual_download_attempt_count})."
                     )
