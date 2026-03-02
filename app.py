@@ -10408,6 +10408,7 @@ class MainWindow(QMainWindow):
             self._run_active_browser_javascript(submit_script, _after_final_submit)
 
         def _after_final_submit(submit_result):
+            submit_ok = bool(isinstance(submit_result, dict) and submit_result.get("ok"))
             if not isinstance(submit_result, dict) or not submit_result.get("ok"):
                 error_detail = submit_result.get("error") if isinstance(submit_result, dict) else submit_result
                 if error_detail not in (None, "", "callback-empty"):
@@ -10418,7 +10419,9 @@ class MainWindow(QMainWindow):
                 f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
             self.manual_continue_setup_in_progress = False
-            self._trigger_browser_video_download(variant)
+            # Avoid duplicate submit clicks: if button-submit succeeded, polling should only wait for
+            # progress/download controls and must not click Make/Create video again.
+            self._trigger_browser_video_download(variant, allow_make_video_click=not submit_ok)
 
         def _click_make_video_after_prompt() -> None:
             step_script = click_option_script_template.replace('"{target_label}"', json.dumps("Make Video"))
