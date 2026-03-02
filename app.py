@@ -8799,7 +8799,7 @@ class MainWindow(QMainWindow):
                     return {{ ok: false, status: "submit-in-flight" }};
                 }}
 
-                if (window.__grokManualImageSubmitToken === submitToken) {{
+                if (window.__grokManualVideoSubmitToken === submitToken) {{
                     return {{ ok: true, status: "video-submit-already-clicked" }};
                 }}
 
@@ -8901,7 +8901,7 @@ class MainWindow(QMainWindow):
 
                 const postUrlNow = String((window.location && window.location.href) || "");
                 const onPostUrlNow = /\\/imagine\\/post\\//i.test(postUrlNow);
-                if (submitted) window.__grokManualImageSubmitToken = submitToken;
+                if (submitted) window.__grokManualVideoSubmitToken = submitToken;
                 return {{
                     ok: submitted,
                     status: submitted ? "video-submit-clicked" : "submit-click-failed",
@@ -9305,7 +9305,7 @@ class MainWindow(QMainWindow):
                                 .find((el) => isVisible(el) && /\bgenerating\b|\brendering\b|\bcancel\b/i.test((el.textContent || "").trim()));
                             const onPostViewReady = Boolean(validPostId);
                             const readyForDownloadPolling = Boolean(onPostViewReady && (downloadButtonVisible || hasVideoSource || generationInProgress));
-                            const submitTokenSeen = Number(window.__grokManualImageSubmitToken || 0) === Number(submitToken || 0);
+                            const submitTokenSeen = Number(window.__grokManualVideoSubmitToken || 0) === Number(submitToken || 0);
                             return {{
                                 ok: true,
                                 readyForDownloadPolling,
