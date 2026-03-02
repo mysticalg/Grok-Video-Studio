@@ -2750,6 +2750,7 @@ class MainWindow(QMainWindow):
         self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
@@ -10605,6 +10606,7 @@ class MainWindow(QMainWindow):
         self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
@@ -10635,6 +10637,7 @@ class MainWindow(QMainWindow):
             self.manual_download_started_at = None
             self.manual_download_deadline = None
             self.manual_refresh_after_generating_sent = False
+            self.manual_refresh_after_progress_100_sent = False
             self.manual_public_video_url = ""
             self.manual_download_attempt_count = 0
             self.manual_download_poll_attempt_count = 0
@@ -10917,32 +10920,11 @@ class MainWindow(QMainWindow):
             if current_variant is None:
                 return
 
-            try:
-                active_url = str(self.browser.url().toString() or "").strip()
-            except Exception:
-                active_url = ""
-            post_derived_public_url = _public_video_url_from_post_url(active_url)
-            if post_derived_public_url:
-                self.manual_public_video_url = post_derived_public_url
-                if self.manual_download_poll_attempt_count <= 2:
-                    self._append_log(
-                        f"Variant {current_variant}: derived public video URL from post id for probing: {post_derived_public_url}"
-                    )
-            if active_url and _looks_like_public_video_url(active_url):
-                self.manual_public_video_url = _ensure_public_download_query(active_url)
-
             if not isinstance(result, dict):
-                if self.manual_public_video_url:
-                    self._append_log(
-                        f"Variant {current_variant}: poll returned no structured page state; probing known public URL directly."
-                    )
-                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
-                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
-                else:
-                    self._append_log(
-                        f"Variant {current_variant}: poll returned no structured page state and no public video URL is known yet; waiting for direct URL signal."
-                    )
-                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                self._append_log(
+                    f"Variant {current_variant}: poll returned no structured page state; waiting for render/download controls."
+                )
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             status = result.get("status", "waiting")
@@ -10968,6 +10950,7 @@ class MainWindow(QMainWindow):
                     )
                 self.manual_generating_indicator_seen = True
                 self.manual_refresh_after_generating_sent = False
+                self.manual_refresh_after_progress_100_sent = False
             elif was_generating:
                 self.manual_generating_indicator_seen = False
                 self._append_log(
@@ -11007,6 +10990,18 @@ class MainWindow(QMainWindow):
             if status == "progress":
                 self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
+                progress_done = progress_text in {"100%", "100"}
+                if progress_done and not self.manual_refresh_after_progress_100_sent:
+                    self.manual_refresh_after_progress_100_sent = True
+                    self._append_log(
+                        f"Variant {current_variant}: render reached 100%; refreshing page before download detection."
+                    )
+                    try:
+                        self.browser.reload()
+                    except Exception:
+                        pass
+                    self.manual_download_poll_timer.start(3000)
+                    return
                 if progress_text:
                     self._append_log(f"Variant {current_variant} still rendering: {progress_text}")
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
@@ -11015,6 +11010,7 @@ class MainWindow(QMainWindow):
             if status == "generating-indicator-visible":
                 self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
+                self.manual_refresh_after_progress_100_sent = False
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
@@ -11047,89 +11043,26 @@ class MainWindow(QMainWindow):
 
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
                 self.manual_video_start_click_sent = True
-                if self.manual_public_video_url:
-                    self._append_log(
-                        f"Variant {current_variant}: status={status}; probing known public URL directly."
-                    )
-                    self._start_manual_direct_download(current_variant, self.manual_public_video_url)
-                    self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
-                else:
-                    self._append_log(
-                        f"Variant {current_variant}: status={status}; waiting for public video URL to appear."
-                    )
-                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                self._append_log(
+                    f"Variant {current_variant}: status={status}; waiting for download control readiness."
+                )
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status in ("download-clicked", "download-visible"):
                 self.manual_download_attempt_count += 1
-                direct_url = (result.get("directUrl") or "").strip()
+                self.manual_download_click_sent = True
+                self.manual_download_in_progress = True
+                click_state = "clicked" if status == "download-clicked" else "visible"
                 self._append_log(
-                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL extraction (manual browser download bypass enabled)."
-                )
-
-                if direct_url:
-                    self.manual_public_video_url = _ensure_public_download_query(direct_url)
-                    self._append_log(
-                        f"Variant {current_variant}: found direct video URL from Download control; downloading without browser click."
-                    )
-                    if self._start_manual_direct_download(current_variant, direct_url):
-                        self.manual_download_click_sent = True
-                        self.manual_download_in_progress = True
-                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
-                        return
-
-                if self.manual_public_video_url:
-                    self._append_log(
-                        f"Variant {current_variant}: Download control is visible; probing known public URL directly."
-                    )
-                    if self._start_manual_direct_download(current_variant, self.manual_public_video_url):
-                        self.manual_download_click_sent = True
-                        self.manual_download_in_progress = True
-                        self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
-                        return
-
-                self._append_log(
-                    f"Variant {current_variant}: Download control is visible but no public direct URL is known yet; waiting for URL discovery."
+                    f"Variant {current_variant}: download control is {click_state}; waiting for browser download event (attempt #{self.manual_download_attempt_count})."
                 )
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
-            src = result.get("src") or ""
             if status == "video-buffering":
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
-
-            min_wait_elapsed = self.manual_download_started_at is not None and (time.time() - self.manual_download_started_at) >= 8
-            if status not in ("video-src-ready", "direct-url-ready") or not src or not min_wait_elapsed:
-                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
-                return
-
-            if status == "direct-url-ready":
-                self.manual_download_attempt_count += 1
-                self.manual_public_video_url = _ensure_public_download_query(src)
-                self._append_log(
-                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via direct URL detection."
-                )
-                if self.manual_download_request_pending:
-                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
-                    return
-                source_type = result.get("sourceType") or "video-link"
-                self._append_log(f"Variant {current_variant} ready; downloading directly from detected video URL ({source_type}).")
-                if self._start_manual_direct_download(current_variant, src):
-                    self.manual_download_click_sent = True
-                    self.manual_download_in_progress = True
-                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
-                return
-
-            if not self.manual_download_click_sent:
-                self.manual_download_attempt_count += 1
-                self.manual_public_video_url = _ensure_public_download_query(src)
-                self._append_log(
-                    f"Variant {current_variant}: download attempt #{self.manual_download_attempt_count} via video source URL direct download (manual browser download bypass enabled)."
-                )
-                if self._start_manual_direct_download(current_variant, src):
-                    self.manual_download_click_sent = True
-                    self.manual_download_in_progress = True
 
             self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
 
@@ -11435,6 +11368,7 @@ class MainWindow(QMainWindow):
         self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -11767,6 +11701,7 @@ class MainWindow(QMainWindow):
         self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -11984,6 +11919,7 @@ class MainWindow(QMainWindow):
         self.manual_make_video_awaiting_progress_count = 0
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
+        self.manual_refresh_after_progress_100_sent = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
