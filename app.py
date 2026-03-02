@@ -10129,12 +10129,15 @@ class MainWindow(QMainWindow):
                     const isShareLinkButton = (el) => /create\s+share\s+link|share\s+link|copy\s+link/i.test(
                         `${clean(el?.getAttribute("aria-label"))} ${clean(el?.textContent)}`
                     );
+                    const isSearchButton = (el) => /(^|\s)search(\s|$)/i.test(
+                        `${clean(el?.getAttribute("aria-label"))} ${clean(el?.textContent)} ${clean(el?.querySelector("span.sr-only")?.textContent || "")}`
+                    );
                     const hasCreateVideoSrOnly = (el) => /create\s+video/i.test(clean(el?.querySelector("span.sr-only")?.textContent || ""));
-                    const primarySubmit = submitButtons.find((el) => hasCreateVideoSrOnly(el) && !isShareLinkButton(el))
-                        || submitButtons.find((el) => /^make\s+video$/i.test(clean(el.getAttribute("aria-label"))) && !isShareLinkButton(el))
-                        || submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit" && !isShareLinkButton(el))
-                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)) && !isShareLinkButton(el))
-                        || submitButtons.find((el) => !isShareLinkButton(el))
+                    const primarySubmit = submitButtons.find((el) => hasCreateVideoSrOnly(el) && !isShareLinkButton(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => /^make\s+video$/i.test(clean(el.getAttribute("aria-label"))) && !isShareLinkButton(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => clean(el.getAttribute("aria-label")) === "submit" && !isShareLinkButton(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => /submit/.test(clean(el.textContent)) && !isShareLinkButton(el) && !isSearchButton(el))
+                        || submitButtons.find((el) => !isShareLinkButton(el) && !isSearchButton(el))
                         || null;
 
                     const recorderSelectors = [
@@ -10167,6 +10170,7 @@ class MainWindow(QMainWindow):
                             const aria = clean(btn.getAttribute("aria-label")).toLowerCase();
                             const text = clean(btn.textContent).toLowerCase();
                             if (/create\s+share\s+link|share\s+link|copy\s+link/i.test(`${aria} ${text}`)) return false;
+                            if (/search/.test(`${aria} ${text} ${srOnly}`)) return false;
                             return /create\s+video/.test(srOnly) || /^make\s+video$/.test(aria) || /^make\s+video$/.test(text);
                         }) || null;
                     try { promptInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
