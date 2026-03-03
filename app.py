@@ -9104,20 +9104,30 @@ class MainWindow(QMainWindow):
                 if status in ("video-mode-selected", "video-mode-ready"):
                     opened = result.get("optionsOpened")
                     item_found = result.get("videoItemFound")
-                    clicked = result.get("videoClicked")
+                    clicked = bool(result.get("videoClicked"))
                     prompt_visible = bool(result.get("promptInputVisible"))
                     generation_visible = bool(result.get("generationInProgress"))
                     make_video_visible = bool(result.get("makeVideoButtonVisible"))
                     submit_visible = bool(result.get("submitButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
-                    if not self.manual_image_video_mode_selected:
+                    if clicked:
                         self._append_log(
-                            f"Variant {current_variant}: video stage ready "
-                            f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
-                            f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
-                            f"submitVisible={submit_visible}, postView={on_post_view}); "
-                            "refilling prompt."
+                            f"Variant {current_variant}: video option changed via settings menu "
+                            f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}); "
+                            "proceeding to prompt entry and Make Video submit."
                         )
+                        self.manual_image_video_mode_selected = True
+                        self.manual_image_video_mode_retry_count = 0
+                        self.manual_image_submit_retry_count = 0
+                        QTimer.singleShot(900, self._poll_for_manual_image)
+                        return
+
+                    self._append_log(
+                        f"Variant {current_variant}: video mode still unconfirmed "
+                        f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
+                        f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
+                        f"submitVisible={submit_visible}, postView={on_post_view}); retrying options selection before submit."
+                    )
                     self.manual_image_video_mode_selected = False
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
@@ -9517,21 +9527,27 @@ class MainWindow(QMainWindow):
                         has_video_source_probe = bool(isinstance(probe_result, dict) and probe_result.get("hasVideoSource"))
                         can_download_probe = bool(isinstance(probe_result, dict) and probe_result.get("canDownload"))
                         if on_post_view_probe and (generation_signal_probe or has_video_source_probe or can_download_probe):
+                            if self.manual_image_video_submit_sent or self.manual_image_submit_in_flight:
+                                self._append_log(
+                                    "Variant "
+                                    f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
+                                    f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
+                                    "switching to download polling to prevent duplicate submits."
+                                )
+                                self.manual_image_video_submit_sent = True
+                                self.manual_image_submit_in_flight = False
+                                self.manual_image_submit_in_flight_since = 0.0
+                                self.manual_image_video_mode_selected = True
+                                self.manual_image_video_mode_retry_count = 0
+                                self.manual_image_submit_retry_count = 0
+                                self.pending_manual_download_type = "video"
+                                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                                return
                             self._append_log(
-                                "Variant "
-                                f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
-                                f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
-                                "switching to download polling to prevent duplicate submits."
+                                "WARNING: Variant "
+                                f"{current_variant}: active/ready video signals appeared before a confirmed submit; "
+                                "continuing video options selection and skipping download handoff."
                             )
-                            self.manual_image_video_submit_sent = True
-                            self.manual_image_submit_in_flight = False
-                            self.manual_image_submit_in_flight_since = 0.0
-                            self.manual_image_video_mode_selected = True
-                            self.manual_image_video_mode_retry_count = 0
-                            self.manual_image_submit_retry_count = 0
-                            self.pending_manual_download_type = "video"
-                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                            return
 
                         self.manual_image_video_mode_retry_count += 1
                         if self.manual_image_video_mode_retry_count >= int(self.automation_retry_attempts.value()):
