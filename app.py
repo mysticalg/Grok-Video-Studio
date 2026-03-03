@@ -2736,7 +2736,6 @@ class MainWindow(QMainWindow):
         self.manual_image_video_submit_sent = False
         self.manual_image_submit_in_flight = False
         self.manual_image_submit_in_flight_since = 0.0
-        self.manual_image_submit_attempted_once = False
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
@@ -7351,7 +7350,6 @@ class MainWindow(QMainWindow):
         self.manual_image_video_submit_sent = False
         self.manual_image_submit_in_flight = False
         self.manual_image_submit_in_flight_since = 0.0
-        self.manual_image_submit_attempted_once = False
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
@@ -8620,7 +8618,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(700, self._poll_for_manual_image)
                 return
 
-        submit_attempt_allowed = phase != "submit" or (not self.manual_image_submit_in_flight and not self.manual_image_submit_attempted_once)
+        submit_attempt_allowed = phase != "submit" or not self.manual_image_submit_in_flight
 
         script = f"""
             (async () => {{
@@ -9486,20 +9484,6 @@ class MainWindow(QMainWindow):
                     self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count += 1
                     if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
-                        if self.manual_image_submit_attempted_once:
-                            self._append_log(
-                                "WARNING: Variant "
-                                f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                                f"{self.manual_image_submit_retry_count} checks after a prior submit attempt; avoiding duplicate submit and switching to download polling."
-                            )
-                            self.manual_image_video_submit_sent = True
-                            self.manual_image_submit_in_flight = False
-                            self.manual_image_submit_in_flight_since = 0.0
-                            self.manual_image_submit_retry_count = 0
-                            self.pending_manual_download_type = "video"
-                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                            return
-
                         self._append_log(
                             "WARNING: Variant "
                             f"{current_variant}: submit-stage validation stayed in '{status}' for "
@@ -9555,7 +9539,6 @@ class MainWindow(QMainWindow):
         if phase == "submit" and submit_attempt_allowed:
             self.manual_image_submit_in_flight = True
             self.manual_image_submit_in_flight_since = time.time()
-            self.manual_image_submit_attempted_once = True
 
     def _start_continue_iteration(self) -> None:
         if self.stop_all_requested:
@@ -12213,7 +12196,6 @@ class MainWindow(QMainWindow):
         self.manual_image_video_submit_sent = False
         self.manual_image_submit_in_flight = False
         self.manual_image_submit_in_flight_since = 0.0
-        self.manual_image_submit_attempted_once = False
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
@@ -12432,7 +12414,6 @@ class MainWindow(QMainWindow):
         self.manual_image_video_submit_sent = False
         self.manual_image_submit_in_flight = False
         self.manual_image_submit_in_flight_since = 0.0
-        self.manual_image_submit_attempted_once = False
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
