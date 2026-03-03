@@ -9394,17 +9394,6 @@ class MainWindow(QMainWindow):
                 return
 
             if not self.manual_image_video_mode_selected:
-                if status == "waiting-for-video-mode" and isinstance(result, dict) and bool(result.get("makeVideoButtonVisible")):
-                    self._append_log(
-                        f"Variant {current_variant}: make-video control is visible while waiting for video-mode; "
-                        "advancing to prompt entry for explicit Make video submit."
-                    )
-                    self.manual_image_video_mode_selected = True
-                    self.manual_image_video_mode_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(300, self._poll_for_manual_image)
-                    return
-
                 if status == "waiting-for-video-mode":
                     generation_state_probe_script = """
                         (() => {
