@@ -8657,6 +8657,15 @@ class MainWindow(QMainWindow):
 
                 if (phase === "pick") {{
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
+                    const allListItems = () => [...document.querySelectorAll("[role='listitem'], li, article, figure")]
+                        .filter((item) => isActuallyVisible(item) && !item.querySelector("div.invisible"));
+                    const isInLastTwoListItems = (el) => {{
+                        const item = listItemOf(el);
+                        if (!item) return false;
+                        const items = allListItems();
+                        const idx = items.indexOf(item);
+                        return idx >= 0 && idx >= Math.max(0, items.length - 2);
+                    }};
                     const listItemReady = (el) => {{
                         const listItem = listItemOf(el);
                         if (!listItem) return true;
@@ -8679,7 +8688,7 @@ class MainWindow(QMainWindow):
                     }}
 
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -9083,6 +9092,15 @@ class MainWindow(QMainWindow):
                                     return true;
                                 };
                                 const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
+                                const allListItems = () => [...document.querySelectorAll("[role='listitem'], li, article, figure")]
+                                    .filter((item) => isActuallyVisible(item) && !item.querySelector("div.invisible"));
+                                const isInLastTwoListItems = (el) => {
+                                    const item = listItemOf(el);
+                                    if (!item) return false;
+                                    const items = allListItems();
+                                    const idx = items.indexOf(item);
+                                    return idx >= 0 && idx >= Math.max(0, items.length - 2);
+                                };
                                 const listItemReady = (el) => {
                                     const listItem = listItemOf(el);
                                     if (!listItem) return true;
@@ -9119,7 +9137,7 @@ class MainWindow(QMainWindow):
 
                                 const tryClickFirstGeneratedTile = () => {
                                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+                                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
 
                                     if (makeVideoButtons.length) {
                                         makeVideoButtons.sort((a, b) => {
@@ -9232,7 +9250,13 @@ class MainWindow(QMainWindow):
                                             if (style && (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") <= 0.01 || style.pointerEvents === "none")) return false;
                                             node = node.parentElement;
                                         }
-                                        return !!btn.closest("[role='listitem'], li, article, figure");
+                                        const listItem = btn.closest("[role='listitem'], li, article, figure");
+                                        if (!listItem) return false;
+                                        const listItems = [...document.querySelectorAll("[role='listitem'], li, article, figure")]
+                                            .filter((item) => !!(item && (item.offsetWidth || item.offsetHeight || item.getClientRects().length)) && !item.querySelector("div.invisible"));
+                                        const idx = listItems.indexOf(listItem);
+                                        if (idx >= 0 && idx >= Math.max(0, listItems.length - 2)) return false;
+                                        return true;
                                     });
                                 const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
                                     .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
