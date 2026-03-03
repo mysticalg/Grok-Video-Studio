@@ -96,7 +96,7 @@ THUMBNAILS_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
-MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = max(10_000, int(os.getenv("MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS", "10000")))
+MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = max(1_000, int(os.getenv("MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS", "1000")))
 CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS = max(3000, int(os.getenv("CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS", "5000")))
 MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS = max(3, int(os.getenv("MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS", "30")))
@@ -2964,6 +2964,12 @@ class MainWindow(QMainWindow):
         self.automation_retry_attempts.setRange(1, 20)
         self.automation_retry_attempts.setValue(self.DEFAULT_AUTOMATION_RETRY_ATTEMPTS)
 
+        self.manual_download_poll_interval_ms = QSpinBox()
+        self.manual_download_poll_interval_ms.setRange(1000, 60000)
+        self.manual_download_poll_interval_ms.setSingleStep(250)
+        self.manual_download_poll_interval_ms.setSuffix(" ms")
+        self.manual_download_poll_interval_ms.setValue(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+
         left_layout.addWidget(prompt_group)
 
         self.generate_image_btn = QPushButton("🎬 Create New Video")
@@ -4960,6 +4966,9 @@ class MainWindow(QMainWindow):
         automation_layout.addSpacing(8)
         automation_layout.addWidget(QLabel("Retries"))
         automation_layout.addWidget(self.automation_retry_attempts)
+        automation_layout.addSpacing(8)
+        automation_layout.addWidget(QLabel("Download Poll"))
+        automation_layout.addWidget(self.manual_download_poll_interval_ms)
         automation_layout.addStretch(1)
         self._add_widget_to_menu(self.automation_menu, automation_widget)
 
@@ -5405,6 +5414,7 @@ class MainWindow(QMainWindow):
             "counter": self.count.value(),
             "automation_action_delay_ms": int(self.automation_action_delay_ms.value()),
             "automation_retry_attempts": int(self.automation_retry_attempts.value()),
+            "manual_download_poll_interval_ms": int(self.manual_download_poll_interval_ms.value()),
             "tiktok_upload_automation_options": {k: v for k, v in self.tiktok_upload_automation_options.items() if k != "music_query_effective"},
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
@@ -5640,6 +5650,11 @@ class MainWindow(QMainWindow):
         if "automation_retry_attempts" in preferences:
             try:
                 self.automation_retry_attempts.setValue(int(preferences["automation_retry_attempts"]))
+            except (TypeError, ValueError):
+                pass
+        if "manual_download_poll_interval_ms" in preferences:
+            try:
+                self.manual_download_poll_interval_ms.setValue(int(preferences["manual_download_poll_interval_ms"]))
             except (TypeError, ValueError):
                 pass
         if "tiktok_upload_automation_options" in preferences and isinstance(preferences["tiktok_upload_automation_options"], dict):
@@ -10759,7 +10774,7 @@ class MainWindow(QMainWindow):
     def _manual_download_poll_interval_ms(self) -> int:
         if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
             return CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS
-        return MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS
+        return max(1000, int(self.manual_download_poll_interval_ms.value()))
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
