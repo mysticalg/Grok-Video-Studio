@@ -8637,6 +8637,12 @@ class MainWindow(QMainWindow):
 
         submit_attempt_allowed = phase != "submit" or not self.manual_image_submit_in_flight
 
+        if phase == "video-mode" and self.manual_image_video_mode_retry_count == 0:
+            self._append_log(f"Variant {variant}: Setting option to Video.")
+        if phase == "submit" and submit_attempt_allowed and not self.manual_image_submit_in_flight:
+            self._append_log(f"Variant {variant}: Entering prompt.")
+            self._append_log(f"Variant {variant}: Pressing Submit.")
+
         script = f"""
             (async () => {{
                 const prompt = {prompt!r};
@@ -9079,7 +9085,7 @@ class MainWindow(QMainWindow):
                             )
                         else:
                             self._append_log(
-                                f"Variant {current_variant}: clicked generated image tile after Make video became available; preparing video prompt + submit."
+                                f"Variant {current_variant}: clicked generated image tile after Make video became visible; preparing video prompt + submit."
                             )
                     self.manual_image_pick_clicked = True
                     self._run_active_browser_javascript("""
@@ -9155,10 +9161,11 @@ class MainWindow(QMainWindow):
                     if status == "video-submit-clicked":
                         message = "video prompt submitted via Make video click"
                     else:
-                        message = "submit was already clicked earlier; waiting for video render/download"
+                        message = "submit was already clicked earlier"
 
                     if not self.manual_image_video_submit_sent:
                         self._append_log(f"Variant {current_variant}: {message}.")
+                        self._append_log(f"Variant {current_variant}: waiting for progression.")
                     self._run_active_browser_javascript("""
                         (() => {
                             try {
