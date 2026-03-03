@@ -8883,9 +8883,20 @@ class MainWindow(QMainWindow):
                 await sleep(ACTION_DELAY_MS);
 
                 if (promptInput.isContentEditable) {{
-                    const paragraph = document.createElement("p");
-                    paragraph.textContent = prompt;
-                    promptInput.replaceChildren(paragraph);
+                    promptInput.focus();
+                    try {{
+                        const selection = window.getSelection && window.getSelection();
+                        if (selection && document.createRange) {{
+                            const range = document.createRange();
+                            range.selectNodeContents(promptInput);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                        }}
+                        document.execCommand("selectAll", false);
+                        document.execCommand("insertText", false, prompt);
+                    }} catch (_) {{
+                        promptInput.textContent = prompt;
+                    }}
                 }} else {{
                     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(promptInput), "value")?.set;
                     if (setter) setter.call(promptInput, prompt);
@@ -8893,13 +8904,19 @@ class MainWindow(QMainWindow):
                 }}
                 await sleep(ACTION_DELAY_MS);
 
-                promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                try {{
+                    promptInput.dispatchEvent(new InputEvent("input", {{ bubbles: true, data: prompt, inputType: "insertText" }}));
+                }} catch (_) {{
+                    promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                }}
                 await sleep(ACTION_DELAY_MS);
                 promptInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
                 await sleep(ACTION_DELAY_MS);
 
-                const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
-                if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
+                const typedValue = promptInput.isContentEditable
+                    ? ((promptInput.innerText || promptInput.textContent || ""))
+                    : (promptInput.value || "");
+                if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty", hasPromptInput: true }};
 
                 const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
                 const scoreSubmit = (btn, index) => {{
@@ -9358,12 +9375,60 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: video-mode validation stayed in '{status}' for "
-                        f"{self.manual_image_video_mode_retry_count} checks; proceeding to prompt entry with Enter-submit fallback."
+                        f"{self.manual_image_video_mode_retry_count} checks; probing render state before Enter-submit fallback."
                     )
-                    self.manual_image_video_mode_selected = True
-                    self.manual_image_video_mode_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(700, self._poll_for_manual_image)
+
+                    video_mode_probe_script = """
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const pathRaw = String((window.location && window.location.pathname) || "");
+                                const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                                const postId = postMatch ? String(postMatch[1] || "") : "";
+                                const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                                    && !/^placeholder-/i.test(postId);
+                                const generationInProgress = !![...document.querySelectorAll("div, span, p, button")]
+                                    .find((el) => isVisible(el) && /\bgenerating\b|\brendering\b|\bcancel\b/i.test((el.textContent || "").trim()));
+                                const video = document.querySelector("video");
+                                const source = document.querySelector("video source");
+                                const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
+                                const hasVideoSource = /^(https?:[/][/]|blob:)/i.test(String(src || "").trim());
+                                return {
+                                    ok: true,
+                                    validPostId,
+                                    generationInProgress,
+                                    hasVideoSource,
+                                };
+                            } catch (_) {
+                                return { ok: false, validPostId: false, generationInProgress: false, hasVideoSource: false };
+                            }
+                        })()
+                    """
+
+                    def _after_video_mode_probe(probe_result):
+                        if isinstance(probe_result, dict) and (
+                            probe_result.get("generationInProgress") or probe_result.get("hasVideoSource")
+                        ):
+                            self._append_log(
+                                "Variant "
+                                f"{current_variant}: render appears active while video mode is unresolved "
+                                "(generation/source detected); switching directly to download polling to avoid duplicate submit attempts."
+                            )
+                            self.manual_image_video_submit_sent = True
+                            self.manual_image_submit_in_flight = False
+                            self.manual_image_submit_in_flight_since = 0.0
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            self.pending_manual_download_type = "video"
+                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                            return
+
+                        self.manual_image_video_mode_selected = True
+                        self.manual_image_video_mode_retry_count = 0
+                        self.manual_image_submit_retry_count = 0
+                        QTimer.singleShot(700, self._poll_for_manual_image)
+
+                    self._run_active_browser_javascript(video_mode_probe_script, _after_video_mode_probe)
                     return
 
                 self._append_log(
@@ -9486,14 +9551,12 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                        f"{self.manual_image_submit_retry_count} checks; assuming submit already happened and switching directly to download polling."
+                        f"{self.manual_image_submit_retry_count} checks; prompt did not persist yet. Retrying submit stage instead of assuming it was already sent."
                     )
-                    self.manual_image_video_submit_sent = True
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count = 0
-                    self.pending_manual_download_type = "video"
-                    self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                    QTimer.singleShot(1200, self._poll_for_manual_image)
                     return
 
                 self.manual_image_submit_retry_count = 0
