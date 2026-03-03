@@ -8942,12 +8942,14 @@ class MainWindow(QMainWindow):
 
                 let enterDispatched = false;
                 if (!submitted) {{
-                    const enterEventCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
-                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
+                    const enterEvent = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
+                    try {{
+                        enterDispatched = promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEvent));
+                    }} catch (_) {{
+                        enterDispatched = false;
+                    }}
                     await sleep(ACTION_DELAY_MS);
-                    submitted = enterDispatched;
+                    submitted = !!enterDispatched;
                     submitLabel = submitLabel || "enter-key";
                 }}
 
