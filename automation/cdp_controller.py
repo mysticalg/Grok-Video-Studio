@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from urllib.parse import urlparse
 
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Browser, Dialog, Page, async_playwright
 
 
 class CDPController:
@@ -21,6 +21,26 @@ class CDPController:
             raise
         return cls(browser=browser, playwright_instance=pw)
 
+
+    @staticmethod
+    async def _safely_handle_dialog(dialog: Dialog) -> None:
+        try:
+            if dialog.type == "beforeunload":
+                await dialog.accept()
+            else:
+                await dialog.dismiss()
+        except Exception:
+            # Some Chromium builds intermittently report
+            # "No dialog is showing" when the dialog is already gone.
+            pass
+
+    def _ensure_dialog_guard(self, page: Page) -> Page:
+        if getattr(page, "_gvs_dialog_guard", False):
+            return page
+        page.on("dialog", self._safely_handle_dialog)
+        setattr(page, "_gvs_dialog_guard", True)
+        return page
+
     async def close(self) -> None:
         await self.browser.close()
         await self._playwright.stop()
@@ -29,13 +49,13 @@ class CDPController:
         for context in self.browser.contexts:
             for page in context.pages:
                 if substr in (page.url or ""):
-                    return page
+                    return self._ensure_dialog_guard(page)
         return None
 
     async def get_most_recent_page(self) -> Page | None:
         for context in self.browser.contexts:
             if context.pages:
-                return context.pages[-1]
+                return self._ensure_dialog_guard(context.pages[-1])
         return None
 
     async def _goto_best_effort(self, page: Page, url: str) -> None:
@@ -73,7 +93,7 @@ class CDPController:
         pages = self._pages_newest_first()
         for page in pages:
             if self._urls_are_compatible(url, page.url or ""):
-                return page
+                return self._ensure_dialog_guard(page)
 
         if reuse_tab:
             target_host = self._host_for_url(url)
@@ -87,12 +107,12 @@ class CDPController:
                     if self._host_for_url(current) != target_host:
                         continue
                     await self._goto_best_effort(page, url)
-                    return page
+                    return self._ensure_dialog_guard(page)
 
         context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         page = await context.new_page()
         await self._goto_best_effort(page, url)
-        return page
+        return self._ensure_dialog_guard(page)
 
     async def navigate(self, page: Page, url: str) -> None:
         await page.goto(url)

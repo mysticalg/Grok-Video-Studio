@@ -119,6 +119,27 @@ def _pick_page(browser, current_url: str, platform: str):
 
 
 
+def _dismiss_dialog_safely(dialog) -> None:
+    try:
+        if str(getattr(dialog, "type", "") or "") == "beforeunload":
+            dialog.accept()
+        else:
+            dialog.dismiss()
+    except Exception:
+        # Playwright can occasionally race and raise:
+        # Protocol error (Page.handleJavaScriptDialog): No dialog is showing
+        pass
+
+
+def _ensure_page_dialog_guard(page) -> None:
+    if page is None:
+        return
+    if getattr(page, "_gvs_dialog_guard", False):
+        return
+    page.on("dialog", _dismiss_dialog_safely)
+    setattr(page, "_gvs_dialog_guard", True)
+
+
 def _upload_selectors_for_platform(platform: str) -> list[str]:
     if platform == "tiktok":
         return [
@@ -314,6 +335,9 @@ def _prime_upload_surface(page, platform: str) -> str:
 
 
 def _stage_file_upload_via_file_chooser(page, platform: str, video_path: str) -> tuple[bool, str]:
+    if platform == "tiktok":
+        return False, "file chooser staging skipped for tiktok"
+
     selectors = _upload_trigger_selectors_for_platform(platform)
     for selector in selectors:
         locator = page.locator(selector)
@@ -919,6 +943,8 @@ def _handle_with_cdp(payload: dict[str, Any]) -> dict[str, Any]:
                     "status": f"No CDP page target found for {platform}.",
                     "retry_ms": 1500,
                 }
+
+            _ensure_page_dialog_guard(page)
 
             try:
                 page.set_default_timeout(int(RELAY_CDP_STEP_TIMEOUT_SECONDS * 1000))
