@@ -223,6 +223,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             "mode": publish_mode,
             "waitForUpload": True,
             "timeoutMs": 120000,
+            "singleClick": True,
         },
     )
     submit_payload = submit_result.get("payload") or {}
