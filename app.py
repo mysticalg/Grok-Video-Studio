@@ -9505,6 +9505,20 @@ class MainWindow(QMainWindow):
 
             self.manual_image_submit_retry_count += 1
             if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
+                if status == "prompt-fill-empty":
+                    self._append_log(
+                        "WARNING: Variant "
+                        f"{current_variant}: submit-stage validation stayed in '{status}' for "
+                        f"{self.manual_image_submit_retry_count} checks; assuming submit already happened and switching directly to download polling."
+                    )
+                    self.manual_image_video_submit_sent = True
+                    self.manual_image_submit_in_flight = False
+                    self.manual_image_submit_in_flight_since = 0.0
+                    self.manual_image_submit_retry_count = 0
+                    self.pending_manual_download_type = "video"
+                    self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                    return
+
                 self._append_log(
                     "WARNING: Variant "
                     f"{current_variant}: submit-stage validation stayed in '{status}' for "
