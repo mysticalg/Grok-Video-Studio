@@ -9441,28 +9441,10 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
-                    submit_grace_seconds = max(2.0, float(os.getenv("GROK_MANUAL_IMAGE_SUBMIT_GRACE_SECONDS", "12")))
-                    submit_elapsed_seconds = (
-                        max(0.0, time.time() - self.manual_image_submit_in_flight_since)
-                        if self.manual_image_submit_in_flight_since > 0
-                        else submit_grace_seconds
-                    )
-
                     probe_submit_token_seen = bool(isinstance(probe_result, dict) and probe_result.get("submitTokenSeen"))
                     current_url = self.browser.url().toString().strip() if self.browser is not None else ""
                     current_post_id = self._extract_valid_grok_post_id(current_url)
-                    if (
-                        self.manual_image_submit_in_flight
-                        and submit_elapsed_seconds < submit_grace_seconds
-                        and probe_submit_token_seen
-                        and bool(current_post_id)
-                        and status in ("callback-empty", "submit-in-flight")
-                    ):
-                        self._append_log(
-                            "WARNING: Variant "
-                            f"{current_variant}: submit token confirmed on post URL ({current_post_id}) while callback is '{status}'; "
-                            "switching to download polling instead of waiting for grace timeout."
-                        )
+                    if probe_submit_token_seen and bool(current_post_id) and status in ("callback-empty", "submit-in-flight"):
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_in_flight = False
                         self.manual_image_submit_in_flight_since = 0.0
@@ -9471,22 +9453,9 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
-                    if self.manual_image_submit_in_flight and submit_elapsed_seconds < submit_grace_seconds:
-                        self._append_log(
-                            f"Variant {current_variant}: submit state unresolved ({status}); waiting {max(0.0, submit_grace_seconds - submit_elapsed_seconds):.1f}s before any re-submit."
-                        )
-                        QTimer.singleShot(1500, self._poll_for_manual_image)
-                        return
-
                     probe_post_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
                     on_post_view_ready = probe_post_ready or bool(current_post_id)
                     if on_post_view_ready and status in ("callback-empty", "submit-in-flight"):
-                        source = "probe" if probe_post_ready else "python-url"
-                        self._append_log(
-                            "WARNING: Variant "
-                            f"{current_variant}: submit callback remained '{status}' after grace window on a valid post URL "
-                            f"({source}, post={current_post_id or 'unknown'}); switching to download polling to avoid submit-stage deadlock."
-                        )
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_in_flight = False
                         self.manual_image_submit_in_flight_since = 0.0
@@ -9497,21 +9466,8 @@ class MainWindow(QMainWindow):
 
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
-                    self.manual_image_submit_retry_count += 1
-                    if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
-                        self._append_log(
-                            "WARNING: Variant "
-                            f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed after grace window, so retrying prompt submit."
-                        )
-                        self.manual_image_submit_retry_count = 0
-                        QTimer.singleShot(1200, self._poll_for_manual_image)
-                        return
-
-                    self._append_log(
-                        f"Variant {current_variant}: video submit stage not ready yet ({status}); rechecking before retry..."
-                    )
-                    QTimer.singleShot(1500, self._poll_for_manual_image)
+                    self.manual_image_submit_retry_count = 0
+                    QTimer.singleShot(1200, self._poll_for_manual_image)
 
                 self._run_active_browser_javascript(submit_ready_probe_script, _after_submit_ready_probe)
                 return
@@ -9536,19 +9492,11 @@ class MainWindow(QMainWindow):
                     self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                     return
 
-                self._append_log(
-                    "WARNING: Variant "
-                    f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                    f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so continuing image polling instead of forcing download."
-                )
                 self.manual_image_submit_retry_count = 0
-                QTimer.singleShot(2000, self._poll_for_manual_image)
+                QTimer.singleShot(1200, self._poll_for_manual_image)
                 return
 
-            self._append_log(
-                f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying..."
-            )
-            QTimer.singleShot(3000, self._poll_for_manual_image)
+            QTimer.singleShot(1200, self._poll_for_manual_image)
 
         self._run_active_browser_javascript(script, _after_poll)
         if phase == "submit" and submit_attempt_allowed:
