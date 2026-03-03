@@ -8630,13 +8630,22 @@ class MainWindow(QMainWindow):
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
-                const isActuallyVisible = (el) => {{
+                const hasVisibleLayout = (el) => {{
                     if (!isVisible(el) || isInsideInvisibleDiv(el)) return false;
                     let node = el;
                     while (node && node.nodeType === 1) {{
                         const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+                        if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+                        node = node.parentElement;
+                    }}
+                    return true;
+                }};
+                const isActuallyVisible = (el) => {{
+                    if (!hasVisibleLayout(el)) return false;
+                    let node = el;
+                    while (node && node.nodeType === 1) {{
+                        const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
                         if (style) {{
-                            if (style.display === "none" || style.visibility === "hidden") return false;
                             if (Number(style.opacity || "1") <= 0.01) return false;
                             if (style.pointerEvents === "none") return false;
                         }}
@@ -8682,20 +8691,20 @@ class MainWindow(QMainWindow):
                     }};
                     scrollBottomNow();
 
-                    const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
-                    const allListItems = () => [...document.querySelectorAll("[role='listitem'], li, article, figure")]
-                        .filter((item) => isActuallyVisible(item) && !item.querySelector("div.invisible"));
-                    const isInLastTwoListItems = (el) => {{
-                        const item = listItemOf(el);
+                    const cardOf = (el) => el?.closest("[role='listitem'], li, article, figure, [class*='media-post' i], [data-testid*='masonry' i], [data-testid*='post' i]") || null;
+                    const allCards = () => [...document.querySelectorAll("[role='listitem'], li, article, figure, [class*='media-post' i], [data-testid*='masonry' i], [data-testid*='post' i]")]
+                        .filter((item) => hasVisibleLayout(item) && !item.querySelector("div.invisible"));
+                    const isInLastTwoCards = (el) => {{
+                        const item = cardOf(el);
                         if (!item) return false;
-                        const items = allListItems();
+                        const items = allCards();
                         const idx = items.indexOf(item);
                         return idx >= 0 && idx >= Math.max(0, items.length - 2);
                     }};
-                    const listItemReady = (el) => {{
-                        const listItem = listItemOf(el);
-                        if (!listItem) return true;
-                        return !listItem.querySelector("div.invisible");
+                    const cardReady = (el) => {{
+                        const card = cardOf(el);
+                        if (!card) return true;
+                        return !card.querySelector("div.invisible");
                     }};
 
                     const path = String((location && location.pathname) || "");
@@ -8714,7 +8723,7 @@ class MainWindow(QMainWindow):
                     }}
 
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
+                        .filter((btn) => hasVisibleLayout(btn) && !btn.disabled && (!!cardOf(btn) || !!btn.closest("div")) && cardReady(btn) && !isInLastTwoCards(btn));
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -8726,7 +8735,7 @@ class MainWindow(QMainWindow):
                         }});
 
                         const firstButton = makeVideoButtons[0];
-                        const tile = listItemOf(firstButton) || firstButton.parentElement;
+                        const tile = cardOf(firstButton) || firstButton.closest("div") || firstButton.parentElement;
                         const tileImage = tile?.querySelector?.("img") || null;
                         const clickedTile = emulateClick(tileImage) || emulateClick(tile);
                         if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
@@ -9084,13 +9093,22 @@ class MainWindow(QMainWindow):
                             try {
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                                 const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
-                                const isActuallyVisible = (el) => {
+                                const hasVisibleLayout = (el) => {
                                     if (!isVisible(el) || isInsideInvisibleDiv(el)) return false;
                                     let node = el;
                                     while (node && node.nodeType === 1) {
                                         const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+                                        if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+                                        node = node.parentElement;
+                                    }
+                                    return true;
+                                };
+                                const isActuallyVisible = (el) => {
+                                    if (!hasVisibleLayout(el)) return false;
+                                    let node = el;
+                                    while (node && node.nodeType === 1) {
+                                        const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
                                         if (style) {
-                                            if (style.display === "none" || style.visibility === "hidden") return false;
                                             if (Number(style.opacity || "1") <= 0.01) return false;
                                             if (style.pointerEvents === "none") return false;
                                         }
@@ -9108,20 +9126,20 @@ class MainWindow(QMainWindow):
                                     el.dispatchEvent(new MouseEvent("click", common));
                                     return true;
                                 };
-                                const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
-                                const allListItems = () => [...document.querySelectorAll("[role='listitem'], li, article, figure")]
-                                    .filter((item) => isActuallyVisible(item) && !item.querySelector("div.invisible"));
-                                const isInLastTwoListItems = (el) => {
-                                    const item = listItemOf(el);
+                                const cardOf = (el) => el?.closest("[role='listitem'], li, article, figure, [class*='media-post' i], [data-testid*='masonry' i], [data-testid*='post' i]") || null;
+                                const allCards = () => [...document.querySelectorAll("[role='listitem'], li, article, figure, [class*='media-post' i], [data-testid*='masonry' i], [data-testid*='post' i]")]
+                                    .filter((item) => hasVisibleLayout(item) && !item.querySelector("div.invisible"));
+                                const isInLastTwoCards = (el) => {
+                                    const item = cardOf(el);
                                     if (!item) return false;
-                                    const items = allListItems();
+                                    const items = allCards();
                                     const idx = items.indexOf(item);
                                     return idx >= 0 && idx >= Math.max(0, items.length - 2);
                                 };
-                                const listItemReady = (el) => {
-                                    const listItem = listItemOf(el);
-                                    if (!listItem) return true;
-                                    return !listItem.querySelector("div.invisible");
+                                const cardReady = (el) => {
+                                    const card = cardOf(el);
+                                    if (!card) return true;
+                                    return !card.querySelector("div.invisible");
                                 };
                                 const SCROLL_PAUSE_MS = 8000;
 
@@ -9154,7 +9172,7 @@ class MainWindow(QMainWindow):
 
                                 const tryClickFirstGeneratedTile = () => {
                                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
+                                        .filter((btn) => hasVisibleLayout(btn) && !btn.disabled && (!!cardOf(btn) || !!btn.closest("div")) && cardReady(btn) && !isInLastTwoCards(btn));
 
                                     if (makeVideoButtons.length) {
                                         makeVideoButtons.sort((a, b) => {
@@ -9166,7 +9184,7 @@ class MainWindow(QMainWindow):
                                         });
 
                                         const firstButton = makeVideoButtons[0];
-                                        const tile = listItemOf(firstButton) || firstButton.parentElement;
+                                        const tile = cardOf(firstButton) || firstButton.closest("div") || firstButton.parentElement;
                                         const tileImage = tile?.querySelector?.("img") || null;
                                         return (emulateClick(tileImage) || emulateClick(tile)) ? "generated-image-clicked" : "";
                                     }
