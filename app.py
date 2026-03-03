@@ -96,7 +96,7 @@ THUMBNAILS_DIR.mkdir(exist_ok=True)
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
-MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = max(10_000, int(os.getenv("MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS", "10000")))
+MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = max(1_000, int(os.getenv("MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS", "1000")))
 CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS = max(3000, int(os.getenv("CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS", "5000")))
 MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS = max(3, int(os.getenv("MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS", "30")))
@@ -2955,7 +2955,7 @@ class MainWindow(QMainWindow):
         self.count.setValue(1)
 
         self.automation_action_delay_ms = QSpinBox()
-        self.automation_action_delay_ms.setRange(50, 10000)
+        self.automation_action_delay_ms.setRange(100, 10000)
         self.automation_action_delay_ms.setSingleStep(10)
         self.automation_action_delay_ms.setSuffix(" ms")
         self.automation_action_delay_ms.setValue(self.DEFAULT_AUTOMATION_ACTION_DELAY_MS)
@@ -2963,6 +2963,12 @@ class MainWindow(QMainWindow):
         self.automation_retry_attempts = QSpinBox()
         self.automation_retry_attempts.setRange(1, 20)
         self.automation_retry_attempts.setValue(self.DEFAULT_AUTOMATION_RETRY_ATTEMPTS)
+
+        self.manual_download_poll_interval_ms = QSpinBox()
+        self.manual_download_poll_interval_ms.setRange(1000, 60000)
+        self.manual_download_poll_interval_ms.setSingleStep(250)
+        self.manual_download_poll_interval_ms.setSuffix(" ms")
+        self.manual_download_poll_interval_ms.setValue(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
 
         left_layout.addWidget(prompt_group)
 
@@ -4960,6 +4966,9 @@ class MainWindow(QMainWindow):
         automation_layout.addSpacing(8)
         automation_layout.addWidget(QLabel("Retries"))
         automation_layout.addWidget(self.automation_retry_attempts)
+        automation_layout.addSpacing(8)
+        automation_layout.addWidget(QLabel("Download Poll"))
+        automation_layout.addWidget(self.manual_download_poll_interval_ms)
         automation_layout.addStretch(1)
         self._add_widget_to_menu(self.automation_menu, automation_widget)
 
@@ -5405,6 +5414,7 @@ class MainWindow(QMainWindow):
             "counter": self.count.value(),
             "automation_action_delay_ms": int(self.automation_action_delay_ms.value()),
             "automation_retry_attempts": int(self.automation_retry_attempts.value()),
+            "manual_download_poll_interval_ms": int(self.manual_download_poll_interval_ms.value()),
             "tiktok_upload_automation_options": {k: v for k, v in self.tiktok_upload_automation_options.items() if k != "music_query_effective"},
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
@@ -5640,6 +5650,11 @@ class MainWindow(QMainWindow):
         if "automation_retry_attempts" in preferences:
             try:
                 self.automation_retry_attempts.setValue(int(preferences["automation_retry_attempts"]))
+            except (TypeError, ValueError):
+                pass
+        if "manual_download_poll_interval_ms" in preferences:
+            try:
+                self.manual_download_poll_interval_ms.setValue(int(preferences["manual_download_poll_interval_ms"]))
             except (TypeError, ValueError):
                 pass
         if "tiktok_upload_automation_options" in preferences and isinstance(preferences["tiktok_upload_automation_options"], dict):
@@ -8443,7 +8458,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Manual image variant {variant}: video option selection is disabled; entering prompt and submitting without resolution/duration/aspect changes."
                 )
-                QTimer.singleShot(max(50, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
+                QTimer.singleShot(max(100, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
                 return
 
             self._append_log(
@@ -8455,7 +8470,7 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            step_pause_ms = max(50, action_delay_ms)
+            step_pause_ms = max(100, action_delay_ms)
             option_steps = [
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
@@ -8534,7 +8549,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"Manual image variant {variant}: skipping image/video option scripts and proceeding directly to prompt fill + submit."
             )
-            QTimer.singleShot(max(50, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
+            QTimer.singleShot(max(100, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
         else:
             self._run_active_browser_javascript(set_image_mode_script, _after_set_mode)
 
@@ -9426,28 +9441,10 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
-                    submit_grace_seconds = max(2.0, float(os.getenv("GROK_MANUAL_IMAGE_SUBMIT_GRACE_SECONDS", "12")))
-                    submit_elapsed_seconds = (
-                        max(0.0, time.time() - self.manual_image_submit_in_flight_since)
-                        if self.manual_image_submit_in_flight_since > 0
-                        else submit_grace_seconds
-                    )
-
                     probe_submit_token_seen = bool(isinstance(probe_result, dict) and probe_result.get("submitTokenSeen"))
                     current_url = self.browser.url().toString().strip() if self.browser is not None else ""
                     current_post_id = self._extract_valid_grok_post_id(current_url)
-                    if (
-                        self.manual_image_submit_in_flight
-                        and submit_elapsed_seconds < submit_grace_seconds
-                        and probe_submit_token_seen
-                        and bool(current_post_id)
-                        and status in ("callback-empty", "submit-in-flight")
-                    ):
-                        self._append_log(
-                            "WARNING: Variant "
-                            f"{current_variant}: submit token confirmed on post URL ({current_post_id}) while callback is '{status}'; "
-                            "switching to download polling instead of waiting for grace timeout."
-                        )
+                    if probe_submit_token_seen and bool(current_post_id) and status in ("callback-empty", "submit-in-flight"):
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_in_flight = False
                         self.manual_image_submit_in_flight_since = 0.0
@@ -9456,22 +9453,9 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
-                    if self.manual_image_submit_in_flight and submit_elapsed_seconds < submit_grace_seconds:
-                        self._append_log(
-                            f"Variant {current_variant}: submit state unresolved ({status}); waiting {max(0.0, submit_grace_seconds - submit_elapsed_seconds):.1f}s before any re-submit."
-                        )
-                        QTimer.singleShot(1500, self._poll_for_manual_image)
-                        return
-
                     probe_post_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
                     on_post_view_ready = probe_post_ready or bool(current_post_id)
                     if on_post_view_ready and status in ("callback-empty", "submit-in-flight"):
-                        source = "probe" if probe_post_ready else "python-url"
-                        self._append_log(
-                            "WARNING: Variant "
-                            f"{current_variant}: submit callback remained '{status}' after grace window on a valid post URL "
-                            f"({source}, post={current_post_id or 'unknown'}); switching to download polling to avoid submit-stage deadlock."
-                        )
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_in_flight = False
                         self.manual_image_submit_in_flight_since = 0.0
@@ -9482,21 +9466,8 @@ class MainWindow(QMainWindow):
 
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
-                    self.manual_image_submit_retry_count += 1
-                    if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
-                        self._append_log(
-                            "WARNING: Variant "
-                            f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                            f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed after grace window, so retrying prompt submit."
-                        )
-                        self.manual_image_submit_retry_count = 0
-                        QTimer.singleShot(1200, self._poll_for_manual_image)
-                        return
-
-                    self._append_log(
-                        f"Variant {current_variant}: video submit stage not ready yet ({status}); rechecking before retry..."
-                    )
-                    QTimer.singleShot(1500, self._poll_for_manual_image)
+                    self.manual_image_submit_retry_count = 0
+                    QTimer.singleShot(1200, self._poll_for_manual_image)
 
                 self._run_active_browser_javascript(submit_ready_probe_script, _after_submit_ready_probe)
                 return
@@ -9521,19 +9492,11 @@ class MainWindow(QMainWindow):
                     self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                     return
 
-                self._append_log(
-                    "WARNING: Variant "
-                    f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                    f"{self.manual_image_submit_retry_count} checks; submit state is still unconfirmed, so continuing image polling instead of forcing download."
-                )
                 self.manual_image_submit_retry_count = 0
-                QTimer.singleShot(2000, self._poll_for_manual_image)
+                QTimer.singleShot(1200, self._poll_for_manual_image)
                 return
 
-            self._append_log(
-                f"Variant {current_variant}: video submit stage not ready yet ({status}); retrying..."
-            )
-            QTimer.singleShot(3000, self._poll_for_manual_image)
+            QTimer.singleShot(1200, self._poll_for_manual_image)
 
         self._run_active_browser_javascript(script, _after_poll)
         if phase == "submit" and submit_attempt_allowed:
@@ -10759,7 +10722,7 @@ class MainWindow(QMainWindow):
     def _manual_download_poll_interval_ms(self) -> int:
         if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
             return CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS
-        return MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS
+        return max(1000, int(self.manual_download_poll_interval_ms.value()))
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         self.pending_manual_download_type = "video"
@@ -11263,7 +11226,7 @@ class MainWindow(QMainWindow):
 
             now = time.time()
             status_changed = status != self.manual_download_last_status
-            status_log_interval_elapsed = (now - self.manual_download_last_status_log_at) >= 6.0
+            status_log_interval_elapsed = (now - self.manual_download_last_status_log_at) >= max(1.0, self._manual_download_poll_interval_ms() / 1000.0)
             if status_changed or status_log_interval_elapsed:
                 suffix = f" ({progress_text})" if progress_text else ""
                 self._append_log(
@@ -11292,7 +11255,7 @@ class MainWindow(QMainWindow):
                         current_variant,
                         "'Generating' disappeared",
                     )
-                    self.manual_download_poll_timer.start(3000)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                     return
 
             if status == "moderated-content-detected":
@@ -11326,7 +11289,7 @@ class MainWindow(QMainWindow):
                             current_variant,
                             "render reached 100%",
                         )
-                        self.manual_download_poll_timer.start(3000)
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
 
                     self._capture_active_post_url_before_download_retry(
                         current_variant,
@@ -11427,7 +11390,7 @@ class MainWindow(QMainWindow):
                         )
                         self._load_grok_homepage_then_return_to_post(resolved_url, current_variant)
                         self.manual_download_click_sent = False
-                        self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                         return
                     self._append_log(
                         f"Variant {current_variant}: direct URL detected; polling/fetching the public URL directly (attempt #{self.manual_download_attempt_count})."
@@ -11818,7 +11781,7 @@ class MainWindow(QMainWindow):
                 f"confirming before abort ({self.manual_public_moderation_count}/{MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS})."
             )
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
         except PublicVideoNotReadyError as exc:
             if output_path is not None and output_path.exists():
@@ -11836,7 +11799,7 @@ class MainWindow(QMainWindow):
                 f"{self.manual_public_not_ready_count}/{MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS}."
             )
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
         except Exception as exc:
             if output_path is not None and output_path.exists():
@@ -11856,7 +11819,7 @@ class MainWindow(QMainWindow):
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
             self._load_grok_homepage_then_return_to_post(source_url, variant)
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
 
         self.manual_public_not_ready_count = 0
@@ -15482,7 +15445,7 @@ class MainWindow(QMainWindow):
                     const payload = JSON.parse(atob("__PAYLOAD_B64__"));
                     const norm = (s) => String(s || "").toLowerCase();
                     const platform = norm(payload.platform);
-                    const configuredActionDelayMs = Math.max(50, Number(payload.action_delay_ms) || 1000);
+                    const configuredActionDelayMs = Math.max(100, Number(payload.action_delay_ms) || 1000);
                     const pick = (arr) => arr.find(Boolean) || null;
                     const collectDeep = (selector) => {
                         const results = [];
