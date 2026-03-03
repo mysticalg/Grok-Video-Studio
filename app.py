@@ -8897,6 +8897,75 @@ class MainWindow(QMainWindow):
                     return {{ ok: true, status: "video-submit-already-clicked" }};
                 }}
 
+                const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+                const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\s+/g, " ").trim();
+                const descriptorOf = (el) => (textOf(el) + " " + ariaOf(el)).trim();
+                const isSettingsTrigger = (el) => {{
+                    if (!el || !isActuallyVisible(el) || el.disabled) return false;
+                    const popup = String(el.getAttribute("aria-haspopup") || "").toLowerCase();
+                    if (popup !== "menu" && popup !== "listbox") return false;
+                    const descriptor = descriptorOf(el).toLowerCase();
+                    const elementId = String(el.id || "").toLowerCase();
+                    return /\bsettings\b|\bmodel\b|\bvideo\b|\bimage\b/.test(descriptor) || elementId === "model-select-trigger";
+                }};
+                const isMakeVideoMenuItem = (el) => {{
+                    if (!el || !isActuallyVisible(el) || el.disabled) return false;
+                    const descriptor = descriptorOf(el).toLowerCase();
+                    return /\bmake\s+video\b/.test(descriptor) || /animate\s+this\s+image\s+into\s+a\s+video/.test(descriptor);
+                }};
+                const getMenuCandidates = () => [
+                    ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitem'], [role='option'], [data-radix-collection-item]")
+                ].filter((el, idx, arr) => arr.indexOf(el) === idx && isActuallyVisible(el));
+                const makeVideoAlreadySelected = () => {{
+                    const selected = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
+                        .filter((el) => isActuallyVisible(el));
+                    return selected.some((el) => /(^|\s)video(\s|$)/i.test(textOf(el)));
+                }};
+                const ensureVideoModeSelected = async () => {{
+                    if (makeVideoAlreadySelected()) return {{ selected: true, selectedNow: false, openedMenu: false }};
+
+                    let openedMenu = false;
+                    const clickMakeVideoItemIfVisible = async () => {{
+                        const makeVideoItem = getMenuCandidates().find((el) => isMakeVideoMenuItem(el)) || null;
+                        if (!makeVideoItem) return false;
+                        const clicked = emulateClick(makeVideoItem);
+                        if (clicked) await sleep(ACTION_DELAY_MS);
+                        return clicked;
+                    }};
+
+                    if (await clickMakeVideoItemIfVisible()) {{
+                        return {{ selected: true, selectedNow: true, openedMenu }};
+                    }}
+
+                    const triggers = [
+                        ...document.querySelectorAll("#model-select-trigger"),
+                        ...document.querySelectorAll("button[aria-label='Settings'], [role='button'][aria-label='Settings']"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                     .filter((el) => isSettingsTrigger(el));
+
+                    for (const trigger of triggers) {{
+                        openedMenu = emulateClick(trigger) || openedMenu;
+                        await sleep(ACTION_DELAY_MS);
+                        if (await clickMakeVideoItemIfVisible()) {{
+                            return {{ selected: true, selectedNow: true, openedMenu }};
+                        }}
+                    }}
+
+                    return {{ selected: makeVideoAlreadySelected(), selectedNow: false, openedMenu }};
+                }};
+
+                const modeResult = await ensureVideoModeSelected();
+                if (!modeResult.selected) {{
+                    return {{
+                        ok: false,
+                        status: "waiting-for-video-mode",
+                        optionsOpened: !!modeResult.openedMenu,
+                        videoItemFound: false,
+                        videoClicked: false,
+                    }};
+                }}
+
                 const promptSelectors = [
                     "textarea[placeholder*='Type to customize video' i]",
                     "input[placeholder*='Type to customize video' i]",
@@ -8946,6 +9015,10 @@ class MainWindow(QMainWindow):
 
                 const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
                     .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
+                    .filter((btn) => {{
+                        const popup = String(btn.getAttribute("aria-haspopup") || "").toLowerCase();
+                        return popup !== "menu" && popup !== "listbox";
+                    }})
                     .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
                 const submitButton = submitCandidates.find((btn) => {{
                     if (btn.closest("[role='listitem'], li, article, figure")) return false;
