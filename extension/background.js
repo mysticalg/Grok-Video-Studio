@@ -725,7 +725,21 @@ async function handleCmd(msg) {
             out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
-            out[rawKey] = setValue(facebookEl, text);
+            const normalizeForCompare = (value) => String(value || "")
+              .replace(/\u200B/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            const expected = normalizeForCompare(text);
+            const facebookTextMatches = () => {
+              const current = normalizeForCompare(getEditableText(facebookEl));
+              if (!expected) return current.length === 0;
+              return current === expected || current.includes(expected) || expected.includes(current);
+            };
+
+            const filled = facebookTextMatches()
+              || setValue(facebookEl, text)
+              || await typeTextIntoEditable(facebookEl, text);
+            out[rawKey] = Boolean(filled) && facebookTextMatches();
           } else if (currentPlatform === "x" && canonicalKey === "description") {
             const xEl = findXComposerField() || el;
             const normalizeForCompare = (value) => String(value || "")

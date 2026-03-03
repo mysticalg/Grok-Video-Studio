@@ -35,6 +35,15 @@ def _best_effort_fill_description(executor: BaseExecutor, description: str) -> N
         except Exception:
             continue
 
+    # Primary path: platform-aware form.fill (uses robust facebook contenteditable handling).
+    try:
+        executor.run("form.fill", {"platform": "facebook", "fields": {"description": value}})
+        return
+    except Exception:
+        pass
+
+    # Last fallback: attempt direct dom.type into each selector.
+    for selector in selectors:
         try:
             executor.run(
                 "dom.type",
@@ -48,12 +57,6 @@ def _best_effort_fill_description(executor: BaseExecutor, description: str) -> N
             return
         except Exception:
             continue
-
-    # Final fallback to generic form.fill path.
-    try:
-        executor.run("form.fill", {"platform": "facebook", "fields": {"description": value}})
-    except Exception:
-        return
 
 
 def _sleep_between_actions() -> None:
