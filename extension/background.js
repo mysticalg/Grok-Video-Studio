@@ -800,22 +800,36 @@ async function handleCmd(msg) {
       }
       const tab = await findTargetTab(platform);
       const debuggee = { tabId: tab.id };
-      const selectorExpr = `(() => { const nodes = Array.from(document.querySelectorAll("input[type=\'file\']")); return nodes.find((n) => (n.offsetWidth || n.offsetHeight || n.getClientRects().length)) || nodes[0] || null; })()`;
       let attached = false;
       try {
         await chrome.debugger.attach(debuggee, "1.3");
         attached = true;
         await chrome.debugger.sendCommand(debuggee, "DOM.enable", {});
-        await chrome.debugger.sendCommand(debuggee, "Runtime.enable", {});
-        const evalRes = await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
-          expression: selectorExpr,
-          returnByValue: false,
-        });
-        const objectId = evalRes?.result?.objectId;
-        if (!objectId) throw new Error("file input element not found in target tab");
-        const nodeInfo = await chrome.debugger.sendCommand(debuggee, "DOM.requestNode", { objectId });
-        const nodeId = nodeInfo?.nodeId;
-        if (!nodeId) throw new Error("failed to resolve file input nodeId");
+
+        const doc = await chrome.debugger.sendCommand(debuggee, "DOM.getDocument", { depth: 2, pierce: true });
+        const rootNodeId = doc?.root?.nodeId;
+        if (!rootNodeId) throw new Error("failed to resolve DOM root nodeId");
+
+        const selectors = [
+          "input[type='file'][accept*='video']",
+          "input[type='file'][accept*='mp4' i]",
+          "input[type='file']",
+        ];
+
+        let nodeId = 0;
+        for (const selector of selectors) {
+          try {
+            const query = await chrome.debugger.sendCommand(debuggee, "DOM.querySelectorAll", { nodeId: rootNodeId, selector });
+            const nodeIds = Array.isArray(query?.nodeIds) ? query.nodeIds : [];
+            if (nodeIds.length > 0) {
+              nodeId = Number(nodeIds[0] || 0);
+              if (nodeId > 0) break;
+            }
+          } catch (_) {}
+        }
+
+        if (!nodeId) throw new Error("file input element not found in target tab");
+
         await chrome.debugger.sendCommand(debuggee, "DOM.setFileInputFiles", { nodeId, files: [filePath] });
         sendEvent("state", { state: "upload_selected", platform, filePath, mode: "extension_debugger_set_file_input_files" });
         ackCmd(msg, true, { mode: "extension_debugger_set_file_input_files" });

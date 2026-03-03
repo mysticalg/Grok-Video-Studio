@@ -735,8 +735,24 @@ class UdpAutomationService:
                 mode = None
                 last_err = ""
 
+                # TikTok usually exposes upload controls that trigger native chooser instantly.
+                # In external automation, the extension debugger path tends to be the quickest
+                # and most reliable way to set the local file path without long Playwright probing.
+                if platform == "tiktok":
+                    try:
+                        ack = await self._send_extension_cmd("upload.select_file", payload)
+                        ack_payload = _ack_from_extension(ack)
+                        if bool(ack_payload.get("ok")):
+                            mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
+                            await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
+                            return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                        last_err = str(ack_payload.get("error") or "")
+                    except Exception as exc:
+                        last_err = str(exc)
+
                 await _prime_upload_surface()
-                for _ in range(24):
+                probe_rounds = 8 if platform == "tiktok" else 24
+                for _ in range(probe_rounds):
                     for locator in input_locators:
                         try:
                             count = await locator.count()
@@ -747,7 +763,8 @@ class UdpAutomationService:
                         for idx in range(count):
                             target = locator.nth(idx)
                             try:
-                                await target.set_input_files(file_path)
+                                timeout_ms = 5000 if platform == "tiktok" else 30000
+                                await target.set_input_files(file_path, timeout=timeout_ms)
                                 mode = "cdp_set_input_files"
                                 break
                             except Exception as exc:
@@ -783,6 +800,53 @@ class UdpAutomationService:
                                     pass
                             if used_dom_fallback:
                                 break
+
+                if not mode and platform == "tiktok":
+                    # TikTok can accept the file even when a follow-up set_input_files probe times out.
+                    # If upload UI already reflects a staged/uploaded video, treat this as success.
+                    try:
+                        tiktok_upload_state = await asyncio.wait_for(
+                            page.evaluate(
+                                """
+() => {
+  const text = (node) => String(node?.textContent || '').toLowerCase();
+  const hasReplace = !![...document.querySelectorAll('button, [role="button"]')]
+    .find((el) => text(el).includes('replace'));
+  const hasUploadedLabel = !![...document.querySelectorAll('div, span, p')]
+    .find((el) => {
+      const t = text(el);
+      return t.includes('uploaded') || t.includes('upload complete') || t.includes('processing');
+    });
+  const hasProgressBar = !!document.querySelector('div.info-status.success, [class*="progress" i], [class*="upload" i]');
+  const hasVideoPreview = !!document.querySelector('video, img[alt*="cover" i], canvas');
+  return {
+    ready: Boolean(hasReplace || hasUploadedLabel || (hasProgressBar && hasVideoPreview)),
+    hasReplace,
+    hasUploadedLabel,
+    hasProgressBar,
+    hasVideoPreview,
+  };
+}
+                                """
+                            ),
+                            timeout=3.0,
+                        )
+                    except Exception:
+                        tiktok_upload_state = None
+
+                    if isinstance(tiktok_upload_state, dict) and bool(tiktok_upload_state.get("ready")):
+                        mode = "tiktok_upload_already_present"
+                        await self._emit(
+                            "state",
+                            {
+                                "state": "upload_selected",
+                                "platform": platform,
+                                "filePath": file_path,
+                                "mode": mode,
+                                "detected": tiktok_upload_state,
+                            },
+                        )
+                        return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2), "detected": tiktok_upload_state}}
 
                 if not mode:
                     # CDP file-input access is brittle across upload UIs; always try extension debugger fallback.

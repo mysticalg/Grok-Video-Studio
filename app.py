@@ -2345,10 +2345,10 @@ class AutomationRuntimeWorker(QThread):
         await self.bus.start()
         self.log.emit("Control bus listening at ws://127.0.0.1:18792")
 
-    def _run_coro(self, coro):
+    def _run_coro(self, coro, timeout_s: float = 30.0):
         if self.loop is None:
             raise RuntimeError("Automation runtime not started")
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=30)
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=max(1.0, float(timeout_s)))
 
     def start_chrome(self) -> ChromeInstance:
         manager = AutomationChromeManager(extension_dir=self.extension_dir)
@@ -2465,7 +2465,35 @@ class AutomationRuntimeWorker(QThread):
                 **result,
             }
 
-        return self._run_coro(_run())
+        # File-input staging can take noticeably longer for larger videos because Chromium may
+        # block while validating path access and preparing upload metadata. Scale timeout with
+        # file size (and allow env override) so path-based uploads do not fail early.
+        command_timeout_s = 30.0
+        if action == "upload.select_file":
+            min_upload_timeout_s = 180.0
+            max_upload_timeout_s = 900.0
+            timeout_from_size_s = min_upload_timeout_s
+            try:
+                file_path = str(payload.get("filePath") or "").strip()
+                if file_path:
+                    file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+                    # Keep enough room for slower disks/AV scanning on Windows for larger files.
+                    timeout_from_size_s = min_upload_timeout_s + (file_size_mb * 8.0)
+            except Exception:
+                pass
+
+            timeout_env_raw = os.getenv("GROK_LOCAL_UPLOAD_SELECT_TIMEOUT_S", "").strip()
+            try:
+                timeout_env_s = float(timeout_env_raw) if timeout_env_raw else 0.0
+            except Exception:
+                timeout_env_s = 0.0
+
+            if timeout_env_s > 0:
+                command_timeout_s = timeout_env_s
+            else:
+                command_timeout_s = timeout_from_size_s
+            command_timeout_s = max(min_upload_timeout_s, min(max_upload_timeout_s, command_timeout_s))
+        return self._run_coro(_run(), timeout_s=command_timeout_s)
 
     def stop_runtime(self) -> None:
         if self.loop is None:
