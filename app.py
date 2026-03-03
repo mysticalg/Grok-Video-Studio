@@ -8720,19 +8720,6 @@ class MainWindow(QMainWindow):
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
-                    const pickPromptSelectors = [
-                        "textarea[placeholder*='Type to customize video' i]",
-                        "input[placeholder*='Type to customize video' i]",
-                        "textarea[aria-label*='Make a video' i]",
-                        "input[aria-label*='Make a video' i]",
-                        "div.tiptap.ProseMirror[contenteditable='true']",
-                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
-                        "[contenteditable='true'][aria-label*='Make a video' i]",
-                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
-                    ];
-                    const pickPromptVisible = pickPromptSelectors
-                        .flatMap((sel) => [...document.querySelectorAll(sel)])
-                        .some((el) => isActuallyVisible(el) && !el.disabled);
                     if (onPostView) {{
                         return {{
                             ok: true,
@@ -8743,32 +8730,8 @@ class MainWindow(QMainWindow):
                         }};
                     }}
 
-                    if (pickPromptVisible) {{
-                        return {{
-                            ok: true,
-                            status: "generated-image-clicked",
-                            detectedViaPrompt: true,
-                            path,
-                            postId,
-                        }};
-                    }}
-
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
                         .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
-
-                    const makeVideoTextButtons = [...document.querySelectorAll("button, [role='button']")]
-                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled)
-                        .filter((btn) => /(^|\\s)make\\s+video(\\s|$)/i.test((btn.textContent || "").replace(/\\s+/g, " ").trim()));
-
-                    if (!makeVideoButtons.length && makeVideoTextButtons.length) {{
-                        const sortedTextButtons = makeVideoTextButtons.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-                        const firstTextButton = sortedTextButtons[0];
-                        const clicked = emulateClick(firstTextButton);
-                        if (clicked) {{
-                            await sleep(ACTION_DELAY_MS);
-                            return {{ ok: true, status: "generated-image-clicked", detectedViaTextButton: true }};
-                        }}
-                    }}
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -9075,11 +9038,26 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(700, self._poll_for_manual_image)
                     return
 
-                if status in ("video-submit-clicked", "video-submit-already-clicked", "make-video-click-failed"):
+                if status == "make-video-click-failed":
+                    self.manual_image_submit_retry_count += 1
+                    self._append_log(
+                        f"WARNING: Variant {current_variant}: Make video click was not confirmed; retrying prompt submit "
+                        f"(attempt {self.manual_image_submit_retry_count}/{int(self.automation_retry_attempts.value())})."
+                    )
+                    if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
+                        self._append_log(
+                            f"ERROR: Variant {current_variant}: Make video click failed after "
+                            f"{self.manual_image_submit_retry_count} attempts; keeping flow in submit stage for manual recovery."
+                        )
+                        self.manual_image_submit_retry_count = 0
+                        QTimer.singleShot(1800, self._poll_for_manual_image)
+                        return
+                    QTimer.singleShot(900, self._poll_for_manual_image)
+                    return
+
+                if status in ("video-submit-clicked", "video-submit-already-clicked"):
                     if status == "video-submit-clicked":
                         message = "video prompt submitted via Make video click"
-                    elif status == "make-video-click-failed":
-                        message = "Make video click could not be confirmed; assuming submit succeeded and switching to render/download polling"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
 
