@@ -8630,9 +8630,23 @@ class MainWindow(QMainWindow):
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
+                const isActuallyVisible = (el) => {{
+                    if (!isVisible(el) || isInsideInvisibleDiv(el)) return false;
+                    let node = el;
+                    while (node && node.nodeType === 1) {{
+                        const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+                        if (style) {{
+                            if (style.display === "none" || style.visibility === "hidden") return false;
+                            if (Number(style.opacity || "1") <= 0.01) return false;
+                            if (style.pointerEvents === "none") return false;
+                        }}
+                        node = node.parentElement;
+                    }}
+                    return true;
+                }};
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
                 const emulateClick = (el) => {{
-                    if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
+                    if (!el || !isActuallyVisible(el) || el.disabled) return false;
                     try {{ el.dispatchEvent(new PointerEvent("pointerdown", common)); }} catch (_) {{}}
                     el.dispatchEvent(new MouseEvent("mousedown", common));
                     try {{ el.dispatchEvent(new PointerEvent("pointerup", common)); }} catch (_) {{}}
@@ -8665,7 +8679,7 @@ class MainWindow(QMainWindow):
                     }}
 
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -9044,9 +9058,23 @@ class MainWindow(QMainWindow):
                             try {
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                                 const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
+                                const isActuallyVisible = (el) => {
+                                    if (!isVisible(el) || isInsideInvisibleDiv(el)) return false;
+                                    let node = el;
+                                    while (node && node.nodeType === 1) {
+                                        const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+                                        if (style) {
+                                            if (style.display === "none" || style.visibility === "hidden") return false;
+                                            if (Number(style.opacity || "1") <= 0.01) return false;
+                                            if (style.pointerEvents === "none") return false;
+                                        }
+                                        node = node.parentElement;
+                                    }
+                                    return true;
+                                };
                                 const common = { bubbles: true, cancelable: true, composed: true };
                                 const emulateClick = (el) => {
-                                    if (!el || !isVisible(el) || isInsideInvisibleDiv(el) || el.disabled) return false;
+                                    if (!el || !isActuallyVisible(el) || el.disabled) return false;
                                     try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
                                     el.dispatchEvent(new MouseEvent("mousedown", common));
                                     try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
@@ -9091,7 +9119,7 @@ class MainWindow(QMainWindow):
 
                                 const tryClickFirstGeneratedTile = () => {
                                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                                        .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+                                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
 
                                     if (makeVideoButtons.length) {
                                         makeVideoButtons.sort((a, b) => {
@@ -9198,6 +9226,12 @@ class MainWindow(QMainWindow):
                                     .find((btn) => {
                                         if (!(btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length))) return false;
                                         if (btn.closest("div.invisible")) return false;
+                                        let node = btn;
+                                        while (node && node.nodeType === 1) {
+                                            const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+                                            if (style && (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") <= 0.01 || style.pointerEvents === "none")) return false;
+                                            node = node.parentElement;
+                                        }
                                         return !!btn.closest("[role='listitem'], li, article, figure");
                                     });
                                 const editImageVisible = !![...document.querySelectorAll("button[aria-label*='edit image' i], [role='button'][aria-label*='edit image' i]")]
