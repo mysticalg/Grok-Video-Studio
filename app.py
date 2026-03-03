@@ -10928,6 +10928,21 @@ class MainWindow(QMainWindow):
         return max(1000, int(self.manual_download_poll_interval_ms.value()))
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
+        if (
+            self.pending_manual_download_type == "video"
+            and self.pending_manual_variant_for_download == variant
+            and self.manual_download_poll_timer.isActive()
+        ):
+            # Keep the current video polling session stable; repeated re-entry here can reset
+            # click/progress guards and cause duplicate Make Video interactions.
+            if not allow_make_video_click:
+                self.manual_video_allow_make_click = False
+            self._append_log(
+                f"Variant {variant}: video download polling already active; reusing existing session "
+                f"(allowMakeVideoClick={self.manual_video_allow_make_click})."
+            )
+            return
+
         self.pending_manual_download_type = "video"
         self.manual_download_deadline = time.time() + 420
         self.manual_public_video_url = ""
@@ -11517,8 +11532,17 @@ class MainWindow(QMainWindow):
                 label = (result.get("buttonLabel") or "Make video").strip()
                 self._append_log(f"Variant {current_variant}: clicked '{label}' to start video generation.")
                 self.manual_video_start_click_sent = True
+                self.manual_video_allow_make_click = False
                 self.manual_video_make_click_fallback_used = True
-                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+
+                def _after_capture_make_video_start() -> None:
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+
+                self._capture_active_post_url_before_download_retry(
+                    current_variant,
+                    "make-video clicked",
+                    _after_capture_make_video_start,
+                )
                 return
 
             if status == "make-video-awaiting-progress":
