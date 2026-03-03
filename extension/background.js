@@ -786,22 +786,36 @@ async function handleCmd(msg) {
       }
       const tab = await findTargetTab(platform);
       const debuggee = { tabId: tab.id };
-      const selectorExpr = `(() => { const nodes = Array.from(document.querySelectorAll("input[type=\'file\']")); return nodes.find((n) => (n.offsetWidth || n.offsetHeight || n.getClientRects().length)) || nodes[0] || null; })()`;
+      const selectors = [
+        "input[type='file'][accept*='video']",
+        "input[type='file'][multiple]",
+        "input[type='file']",
+      ];
       let attached = false;
       try {
         await chrome.debugger.attach(debuggee, "1.3");
         attached = true;
         await chrome.debugger.sendCommand(debuggee, "DOM.enable", {});
         await chrome.debugger.sendCommand(debuggee, "Runtime.enable", {});
-        const evalRes = await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", {
-          expression: selectorExpr,
-          returnByValue: false,
+        const { root } = await chrome.debugger.sendCommand(debuggee, "DOM.getDocument", {
+          depth: -1,
+          pierce: true,
         });
-        const objectId = evalRes?.result?.objectId;
-        if (!objectId) throw new Error("file input element not found in target tab");
-        const nodeInfo = await chrome.debugger.sendCommand(debuggee, "DOM.requestNode", { objectId });
-        const nodeId = nodeInfo?.nodeId;
-        if (!nodeId) throw new Error("failed to resolve file input nodeId");
+        const rootNodeId = root?.nodeId;
+        if (!rootNodeId) throw new Error("failed to resolve root DOM node");
+
+        let nodeId = null;
+        for (const selector of selectors) {
+          const queryRes = await chrome.debugger.sendCommand(debuggee, "DOM.querySelector", {
+            nodeId: rootNodeId,
+            selector,
+          });
+          if (queryRes?.nodeId) {
+            nodeId = queryRes.nodeId;
+            break;
+          }
+        }
+        if (!nodeId) throw new Error("file input element not found in target tab");
         await chrome.debugger.sendCommand(debuggee, "DOM.setFileInputFiles", { nodeId, files: [filePath] });
         sendEvent("state", { state: "upload_selected", platform, filePath, mode: "extension_debugger_set_file_input_files" });
         ackCmd(msg, true, { mode: "extension_debugger_set_file_input_files" });

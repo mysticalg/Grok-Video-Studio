@@ -686,10 +686,17 @@ class UdpAutomationService:
                     )
 
                 file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+                frames = [page] + list(page.frames)
+                selector_candidates = [
+                    "input[type='file'][accept*='video']",
+                    "input[type='file'][multiple]",
+                    "input[type='file']",
+                    "ytcp-uploads-dialog input[type='file']",
+                ]
                 input_locators = [
-                    page.locator("input[type='file']"),
-                    page.locator("ytcp-uploads-dialog input[type='file']"),
-                    page.locator("input[type='file'][accept*='video']"),
+                    frame.locator(selector)
+                    for frame in frames
+                    for selector in selector_candidates
                 ]
 
                 mode = None
@@ -723,7 +730,7 @@ class UdpAutomationService:
                 if not mode:
                     used_dom_fallback = False
                     if self.cdp is not None:
-                        for selector in ["ytcp-uploads-dialog input[type='file']", "input[type='file'][accept*='video']", "input[type='file']"]:
+                        for selector in ["input[type='file'][accept*='video']", "input[type='file'][multiple]", "ytcp-uploads-dialog input[type='file']", "input[type='file']"]:
                             for _ in range(4):
                                 used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, selector, file_path)
                                 if used_dom_fallback:
