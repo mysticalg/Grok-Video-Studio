@@ -8763,99 +8763,43 @@ class MainWindow(QMainWindow):
                 }}
 
                 if (phase === "video-mode") {{
-                    const textOf = (el) => (el?.textContent || "").replace(/\\s+/g, " ").trim();
-                    const ariaOf = (el) => (el?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
-                    const titleOf = (el) => (el?.getAttribute?.("title") || "").replace(/\\s+/g, " ").trim();
-                    const descriptorOf = (el) => `${{textOf(el)}} ${{ariaOf(el)}} ${{titleOf(el)}}`.trim();
-                    const isSidebarControl = (el) => {{
-                        if (!el) return false;
-                        const label = ariaOf(el).toLowerCase();
-                        if (/^create\\s+new\\s+project$/.test(label)) return true;
-                        if (el.matches?.("[data-sidebar], [data-sidebar='menu-button']")) return true;
-                        if (el.closest?.("[data-sidebar], [data-sidebar='menu-button']")) return true;
-                        if (el.closest?.("aside")) return true;
-                        return false;
-                    }};
-                    const isMakeVideoItem = (el) => /\\bmake\\s+video\\b/i.test(descriptorOf(el))
-                        || /animate\\s+this\\s+image\\s+into\\s+a\\s+video/i.test(descriptorOf(el));
-                    const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(descriptorOf(el));
-                    const isBlockedMoreOptionsControl = (el) => {{
-                        if (!el) return false;
-                        const descriptor = descriptorOf(el).toLowerCase();
-                        const hasPopup = String(el.getAttribute?.("aria-haspopup") || "").toLowerCase() === "menu";
-                        if ((el.id || "") === "model-select-trigger") return false;
-                        return hasPopup && /\\bmore\\s+options\\b/.test(descriptor);
-                    }};
-                    const getMenuItems = () => [
-                        ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
-                    ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+                    // Detection-only gate: do not click "Make video" or menu options here.
+                    // Clicking those controls in this phase can submit/generate before prompt entry.
+                    const promptReadySelectors = [
+                        "textarea[placeholder*='Type to customize video' i]",
+                        "input[placeholder*='Type to customize video' i]",
+                        "textarea[placeholder*='Type to imagine' i]",
+                        "input[placeholder*='Type to imagine' i]",
+                        "textarea[aria-label*='Make a video' i]",
+                        "input[aria-label*='Make a video' i]",
+                        "div.tiptap.ProseMirror[contenteditable='true']",
+                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                        "[contenteditable='true'][aria-label*='Make a video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                        "[contenteditable='true'][data-placeholder*='Customize video' i]",
+                    ];
+                    const promptReady = promptReadySelectors
+                        .flatMap((sel) => [...document.querySelectorAll(sel)])
+                        .some((el) => isActuallyVisible(el) && !el.disabled);
 
-                    const makeVideoFromOpenMenu = async () => {{
-                        const menuItems = getMenuItems();
-                        const makeVideoItem = menuItems.find((el) => isMakeVideoItem(el)) || null;
-                        const clicked = makeVideoItem ? emulateClick(makeVideoItem) : false;
-                        if (clicked) await sleep(ACTION_DELAY_MS);
-                        return {{ item: makeVideoItem, clicked }};
-                    }};
-
-                    let optionsOpened = false;
-                    let makeVideoItemFound = false;
-                    let makeVideoClicked = false;
-
-                    let menuAttempt = await makeVideoFromOpenMenu();
-                    if (menuAttempt.item) {{
-                        makeVideoItemFound = true;
-                        makeVideoClicked = !!menuAttempt.clicked;
-                    }}
-
-                    if (!makeVideoItemFound || !makeVideoClicked) {{
-                        const triggerCandidates = [
-                            ...document.querySelectorAll("#model-select-trigger"),
-                            ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
-                            ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
-                            ...document.querySelectorAll("button, [role='button']"),
-                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el) && !isSidebarControl(el));
-
-                        const likelyTriggers = triggerCandidates.filter((el) => {{
-                            const descriptor = descriptorOf(el);
-                            return /model|video|image|options|settings/i.test(descriptor) || (el.id || "") === "model-select-trigger";
-                        }});
-                        const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
-
-                        for (const trigger of candidates) {{
-                            const opened = emulateClick(trigger);
-                            optionsOpened = optionsOpened || opened;
-                            await sleep(ACTION_DELAY_MS);
-                            menuAttempt = await makeVideoFromOpenMenu();
-                            if (menuAttempt.item) {{
-                                makeVideoItemFound = true;
-                                makeVideoClicked = !!menuAttempt.clicked;
-                                if (makeVideoClicked) break;
-                            }}
-                        }}
-                    }}
-
-                    const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
-                        .filter((el) => isVisible(el));
-                    const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
-                    const videoSelected = makeVideoClicked || selectedViaMarker;
-
-                    if (!videoSelected) {{
+                    if (!promptReady) {{
                         return {{
                             ok: false,
                             status: "waiting-for-video-mode",
-                            optionsOpened,
-                            videoItemFound: makeVideoItemFound,
-                            videoClicked: makeVideoClicked,
+                            optionsOpened: false,
+                            videoItemFound: false,
+                            videoClicked: false,
                         }};
                     }}
 
                     return {{
                         ok: true,
                         status: "video-mode-selected",
-                        optionsOpened,
-                        videoItemFound: makeVideoItemFound,
-                        videoClicked: makeVideoClicked,
+                        optionsOpened: false,
+                        videoItemFound: false,
+                        videoClicked: false,
                     }};
                 }}
 
@@ -9035,8 +8979,8 @@ class MainWindow(QMainWindow):
                     clicked = result.get("videoClicked")
                     if not self.manual_image_video_mode_selected:
                         self._append_log(
-                            f"Variant {current_variant}: switched prompt mode to video "
-                            f"(opened={opened}, itemFound={item_found}, itemClicked={clicked}); refilling prompt."
+                            f"Variant {current_variant}: video prompt input is ready "
+                            f"(opened={opened}, itemFound={item_found}, itemClicked={clicked}); filling prompt."
                         )
                     self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
