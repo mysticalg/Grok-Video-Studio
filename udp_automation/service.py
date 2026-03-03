@@ -738,10 +738,10 @@ class UdpAutomationService:
                 mode = None
                 last_err = ""
 
-                # TikTok usually exposes upload controls that trigger native chooser instantly.
-                # In external automation, the extension debugger path tends to be the quickest
-                # and most reliable way to set the local file path without long Playwright probing.
-                if platform == "tiktok":
+                # TikTok and X often trigger native choosers from upload controls.
+                # In external automation, prefer the extension debugger path first so the
+                # local machine file path can be set directly without remote CDP transfer.
+                if platform in {"tiktok", "x"}:
                     try:
                         ack = await self._send_extension_cmd("upload.select_file", payload)
                         ack_payload = _ack_from_extension(ack)
