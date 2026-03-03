@@ -673,28 +673,77 @@ class UdpAutomationService:
 
             if name == "upload.select_file":
                 file_path = str(payload.get("filePath") or "")
-                platform = str(payload.get("platform") or "")
+                platform = str(payload.get("platform") or "").lower()
                 if not file_path:
                     raise RuntimeError("filePath is required")
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
-                page = await self.cdp.find_page_by_url_contains("studio.youtube.com") if platform.lower() == "youtube" else await self.cdp.get_most_recent_page()
-                if page is None:
-                    page = await self.cdp.get_or_create_page(
-                        PLATFORM_URLS.get(platform.lower(), "https://example.com"),
+
+                async def _pick_target_page() -> Any:
+                    platform_needles = {
+                        "youtube": ["studio.youtube.com", "youtube.com/upload"],
+                        "tiktok": ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktokstudio"],
+                        "facebook": ["facebook.com/reels/create", "facebook.com"],
+                        "instagram": ["instagram.com"],
+                        "x": ["x.com/compose", "x.com"],
+                    }
+                    for needle in platform_needles.get(platform, []):
+                        page_candidate = await self.cdp.find_page_by_url_contains(needle)
+                        if page_candidate is not None:
+                            return page_candidate
+                    page_candidate = await self.cdp.get_most_recent_page()
+                    if page_candidate is not None:
+                        return page_candidate
+                    return await self.cdp.get_or_create_page(
+                        PLATFORM_URLS.get(platform, "https://example.com"),
                         reuse_tab=True,
                     )
+
+                page = await _pick_target_page()
+                if page is None:
+                    raise RuntimeError("No browser page available for upload")
 
                 file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
                 input_locators = [
                     page.locator("input[type='file']"),
-                    page.locator("ytcp-uploads-dialog input[type='file']"),
                     page.locator("input[type='file'][accept*='video']"),
+                    page.locator("input[type='file'][accept*='mp4' i]"),
+                    page.locator("input[type='file'][accept*='quicktime' i]"),
+                    page.locator("ytcp-uploads-dialog input[type='file']"),
                 ]
+
+                async def _prime_upload_surface() -> None:
+                    trigger_selectors = {
+                        "tiktok": [
+                            '[data-e2e*="upload"]',
+                            'button[data-e2e*="upload"]',
+                            'div[data-e2e*="upload"]',
+                            '[class*="upload" i] button',
+                            '[role="button"][aria-label*="upload" i]',
+                            'button:has-text("Upload")',
+                            '[role="button"]:has-text("Upload")',
+                        ],
+                        "youtube": [
+                            'ytcp-button[id="create-icon"] button',
+                            'tp-yt-paper-item[test-id="upload"]',
+                            'tp-yt-paper-item#text-item-0[test-id="upload"]',
+                        ],
+                    }
+                    for selector in trigger_selectors.get(platform, []):
+                        try:
+                            loc = page.locator(selector).first
+                            if await loc.count() <= 0:
+                                continue
+                            await loc.click(timeout=1200)
+                            await page.wait_for_timeout(200)
+                        except Exception:
+                            continue
 
                 mode = None
                 last_err = ""
-                for _ in range(20):
+
+                await _prime_upload_surface()
+                for _ in range(24):
                     for locator in input_locators:
                         try:
                             count = await locator.count()
@@ -716,6 +765,7 @@ class UdpAutomationService:
                     if mode:
                         break
                     try:
+                        await _prime_upload_surface()
                         await page.wait_for_timeout(300)
                     except Exception:
                         pass
@@ -723,8 +773,13 @@ class UdpAutomationService:
                 if not mode:
                     used_dom_fallback = False
                     if self.cdp is not None:
-                        for selector in ["ytcp-uploads-dialog input[type='file']", "input[type='file'][accept*='video']", "input[type='file']"]:
-                            for _ in range(4):
+                        for selector in [
+                            "ytcp-uploads-dialog input[type='file']",
+                            "input[type='file'][accept*='video']",
+                            "input[type='file'][accept*='mp4' i]",
+                            "input[type='file']",
+                        ]:
+                            for _ in range(5):
                                 used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, selector, file_path)
                                 if used_dom_fallback:
                                     mode = "cdp_dom_set_file_input_files"
