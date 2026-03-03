@@ -8941,14 +8941,27 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
+                const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
+                const promptContainer = promptInput.closest("form, section, main, [role='form'], [data-testid*='composer' i], [data-testid*='prompt' i]");
+
                 const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
                     .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
                     .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
                 const submitButton = submitCandidates.find((btn) => {{
+                    if (btn.closest("[role='listitem'], li, article, figure")) return false;
                     const aria = String(btn.getAttribute("aria-label") || "").trim();
                     const txt = String(btn.textContent || "").trim();
                     const raw = `${{aria}} ${{txt}}`.trim().toLowerCase();
                     if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) return false;
+                    const rect = typeof btn.getBoundingClientRect === "function" ? btn.getBoundingClientRect() : null;
+                    const nearPrompt = !!(promptRect && rect && Math.hypot(
+                        (rect.left + rect.width / 2) - (promptRect.left + promptRect.width / 2),
+                        (rect.top + rect.height / 2) - (promptRect.top + promptRect.height / 2)
+                    ) <= 340);
+                    const inPromptContainer = !!(promptContainer && promptContainer.contains(btn));
+                    if (!nearPrompt && !inPromptContainer) return false;
+                    const hasArrowIcon = !!btn.querySelector("svg path[d*='M6 11L12 5'], svg path[d*='M6 11 L12 5']");
+                    if (/^edit$/i.test(aria) && hasArrowIcon) return true;
                     return /(^|\\s)make\\s+video(\\s|$)/i.test(raw);
                 }}) || null;
 
@@ -9384,7 +9397,7 @@ class MainWindow(QMainWindow):
                 if status == "waiting-for-video-mode" and isinstance(result, dict) and bool(result.get("makeVideoButtonVisible")):
                     self._append_log(
                         f"Variant {current_variant}: make-video control is visible while waiting for video-mode; "
-                        "advancing to prompt entry and Enter-submit (no make-video click)."
+                        "advancing to prompt entry for explicit Make video submit."
                     )
                     self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
