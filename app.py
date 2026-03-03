@@ -7302,6 +7302,7 @@ class MainWindow(QMainWindow):
         self._start_manual_browser_generation(manual_prompt, self.count.value())
 
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
+        self.manual_image_generation_queue.clear()
         self.manual_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._start_automation_counter_tracking(count)
         self._append_log(
@@ -7326,6 +7327,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.show_browser_page)
 
     def _start_manual_browser_image_generation(self, prompt: str, count: int) -> None:
+        self.manual_generation_queue.clear()
         self.manual_image_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._start_automation_counter_tracking(count)
         self._append_log(
@@ -8911,7 +8913,8 @@ class MainWindow(QMainWindow):
                     let score = index * 25;
 
                     if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) score += 5000;
-                    if (/^make\\s+video$/i.test(aria) || /^make\\s+video$/i.test(txt)) score -= 4000;
+                    const isPlainMakeVideo = /^make\\s+video$/i.test(aria) || /^make\\s+video$/i.test(txt);
+                    if (isPlainMakeVideo) score += 900;
                     if (/submit|send|generate|make\\s+video/i.test(raw)) score -= 500;
                     if (/\\bcreate\\b/i.test(raw) && !/make\\s+video/i.test(raw)) score += 300;
                     if (hasArrowIcon) score -= 120;
@@ -8922,30 +8925,27 @@ class MainWindow(QMainWindow):
                         const cy = rect.top + rect.height / 2;
                         const pCx = promptRect.left + promptRect.width / 2;
                         const pCy = promptRect.top + promptRect.height / 2;
-                        score += Math.hypot(cx - pCx, cy - pCy);
+                        const distance = Math.hypot(cx - pCx, cy - pCy);
+                        score += distance;
                         if (cx > pCx) score -= 60;
+                        if (isPlainMakeVideo && distance > 420) score += 2500;
                     }}
                     return score;
                 }};
-
-                const explicitMakeVideoButton = [...document.querySelectorAll("button[aria-label='Make video'], button[aria-label='make video']")]
-                    .find((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled);
 
                 const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
                     .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
                     .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"))
                     .filter((btn) => !/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(`${{btn.getAttribute("aria-label") || ""}} ${{btn.textContent || ""}}`));
-                let submitButton = explicitMakeVideoButton || null;
-                let submitScore = explicitMakeVideoButton ? -99999 : Number.MAX_SAFE_INTEGER;
-                if (!submitButton) {{
-                    submitCandidates.forEach((btn, idx) => {{
-                        const score = scoreSubmit(btn, idx);
-                        if (score < submitScore) {{
-                            submitScore = score;
-                            submitButton = btn;
-                        }}
-                    }});
-                }}
+                let submitButton = null;
+                let submitScore = Number.MAX_SAFE_INTEGER;
+                submitCandidates.forEach((btn, idx) => {{
+                    const score = scoreSubmit(btn, idx);
+                    if (score < submitScore) {{
+                        submitScore = score;
+                        submitButton = btn;
+                    }}
+                }});
 
                 let submitted = false;
                 let submitLabel = "";
@@ -8964,7 +8964,6 @@ class MainWindow(QMainWindow):
                         enterDispatched = false;
                     }}
                     await sleep(ACTION_DELAY_MS);
-                    submitted = !!enterDispatched;
                     submitLabel = submitLabel || "enter-key";
                 }}
 
@@ -8973,7 +8972,7 @@ class MainWindow(QMainWindow):
                 if (submitted) window.__grokManualVideoSubmitToken = submitToken;
                 return {{
                     ok: submitted,
-                    status: submitted ? "video-submit-clicked" : "submit-click-failed",
+                    status: submitted ? "video-submit-clicked" : (enterDispatched ? "enter-dispatched" : "submit-click-failed"),
                     buttonLabel: submitLabel,
                     enterDispatched,
                     filledLength: typedValue.length,
@@ -9077,6 +9076,19 @@ class MainWindow(QMainWindow):
                     return
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
+            if status == "enter-dispatched":
+                self._append_log(
+                    f"Variant {current_variant}: Enter key dispatched in video prompt; switching to download polling to avoid duplicate submits."
+                )
+                self.manual_image_video_submit_sent = True
+                self.manual_image_submit_in_flight = False
+                self.manual_image_submit_in_flight_since = 0.0
+                self.manual_image_video_mode_retry_count = 0
+                self.manual_image_submit_retry_count = 0
+                self.pending_manual_download_type = "video"
+                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                return
+
             if not self.manual_image_pick_clicked:
                 def _queue_pick_retry(current_status: str) -> None:
                     self.manual_image_pick_retry_count += 1
@@ -9350,7 +9362,7 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 self.manual_image_video_mode_retry_count += 1
-                if self.manual_image_video_mode_retry_count >= 1:
+                if self.manual_image_video_mode_retry_count >= 3:
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: video-mode validation stayed in '{status}' for "
@@ -12138,6 +12150,7 @@ class MainWindow(QMainWindow):
         return output_path
 
     def _complete_manual_video_download(self, video_path: Path, variant: int) -> None:
+        completed_download_type = str(self.pending_manual_download_type or "video").strip().lower() or "video"
         self._clear_manual_direct_download_tracking()
         self._advance_automation_counter_tracking()
         self.on_video_finished(
@@ -12198,7 +12211,10 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_current_source_video = ""
                 self.continue_from_frame_seed_image_path = None
         else:
-            self._submit_next_manual_variant()
+            if completed_download_type == "image":
+                self._submit_next_manual_image_variant()
+            else:
+                self._submit_next_manual_variant()
 
     def _native_click_embedded_browser_at(self, x: float, y: float) -> bool:
         if self.browser is None:
