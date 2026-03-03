@@ -18,8 +18,40 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str) -> 
 
 
 def _best_effort_fill_description(executor: BaseExecutor, description: str) -> None:
+    selectors = [
+        "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+        "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+        "div[contenteditable='true'][role='textbox'][aria-placeholder*='Describe your reel' i]",
+        "[contenteditable='true'][aria-placeholder*='Describe your reel' i]",
+    ]
+
+    value = str(description or "")
+    if not value:
+        return
+
+    for selector in selectors:
+        try:
+            executor.run("dom.click", {"platform": "facebook", "selector": selector, "timeoutMs": 8000})
+        except Exception:
+            continue
+
+        try:
+            executor.run(
+                "dom.type",
+                {
+                    "platform": "facebook",
+                    "selector": selector,
+                    "value": value,
+                    "timeoutMs": 8000,
+                },
+            )
+            return
+        except Exception:
+            continue
+
+    # Final fallback to generic form.fill path.
     try:
-        executor.run("form.fill", {"platform": "facebook", "fields": {"description": description}})
+        executor.run("form.fill", {"platform": "facebook", "fields": {"description": value}})
     except Exception:
         return
 
