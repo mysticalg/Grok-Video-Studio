@@ -15408,23 +15408,15 @@ class MainWindow(QMainWindow):
         video_file = Path(str(video_path))
         encoded_video = ""
         if video_file.exists() and video_file.is_file():
-            # Avoid embedding very large TikTok blobs into in-page JS payloads.
-            # Large base64 payloads can freeze the browser process before upload starts.
-            tiktok_inline_limit_bytes = 200 * 1024 * 1024
-            if platform_name == "X":
-                should_inline_video = True
-            elif platform_name == "TikTok":
-                should_inline_video = video_file.stat().st_size <= tiktok_inline_limit_bytes
-            else:
-                should_inline_video = True
-            if should_inline_video:
+            # Prefer native file-path selection via Qt's file chooser hook instead of embedding
+            # full video blobs in JS payloads. This avoids large in-page base64 uploads, which can
+            # stall/fail on large files (especially on Windows).
+            inline_limit_bytes = max(0, int(os.getenv("GROK_SOCIAL_UPLOAD_INLINE_BYTES", "0")))
+            if inline_limit_bytes > 0 and video_file.stat().st_size <= inline_limit_bytes:
                 try:
                     encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
                 except Exception:
                     encoded_video = ""
-            else:
-                # Keep a tiny payload available for lightweight synthetic input probes (TikTok only).
-                encoded_video = "AA==" if platform_name == "TikTok" else ""
 
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
@@ -15438,8 +15430,10 @@ class MainWindow(QMainWindow):
             "video_mime": "video/mp4",
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
+        upload_transport = "inline_base64" if encoded_video else "file_path_dialog"
         self._append_log(
-            f"{platform_name}: queued browser upload video path={video_path} (exists={Path(str(video_path)).exists()})"
+            f"{platform_name}: queued browser upload video path={video_path} "
+            f"(exists={Path(str(video_path)).exists()}, transport={upload_transport})"
         )
 
         progress_bar.setVisible(True)
