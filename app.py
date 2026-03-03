@@ -8720,6 +8720,19 @@ class MainWindow(QMainWindow):
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
+                    const pickPromptSelectors = [
+                        "textarea[placeholder*='Type to customize video' i]",
+                        "input[placeholder*='Type to customize video' i]",
+                        "textarea[aria-label*='Make a video' i]",
+                        "input[aria-label*='Make a video' i]",
+                        "div.tiptap.ProseMirror[contenteditable='true']",
+                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Make a video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                    ];
+                    const pickPromptVisible = pickPromptSelectors
+                        .flatMap((sel) => [...document.querySelectorAll(sel)])
+                        .some((el) => isActuallyVisible(el) && !el.disabled);
                     if (onPostView) {{
                         return {{
                             ok: true,
@@ -8730,8 +8743,32 @@ class MainWindow(QMainWindow):
                         }};
                     }}
 
+                    if (pickPromptVisible) {{
+                        return {{
+                            ok: true,
+                            status: "generated-image-clicked",
+                            detectedViaPrompt: true,
+                            path,
+                            postId,
+                        }};
+                    }}
+
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
                         .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
+
+                    const makeVideoTextButtons = [...document.querySelectorAll("button, [role='button']")]
+                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled)
+                        .filter((btn) => /(^|\\s)make\\s+video(\\s|$)/i.test((btn.textContent || "").replace(/\\s+/g, " ").trim()));
+
+                    if (!makeVideoButtons.length && makeVideoTextButtons.length) {{
+                        const sortedTextButtons = makeVideoTextButtons.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+                        const firstTextButton = sortedTextButtons[0];
+                        const clicked = emulateClick(firstTextButton);
+                        if (clicked) {{
+                            await sleep(ACTION_DELAY_MS);
+                            return {{ ok: true, status: "generated-image-clicked", detectedViaTextButton: true }};
+                        }}
+                    }}
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
