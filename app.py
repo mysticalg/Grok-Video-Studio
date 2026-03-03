@@ -11305,7 +11305,7 @@ class MainWindow(QMainWindow):
                         current_variant,
                         "'Generating' disappeared",
                     )
-                    self.manual_download_poll_timer.start(3000)
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                     return
 
             if status == "moderated-content-detected":
@@ -11339,7 +11339,7 @@ class MainWindow(QMainWindow):
                             current_variant,
                             "render reached 100%",
                         )
-                        self.manual_download_poll_timer.start(3000)
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
 
                     self._capture_active_post_url_before_download_retry(
                         current_variant,
@@ -11440,7 +11440,7 @@ class MainWindow(QMainWindow):
                         )
                         self._load_grok_homepage_then_return_to_post(resolved_url, current_variant)
                         self.manual_download_click_sent = False
-                        self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                         return
                     self._append_log(
                         f"Variant {current_variant}: direct URL detected; polling/fetching the public URL directly (attempt #{self.manual_download_attempt_count})."
@@ -11831,7 +11831,7 @@ class MainWindow(QMainWindow):
                 f"confirming before abort ({self.manual_public_moderation_count}/{MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS})."
             )
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
         except PublicVideoNotReadyError as exc:
             if output_path is not None and output_path.exists():
@@ -11849,7 +11849,7 @@ class MainWindow(QMainWindow):
                 f"{self.manual_public_not_ready_count}/{MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS}."
             )
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS)
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
         except Exception as exc:
             if output_path is not None and output_path.exists():
@@ -11869,7 +11869,7 @@ class MainWindow(QMainWindow):
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
             self._load_grok_homepage_then_return_to_post(source_url, variant)
             self.manual_download_click_sent = False
-            self.manual_download_poll_timer.start(max(2500, self._manual_download_poll_interval_ms()))
+            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
 
         self.manual_public_not_ready_count = 0
