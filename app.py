@@ -8656,6 +8656,32 @@ class MainWindow(QMainWindow):
                 }};
 
                 if (phase === "pick") {{
+                    const scrollBottomNow = () => {{
+                        const fullWidthContainers = [...document.querySelectorAll("div.w-full")];
+                        for (const el of fullWidthContainers) {{
+                            try {{ el.style.overflowY = "scroll"; }} catch (_) {{}}
+                        }}
+
+                        const scrollTargets = [
+                            document.scrollingElement,
+                            document.documentElement,
+                            document.body,
+                            ...fullWidthContainers,
+                            ...document.querySelectorAll("[data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
+                        ].filter((el, idx, arr) => el && arr.indexOf(el) === idx);
+
+                        for (const target of scrollTargets) {{
+                            const maxTop = Math.max(0, (target.scrollHeight || 0) - (target.clientHeight || 0));
+                            if (typeof target.scrollTo === "function") {{
+                                target.scrollTo({{ top: maxTop, left: 0, behavior: "instant" }});
+                            }} else if ("scrollTop" in target) {{
+                                target.scrollTop = maxTop;
+                            }}
+                        }}
+                        window.scrollTo({{ top: document.body?.scrollHeight || 999999, left: 0, behavior: "instant" }});
+                    }};
+                    scrollBottomNow();
+
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
                     const allListItems = () => [...document.querySelectorAll("[role='listitem'], li, article, figure")]
                         .filter((item) => isActuallyVisible(item) && !item.querySelector("div.invisible"));
