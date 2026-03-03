@@ -15014,16 +15014,12 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
-        filename_title = title.strip() or self.ai_social_metadata.medium_title.strip() or caption.strip()
-        filename_slogan = self.ai_social_metadata.tiktok_subheading.strip()
-        renamed_video_path = self._stage_tiktok_browser_video(video_path, filename_title, filename_slogan, hashtags)
-
         self.tiktok_upload_automation_options["text_overlay"] = self._tiktok_overlay_text()
         self.tiktok_upload_automation_options["music_query_effective"] = self._resolve_tiktok_music_query_for_upload()
 
         self._run_social_upload_via_mode(
             platform_name="TikTok",
-            video_path=renamed_video_path,
+            video_path=video_path,
             caption=self._compose_social_text(caption, hashtags),
             title=title,
         )
@@ -17369,69 +17365,6 @@ class MainWindow(QMainWindow):
         raw_text = str(self.ai_social_metadata.tiktok_subheading or "").strip()
         no_tags = re.sub(r"(^|\s)#\w+", " ", raw_text)
         return " ".join(no_tags.split()).strip()
-
-    def _build_tiktok_filename_stem(self, title_text: str, slogan_text: str, hashtags: list[str], max_length: int) -> str:
-        safe_title = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(title_text or "")).strip()
-        safe_slogan = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(slogan_text or "")).strip()
-        safe_title = re.sub(r"\s+", " ", safe_title).strip(" .")
-        safe_slogan = re.sub(r"\s+", " ", safe_slogan).strip(" .")
-        normalized_tags = []
-        for tag in hashtags:
-            raw_tag = str(tag).strip().lstrip('#')
-            if not raw_tag:
-                continue
-            clean_tag = re.sub(r'[\\/:*?"<>|\r\n]+', "", raw_tag)
-            clean_tag = re.sub(r"\s+", "", clean_tag)
-            clean_tag = clean_tag.strip(" .")
-            if clean_tag:
-                normalized_tags.append(f"#{clean_tag}")
-
-        parts = [part for part in [safe_title, safe_slogan] if part]
-        base = " - ".join(parts).strip()
-        if not base:
-            base = "Tiktok Upload"
-
-        candidate_tags = normalized_tags.copy()
-        if candidate_tags:
-            stem = f"{base} {' '.join(candidate_tags)}".strip()
-        else:
-            stem = base
-
-        while len(stem) > max_length and candidate_tags:
-            candidate_tags.pop()
-            stem = f"{base} {' '.join(candidate_tags)}".strip()
-
-        if len(stem) > max_length:
-            stem = stem[:max_length].rstrip(" .")
-        return stem or "Tiktok Upload"
-
-    def _stage_tiktok_browser_video(self, source_video_path: str, title_text: str, slogan_text: str, hashtags: list[str]) -> str:
-        source_path = Path(str(source_video_path)).expanduser()
-        if not source_path.exists() or not source_path.is_file():
-            raise ValueError("TikTok upload video path is invalid.")
-
-        extension = source_path.suffix or ".mp4"
-        max_stem_length = max(1, 255 - len(extension))
-        if os.name == "nt":
-            max_windows_path = 240
-            path_headroom = max_windows_path - len(str(source_path.parent)) - len(extension) - 1
-            max_stem_length = max(16, min(max_stem_length, path_headroom))
-        safe_stem = self._build_tiktok_filename_stem(title_text, slogan_text, hashtags, max_stem_length)
-        staged_path = source_path.with_name(f"{safe_stem}{extension}")
-        if staged_path == source_path:
-            self._append_log(f"TikTok: using existing filename for browser upload: {source_path.name}")
-            return str(source_path)
-
-        counter = 1
-        while staged_path.exists():
-            staged_path = source_path.with_name(f"{safe_stem}-{counter}{extension}")
-            counter += 1
-
-        shutil.copy2(source_path, staged_path)
-        self._append_log(
-            f"TikTok: staged renamed upload file '{staged_path.name}' from description text before browser upload."
-        )
-        return str(staged_path)
 
     def _show_upload_dialog(self, platform_name: str, title_enabled: bool = True) -> tuple[str, str, list[str], str, bool, str]:
         dialog = QDialog(self)
