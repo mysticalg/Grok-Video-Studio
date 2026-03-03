@@ -11537,12 +11537,11 @@ class MainWindow(QMainWindow):
                     return
                 if self.manual_make_video_awaiting_progress_count >= 2 and not self.manual_video_make_click_fallback_used:
                     self._append_log(
-                        f"Variant {current_variant}: still waiting for render progress while 'Make video' is visible; retrying explicit click fallback."
+                        f"Variant {current_variant}: Make video is still visible but progress has not appeared yet; "
+                        "waiting without re-click to avoid starting a second render."
                     )
-                    self.manual_video_start_click_sent = False
-                    self.manual_video_allow_make_click = True
-                    self.manual_download_poll_timer.start(1200)
-                    return
+                    self.manual_video_start_click_sent = True
+                    self.manual_video_allow_make_click = False
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
