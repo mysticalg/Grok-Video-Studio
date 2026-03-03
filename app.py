@@ -7302,6 +7302,7 @@ class MainWindow(QMainWindow):
         self._start_manual_browser_generation(manual_prompt, self.count.value())
 
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
+        self.manual_image_generation_queue.clear()
         self.manual_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._start_automation_counter_tracking(count)
         self._append_log(
@@ -7326,6 +7327,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.show_browser_page)
 
     def _start_manual_browser_image_generation(self, prompt: str, count: int) -> None:
+        self.manual_generation_queue.clear()
         self.manual_image_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
         self._start_automation_counter_tracking(count)
         self._append_log(
@@ -12138,6 +12140,7 @@ class MainWindow(QMainWindow):
         return output_path
 
     def _complete_manual_video_download(self, video_path: Path, variant: int) -> None:
+        completed_download_type = str(self.pending_manual_download_type or "video").strip().lower() or "video"
         self._clear_manual_direct_download_tracking()
         self._advance_automation_counter_tracking()
         self.on_video_finished(
@@ -12198,7 +12201,10 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_current_source_video = ""
                 self.continue_from_frame_seed_image_path = None
         else:
-            self._submit_next_manual_variant()
+            if completed_download_type == "image":
+                self._submit_next_manual_image_variant()
+            else:
+                self._submit_next_manual_variant()
 
     def _native_click_embedded_browser_at(self, x: float, y: float) -> bool:
         if self.browser is None:
