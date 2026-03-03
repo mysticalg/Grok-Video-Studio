@@ -23,6 +23,8 @@ PLATFORM_URLS = {
     "x": "https://x.com/compose/post",
 }
 
+REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB = 50.0
+
 
 EXTENSION_CMD_TIMEOUTS = {
     "form.fill": 90.0,
@@ -704,6 +706,7 @@ class UdpAutomationService:
                     raise RuntimeError("No browser page available for upload")
 
                 file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+                skip_direct_upload_probe = platform == "x" and file_size_mb > REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB
                 input_locators = [
                     page.locator("input[type='file']"),
                     page.locator("input[type='file'][accept*='video']"),
@@ -750,35 +753,42 @@ class UdpAutomationService:
                     except Exception as exc:
                         last_err = str(exc)
 
+                if skip_direct_upload_probe:
+                    last_err = (
+                        "Locator.set_input_files skipped for x.com because remote CDP cannot transfer "
+                        f"files larger than {REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB:.0f}Mb"
+                    )
+
                 await _prime_upload_surface()
                 probe_rounds = 8 if platform == "tiktok" else 24
-                for _ in range(probe_rounds):
-                    for locator in input_locators:
-                        try:
-                            count = await locator.count()
-                        except Exception:
-                            count = 0
-                        if count <= 0:
-                            continue
-                        for idx in range(count):
-                            target = locator.nth(idx)
+                if not skip_direct_upload_probe:
+                    for _ in range(probe_rounds):
+                        for locator in input_locators:
                             try:
-                                timeout_ms = 5000 if platform == "tiktok" else 30000
-                                await target.set_input_files(file_path, timeout=timeout_ms)
-                                mode = "cdp_set_input_files"
-                                break
-                            except Exception as exc:
-                                last_err = str(exc)
+                                count = await locator.count()
+                            except Exception:
+                                count = 0
+                            if count <= 0:
                                 continue
+                            for idx in range(count):
+                                target = locator.nth(idx)
+                                try:
+                                    timeout_ms = 5000 if platform == "tiktok" else 30000
+                                    await target.set_input_files(file_path, timeout=timeout_ms)
+                                    mode = "cdp_set_input_files"
+                                    break
+                                except Exception as exc:
+                                    last_err = str(exc)
+                                    continue
+                            if mode:
+                                break
                         if mode:
                             break
-                    if mode:
-                        break
-                    try:
-                        await _prime_upload_surface()
-                        await page.wait_for_timeout(300)
-                    except Exception:
-                        pass
+                        try:
+                            await _prime_upload_surface()
+                            await page.wait_for_timeout(300)
+                        except Exception:
+                            pass
 
                 if not mode:
                     used_dom_fallback = False
