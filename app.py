@@ -9350,7 +9350,11 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 self.manual_image_video_mode_retry_count += 1
-                if self.manual_image_video_mode_retry_count >= 1:
+                # Give Grok a few polling cycles to finish switching from image -> video mode.
+                # Falling back after a single check can race the UI and trigger a second submit,
+                # which may start duplicate video generations.
+                video_mode_fallback_checks = 3
+                if self.manual_image_video_mode_retry_count >= video_mode_fallback_checks:
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: video-mode validation stayed in '{status}' for "
