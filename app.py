@@ -9118,10 +9118,10 @@ class MainWindow(QMainWindow):
                             f"submitVisible={submit_visible}, postView={on_post_view}); "
                             "refilling prompt."
                         )
-                    self.manual_image_video_mode_selected = True
+                    self.manual_image_video_mode_selected = False
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    QTimer.singleShot(1800, self._poll_for_manual_image)
                     return
 
                 if status == "make-video-click-failed":
@@ -9452,7 +9452,7 @@ class MainWindow(QMainWindow):
                                 f"Variant {current_variant}: detected post/make-video UI after empty callback ({ready_flags}); treating image pick as complete."
                             )
                             self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = True
+                            self.manual_image_video_mode_selected = False
                             self.manual_image_pick_retry_count = 0
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
@@ -9540,7 +9540,7 @@ class MainWindow(QMainWindow):
                             make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
                             submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
                             on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
-                            stage_evidence = prompt_visible or generation_visible or (on_post_view and submit_visible)
+                            stage_evidence = prompt_visible or generation_visible
                             if not stage_evidence:
                                 self._append_log(
                                     "WARNING: Variant "
@@ -9560,12 +9560,12 @@ class MainWindow(QMainWindow):
                                 f"{self.manual_image_video_mode_retry_count} checks "
                                 f"(promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                                 f"submitVisible={submit_visible}, postView={on_post_view}, generationProbe={generation_signal_probe}); "
-                                "proceeding to prompt entry with Enter-submit fallback."
+                                "proceeding to another video-mode selection attempt (no submit fallback while mode is unconfirmed)."
                             )
-                            self.manual_image_video_mode_selected = True
+                            self.manual_image_video_mode_selected = False
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            QTimer.singleShot(1200, self._poll_for_manual_image)
                             return
 
                         prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
@@ -9590,7 +9590,7 @@ class MainWindow(QMainWindow):
                     make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
                     submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
                     on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
-                    stage_evidence = prompt_visible or generation_visible or (on_post_view and submit_visible)
+                    stage_evidence = prompt_visible or generation_visible
                     if not stage_evidence:
                         self._append_log(
                             "WARNING: Variant "
@@ -9610,12 +9610,12 @@ class MainWindow(QMainWindow):
                         f"{self.manual_image_video_mode_retry_count} checks "
                         f"(promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                         f"submitVisible={submit_visible}, postView={on_post_view}); "
-                        "proceeding to prompt entry with Enter-submit fallback."
+                        "continuing video-mode checks without entering prompt until mode is confirmed."
                     )
-                    self.manual_image_video_mode_selected = True
+                    self.manual_image_video_mode_selected = False
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    QTimer.singleShot(1800, self._poll_for_manual_image)
                     return
 
                 prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
