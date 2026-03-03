@@ -6123,7 +6123,7 @@ class MainWindow(QMainWindow):
             action_delay_ms = int(self.automation_action_delay_ms.value())
             worker = UdpWorkflowWorker(
                 platform_name=platform_name,
-                video_path=video_path,
+                video_path=upload_path,
                 title=title,
                 caption=caption,
                 platform_url=target_url,
@@ -14797,8 +14797,9 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
+        upload_path = str(Path(video_path).expanduser().resolve())
         self._append_log(
-            f"TikTok: keeping original filename for browser upload: {Path(video_path).name}"
+            f"TikTok: keeping original filename for browser upload: {Path(upload_path).name} (path: {upload_path})"
         )
 
         self.tiktok_upload_automation_options["text_overlay"] = self._tiktok_overlay_text()
@@ -14806,7 +14807,7 @@ class MainWindow(QMainWindow):
 
         self._run_social_upload_via_mode(
             platform_name="TikTok",
-            video_path=video_path,
+            video_path=upload_path,
             caption=self._compose_social_text(caption, hashtags),
             title=title,
         )
