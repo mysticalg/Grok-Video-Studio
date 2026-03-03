@@ -2955,7 +2955,7 @@ class MainWindow(QMainWindow):
         self.count.setValue(1)
 
         self.automation_action_delay_ms = QSpinBox()
-        self.automation_action_delay_ms.setRange(50, 10000)
+        self.automation_action_delay_ms.setRange(100, 10000)
         self.automation_action_delay_ms.setSingleStep(10)
         self.automation_action_delay_ms.setSuffix(" ms")
         self.automation_action_delay_ms.setValue(self.DEFAULT_AUTOMATION_ACTION_DELAY_MS)
@@ -8458,7 +8458,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Manual image variant {variant}: video option selection is disabled; entering prompt and submitting without resolution/duration/aspect changes."
                 )
-                QTimer.singleShot(max(50, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
+                QTimer.singleShot(max(100, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
                 return
 
             self._append_log(
@@ -8470,7 +8470,7 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            step_pause_ms = max(50, action_delay_ms)
+            step_pause_ms = max(100, action_delay_ms)
             option_steps = [
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
@@ -8549,7 +8549,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"Manual image variant {variant}: skipping image/video option scripts and proceeding directly to prompt fill + submit."
             )
-            QTimer.singleShot(max(50, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
+            QTimer.singleShot(max(100, action_delay_ms), lambda: self._run_active_browser_javascript(populate_script, _after_populate))
         else:
             self._run_active_browser_javascript(set_image_mode_script, _after_set_mode)
 
@@ -15445,7 +15445,7 @@ class MainWindow(QMainWindow):
                     const payload = JSON.parse(atob("__PAYLOAD_B64__"));
                     const norm = (s) => String(s || "").toLowerCase();
                     const platform = norm(payload.platform);
-                    const configuredActionDelayMs = Math.max(50, Number(payload.action_delay_ms) || 1000);
+                    const configuredActionDelayMs = Math.max(100, Number(payload.action_delay_ms) || 1000);
                     const pick = (arr) => arr.find(Boolean) || null;
                     const collectDeep = (selector) => {
                         const results = [];
