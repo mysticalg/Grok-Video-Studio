@@ -8941,68 +8941,26 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
-                const scoreSubmit = (btn, index) => {{
-                    if (!isVisible(btn) || btn.disabled) return Number.MAX_SAFE_INTEGER;
+                const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
+                    .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
+                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
+                const submitButton = submitCandidates.find((btn) => {{
                     const aria = String(btn.getAttribute("aria-label") || "").trim();
                     const txt = String(btn.textContent || "").trim();
                     const raw = `${{aria}} ${{txt}}`.trim().toLowerCase();
-                    const hasArrowIcon = !!btn.querySelector("svg");
-                    let score = index * 25;
-
-                    if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) score += 5000;
-                    const isPlainMakeVideo = /^make\\s+video$/i.test(aria) || /^make\\s+video$/i.test(txt);
-                    if (isPlainMakeVideo) score += 900;
-                    if (/submit|send|generate|make\\s+video/i.test(raw)) score -= 500;
-                    if (/\\bcreate\\b/i.test(raw) && !/make\\s+video/i.test(raw)) score += 300;
-                    if (hasArrowIcon) score -= 120;
-
-                    if (promptRect && typeof btn.getBoundingClientRect === "function") {{
-                        const rect = btn.getBoundingClientRect();
-                        const cx = rect.left + rect.width / 2;
-                        const cy = rect.top + rect.height / 2;
-                        const pCx = promptRect.left + promptRect.width / 2;
-                        const pCy = promptRect.top + promptRect.height / 2;
-                        const distance = Math.hypot(cx - pCx, cy - pCy);
-                        score += distance;
-                        if (cx > pCx) score -= 60;
-                        if (isPlainMakeVideo && distance > 420) score += 2500;
-                    }}
-                    return score;
-                }};
-
-                const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
-                    .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
-                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"))
-                    .filter((btn) => !/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(`${{btn.getAttribute("aria-label") || ""}} ${{btn.textContent || ""}}`));
-                let submitButton = null;
-                let submitScore = Number.MAX_SAFE_INTEGER;
-                submitCandidates.forEach((btn, idx) => {{
-                    const score = scoreSubmit(btn, idx);
-                    if (score < submitScore) {{
-                        submitScore = score;
-                        submitButton = btn;
-                    }}
-                }});
+                    if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) return false;
+                    return /(^|\\s)make\\s+video(\\s|$)/i.test(raw);
+                }}) || null;
 
                 let submitted = false;
                 let submitLabel = "";
-                if (submitButton && submitScore < Number.MAX_SAFE_INTEGER) {{
+                if (submitButton) {{
                     await sleep(ACTION_DELAY_MS);
                     submitted = emulateClick(submitButton);
-                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "submit-button";
-                }}
-
-                let enterDispatched = false;
-                if (!submitted) {{
-                    const enterEvent = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
-                    try {{
-                        enterDispatched = promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEvent));
-                    }} catch (_) {{
-                        enterDispatched = false;
+                    if (!submitted) {{
+                        try {{ submitButton.click(); submitted = true; }} catch (_) {{}}
                     }}
-                    await sleep(ACTION_DELAY_MS);
-                    submitLabel = submitLabel || "enter-key";
+                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "make-video-button";
                 }}
 
                 const postUrlNow = String((window.location && window.location.href) || "");
@@ -9010,12 +8968,11 @@ class MainWindow(QMainWindow):
                 if (submitted) window.__grokManualVideoSubmitToken = submitToken;
                 return {{
                     ok: submitted,
-                    status: submitted ? "video-submit-clicked" : (enterDispatched ? "enter-dispatched" : "submit-click-failed"),
+                    status: submitted ? "video-submit-clicked" : "make-video-click-failed",
                     buttonLabel: submitLabel,
-                    enterDispatched,
                     filledLength: typedValue.length,
                     onPostUrlNow,
-                    submitScore,
+                    makeVideoFound: !!submitButton,
                 }};
             }})()
         """
@@ -9081,9 +9038,11 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(700, self._poll_for_manual_image)
                     return
 
-                if status in ("video-submit-clicked", "video-submit-already-clicked"):
+                if status in ("video-submit-clicked", "video-submit-already-clicked", "make-video-click-failed"):
                     if status == "video-submit-clicked":
-                        message = "video prompt submitted"
+                        message = "video prompt submitted via Make video click"
+                    elif status == "make-video-click-failed":
+                        message = "Make video click could not be confirmed; assuming submit succeeded and switching to render/download polling"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
 
