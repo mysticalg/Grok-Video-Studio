@@ -799,10 +799,49 @@ async function handleCmd(msg) {
         });
         const objectId = evalRes?.result?.objectId;
         if (!objectId) throw new Error("file input element not found in target tab");
-        const nodeInfo = await chrome.debugger.sendCommand(debuggee, "DOM.requestNode", { objectId });
-        const nodeId = nodeInfo?.nodeId;
-        if (!nodeId) throw new Error("failed to resolve file input nodeId");
-        await chrome.debugger.sendCommand(debuggee, "DOM.setFileInputFiles", { nodeId, files: [filePath] });
+        // Some upload pages (notably TikTok) can place the file input in a context where
+        // DOM.requestNode intermittently fails to resolve a nodeId. Prefer nodeId when
+        // available, but gracefully fall back to backendNodeId/objectId so we can still
+        // set files through the debugger protocol.
+        let setFileInputError = "";
+        let didSetInput = false;
+
+        try {
+          const nodeInfo = await chrome.debugger.sendCommand(debuggee, "DOM.requestNode", { objectId });
+          const nodeId = nodeInfo?.nodeId;
+          if (nodeId) {
+            await chrome.debugger.sendCommand(debuggee, "DOM.setFileInputFiles", { nodeId, files: [filePath] });
+            didSetInput = true;
+          }
+        } catch (err) {
+          setFileInputError = err?.message || String(err);
+        }
+
+        if (!didSetInput) {
+          try {
+            const described = await chrome.debugger.sendCommand(debuggee, "DOM.describeNode", { objectId });
+            const backendNodeId = described?.node?.backendNodeId;
+            if (backendNodeId) {
+              await chrome.debugger.sendCommand(debuggee, "DOM.setFileInputFiles", { backendNodeId, files: [filePath] });
+              didSetInput = true;
+            }
+          } catch (err) {
+            if (!setFileInputError) setFileInputError = err?.message || String(err);
+          }
+        }
+
+        if (!didSetInput) {
+          try {
+            await chrome.debugger.sendCommand(debuggee, "DOM.setFileInputFiles", { objectId, files: [filePath] });
+            didSetInput = true;
+          } catch (err) {
+            if (!setFileInputError) setFileInputError = err?.message || String(err);
+          }
+        }
+
+        if (!didSetInput) {
+          throw new Error(setFileInputError || "failed to resolve file input node target");
+        }
         sendEvent("state", { state: "upload_selected", platform, filePath, mode: "extension_debugger_set_file_input_files" });
         ackCmd(msg, true, { mode: "extension_debugger_set_file_input_files" });
       } catch (err) {
