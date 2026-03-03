@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from udp_automation.executors import BaseExecutor
@@ -140,7 +141,15 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     _log(log_fn, "platform.ensure_logged_in: ok")
     _pause(action_delay_s, step="startup_wait_after_login_check", log_fn=log_fn)
 
-    upload_result = executor.run("upload.select_file", {"platform": "tiktok", "filePath": video_path})
+    upload_path = Path(str(video_path)).expanduser()
+    upload_exists = upload_path.exists()
+    upload_size_mb = round(upload_path.stat().st_size / (1024 * 1024), 2) if upload_exists else 0.0
+    _log(
+        log_fn,
+        "upload.select_file: preparing "
+        f"filename='{upload_path.name}' path='{upload_path}' exists={upload_exists} sizeMb={upload_size_mb}",
+    )
+    upload_result = executor.run("upload.select_file", {"platform": "tiktok", "filePath": str(upload_path)})
     upload_payload = upload_result.get("payload") or {}
     _log(log_fn, f"upload.select_file: payload={upload_payload}")
     if upload_payload.get("requiresUserAction"):

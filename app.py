@@ -17193,28 +17193,12 @@ class MainWindow(QMainWindow):
         if not source_path.exists() or not source_path.is_file():
             raise ValueError("TikTok upload video path is invalid.")
 
-        extension = source_path.suffix or ".mp4"
-        max_stem_length = max(1, 255 - len(extension))
-        if os.name == "nt":
-            max_windows_path = 240
-            path_headroom = max_windows_path - len(str(source_path.parent)) - len(extension) - 1
-            max_stem_length = max(16, min(max_stem_length, path_headroom))
-        safe_stem = self._build_tiktok_filename_stem(title_text, slogan_text, hashtags, max_stem_length)
-        staged_path = source_path.with_name(f"{safe_stem}{extension}")
-        if staged_path == source_path:
-            self._append_log(f"TikTok: using existing filename for browser upload: {source_path.name}")
-            return str(source_path)
-
-        counter = 1
-        while staged_path.exists():
-            staged_path = source_path.with_name(f"{safe_stem}-{counter}{extension}")
-            counter += 1
-
-        shutil.copy2(source_path, staged_path)
+        _ = (title_text, slogan_text, hashtags)
         self._append_log(
-            f"TikTok: staged renamed upload file '{staged_path.name}' from description text before browser upload."
+            "TikTok: using original file for browser upload (AI rename disabled): "
+            f"filename='{source_path.name}' path='{source_path}'"
         )
-        return str(staged_path)
+        return str(source_path)
 
     def _show_upload_dialog(self, platform_name: str, title_enabled: bool = True) -> tuple[str, str, list[str], str, bool, str]:
         dialog = QDialog(self)
