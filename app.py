@@ -2560,7 +2560,12 @@ class UdpWorkflowWorker(QThread):
                 raise RuntimeError(f"UDP workflow not implemented for {self.platform_name}")
             self.finished_with_result.emit(json.dumps(result, ensure_ascii=False))
         except Exception as exc:
-            self.failed.emit(str(exc))
+            error_message = str(exc).strip()
+            if not error_message:
+                error_message = exc.__class__.__name__
+            elif not error_message.startswith(f"{exc.__class__.__name__}:"):
+                error_message = f"{exc.__class__.__name__}: {error_message}"
+            self.failed.emit(error_message)
 
 
 class FilteredWebEnginePage(QWebEnginePage):
