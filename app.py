@@ -2345,10 +2345,10 @@ class AutomationRuntimeWorker(QThread):
         await self.bus.start()
         self.log.emit("Control bus listening at ws://127.0.0.1:18792")
 
-    def _run_coro(self, coro):
+    def _run_coro(self, coro, timeout_s: float = 30.0):
         if self.loop is None:
             raise RuntimeError("Automation runtime not started")
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=30)
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=max(1.0, float(timeout_s)))
 
     def start_chrome(self) -> ChromeInstance:
         manager = AutomationChromeManager(extension_dir=self.extension_dir)
@@ -2465,7 +2465,13 @@ class AutomationRuntimeWorker(QThread):
                 **result,
             }
 
-        return self._run_coro(_run())
+        # File-input staging can take noticeably longer for larger videos because Chromium may
+        # block while validating path access and preparing upload metadata. Use a larger local
+        # command timeout so path-based uploads do not fail early with TimeoutError.
+        command_timeout_s = 30.0
+        if action == "upload.select_file":
+            command_timeout_s = 180.0
+        return self._run_coro(_run(), timeout_s=command_timeout_s)
 
     def stop_runtime(self) -> None:
         if self.loop is None:
@@ -2560,7 +2566,12 @@ class UdpWorkflowWorker(QThread):
                 raise RuntimeError(f"UDP workflow not implemented for {self.platform_name}")
             self.finished_with_result.emit(json.dumps(result, ensure_ascii=False))
         except Exception as exc:
-            self.failed.emit(str(exc))
+            error_message = str(exc).strip()
+            if not error_message:
+                error_message = exc.__class__.__name__
+            elif not error_message.startswith(f"{exc.__class__.__name__}:"):
+                error_message = f"{exc.__class__.__name__}: {error_message}"
+            self.failed.emit(error_message)
 
 
 class FilteredWebEnginePage(QWebEnginePage):
@@ -9395,7 +9406,7 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 if status == "waiting-for-video-mode":
-                    generation_state_probe_script = """
+                    generation_state_probe_script = r"""
                         (() => {
                             try {
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -10958,7 +10969,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_active_browser_page_before_download(self, variant: int, reason: str) -> None:
         self._append_log(f"Variant {variant}: refreshing browser page before download detection ({reason}).")
-        refresh_script = """
+        refresh_script = r"""
             (() => {
                 try {
                     if (window.location && typeof window.location.reload === "function") {
@@ -15403,23 +15414,15 @@ class MainWindow(QMainWindow):
         video_file = Path(str(video_path))
         encoded_video = ""
         if video_file.exists() and video_file.is_file():
-            # Avoid embedding very large TikTok blobs into in-page JS payloads.
-            # Large base64 payloads can freeze the browser process before upload starts.
-            tiktok_inline_limit_bytes = 200 * 1024 * 1024
-            if platform_name == "X":
-                should_inline_video = True
-            elif platform_name == "TikTok":
-                should_inline_video = video_file.stat().st_size <= tiktok_inline_limit_bytes
-            else:
-                should_inline_video = True
-            if should_inline_video:
+            # Prefer native file-path selection via Qt's file chooser hook instead of embedding
+            # full video blobs in JS payloads. This avoids large in-page base64 uploads, which can
+            # stall/fail on large files (especially on Windows).
+            inline_limit_bytes = max(0, int(os.getenv("GROK_SOCIAL_UPLOAD_INLINE_BYTES", "0")))
+            if inline_limit_bytes > 0 and video_file.stat().st_size <= inline_limit_bytes:
                 try:
                     encoded_video = base64.b64encode(video_file.read_bytes()).decode("ascii")
                 except Exception:
                     encoded_video = ""
-            else:
-                # Keep a tiny payload available for lightweight synthetic input probes (TikTok only).
-                encoded_video = "AA==" if platform_name == "TikTok" else ""
 
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
@@ -15433,8 +15436,10 @@ class MainWindow(QMainWindow):
             "video_mime": "video/mp4",
             "youtube_options": dict(getattr(self, "youtube_browser_upload_options", {})),
         }
+        upload_transport = "inline_base64" if encoded_video else "file_path_dialog"
         self._append_log(
-            f"{platform_name}: queued browser upload video path={video_path} (exists={Path(str(video_path)).exists()})"
+            f"{platform_name}: queued browser upload video path={video_path} "
+            f"(exists={Path(str(video_path)).exists()}, transport={upload_transport})"
         )
 
         progress_bar.setVisible(True)
@@ -15652,7 +15657,7 @@ class MainWindow(QMainWindow):
             ensure_ascii=True,
         )
         payload_b64 = base64.b64encode(payload_json.encode("utf-8")).decode("ascii")
-        script = """
+        script = r"""
             (() => {
                 try {
                     const payload = JSON.parse(atob("__PAYLOAD_B64__"));

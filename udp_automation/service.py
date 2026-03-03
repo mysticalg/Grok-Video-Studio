@@ -713,16 +713,9 @@ class UdpAutomationService:
                 ]
 
                 async def _prime_upload_surface() -> None:
+                    # Avoid clicking TikTok "Upload" buttons here: it opens a native file chooser,
+                    # which steals focus and can block automation before we programmatically set files.
                     trigger_selectors = {
-                        "tiktok": [
-                            '[data-e2e*="upload"]',
-                            'button[data-e2e*="upload"]',
-                            'div[data-e2e*="upload"]',
-                            '[class*="upload" i] button',
-                            '[role="button"][aria-label*="upload" i]',
-                            'button:has-text("Upload")',
-                            '[role="button"]:has-text("Upload")',
-                        ],
                         "youtube": [
                             'ytcp-button[id="create-icon"] button',
                             'tp-yt-paper-item[test-id="upload"]',
