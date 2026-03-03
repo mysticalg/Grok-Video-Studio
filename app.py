@@ -9407,6 +9407,122 @@ class MainWindow(QMainWindow):
                 return
 
             if not self.manual_image_video_mode_selected:
+                if status == "waiting-for-video-mode":
+                    generation_state_probe_script = """
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const isActuallyVisible = (el) => {
+                                    if (!isVisible(el)) return false;
+                                    let node = el;
+                                    while (node && node.nodeType === 1) {
+                                        const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+                                        if (style && (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") <= 0.01)) return false;
+                                        node = node.parentElement;
+                                    }
+                                    return true;
+                                };
+                                const pathRaw = String((window.location && window.location.pathname) || "");
+                                const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                                const postId = postMatch ? String(postMatch[1] || "") : "";
+                                const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                                    && !/^placeholder-/i.test(postId);
+                                const textHasGeneration = (text) => /\\bgenerating\\b|\\brendering\\b|\\bcancel\\s*video\\b|\\b\\d{1,3}%\\b/i.test(String(text || ""));
+                                const generationSignalVisible = !![...document.querySelectorAll("div, span, p, button, [role='status'], [aria-live]")]
+                                    .find((el) => isActuallyVisible(el) && textHasGeneration(el.textContent || ""));
+                                const video = document.querySelector("video");
+                                const source = document.querySelector("video source");
+                                const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
+                                const hasVideoSource = /^(https?:[/][/]|blob:)/i.test(String(src || "").trim());
+                                const canDownload = !![...document.querySelectorAll("button, [role='button'], a[download]")]
+                                    .find((btn) => isActuallyVisible(btn) && !btn.disabled && /download/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim()));
+                                return {
+                                    ok: true,
+                                    onPostView,
+                                    generationSignalVisible,
+                                    hasVideoSource,
+                                    canDownload,
+                                };
+                            } catch (_) {
+                                return { ok: false, onPostView: false, generationSignalVisible: false, hasVideoSource: false, canDownload: false };
+                            }
+                        })()
+                    """
+
+                    def _after_generation_state_probe(probe_result):
+                        if current_variant != self.pending_manual_variant_for_download:
+                            return
+                        on_post_view_probe = bool(isinstance(probe_result, dict) and probe_result.get("onPostView"))
+                        generation_signal_probe = bool(isinstance(probe_result, dict) and probe_result.get("generationSignalVisible"))
+                        has_video_source_probe = bool(isinstance(probe_result, dict) and probe_result.get("hasVideoSource"))
+                        can_download_probe = bool(isinstance(probe_result, dict) and probe_result.get("canDownload"))
+                        if on_post_view_probe and (generation_signal_probe or has_video_source_probe or can_download_probe):
+                            self._append_log(
+                                "Variant "
+                                f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
+                                f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
+                                "switching to download polling to prevent duplicate submits."
+                            )
+                            self.manual_image_video_submit_sent = True
+                            self.manual_image_submit_in_flight = False
+                            self.manual_image_submit_in_flight_since = 0.0
+                            self.manual_image_video_mode_selected = True
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            self.pending_manual_download_type = "video"
+                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                            return
+
+                        self.manual_image_video_mode_retry_count += 1
+                        if self.manual_image_video_mode_retry_count >= int(self.automation_retry_attempts.value()):
+                            prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
+                            generation_visible = bool(isinstance(result, dict) and result.get("generationInProgress"))
+                            make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
+                            submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
+                            on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
+                            stage_evidence = prompt_visible or generation_visible or (on_post_view and submit_visible)
+                            if not stage_evidence:
+                                self._append_log(
+                                    "WARNING: Variant "
+                                    f"{current_variant}: video-mode validation stayed in '{status}' for "
+                                    f"{self.manual_image_video_mode_retry_count} checks "
+                                    f"(promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
+                                    f"submitVisible={submit_visible}, postView={on_post_view}, generationProbe={generation_signal_probe}); "
+                                    "holding video-mode stage to avoid duplicate submits and continuing checks."
+                                )
+                                self.manual_image_video_mode_retry_count = 0
+                                QTimer.singleShot(1800, self._poll_for_manual_image)
+                                return
+
+                            self._append_log(
+                                "WARNING: Variant "
+                                f"{current_variant}: video-mode validation stayed in '{status}' for "
+                                f"{self.manual_image_video_mode_retry_count} checks "
+                                f"(promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
+                                f"submitVisible={submit_visible}, postView={on_post_view}, generationProbe={generation_signal_probe}); "
+                                "proceeding to prompt entry with Enter-submit fallback."
+                            )
+                            self.manual_image_video_mode_selected = True
+                            self.manual_image_video_mode_retry_count = 0
+                            self.manual_image_submit_retry_count = 0
+                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            return
+
+                        prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
+                        generation_visible = bool(isinstance(result, dict) and result.get("generationInProgress"))
+                        make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
+                        submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
+                        on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
+                        self._append_log(
+                            f"Variant {current_variant}: waiting for video mode selection ({status}, "
+                            f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
+                            f"submitVisible={submit_visible}, postView={on_post_view}, generationProbe={generation_signal_probe}); retrying..."
+                        )
+                        QTimer.singleShot(2500, self._poll_for_manual_image)
+
+                    self._run_active_browser_javascript(generation_state_probe_script, _after_generation_state_probe)
+                    return
+
                 self.manual_image_video_mode_retry_count += 1
                 if self.manual_image_video_mode_retry_count >= int(self.automation_retry_attempts.value()):
                     prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
