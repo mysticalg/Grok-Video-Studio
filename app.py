@@ -9021,12 +9021,7 @@ class MainWindow(QMainWindow):
 
                 if status in ("video-submit-clicked", "video-submit-already-clicked"):
                     if status == "video-submit-clicked":
-                        detail = result.get("buttonLabel") or "submit"
-                        filled_length = result.get("filledLength")
-                        if isinstance(filled_length, int):
-                            message = f"video prompt submitted via '{detail}' (length={filled_length})"
-                        else:
-                            message = f"video prompt submitted via '{detail}'"
+                        message = "video prompt submitted"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
 
@@ -9406,6 +9401,20 @@ class MainWindow(QMainWindow):
                             f"{current_variant}: submit callback remained empty but post view indicates video is ready "
                             f"(downloadBtn={bool(probe_result.get('downloadButtonVisible'))}, "
                             f"videoSrc={bool(probe_result.get('hasVideoSource'))}); switching to download polling."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_in_flight = False
+                        self.manual_image_submit_in_flight_since = 0.0
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+
+                    if isinstance(probe_result, dict) and probe_result.get("generationInProgress") and status in ("callback-empty", "submit-in-flight"):
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: generation UI is visible while submit callback is '{status}'; "
+                            "switching to download polling to avoid duplicate submit attempts."
                         )
                         self.manual_image_video_submit_sent = True
                         self.manual_image_submit_in_flight = False
