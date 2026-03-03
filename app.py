@@ -9400,7 +9400,7 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 if status == "waiting-for-video-mode":
-                    generation_state_probe_script = """
+                    generation_state_probe_script = r"""
                         (() => {
                             try {
                                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -10963,7 +10963,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_active_browser_page_before_download(self, variant: int, reason: str) -> None:
         self._append_log(f"Variant {variant}: refreshing browser page before download detection ({reason}).")
-        refresh_script = """
+        refresh_script = r"""
             (() => {
                 try {
                     if (window.location && typeof window.location.reload === "function") {
@@ -15657,7 +15657,7 @@ class MainWindow(QMainWindow):
             ensure_ascii=True,
         )
         payload_b64 = base64.b64encode(payload_json.encode("utf-8")).decode("ascii")
-        script = """
+        script = r"""
             (() => {
                 try {
                     const payload = JSON.parse(atob("__PAYLOAD_B64__"));
