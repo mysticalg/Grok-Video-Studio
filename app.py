@@ -9410,6 +9410,20 @@ class MainWindow(QMainWindow):
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
 
+                    if isinstance(probe_result, dict) and probe_result.get("generationInProgress") and status in ("callback-empty", "submit-in-flight"):
+                        self._append_log(
+                            "WARNING: Variant "
+                            f"{current_variant}: generation UI is visible while submit callback is '{status}'; "
+                            "switching to download polling to avoid duplicate submit attempts."
+                        )
+                        self.manual_image_video_submit_sent = True
+                        self.manual_image_submit_in_flight = False
+                        self.manual_image_submit_in_flight_since = 0.0
+                        self.manual_image_submit_retry_count = 0
+                        self.pending_manual_download_type = "video"
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+
                     submit_grace_seconds = max(2.0, float(os.getenv("GROK_MANUAL_IMAGE_SUBMIT_GRACE_SECONDS", "12")))
                     submit_elapsed_seconds = (
                         max(0.0, time.time() - self.manual_image_submit_in_flight_since)
