@@ -8654,15 +8654,11 @@ class MainWindow(QMainWindow):
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
-                    const customizePromptReady = !!document.querySelector(
-                        "textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], "
-                        + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
-                    );
-                    if (customizePromptReady || onPostView) {{
+                    if (onPostView) {{
                         return {{
                             ok: true,
                             status: "generated-image-clicked",
-                            detectedViaUrl: onPostView,
+                            detectedViaUrl: true,
                             path,
                             postId,
                         }};
@@ -9213,7 +9209,7 @@ class MainWindow(QMainWindow):
                                 const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                                     && !/^placeholder-/i.test(postId);
                                 const onPostView = Boolean(validPostId);
-                                const ready = customizePromptVisible || onPostView || editImageVisible || makeVideoButtonVisible;
+                                const ready = onPostView || makeVideoButtonVisible;
                                 return {
                                     ready,
                                     customizePromptVisible,
@@ -9239,7 +9235,7 @@ class MainWindow(QMainWindow):
                                 f"postView={bool(probe_result.get('onPostView'))}"
                             )
                             self._append_log(
-                                f"Variant {current_variant}: detected post/customize UI after empty callback ({ready_flags}); treating image pick as complete."
+                                f"Variant {current_variant}: detected post/make-video UI after empty callback ({ready_flags}); treating image pick as complete."
                             )
                             self.manual_image_pick_clicked = True
                             self.manual_image_video_mode_selected = True
