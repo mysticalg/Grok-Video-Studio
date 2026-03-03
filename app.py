@@ -8641,7 +8641,7 @@ class MainWindow(QMainWindow):
             self._append_log(f"Variant {variant}: Setting option to Video.")
         if phase == "submit" and submit_attempt_allowed and not self.manual_image_submit_in_flight:
             self._append_log(f"Variant {variant}: Entering prompt.")
-            self._append_log(f"Variant {variant}: Pressing Submit.")
+            self._append_log(f"Variant {variant}: Pressing make video.")
 
         script = f"""
             (async () => {{
@@ -9116,10 +9116,12 @@ class MainWindow(QMainWindow):
                     make_video_visible = bool(result.get("makeVideoButtonVisible"))
                     submit_visible = bool(result.get("submitButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
-                    if clicked:
+                    mode_confirmed = clicked or prompt_visible or make_video_visible
+                    if mode_confirmed:
                         self._append_log(
-                            f"Variant {current_variant}: video option changed via settings menu "
-                            f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}); "
+                            f"Variant {current_variant}: video option ready "
+                            f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
+                            f"promptVisible={prompt_visible}, makeVideoVisible={make_video_visible}); "
                             "proceeding to prompt entry and Make Video submit."
                         )
                         self.manual_image_video_mode_selected = True
@@ -9164,8 +9166,8 @@ class MainWindow(QMainWindow):
                         message = "submit was already clicked earlier"
 
                     if not self.manual_image_video_submit_sent:
-                        self._append_log(f"Variant {current_variant}: {message}.")
-                        self._append_log(f"Variant {current_variant}: waiting for progression.")
+                        self._append_log(f"Variant {current_variant}: Pressed make video - waiting for progress to appear.")
+                        self._append_log(f"Variant {current_variant}: Polling progression (1%).")
                     self._run_active_browser_javascript("""
                         (() => {
                             try {
@@ -9551,7 +9553,7 @@ class MainWindow(QMainWindow):
                                 self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                                 return
                             self._append_log(
-                                "WARNING: Variant "
+                                "Variant "
                                 f"{current_variant}: active/ready video signals appeared before a confirmed submit; "
                                 "continuing video options selection and skipping download handoff."
                             )
@@ -9633,12 +9635,12 @@ class MainWindow(QMainWindow):
                         f"{self.manual_image_video_mode_retry_count} checks "
                         f"(promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                         f"submitVisible={submit_visible}, postView={on_post_view}); "
-                        "continuing video-mode checks without entering prompt until mode is confirmed."
+                        "proceeding with prompt entry and make video submit."
                     )
-                    self.manual_image_video_mode_selected = False
+                    self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(1800, self._poll_for_manual_image)
+                    QTimer.singleShot(900, self._poll_for_manual_image)
                     return
 
                 prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
