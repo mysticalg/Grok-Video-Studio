@@ -9021,12 +9021,7 @@ class MainWindow(QMainWindow):
 
                 if status in ("video-submit-clicked", "video-submit-already-clicked"):
                     if status == "video-submit-clicked":
-                        detail = result.get("buttonLabel") or "submit"
-                        filled_length = result.get("filledLength")
-                        if isinstance(filled_length, int):
-                            message = f"video prompt submitted via '{detail}' (length={filled_length})"
-                        else:
-                            message = f"video prompt submitted via '{detail}'"
+                        message = "video prompt submitted"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
 
