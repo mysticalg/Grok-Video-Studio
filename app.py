@@ -8940,16 +8940,7 @@ class MainWindow(QMainWindow):
                     submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "submit-button";
                 }}
 
-                let enterDispatched = false;
-                if (!submitted) {{
-                    const enterEventCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
-                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                    try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterEventCommon)); enterDispatched = true; }} catch (_) {{}}
-                    await sleep(ACTION_DELAY_MS);
-                    submitted = enterDispatched;
-                    submitLabel = submitLabel || "enter-key";
-                }}
+                const enterDispatched = false;
 
                 const postUrlNow = String((window.location && window.location.href) || "");
                 const onPostUrlNow = /\\/imagine\\/post\\//i.test(postUrlNow);
@@ -9338,18 +9329,6 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 self.manual_image_video_mode_retry_count += 1
-                if self.manual_image_video_mode_retry_count >= 1:
-                    self._append_log(
-                        "WARNING: Variant "
-                        f"{current_variant}: video-mode validation stayed in '{status}' for "
-                        f"{self.manual_image_video_mode_retry_count} checks; proceeding to prompt entry with Enter-submit fallback."
-                    )
-                    self.manual_image_video_mode_selected = True
-                    self.manual_image_video_mode_retry_count = 0
-                    self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(700, self._poll_for_manual_image)
-                    return
-
                 self._append_log(
                     f"Variant {current_variant}: waiting for video mode selection ({status}); retrying..."
                 )
