@@ -8731,6 +8731,33 @@ class MainWindow(QMainWindow):
                     let makeVideoItemFound = false;
                     let makeVideoClicked = false;
 
+                    const promptCandidates = promptSelectors
+                        .flatMap((sel) => [...document.querySelectorAll(sel)])
+                        .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                        .filter((el) => isActuallyVisible(el) && !el.disabled);
+                    const activePromptInput = promptCandidates[0] || null;
+                    const activePromptRect = activePromptInput && typeof activePromptInput.getBoundingClientRect === "function"
+                        ? activePromptInput.getBoundingClientRect()
+                        : null;
+                    const promptAnchor = activePromptInput
+                        || document.querySelector("main form")
+                        || document.querySelector("main")
+                        || null;
+
+                    const distanceToPrompt = (el) => {{
+                        if (!el || !activePromptRect || typeof el.getBoundingClientRect !== "function") return Number.POSITIVE_INFINITY;
+                        const rect = el.getBoundingClientRect();
+                        return Math.hypot(
+                            (rect.left + rect.width / 2) - (activePromptRect.left + activePromptRect.width / 2),
+                            (rect.top + rect.height / 2) - (activePromptRect.top + activePromptRect.height / 2)
+                        );
+                    }};
+                    const isNearPrompt = (el) => {{
+                        if (!el) return false;
+                        if (promptAnchor && typeof promptAnchor.contains === "function" && promptAnchor.contains(el)) return true;
+                        return distanceToPrompt(el) <= 420;
+                    }};
+
                     let menuAttempt = await makeVideoFromOpenMenu();
                     if (menuAttempt.item) {{
                         makeVideoItemFound = true;
@@ -8747,11 +8774,21 @@ class MainWindow(QMainWindow):
 
                         const likelyTriggers = triggerCandidates.filter((el) => {{
                             const descriptor = descriptorOf(el);
-                            return /model|video|image|options|settings/i.test(descriptor) || (el.id || "") === "model-select-trigger";
+                            const popup = String(el.getAttribute?.("aria-haspopup") || "").toLowerCase();
+                            return popup === "menu"
+                                || /model|video|image|options|settings/i.test(descriptor)
+                                || (el.id || "") === "model-select-trigger";
                         }});
-                        const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
+                        const candidates = (likelyTriggers.length ? likelyTriggers : triggerCandidates)
+                            .filter((el) => !activePromptInput || isNearPrompt(el))
+                            .sort((a, b) => distanceToPrompt(a) - distanceToPrompt(b));
 
-                        for (const trigger of candidates) {{
+                        const fallbackCandidates = (likelyTriggers.length ? likelyTriggers : triggerCandidates)
+                            .sort((a, b) => distanceToPrompt(a) - distanceToPrompt(b));
+
+                        const orderedCandidates = candidates.length ? candidates : fallbackCandidates;
+
+                        for (const trigger of orderedCandidates) {{
                             const opened = emulateClick(trigger);
                             optionsOpened = optionsOpened || opened;
                             await sleep(ACTION_DELAY_MS);
