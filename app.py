@@ -8731,25 +8731,22 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
 
-                    const makeVideoFromOpenMenu = async () => {{
+                    const findMakeVideoInOpenMenu = () => {{
                         const menuItems = getMenuItems();
                         const makeVideoItem = menuItems.find((el) => isMakeVideoItem(el)) || null;
-                        const clicked = makeVideoItem ? emulateClick(makeVideoItem) : false;
-                        if (clicked) await sleep(ACTION_DELAY_MS);
-                        return {{ item: makeVideoItem, clicked }};
+                        return {{ item: makeVideoItem }};
                     }};
 
                     let optionsOpened = false;
                     let makeVideoItemFound = false;
                     let makeVideoClicked = false;
 
-                    let menuAttempt = await makeVideoFromOpenMenu();
+                    let menuAttempt = findMakeVideoInOpenMenu();
                     if (menuAttempt.item) {{
                         makeVideoItemFound = true;
-                        makeVideoClicked = !!menuAttempt.clicked;
                     }}
 
-                    if (!makeVideoItemFound || !makeVideoClicked) {{
+                    if (!makeVideoItemFound) {{
                         const triggerCandidates = [
                             ...document.querySelectorAll("#model-select-trigger"),
                             ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
@@ -8767,11 +8764,10 @@ class MainWindow(QMainWindow):
                             const opened = emulateClick(trigger);
                             optionsOpened = optionsOpened || opened;
                             await sleep(ACTION_DELAY_MS);
-                            menuAttempt = await makeVideoFromOpenMenu();
+                            menuAttempt = findMakeVideoInOpenMenu();
                             if (menuAttempt.item) {{
                                 makeVideoItemFound = true;
-                                makeVideoClicked = !!menuAttempt.clicked;
-                                if (makeVideoClicked) break;
+                                break;
                             }}
                         }}
                     }}
@@ -8779,8 +8775,7 @@ class MainWindow(QMainWindow):
                     const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
                         .filter((el) => isVisible(el));
                     const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
-                    const videoSelected = makeVideoClicked
-                        || selectedViaMarker
+                    const videoSelected = selectedViaMarker
                         || promptInputVisible
                         || generationInProgress
                         || (onPostView && submitButtonVisible);
@@ -8802,7 +8797,7 @@ class MainWindow(QMainWindow):
 
                     return {{
                         ok: true,
-                        status: makeVideoClicked || selectedViaMarker ? "video-mode-selected" : "video-mode-ready",
+                        status: selectedViaMarker ? "video-mode-selected" : "video-mode-ready",
                         optionsOpened,
                         videoItemFound: makeVideoItemFound,
                         videoClicked: makeVideoClicked,
