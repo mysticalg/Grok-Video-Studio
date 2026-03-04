@@ -753,10 +753,10 @@ async function handleCmd(msg) {
               return current === expected || current.includes(expected) || expected.includes(current);
             };
 
-            // X's composer can process synthetic paste/input events twice,
-            // which duplicates hashtag segments. Prefer character typing only.
+            // Prefer direct setValue for X composer stability; some typed flows
+            // can lead to composer text disappearing after post submission.
             const filled = draftTextMatches()
-              || await typeTextIntoEditable(xEl, text);
+              || setValue(xEl, text);
             out[rawKey] = Boolean(filled) && draftTextMatches();
           } else if (currentPlatform === "instagram" && canonicalKey === "description") {
             out[rawKey] = setValue(el, text);
