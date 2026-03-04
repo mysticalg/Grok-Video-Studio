@@ -8737,6 +8737,10 @@ class MainWindow(QMainWindow):
                         return {{ item: makeVideoItem, clicked }};
                     }};
 
+                    const settingsMenuButtons = () => [...document.querySelectorAll("button[aria-label='Settings'][aria-haspopup='menu'], button[aria-label*='setting' i][aria-haspopup='menu'], [role='button'][aria-label='Settings'][aria-haspopup='menu']")]
+                        .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                        .filter((el) => isActuallyVisible(el) && !el.disabled && !isSidebarControl(el));
+
                     let optionsOpened = false;
                     let makeVideoItemFound = false;
                     let makeVideoClicked = false;
@@ -8772,6 +8776,33 @@ class MainWindow(QMainWindow):
                     if (menuAttempt.item) {{
                         makeVideoItemFound = true;
                         makeVideoClicked = !!menuAttempt.clicked;
+                    }}
+
+                    if (!makeVideoItemFound || !makeVideoClicked) {{
+                        const prioritizedSettingsButtons = settingsMenuButtons()
+                            .filter((el) => !activePromptInput || isNearPrompt(el))
+                            .sort((a, b) => distanceToPrompt(a) - distanceToPrompt(b));
+                        const fallbackSettingsButtons = settingsMenuButtons()
+                            .sort((a, b) => distanceToPrompt(a) - distanceToPrompt(b));
+                        const settingsCandidatesFirst = (prioritizedSettingsButtons.length ? prioritizedSettingsButtons : fallbackSettingsButtons)
+                            .sort((a, b) => {{
+                                const aExpanded = String(a.getAttribute("aria-expanded") || "false").toLowerCase() === "true";
+                                const bExpanded = String(b.getAttribute("aria-expanded") || "false").toLowerCase() === "true";
+                                if (aExpanded !== bExpanded) return aExpanded ? 1 : -1;
+                                return distanceToPrompt(a) - distanceToPrompt(b);
+                            }});
+
+                        for (const settingsBtn of settingsCandidatesFirst) {{
+                            const opened = emulateClick(settingsBtn);
+                            optionsOpened = optionsOpened || opened;
+                            await sleep(ACTION_DELAY_MS);
+                            menuAttempt = await makeVideoFromOpenMenu();
+                            if (menuAttempt.item) {{
+                                makeVideoItemFound = true;
+                                makeVideoClicked = !!menuAttempt.clicked;
+                                if (makeVideoClicked) break;
+                            }}
+                        }}
                     }}
 
                     if (!makeVideoItemFound || !makeVideoClicked) {{
