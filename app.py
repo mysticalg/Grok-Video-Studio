@@ -8760,6 +8760,20 @@ class MainWindow(QMainWindow):
                     }}
 
                     if (!makeVideoItemFound || !makeVideoClicked) {{
+                        const primaryMakeVideoButton = [...document.querySelectorAll("button, [role='button']")]
+                            .find((el) => isActuallyVisible(el) && !el.disabled && /\bmake\s+video\b/i.test(descriptorOf(el)));
+                        const triggerDistanceScore = (el) => {{
+                            if (!el) return Number.POSITIVE_INFINITY;
+                            const triggerRect = typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : null;
+                            const makeVideoRect = primaryMakeVideoButton && typeof primaryMakeVideoButton.getBoundingClientRect === "function"
+                                ? primaryMakeVideoButton.getBoundingClientRect()
+                                : null;
+                            if (!triggerRect || !makeVideoRect) return Number.POSITIVE_INFINITY;
+                            const dx = (triggerRect.left + (triggerRect.width / 2)) - (makeVideoRect.left + (makeVideoRect.width / 2));
+                            const dy = (triggerRect.top + (triggerRect.height / 2)) - (makeVideoRect.top + (makeVideoRect.height / 2));
+                            return Math.hypot(dx, dy);
+                        }};
+
                         const explicitSettingsTriggers = [
                             ...document.querySelectorAll("button[aria-label='Settings'][aria-haspopup='menu']"),
                             ...document.querySelectorAll("button[aria-label='Settings']"),
@@ -8768,7 +8782,8 @@ class MainWindow(QMainWindow):
                             ...document.querySelectorAll("#model-select-trigger"),
                         ].filter((el, idx, arr) => arr.indexOf(el) === idx)
                             .filter((el) => isVisible(el) && !el.disabled)
-                            .filter((el) => !isSidebarControl(el) && !isBlockedMoreOptionsControl(el));
+                            .filter((el) => !isSidebarControl(el) && !isBlockedMoreOptionsControl(el))
+                            .sort((a, b) => triggerDistanceScore(a) - triggerDistanceScore(b));
 
                         const triggerCandidates = [
                             ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
@@ -8789,13 +8804,17 @@ class MainWindow(QMainWindow):
                         for (const trigger of candidates) {{
                             const opened = emulateActivate(trigger) || emulateClick(trigger);
                             optionsOpened = optionsOpened || opened;
-                            await sleep(ACTION_DELAY_MS);
-                            menuAttempt = await makeVideoFromOpenMenu();
-                            if (menuAttempt.item) {{
-                                makeVideoItemFound = true;
-                                makeVideoClicked = !!menuAttempt.clicked;
-                                if (makeVideoClicked) break;
+
+                            for (const waitMs of [ACTION_DELAY_MS, ACTION_DELAY_MS * 2, ACTION_DELAY_MS * 3]) {{
+                                await sleep(waitMs);
+                                menuAttempt = await makeVideoFromOpenMenu();
+                                if (menuAttempt.item) {{
+                                    makeVideoItemFound = true;
+                                    makeVideoClicked = !!menuAttempt.clicked;
+                                    break;
+                                }}
                             }}
+                            if (makeVideoClicked) break;
                         }}
                     }}
 
