@@ -8750,7 +8750,9 @@ class MainWindow(QMainWindow):
 
                     if (!makeVideoItemFound || !makeVideoClicked) {{
                         const explicitSettingsTriggers = [
+                            ...document.querySelectorAll("button[aria-label='Settings'][aria-haspopup='menu']"),
                             ...document.querySelectorAll("button[aria-label='Settings']"),
+                            ...document.querySelectorAll("button[aria-label*='settings' i][aria-haspopup='menu']"),
                             ...document.querySelectorAll("button[aria-label*='settings' i]"),
                             ...document.querySelectorAll("#model-select-trigger"),
                         ].filter((el, idx, arr) => arr.indexOf(el) === idx)
@@ -8774,7 +8776,7 @@ class MainWindow(QMainWindow):
                             : (likelyTriggers.length ? likelyTriggers : triggerCandidates);
 
                         for (const trigger of candidates) {{
-                            const opened = emulateClick(trigger);
+                            const opened = emulateActivate(trigger) || emulateClick(trigger);
                             optionsOpened = optionsOpened || opened;
                             await sleep(ACTION_DELAY_MS);
                             menuAttempt = await makeVideoFromOpenMenu();
