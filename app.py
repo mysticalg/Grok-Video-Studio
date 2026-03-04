@@ -8861,54 +8861,32 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
-                const promptContainer = promptInput.closest("form, section, main, [role='form'], [data-testid*='composer' i], [data-testid*='prompt' i]");
-
-                const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
-                    .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
-                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
-                const submitButton = submitCandidates.find((btn) => {{
-                    if (btn.closest("[role='listitem'], li, article, figure")) return false;
-                    const aria = String(btn.getAttribute("aria-label") || "").trim();
-                    const txt = String(btn.textContent || "").trim();
-                    const raw = `${{aria}} ${{txt}}`.trim().toLowerCase();
-                    if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) return false;
-                    const rect = typeof btn.getBoundingClientRect === "function" ? btn.getBoundingClientRect() : null;
-                    const nearPrompt = !!(promptRect && rect && Math.hypot(
-                        (rect.left + rect.width / 2) - (promptRect.left + promptRect.width / 2),
-                        (rect.top + rect.height / 2) - (promptRect.top + promptRect.height / 2)
-                    ) <= 340);
-                    const inPromptContainer = !!(promptContainer && promptContainer.contains(btn));
-                    if (!nearPrompt && !inPromptContainer) return false;
-                    const hasArrowIcon = !!btn.querySelector("svg path[d*='M6 11L12 5'], svg path[d*='M6 11 L12 5']");
-                    if (/^edit$/i.test(aria) && hasArrowIcon) return true;
-                    if (/(^|\\s)make\\s+video(\\s|$)/i.test(raw)) return true;
-                    if (/(^|\\s)(create|generate|submit)(\\s|$).*\\bvideo\\b|\\bvideo\\b.*(^|\\s)(create|generate|submit)(\\s|$)/i.test(raw)) return true;
-                    if (!raw && String(btn.getAttribute("type") || "").toLowerCase() === "submit") return true;
-                    return false;
-                }}) || null;
-
-                let submitted = false;
-                let submitLabel = "";
-                if (submitButton) {{
-                    await sleep(ACTION_DELAY_MS);
-                    submitted = emulateClick(submitButton);
-                    if (!submitted) {{
-                        try {{ submitButton.click(); submitted = true; }} catch (_) {{}}
-                    }}
-                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "make-video-button";
+                await sleep(ACTION_DELAY_MS);
+                let dispatched = false;
+                const enterCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterCommon)); dispatched = true; }} catch (_) {{}}
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterCommon)); dispatched = true; }} catch (_) {{}}
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterCommon)); dispatched = true; }} catch (_) {{}}
+                if (!dispatched) {{
+                    try {{
+                        const form = promptInput.closest("form");
+                        if (form && typeof form.requestSubmit === "function") {{
+                            form.requestSubmit();
+                            dispatched = true;
+                        }}
+                    }} catch (_) {{}}
                 }}
 
                 const postUrlNow = String((window.location && window.location.href) || "");
                 const onPostUrlNow = /\\/imagine\\/post\\//i.test(postUrlNow);
-                if (submitted) window.__grokManualVideoSubmitToken = submitToken;
+                if (dispatched) window.__grokManualVideoSubmitToken = submitToken;
                 return {{
-                    ok: submitted,
-                    status: submitted ? "video-submit-clicked" : "make-video-click-failed",
-                    buttonLabel: submitLabel,
+                    ok: dispatched,
+                    status: dispatched ? "video-submit-enter-dispatched" : "video-submit-enter-failed",
+                    buttonLabel: "enter-keypress",
                     filledLength: typedValue.length,
                     onPostUrlNow,
-                    makeVideoFound: !!submitButton,
+                    makeVideoFound: false,
                 }};
             }})()
         """
@@ -8974,10 +8952,10 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(700, self._poll_for_manual_image)
                     return
 
-                if status == "make-video-click-failed":
+                if status in ("make-video-click-failed", "video-submit-enter-failed"):
                     self.manual_image_submit_retry_count += 1
                     self._append_log(
-                        f"WARNING: Variant {current_variant}: Make video click was not confirmed; retrying prompt submit "
+                        f"WARNING: Variant {current_variant}: trailing Enter submit was not confirmed; retrying prompt submit "
                         f"(attempt {self.manual_image_submit_retry_count}/{int(self.automation_retry_attempts.value())})."
                     )
                     if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
@@ -8991,9 +8969,9 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(900, self._poll_for_manual_image)
                     return
 
-                if status in ("video-submit-clicked", "video-submit-already-clicked"):
-                    if status == "video-submit-clicked":
-                        message = "video prompt submitted via Make video click"
+                if status in ("video-submit-clicked", "video-submit-enter-dispatched", "video-submit-already-clicked"):
+                    if status in ("video-submit-clicked", "video-submit-enter-dispatched"):
+                        message = "video prompt submitted via trailing Enter"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
 
