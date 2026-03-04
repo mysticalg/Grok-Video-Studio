@@ -14892,7 +14892,9 @@ class MainWindow(QMainWindow):
         self._run_social_upload_via_mode(
             platform_name="TikTok",
             video_path=video_path,
-            caption=self._compose_social_text(caption, hashtags),
+            # TikTok UDP/CDP automation should post only the description/caption text.
+            # Hashtags are intentionally omitted here.
+            caption=caption.strip(),
             title=title,
         )
 
