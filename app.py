@@ -2809,11 +2809,6 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_reload_timeout_timer = QTimer(self)
         self.continue_from_frame_reload_timeout_timer.setSingleShot(True)
         self.continue_from_frame_reload_timeout_timer.timeout.connect(self._on_continue_reload_timeout)
-        self.video_playback_hack_timer = QTimer(self)
-        self.video_playback_hack_timer.setInterval(1800)
-        self.video_playback_hack_timer.setSingleShot(True)
-        self.video_playback_hack_timer.timeout.connect(self._ensure_browser_video_playback)
-        self._playback_hack_success_logged = False
         self.last_extracted_frame_path: Path | None = None
         self.preview_muted = False
         self.preview_volume = 100
@@ -6233,9 +6228,6 @@ class MainWindow(QMainWindow):
 
     def _on_browser_load_finished(self, ok: bool) -> None:
         if ok:
-            self._playback_hack_success_logged = False
-            self.video_playback_hack_timer.start()
-            self._ensure_browser_video_playback()
             if self.continue_from_frame_waiting_for_reload and self.continue_from_frame_active:
                 self._run_active_browser_javascript(
                     "(() => ({ href: String((window.location && window.location.href) || '') }))()",
@@ -6299,118 +6291,6 @@ class MainWindow(QMainWindow):
 
         self.last_extracted_frame_path = frame_path
         self._upload_frame_into_grok(frame_path, on_uploaded=self._wait_for_continue_upload_reload)
-
-    def _ensure_browser_video_playback(self) -> None:
-        if not hasattr(self, "browser") or self.browser is None:
-            return
-
-        script = r"""
-            (() => {
-                try {
-                    const videos = [...document.querySelectorAll("video")];
-                    if (!videos.length) return { ok: true, found: 0, attempted: 0, playing: 0 };
-
-                    const pokeUserGesture = () => {
-                        try {
-                            const ev = new MouseEvent("click", { bubbles: true, cancelable: true, composed: true });
-                            document.body.dispatchEvent(ev);
-                        } catch (_) {}
-                    };
-                    pokeUserGesture();
-
-                    const common = { bubbles: true, cancelable: true, composed: true };
-                    const synthClick = (el) => {
-                        if (!el) return;
-                        try {
-                            el.dispatchEvent(new PointerEvent("pointerdown", common));
-                            el.dispatchEvent(new MouseEvent("mousedown", common));
-                            el.dispatchEvent(new PointerEvent("pointerup", common));
-                            el.dispatchEvent(new MouseEvent("mouseup", common));
-                            el.dispatchEvent(new MouseEvent("click", common));
-                        } catch (_) {}
-                    };
-
-                    let attempted = 0;
-                    let playing = 0;
-                    for (const video of videos) {
-                        try {
-                            // Chromium/WebEngine autoplay policies are stricter for unmuted media.
-                            // Start muted so playback can begin reliably, then attempt an unmute.
-                            video.muted = true;
-                            video.defaultMuted = true;
-                            video.volume = Math.max(video.volume || 0, 0.01);
-                            video.autoplay = true;
-                            video.playsInline = true;
-                            video.loop = false;
-                            video.setAttribute("muted", "");
-                            video.setAttribute("autoplay", "");
-                            video.setAttribute("playsinline", "");
-                            video.setAttribute("webkit-playsinline", "");
-                            video.controls = true;
-                            video.preload = "auto";
-
-                            const st = getComputedStyle(video);
-                            if (st.display === "none") video.style.display = "block";
-                            if (st.visibility === "hidden") video.style.visibility = "visible";
-                            if (Number(st.opacity || "1") < 0.1) video.style.opacity = "1";
-
-                            if (video.paused || video.readyState < 2) {
-                                attempted += 1;
-                                const p = video.play();
-                                if (p && typeof p.catch === "function") {
-                                    p.catch(() => {
-                                        const playButton = video.closest("[role='button'], button")
-                                            || video.parentElement?.querySelector("button, [role='button']");
-                                        synthClick(playButton);
-                                        const p2 = video.play();
-                                        if (p2 && typeof p2.catch === "function") p2.catch(() => {});
-                                    });
-                                    p.then(() => {
-                                        // Best-effort unmute; if policy rejects it we keep muted playback.
-                                        try {
-                                            video.muted = false;
-                                            video.defaultMuted = false;
-                                            video.removeAttribute("muted");
-                                            video.volume = Math.max(video.volume || 0, 0.2);
-                                        } catch (_) {}
-                                    });
-                                }
-
-                                if (video.muted) {
-                                    // Keep muted for autoplay reliability.
-                                }
-
-                                if (video.readyState < 2) {
-                                    video.addEventListener("canplay", () => {
-                                        const p3 = video.play();
-                                        if (p3 && typeof p3.catch === "function") p3.catch(() => {});
-                                    }, { once: true });
-                                }
-                            }
-
-                            if (!video.paused && !video.ended && video.currentTime >= 0) {
-                                playing += 1;
-                            }
-                        } catch (_) {}
-                    }
-
-                    return { ok: true, found: videos.length, attempted, playing };
-                } catch (err) {
-                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
-                }
-            })()
-        """
-
-        def after(result):
-            if not isinstance(result, dict) or not result.get("ok"):
-                return
-            if result.get("found", 0) > 0 and result.get("playing", 0) > 0 and not self._playback_hack_success_logged:
-                self._append_log(
-                    f"Playback hack active: {result.get('playing')}/{result.get('found')} embedded video element(s) are playing."
-                )
-                self._playback_hack_success_logged = True
-
-        self._run_active_browser_javascript(script, after)
 
     def _aspect_ratio_from_video_size(self, size: str) -> str:
         mapping = {
