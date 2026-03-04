@@ -9003,7 +9003,7 @@ class MainWindow(QMainWindow):
                             )
                         else:
                             self._append_log(
-                                f"Variant {current_variant}: clicked generated image tile after Make video became available; preparing video prompt + submit."
+                                f"Variant {current_variant}: clicked generated image tile after Make video became available; moving to video-mode/download polling (prompt+submit disabled)."
                             )
                     self.manual_image_pick_clicked = True
                     self._run_active_browser_javascript("""
@@ -9034,18 +9034,21 @@ class MainWindow(QMainWindow):
                     make_video_visible = bool(result.get("makeVideoButtonVisible"))
                     submit_visible = bool(result.get("submitButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
-                    if not self.manual_image_video_mode_selected:
-                        self._append_log(
-                            f"Variant {current_variant}: video stage ready "
-                            f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
-                            f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
-                            f"submitVisible={submit_visible}, postView={on_post_view}); "
-                            "refilling prompt."
-                        )
+                    self._append_log(
+                        f"Variant {current_variant}: video stage ready "
+                        f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
+                        f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
+                        f"submitVisible={submit_visible}, postView={on_post_view}); "
+                        "skipping prompt+submit for test run and switching to download polling."
+                    )
                     self.manual_image_video_mode_selected = True
+                    self.manual_image_video_submit_sent = True
+                    self.manual_image_submit_in_flight = False
+                    self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    self.pending_manual_download_type = "video"
+                    self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                     return
 
                 if status == "make-video-click-failed":
