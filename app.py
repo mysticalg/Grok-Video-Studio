@@ -15862,6 +15862,43 @@ class MainWindow(QMainWindow):
                         return inserted || finalText.length > 0;
                     };
 
+                    const clearEditorText = (node) => {
+                        if (!node) return false;
+                        try {
+                            if (!(node.isContentEditable || node.getAttribute("contenteditable") === "true")) {
+                                return setTextValue(node, "");
+                            }
+                        } catch (_) {
+                            return setTextValue(node, "");
+                        }
+                        try { node.focus(); } catch (_) {}
+                        try {
+                            const sel = window.getSelection();
+                            if (sel) {
+                                sel.removeAllRanges();
+                                const range = document.createRange();
+                                range.selectNodeContents(node);
+                                sel.addRange(range);
+                            }
+                        } catch (_) {}
+                        try {
+                            if (typeof document.execCommand === "function") {
+                                document.execCommand("selectAll", false);
+                                document.execCommand("delete", false);
+                            }
+                        } catch (_) {}
+                        try {
+                            node.textContent = "";
+                            node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
+                            node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                        } catch (_) {}
+                        const finalText = String(node.innerText || node.textContent || "")
+                            .replace(/\u200B/g, "")
+                            .replace(/\s+/g, " ")
+                            .trim();
+                        return finalText.length === 0;
+                    };
+
                     const emulateTypingIntoEditor = (node, value) => {
                         if (!node) return false;
                         const text = String(value || "");
@@ -15978,14 +16015,17 @@ class MainWindow(QMainWindow):
                                 if (!xComposer) return false;
                                 const currentText = normalizeForCompare(xComposer.innerText || xComposer.textContent || "");
                                 if (!currentText || !expectedCaption) return false;
-                                return currentText === expectedCaption
-                                    || currentText.includes(expectedCaption)
-                                    || expectedCaption.includes(currentText);
+                                return currentText === expectedCaption;
                             };
 
                             textFilled = draftTextMatches()
-                                || pasteTextIntoEditor(xComposer, captionText)
-                                || emulateTypingIntoEditor(xComposer, captionText);
+                                || (
+                                    clearEditorText(xComposer)
+                                    && (
+                                        pasteTextIntoEditor(xComposer, captionText)
+                                        || emulateTypingIntoEditor(xComposer, captionText)
+                                    )
+                                );
                             textFilled = textFilled && draftTextMatches();
 
                             const refreshKeyParts = [requestedVideoPath || "video", expectedCaption || "caption"];
