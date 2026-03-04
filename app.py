@@ -3001,10 +3001,19 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(prompt_group)
 
         self.generate_image_btn = QPushButton("🎬 Create New Video")
-        self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
+        self.generate_image_btn.setToolTip("Build and paste a video prompt into the Grok browser tab.")
         self.generate_image_btn.setCheckable(True)
         self.generate_image_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.generate_image_btn, self.start_image_generation)
+            lambda: self._run_with_button_feedback(self.generate_image_btn, self.populate_video_prompt)
+        )
+
+        self.create_video_from_image_btn = QPushButton("🖼️ Create video from Image")
+        self.create_video_from_image_btn.setToolTip(
+            "Generate an image first, then switch that image to Make Video and download the result."
+        )
+        self.create_video_from_image_btn.setCheckable(True)
+        self.create_video_from_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.create_video_from_image_btn, self.start_image_generation)
         )
 
         self.multi_video_btn = QPushButton("🎞️ Multi Video")
@@ -3109,6 +3118,7 @@ class MainWindow(QMainWindow):
         )
 
         self.generate_image_btn.setMaximumWidth(170)
+        self.create_video_from_image_btn.setMaximumWidth(210)
         self.multi_video_btn.setMaximumWidth(170)
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
@@ -3497,12 +3507,13 @@ class MainWindow(QMainWindow):
         grok_browser_layout = QVBoxLayout(self.grok_browser_tab)
         grok_browser_controls = QGridLayout()
         grok_browser_controls.addWidget(self.generate_image_btn, 0, 0)
-        grok_browser_controls.addWidget(self.multi_video_btn, 0, 1)
-        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 2)
-        grok_browser_controls.addWidget(self.continue_image_btn, 0, 3)
-        grok_browser_controls.addWidget(self.browser_home_btn, 0, 4)
-        grok_browser_controls.addWidget(self.browser_external_btn, 0, 5)
-        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 6)
+        grok_browser_controls.addWidget(self.create_video_from_image_btn, 0, 1)
+        grok_browser_controls.addWidget(self.multi_video_btn, 0, 2)
+        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 3)
+        grok_browser_controls.addWidget(self.continue_image_btn, 0, 4)
+        grok_browser_controls.addWidget(self.browser_home_btn, 0, 5)
+        grok_browser_controls.addWidget(self.browser_external_btn, 0, 6)
+        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 7)
         grok_browser_controls.addWidget(self.multi_video_count_label, 1, 0)
         grok_browser_controls.addWidget(self.multi_video_count_spin, 1, 1)
         grok_browser_controls.addWidget(self.multi_video_manual_pick_checkbox, 1, 2, 1, 3)
@@ -4857,8 +4868,19 @@ class MainWindow(QMainWindow):
 
         create_video_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "Create New Video", self)
         create_video_action.setToolTip("Create a new video from the current prompt in Grok.")
-        create_video_action.triggered.connect(self.start_image_generation)
+        create_video_action.triggered.connect(self.populate_video_prompt)
         self.quick_actions_toolbar.addAction(create_video_action)
+
+        create_video_from_image_action = QAction(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+            "Create video from Image",
+            self,
+        )
+        create_video_from_image_action.setToolTip(
+            "Generate image first, then pick it and continue with the image-to-video flow."
+        )
+        create_video_from_image_action.triggered.connect(self.start_image_generation)
+        self.quick_actions_toolbar.addAction(create_video_from_image_action)
 
         continue_last_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward), "Continue Last Video", self)
         continue_last_action.setToolTip("Continue from the last generated video's final frame.")
@@ -8535,18 +8557,8 @@ class MainWindow(QMainWindow):
             phase = "submit"
 
         if phase == "pick":
-            current_url = self.browser.url().toString().strip() if self.browser is not None else ""
-            post_id = self._extract_valid_grok_post_id(current_url)
-            if post_id:
-                self._append_log(
-                    f"Variant {variant}: detected valid /imagine/post URL ({post_id}); advancing from pick to video-mode options."
-                )
-                self.manual_image_pick_clicked = True
-                self.manual_image_pick_retry_count = 0
-                self.manual_image_video_mode_retry_count = 0
-                self.manual_image_submit_retry_count = 0
-                QTimer.singleShot(700, self._poll_for_manual_image)
-                return
+            # Do not auto-advance on URL alone; image->video flow must confirm an actual generated-image pick first.
+            pass
 
         submit_attempt_allowed = phase != "submit" or not self.manual_image_submit_in_flight
 
@@ -8719,25 +8731,22 @@ class MainWindow(QMainWindow):
                         ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
 
-                    const makeVideoFromOpenMenu = async () => {{
+                    const findMakeVideoInOpenMenu = () => {{
                         const menuItems = getMenuItems();
                         const makeVideoItem = menuItems.find((el) => isMakeVideoItem(el)) || null;
-                        const clicked = makeVideoItem ? emulateClick(makeVideoItem) : false;
-                        if (clicked) await sleep(ACTION_DELAY_MS);
-                        return {{ item: makeVideoItem, clicked }};
+                        return {{ item: makeVideoItem }};
                     }};
 
                     let optionsOpened = false;
                     let makeVideoItemFound = false;
                     let makeVideoClicked = false;
 
-                    let menuAttempt = await makeVideoFromOpenMenu();
+                    let menuAttempt = findMakeVideoInOpenMenu();
                     if (menuAttempt.item) {{
                         makeVideoItemFound = true;
-                        makeVideoClicked = !!menuAttempt.clicked;
                     }}
 
-                    if (!makeVideoItemFound || !makeVideoClicked) {{
+                    if (!makeVideoItemFound) {{
                         const triggerCandidates = [
                             ...document.querySelectorAll("#model-select-trigger"),
                             ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
@@ -8755,11 +8764,10 @@ class MainWindow(QMainWindow):
                             const opened = emulateClick(trigger);
                             optionsOpened = optionsOpened || opened;
                             await sleep(ACTION_DELAY_MS);
-                            menuAttempt = await makeVideoFromOpenMenu();
+                            menuAttempt = findMakeVideoInOpenMenu();
                             if (menuAttempt.item) {{
                                 makeVideoItemFound = true;
-                                makeVideoClicked = !!menuAttempt.clicked;
-                                if (makeVideoClicked) break;
+                                break;
                             }}
                         }}
                     }}
@@ -8767,8 +8775,7 @@ class MainWindow(QMainWindow):
                     const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
                         .filter((el) => isVisible(el));
                     const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
-                    const videoSelected = makeVideoClicked
-                        || selectedViaMarker
+                    const videoSelected = selectedViaMarker
                         || promptInputVisible
                         || generationInProgress
                         || (onPostView && submitButtonVisible);
@@ -8790,7 +8797,7 @@ class MainWindow(QMainWindow):
 
                     return {{
                         ok: true,
-                        status: makeVideoClicked || selectedViaMarker ? "video-mode-selected" : "video-mode-ready",
+                        status: selectedViaMarker ? "video-mode-selected" : "video-mode-ready",
                         optionsOpened,
                         videoItemFound: makeVideoItemFound,
                         videoClicked: makeVideoClicked,
@@ -8854,51 +8861,32 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
-                const promptContainer = promptInput.closest("form, section, main, [role='form'], [data-testid*='composer' i], [data-testid*='prompt' i]");
-
-                const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
-                    .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
-                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
-                const submitButton = submitCandidates.find((btn) => {{
-                    if (btn.closest("[role='listitem'], li, article, figure")) return false;
-                    const aria = String(btn.getAttribute("aria-label") || "").trim();
-                    const txt = String(btn.textContent || "").trim();
-                    const raw = `${{aria}} ${{txt}}`.trim().toLowerCase();
-                    if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) return false;
-                    const rect = typeof btn.getBoundingClientRect === "function" ? btn.getBoundingClientRect() : null;
-                    const nearPrompt = !!(promptRect && rect && Math.hypot(
-                        (rect.left + rect.width / 2) - (promptRect.left + promptRect.width / 2),
-                        (rect.top + rect.height / 2) - (promptRect.top + promptRect.height / 2)
-                    ) <= 340);
-                    const inPromptContainer = !!(promptContainer && promptContainer.contains(btn));
-                    if (!nearPrompt && !inPromptContainer) return false;
-                    const hasArrowIcon = !!btn.querySelector("svg path[d*='M6 11L12 5'], svg path[d*='M6 11 L12 5']");
-                    if (/^edit$/i.test(aria) && hasArrowIcon) return true;
-                    return /(^|\\s)make\\s+video(\\s|$)/i.test(raw);
-                }}) || null;
-
-                let submitted = false;
-                let submitLabel = "";
-                if (submitButton) {{
-                    await sleep(ACTION_DELAY_MS);
-                    submitted = emulateClick(submitButton);
-                    if (!submitted) {{
-                        try {{ submitButton.click(); submitted = true; }} catch (_) {{}}
-                    }}
-                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "make-video-button";
+                await sleep(ACTION_DELAY_MS);
+                let dispatched = false;
+                const enterCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterCommon)); dispatched = true; }} catch (_) {{}}
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterCommon)); dispatched = true; }} catch (_) {{}}
+                try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterCommon)); dispatched = true; }} catch (_) {{}}
+                if (!dispatched) {{
+                    try {{
+                        const form = promptInput.closest("form");
+                        if (form && typeof form.requestSubmit === "function") {{
+                            form.requestSubmit();
+                            dispatched = true;
+                        }}
+                    }} catch (_) {{}}
                 }}
 
                 const postUrlNow = String((window.location && window.location.href) || "");
                 const onPostUrlNow = /\\/imagine\\/post\\//i.test(postUrlNow);
-                if (submitted) window.__grokManualVideoSubmitToken = submitToken;
+                if (dispatched) window.__grokManualVideoSubmitToken = submitToken;
                 return {{
-                    ok: submitted,
-                    status: submitted ? "video-submit-clicked" : "make-video-click-failed",
-                    buttonLabel: submitLabel,
+                    ok: dispatched,
+                    status: dispatched ? "video-submit-enter-dispatched" : "video-submit-enter-failed",
+                    buttonLabel: "enter-keypress",
                     filledLength: typedValue.length,
                     onPostUrlNow,
-                    makeVideoFound: !!submitButton,
+                    makeVideoFound: false,
                 }};
             }})()
         """
@@ -8964,10 +8952,10 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(700, self._poll_for_manual_image)
                     return
 
-                if status == "make-video-click-failed":
+                if status in ("make-video-click-failed", "video-submit-enter-failed"):
                     self.manual_image_submit_retry_count += 1
                     self._append_log(
-                        f"WARNING: Variant {current_variant}: Make video click was not confirmed; retrying prompt submit "
+                        f"WARNING: Variant {current_variant}: trailing Enter submit was not confirmed; retrying prompt submit "
                         f"(attempt {self.manual_image_submit_retry_count}/{int(self.automation_retry_attempts.value())})."
                     )
                     if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
@@ -8981,9 +8969,9 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(900, self._poll_for_manual_image)
                     return
 
-                if status in ("video-submit-clicked", "video-submit-already-clicked"):
-                    if status == "video-submit-clicked":
-                        message = "video prompt submitted via Make video click"
+                if status in ("video-submit-clicked", "video-submit-enter-dispatched", "video-submit-already-clicked"):
+                    if status in ("video-submit-clicked", "video-submit-enter-dispatched"):
+                        message = "video prompt submitted via trailing Enter"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
 
@@ -9289,15 +9277,8 @@ class MainWindow(QMainWindow):
                                 f"postView={bool(probe_result.get('onPostView'))}"
                             )
                             self._append_log(
-                                f"Variant {current_variant}: detected post/make-video UI after empty callback ({ready_flags}); treating image pick as complete."
+                                f"Variant {current_variant}: post/make-video UI detected ({ready_flags}) but image pick is not yet confirmed; staying in pick stage."
                             )
-                            self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = True
-                            self.manual_image_pick_retry_count = 0
-                            self.manual_image_video_mode_retry_count = 0
-                            self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
-                            return
                         _queue_pick_retry(status)
 
                     self._run_active_browser_javascript(pick_ready_probe_script, _after_pick_ready_probe)
@@ -9361,16 +9342,14 @@ class MainWindow(QMainWindow):
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
                                 f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
-                                "switching to download polling to prevent duplicate submits."
+                                "still forcing submit stage so the prompt is re-filled and Make Video is clicked again."
                             )
-                            self.manual_image_video_submit_sent = True
                             self.manual_image_submit_in_flight = False
                             self.manual_image_submit_in_flight_since = 0.0
                             self.manual_image_video_mode_selected = True
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
-                            self.pending_manual_download_type = "video"
-                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                            QTimer.singleShot(700, self._poll_for_manual_image)
                             return
 
                         self.manual_image_video_mode_retry_count += 1
@@ -9518,31 +9497,17 @@ class MainWindow(QMainWindow):
                     if isinstance(probe_result, dict) and probe_result.get("readyForDownloadPolling"):
                         self._append_log(
                             "Variant "
-                            f"{current_variant}: submit callback remained empty but post view indicates video is ready "
+                            f"{current_variant}: post view already looks render-ready "
                             f"(downloadBtn={bool(probe_result.get('downloadButtonVisible'))}, "
-                            f"videoSrc={bool(probe_result.get('hasVideoSource'))}); switching to download polling."
+                            f"videoSrc={bool(probe_result.get('hasVideoSource'))}); still waiting for explicit submit-token confirmation."
                         )
-                        self.manual_image_video_submit_sent = True
-                        self.manual_image_submit_in_flight = False
-                        self.manual_image_submit_in_flight_since = 0.0
-                        self.manual_image_submit_retry_count = 0
-                        self.pending_manual_download_type = "video"
-                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                        return
 
                     if isinstance(probe_result, dict) and probe_result.get("generationInProgress") and status in ("callback-empty", "submit-in-flight"):
                         self._append_log(
                             "WARNING: Variant "
                             f"{current_variant}: generation UI is visible while submit callback is '{status}'; "
-                            "switching to download polling to avoid duplicate submit attempts."
+                            "keeping submit stage active until prompt refill + explicit submit click is confirmed."
                         )
-                        self.manual_image_video_submit_sent = True
-                        self.manual_image_submit_in_flight = False
-                        self.manual_image_submit_in_flight_since = 0.0
-                        self.manual_image_submit_retry_count = 0
-                        self.pending_manual_download_type = "video"
-                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                        return
 
                     probe_submit_token_seen = bool(isinstance(probe_result, dict) and probe_result.get("submitTokenSeen"))
                     current_url = self.browser.url().toString().strip() if self.browser is not None else ""
@@ -9559,13 +9524,9 @@ class MainWindow(QMainWindow):
                     probe_post_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
                     on_post_view_ready = probe_post_ready or bool(current_post_id)
                     if on_post_view_ready and status in ("callback-empty", "submit-in-flight"):
-                        self.manual_image_video_submit_sent = True
-                        self.manual_image_submit_in_flight = False
-                        self.manual_image_submit_in_flight_since = 0.0
-                        self.manual_image_submit_retry_count = 0
-                        self.pending_manual_download_type = "video"
-                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                        return
+                        self._append_log(
+                            f"Variant {current_variant}: on post view but submit token not confirmed yet; retrying submit stage to ensure prompt refill + Make Video click."
+                        )
 
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
@@ -9585,14 +9546,12 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                        f"{self.manual_image_submit_retry_count} checks; assuming submit already happened and switching directly to download polling."
+                        f"{self.manual_image_submit_retry_count} checks; keeping submit stage active until prompt refill is confirmed."
                     )
-                    self.manual_image_video_submit_sent = True
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count = 0
-                    self.pending_manual_download_type = "video"
-                    self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                    QTimer.singleShot(1200, self._poll_for_manual_image)
                     return
 
                 self.manual_image_submit_retry_count = 0
