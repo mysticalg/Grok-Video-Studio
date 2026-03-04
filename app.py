@@ -17195,11 +17195,19 @@ class MainWindow(QMainWindow):
 
     def _normalize_hashtag_tokens(self, hashtags: list[str]) -> list[str]:
         normalized: list[str] = []
+        seen: set[str] = set()
         for tag in hashtags:
             cleaned = str(tag).strip().lstrip("#")
             if cleaned:
+                key = cleaned.lower()
+                if key in seen:
+                    continue
                 normalized.append(f"#{cleaned}")
+                seen.add(key)
         return normalized
+
+    def _extract_hashtag_keys(self, text: str) -> set[str]:
+        return {match.lower() for match in re.findall(r"#([A-Za-z0-9_]+)", str(text or ""))}
 
     def _compose_social_text(self, base_text: str, hashtags: list[str]) -> str:
         tag_text = " ".join(self._normalize_hashtag_tokens(hashtags))
@@ -17210,7 +17218,12 @@ class MainWindow(QMainWindow):
 
     def _compose_x_post_text(self, base_text: str, hashtags: list[str], max_chars: int = 275) -> str:
         text = " ".join(str(base_text or "").split())
-        tag_tokens = self._normalize_hashtag_tokens(hashtags)
+        existing_tag_keys = self._extract_hashtag_keys(text)
+        tag_tokens = [
+            token
+            for token in self._normalize_hashtag_tokens(hashtags)
+            if token.lstrip("#").lower() not in existing_tag_keys
+        ]
 
         if not text and not tag_tokens:
             return ""
