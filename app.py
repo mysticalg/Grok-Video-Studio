@@ -17218,6 +17218,27 @@ class MainWindow(QMainWindow):
     def _extract_hashtag_keys(self, text: str) -> set[str]:
         return {match.lower() for match in re.findall(r"#([A-Za-z0-9_]+)", str(text or ""))}
 
+    def _dedupe_hashtags_in_text(self, text: str) -> str:
+        value = " ".join(str(text or "").split())
+        if not value:
+            return ""
+
+        # Handle adjacent hashtags such as "#tag1#tag2" so each token can be deduped.
+        value = re.sub(r"(?<=[A-Za-z0-9_])#", " #", value)
+
+        seen: set[str] = set()
+
+        def _replace(match: re.Match[str]) -> str:
+            token = match.group(1)
+            key = token.lower()
+            if key in seen:
+                return ""
+            seen.add(key)
+            return f"#{token}"
+
+        value = re.sub(r"#([A-Za-z0-9_]+)", _replace, value)
+        return " ".join(value.split()).strip()
+
     def _compose_social_text(self, base_text: str, hashtags: list[str]) -> str:
         tag_text = " ".join(self._normalize_hashtag_tokens(hashtags))
         if not tag_text:
@@ -17226,7 +17247,7 @@ class MainWindow(QMainWindow):
         return combined.strip()
 
     def _compose_x_post_text(self, base_text: str, hashtags: list[str], max_chars: int = 275) -> str:
-        text = " ".join(str(base_text or "").split())
+        text = self._dedupe_hashtags_in_text(base_text)
         existing_tag_keys = self._extract_hashtag_keys(text)
         tag_tokens = [
             token
@@ -17244,10 +17265,10 @@ class MainWindow(QMainWindow):
             tag_text = " ".join(tag_tokens)
             combined = f"{text} {tag_text}".strip() if text else tag_text
             if len(combined) <= max_chars:
-                return combined
+                return self._dedupe_hashtags_in_text(combined)
             tag_tokens.pop()
 
-        return text[:max_chars].rstrip()
+        return self._dedupe_hashtags_in_text(text[:max_chars].rstrip())
 
     def _tiktok_overlay_text(self) -> str:
         raw_text = str(self.ai_social_metadata.tiktok_subheading or "").strip()
@@ -17351,7 +17372,7 @@ class MainWindow(QMainWindow):
                 "track_name_rotation_index": max(0, int(self.tiktok_upload_automation_options.get("track_name_rotation_index") or 0)),
                 "music_query_effective": str(self.tiktok_upload_automation_options.get("music_query_effective") or "").strip(),
             }
-        hashtags = [tag.strip().lstrip("#") for tag in hashtags_input.text().split(",") if tag.strip()]
+        hashtags = _parse_hashtags_from_text(hashtags_input.text())
         category_value = category_input.text().strip() if platform_name == "YouTube" else self.ai_social_metadata.category
         if platform_name == "YouTube":
             self.youtube_browser_upload_options = {
