@@ -8683,7 +8683,7 @@ class MainWindow(QMainWindow):
                     const titleOf = (el) => (el?.getAttribute?.("title") || "").replace(/\\s+/g, " ").trim();
                     const descriptorOf = (el) => `${{textOf(el)}} ${{ariaOf(el)}} ${{titleOf(el)}}`.trim();
                     const pathRaw = String((window.location && window.location.pathname) || "");
-                    const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                    const postMatch = pathRaw.match(/(?:[/]imagine)?[/]post[/]([^/?#]+)/i);
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
@@ -9342,7 +9342,7 @@ class MainWindow(QMainWindow):
                                     .find((el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
                                 const pathRaw = String((window.location && window.location.pathname) || "");
                                 const path = pathRaw.toLowerCase();
-                                const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                                const postMatch = pathRaw.match(/(?:[/]imagine)?[/]post[/]([^/?#]+)/i);
                                 const postId = postMatch ? String(postMatch[1] || "") : "";
                                 const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                                     && !/^placeholder-/i.test(postId);
@@ -9407,7 +9407,7 @@ class MainWindow(QMainWindow):
                                     return true;
                                 };
                                 const pathRaw = String((window.location && window.location.pathname) || "");
-                                const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                                const postMatch = pathRaw.match(/(?:[/]imagine)?[/]post[/]([^/?#]+)/i);
                                 const postId = postMatch ? String(postMatch[1] || "") : "";
                                 const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                                     && !/^placeholder-/i.test(postId);
@@ -9441,20 +9441,33 @@ class MainWindow(QMainWindow):
                         has_video_source_probe = bool(isinstance(probe_result, dict) and probe_result.get("hasVideoSource"))
                         can_download_probe = bool(isinstance(probe_result, dict) and probe_result.get("canDownload"))
                         if on_post_view_probe and (generation_signal_probe or has_video_source_probe or can_download_probe):
+                            if has_video_source_probe:
+                                self._append_log(
+                                    "Variant "
+                                    f"{current_variant}: detected rendered video source while waiting-for-video-mode "
+                                    f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
+                                    "switching to download polling."
+                                )
+                                self.manual_image_video_submit_sent = True
+                                self.manual_image_submit_in_flight = False
+                                self.manual_image_submit_in_flight_since = 0.0
+                                self.manual_image_video_mode_selected = True
+                                self.manual_image_video_mode_retry_count = 0
+                                self.manual_image_submit_retry_count = 0
+                                self.pending_manual_download_type = "video"
+                                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                                return
+
                             self._append_log(
                                 "Variant "
-                                f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
+                                f"{current_variant}: detected post/video controls while waiting-for-video-mode "
                                 f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
-                                "switching to download polling to prevent duplicate submits."
+                                "continuing staged flow with prompt entry before submit."
                             )
-                            self.manual_image_video_submit_sent = True
-                            self.manual_image_submit_in_flight = False
-                            self.manual_image_submit_in_flight_since = 0.0
                             self.manual_image_video_mode_selected = True
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
-                            self.pending_manual_download_type = "video"
-                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                            QTimer.singleShot(900, self._poll_for_manual_image)
                             return
 
                         self.manual_image_video_mode_retry_count += 1
@@ -9562,7 +9575,7 @@ class MainWindow(QMainWindow):
                             const submitToken = {self.manual_image_submit_token};
                             const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                             const pathRaw = String((window.location && window.location.pathname) || "");
-                            const postMatch = pathRaw.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                            const postMatch = pathRaw.match(/(?:[/]imagine)?[/]post[/]([^/?#]+)/i);
                             const postId = postMatch ? String(postMatch[1] || "") : "";
                             const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                                 && !/^placeholder-/i.test(postId);
