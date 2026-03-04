@@ -9375,16 +9375,14 @@ class MainWindow(QMainWindow):
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
                                 f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
-                                "switching to download polling to prevent duplicate submits."
+                                "still forcing submit stage so the prompt is re-filled and Make Video is clicked again."
                             )
-                            self.manual_image_video_submit_sent = True
                             self.manual_image_submit_in_flight = False
                             self.manual_image_submit_in_flight_since = 0.0
                             self.manual_image_video_mode_selected = True
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
-                            self.pending_manual_download_type = "video"
-                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                            QTimer.singleShot(700, self._poll_for_manual_image)
                             return
 
                         self.manual_image_video_mode_retry_count += 1
@@ -9532,31 +9530,17 @@ class MainWindow(QMainWindow):
                     if isinstance(probe_result, dict) and probe_result.get("readyForDownloadPolling"):
                         self._append_log(
                             "Variant "
-                            f"{current_variant}: submit callback remained empty but post view indicates video is ready "
+                            f"{current_variant}: post view already looks render-ready "
                             f"(downloadBtn={bool(probe_result.get('downloadButtonVisible'))}, "
-                            f"videoSrc={bool(probe_result.get('hasVideoSource'))}); switching to download polling."
+                            f"videoSrc={bool(probe_result.get('hasVideoSource'))}); still waiting for explicit submit-token confirmation."
                         )
-                        self.manual_image_video_submit_sent = True
-                        self.manual_image_submit_in_flight = False
-                        self.manual_image_submit_in_flight_since = 0.0
-                        self.manual_image_submit_retry_count = 0
-                        self.pending_manual_download_type = "video"
-                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                        return
 
                     if isinstance(probe_result, dict) and probe_result.get("generationInProgress") and status in ("callback-empty", "submit-in-flight"):
                         self._append_log(
                             "WARNING: Variant "
                             f"{current_variant}: generation UI is visible while submit callback is '{status}'; "
-                            "switching to download polling to avoid duplicate submit attempts."
+                            "keeping submit stage active until prompt refill + explicit submit click is confirmed."
                         )
-                        self.manual_image_video_submit_sent = True
-                        self.manual_image_submit_in_flight = False
-                        self.manual_image_submit_in_flight_since = 0.0
-                        self.manual_image_submit_retry_count = 0
-                        self.pending_manual_download_type = "video"
-                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                        return
 
                     probe_submit_token_seen = bool(isinstance(probe_result, dict) and probe_result.get("submitTokenSeen"))
                     current_url = self.browser.url().toString().strip() if self.browser is not None else ""
@@ -9573,13 +9557,9 @@ class MainWindow(QMainWindow):
                     probe_post_ready = bool(isinstance(probe_result, dict) and probe_result.get("onPostViewReady"))
                     on_post_view_ready = probe_post_ready or bool(current_post_id)
                     if on_post_view_ready and status in ("callback-empty", "submit-in-flight"):
-                        self.manual_image_video_submit_sent = True
-                        self.manual_image_submit_in_flight = False
-                        self.manual_image_submit_in_flight_since = 0.0
-                        self.manual_image_submit_retry_count = 0
-                        self.pending_manual_download_type = "video"
-                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
-                        return
+                        self._append_log(
+                            f"Variant {current_variant}: on post view but submit token not confirmed yet; retrying submit stage to ensure prompt refill + Make Video click."
+                        )
 
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
@@ -9599,14 +9579,12 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         "WARNING: Variant "
                         f"{current_variant}: submit-stage validation stayed in '{status}' for "
-                        f"{self.manual_image_submit_retry_count} checks; assuming submit already happened and switching directly to download polling."
+                        f"{self.manual_image_submit_retry_count} checks; keeping submit stage active until prompt refill is confirmed."
                     )
-                    self.manual_image_video_submit_sent = True
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count = 0
-                    self.pending_manual_download_type = "video"
-                    self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                    QTimer.singleShot(1200, self._poll_for_manual_image)
                     return
 
                 self.manual_image_submit_retry_count = 0
