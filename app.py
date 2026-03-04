@@ -8886,7 +8886,10 @@ class MainWindow(QMainWindow):
                     if (!nearPrompt && !inPromptContainer) return false;
                     const hasArrowIcon = !!btn.querySelector("svg path[d*='M6 11L12 5'], svg path[d*='M6 11 L12 5']");
                     if (/^edit$/i.test(aria) && hasArrowIcon) return true;
-                    return /(^|\\s)make\\s+video(\\s|$)/i.test(raw);
+                    if (/(^|\\s)make\\s+video(\\s|$)/i.test(raw)) return true;
+                    if (/(^|\\s)(create|generate|submit)(\\s|$).*\\bvideo\\b|\\bvideo\\b.*(^|\\s)(create|generate|submit)(\\s|$)/i.test(raw)) return true;
+                    if (!raw && String(btn.getAttribute("type") || "").toLowerCase() === "submit") return true;
+                    return false;
                 }}) || null;
 
                 let submitted = false;
