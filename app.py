@@ -8637,7 +8637,10 @@ class MainWindow(QMainWindow):
                     }}
 
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled)
+                        .filter((btn) => !!listItemOf(btn) && listItemReady(btn))
+                        .filter((btn) => !btn.closest("div.w-full.mx-auto"))
+                        .filter((btn) => !!listItemOf(btn)?.querySelector?.("img"));
 
 
                     const visibleGeneratedImages = [...document.querySelectorAll("img")]
@@ -8671,7 +8674,7 @@ class MainWindow(QMainWindow):
                         const clickedTile = emulateClick(tileImage) || emulateClick(tile);
                         if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
                         await sleep(ACTION_DELAY_MS);
-                        return {{ ok: true, status: "generated-image-clicked" }};
+                        return {{ ok: true, status: "generated-image-clicked", makeVideoCandidateCount: makeVideoButtons.length }};
                     }}
 
                     return {{ ok: false, status: "waiting-for-make-video-button" }};
@@ -9217,7 +9220,10 @@ class MainWindow(QMainWindow):
 
                                 const tryClickFirstGeneratedTile = () => {
                                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+                                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled)
+                                        .filter((btn) => !!listItemOf(btn) && listItemReady(btn))
+                                        .filter((btn) => !btn.closest("div.w-full.mx-auto"))
+                                        .filter((btn) => !!listItemOf(btn)?.querySelector?.("img"));
 
                                     if (makeVideoButtons.length) {
                                         makeVideoButtons.sort((a, b) => {
