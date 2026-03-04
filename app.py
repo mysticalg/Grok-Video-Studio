@@ -8715,6 +8715,7 @@ class MainWindow(QMainWindow):
                         if ((el.id || "") === "model-select-trigger") return false;
                         return hasPopup && /\\bmore\\s+options\\b/.test(descriptor);
                     }};
+                    const settingsTriggerSelector = "button[aria-label='Settings'][aria-haspopup='menu'], [role='button'][aria-label='Settings'][aria-haspopup='menu']";
                     const getMenuItems = () => [
                         ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
@@ -8739,17 +8740,21 @@ class MainWindow(QMainWindow):
 
                     if (!makeVideoItemFound || !makeVideoClicked) {{
                         const triggerCandidates = [
+                            ...document.querySelectorAll(settingsTriggerSelector),
                             ...document.querySelectorAll("#model-select-trigger"),
                             ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
                             ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
                             ...document.querySelectorAll("button, [role='button']"),
                         ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el) && !isSidebarControl(el));
 
+                        const settingsTriggers = triggerCandidates.filter((el) => el.matches?.(settingsTriggerSelector));
                         const likelyTriggers = triggerCandidates.filter((el) => {{
                             const descriptor = descriptorOf(el);
                             return /model|video|image|options|settings/i.test(descriptor) || (el.id || "") === "model-select-trigger";
                         }});
-                        const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
+                        const candidates = settingsTriggers.length
+                            ? settingsTriggers
+                            : (likelyTriggers.length ? likelyTriggers : triggerCandidates);
 
                         for (const trigger of candidates) {{
                             const opened = emulateClick(trigger);
@@ -8854,39 +8859,39 @@ class MainWindow(QMainWindow):
                 const typedValue = promptInput.isContentEditable ? (promptInput.textContent || "") : (promptInput.value || "");
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
-                const promptRect = typeof promptInput.getBoundingClientRect === "function" ? promptInput.getBoundingClientRect() : null;
-                const promptContainer = promptInput.closest("form, section, main, [role='form'], [data-testid*='composer' i], [data-testid*='prompt' i]");
-
-                const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
-                    .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
-                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
-                const submitButton = submitCandidates.find((btn) => {{
-                    if (btn.closest("[role='listitem'], li, article, figure")) return false;
-                    const aria = String(btn.getAttribute("aria-label") || "").trim();
-                    const txt = String(btn.textContent || "").trim();
-                    const raw = `${{aria}} ${{txt}}`.trim().toLowerCase();
-                    if (/create\\s+share\\s+link|share\\s+link|copy\\s+link/i.test(raw)) return false;
-                    const rect = typeof btn.getBoundingClientRect === "function" ? btn.getBoundingClientRect() : null;
-                    const nearPrompt = !!(promptRect && rect && Math.hypot(
-                        (rect.left + rect.width / 2) - (promptRect.left + promptRect.width / 2),
-                        (rect.top + rect.height / 2) - (promptRect.top + promptRect.height / 2)
-                    ) <= 340);
-                    const inPromptContainer = !!(promptContainer && promptContainer.contains(btn));
-                    if (!nearPrompt && !inPromptContainer) return false;
-                    const hasArrowIcon = !!btn.querySelector("svg path[d*='M6 11L12 5'], svg path[d*='M6 11 L12 5']");
-                    if (/^edit$/i.test(aria) && hasArrowIcon) return true;
-                    return /(^|\\s)make\\s+video(\\s|$)/i.test(raw);
-                }}) || null;
-
                 let submitted = false;
                 let submitLabel = "";
-                if (submitButton) {{
+                let submitButton = null;
+                const getMenuItems = () => [
+                    ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
+                ].filter((el, idx, arr) => arr.indexOf(el) === idx && isActuallyVisible(el));
+
+                const clickMakeVideoMenuItem = async () => {{
+                    const menuItem = getMenuItems().find((el) => /\\bmake\\s+video\\b/i.test((el.textContent || "").trim())) || null;
+                    if (!menuItem) return null;
                     await sleep(ACTION_DELAY_MS);
-                    submitted = emulateClick(submitButton);
-                    if (!submitted) {{
-                        try {{ submitButton.click(); submitted = true; }} catch (_) {{}}
+                    let clicked = emulateClick(menuItem);
+                    if (!clicked) {{
+                        try {{ menuItem.click(); clicked = true; }} catch (_) {{}}
                     }}
-                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "make-video-button";
+                    if (!clicked) return null;
+                    return menuItem;
+                }};
+
+                submitButton = await clickMakeVideoMenuItem();
+                if (!submitButton) {{
+                    const settingsTrigger = [...document.querySelectorAll("button[aria-label='Settings'][aria-haspopup='menu'], [role='button'][aria-label='Settings'][aria-haspopup='menu']")]
+                        .find((btn) => isActuallyVisible(btn) && !btn.disabled) || null;
+                    if (settingsTrigger) {{
+                        emulateClick(settingsTrigger);
+                        await sleep(ACTION_DELAY_MS);
+                    }}
+                    submitButton = await clickMakeVideoMenuItem();
+                }}
+
+                if (submitButton) {{
+                    submitted = true;
+                    submitLabel = (submitButton.getAttribute("aria-label") || submitButton.textContent || "").trim() || "make-video-menu-item";
                 }}
 
                 const postUrlNow = String((window.location && window.location.href) || "");
