@@ -8001,16 +8001,16 @@ class MainWindow(QMainWindow):
                             return true;
                         } catch (_) {
                             return false;
-                        }
-                    };
+                        }}
+                    }};
                     const emitMouse = (el, type) => {
                         try {
                             el.dispatchEvent(new MouseEvent(type, { ...common, button: 0, buttons: type === "mouseup" || type === "mouseenter" || type === "mouseover" ? 0 : 1 }));
                             return true;
                         } catch (_) {
                             return false;
-                        }
-                    };
+                        }}
+                    }};
                     const activateSubmit = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
                         let fired = false;
@@ -8144,7 +8144,7 @@ class MainWindow(QMainWindow):
                             + "[contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i]"
                         );
                         const path = String((location && location.pathname) || "");
-                        const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                        const postMatch = path.match(/(?:[/]imagine)?[/]post[/]([^/?#]+)/i);
                         const postId = postMatch ? String(postMatch[1] || "") : "";
                         const validPostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                             && !/^placeholder-/i.test(postId);
@@ -8615,13 +8615,6 @@ class MainWindow(QMainWindow):
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
                     const allListItems = () => [...document.querySelectorAll("[role='listitem'], li, article, figure")]
                         .filter((item) => isActuallyVisible(item) && !item.querySelector("div.invisible"));
-                    const isInLastTwoListItems = (el) => {{
-                        const item = listItemOf(el);
-                        if (!item) return false;
-                        const items = allListItems();
-                        const idx = items.indexOf(item);
-                        return idx >= 0 && idx >= Math.max(0, items.length - 2);
-                    }};
                     const listItemReady = (el) => {{
                         const listItem = listItemOf(el);
                         if (!listItem) return true;
@@ -8629,7 +8622,7 @@ class MainWindow(QMainWindow):
                     }};
 
                     const path = String((location && location.pathname) || "");
-                    const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                    const postMatch = path.match(/(?:[/]imagine)?[/]post[/]([^/?#]+)/i);
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
@@ -8644,7 +8637,24 @@ class MainWindow(QMainWindow):
                     }}
 
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
+                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
+
+
+                    const visibleGeneratedImages = [...document.querySelectorAll("img")]
+                        .filter((img) => isActuallyVisible(img))
+                         .filter((img) => {{
+                            const alt = String(img.getAttribute("alt") || "").toLowerCase();
+                            const src = String(img.getAttribute("src") || "").toLowerCase();
+                            return /generated|imagine|grok/.test(alt) || /imagine|blob:|cdn/.test(src);
+                        }});
+                    if (!makeVideoButtons.length && visibleGeneratedImages.length) {{
+                        const image = visibleGeneratedImages[0];
+                        const clickedImage = emulateClick(image) || emulateClick(listItemOf(image));
+                        if (clickedImage) {{
+                            await sleep(ACTION_DELAY_MS);
+                            return {{ ok: true, status: "generated-image-clicked", detectedViaImageFallback: true }};
+                        }}
+                    }}
 
                     if (makeVideoButtons.length) {{
                         makeVideoButtons.sort((a, b) => {{
@@ -9170,7 +9180,7 @@ class MainWindow(QMainWindow):
 
                                 const tryClickFirstGeneratedTile = () => {
                                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
+                                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn));
 
                                     if (makeVideoButtons.length) {
                                         makeVideoButtons.sort((a, b) => {
@@ -10368,16 +10378,16 @@ class MainWindow(QMainWindow):
                             return true;
                         } catch (_) {
                             return false;
-                        }
-                    };
+                        }}
+                    }};
                     const emitMouse = (el, type) => {
                         try {
                             el.dispatchEvent(new MouseEvent(type, { ...common, button: 0, buttons: type === "mouseup" || type === "mouseenter" || type === "mouseover" ? 0 : 1 }));
                             return true;
                         } catch (_) {
                             return false;
-                        }
-                    };
+                        }}
+                    }};
                     const activateSubmit = (el) => {
                         if (!el || !isVisible(el) || el.disabled) return false;
                         let fired = false;
@@ -10558,8 +10568,8 @@ class MainWindow(QMainWindow):
                         if (!clicked) {
                             clicked = click(target);
                             clickedNodeTag = String(target.tagName || "").toLowerCase();
-                        }
-                    }
+                        }}
+                    }}
 
                     return {
                         ok: !!target && clicked,
@@ -13463,8 +13473,8 @@ class MainWindow(QMainWindow):
                         if (descriptor && typeof descriptor.set === "function") {
                             descriptor.set.call(input, files);
                             return true;
-                        }
-                    } catch (_) {}
+                        }}
+                    }} catch (_) {}
 
                     try {
                         Object.defineProperty(input, "files", { value: files, configurable: true });
@@ -15839,8 +15849,8 @@ class MainWindow(QMainWindow):
                                     }
                                 }
                             }
-                        }
-                    }
+                        }}
+                    }}
 
                     if (platform === "facebook" && !facebookState.createPostOpened) {
                         const facebookCreatePostButton = findClickableByHints(["create post", "what's on your mind"]);
@@ -15850,8 +15860,8 @@ class MainWindow(QMainWindow):
                             if (clicked) {
                                 facebookState.createPostOpened = true;
                             }
-                        }
-                    }
+                        }}
+                    }}
 
                     const setTextValue = (node, value) => {
                         if (!node) return false;
@@ -16086,8 +16096,8 @@ class MainWindow(QMainWindow):
                             const textTarget = findTextInputTarget();
                             textFilled = setTextValue(textTarget, captionText);
                             captionReady = textFilled;
-                        }
-                    }
+                        }}
+                    }}
 
                     if (platform === "facebook" && captionReady && !facebookState.uploadChooserOpened) {
 
@@ -16103,8 +16113,8 @@ class MainWindow(QMainWindow):
                             if (clicked) {
                                 facebookState.uploadChooserOpened = true;
                             }
-                        }
-                    }
+                        }}
+                    }}
 
                     if (platform === "tiktok") {
                         const tiktokUploadPreState = uploadState.tiktok = uploadState.tiktok || {};
@@ -16131,8 +16141,8 @@ class MainWindow(QMainWindow):
                             if (clicked) {
                                 tiktokUploadPreState.uploadTriggerClickedAtMs = nowMs;
                             }
-                        }
-                    }
+                        }}
+                    }}
 
                     const fileInputs = collectDeep('input[type="file"]');
                     const pickVideoInput = () => {
@@ -16195,8 +16205,8 @@ class MainWindow(QMainWindow):
                             return true;
                         } catch (_) {
                             return false;
-                        }
-                    };
+                        }}
+                    }};
                     let fileDialogTriggered = false;
                     let fakeProbeInjected = false;
                     if (fileInput && (platform !== "facebook" || captionReady)) {
@@ -16302,8 +16312,8 @@ class MainWindow(QMainWindow):
                                     }
                                 }
                             } catch (_) {}
-                        }
-                    }
+                        }}
+                    }}
 
                     const detectTikTokUploadCompletionSignal = () => {
                         if (platform !== "tiktok") return false;
@@ -16377,8 +16387,8 @@ class MainWindow(QMainWindow):
                             }
                         } else {
                             facebookState.fileReadyAtMs = 0;
-                        }
-                    }
+                        }}
+                    }}
                     const facebookSubmitDelayElapsed = platform !== "facebook"
                         || Boolean(facebookState.fileReadyAtMs && (Date.now() - Number(facebookState.fileReadyAtMs)) >= configuredActionDelayMs);
 
@@ -16411,8 +16421,8 @@ class MainWindow(QMainWindow):
                             if (shareButton) {
                                 submitClicked = clickNodeOrAncestor(shareButton) || submitClicked;
                             }
-                        }
-                    }
+                        }}
+                    }}
 
                     if (platform === "facebook" && fileReadySignal && captionReady && facebookSubmitDelayElapsed) {
                         const explicitPostButton = bySelectors(['div[aria-label="Post"][role="button"][tabindex="0"]']);
@@ -16462,8 +16472,8 @@ class MainWindow(QMainWindow):
                                     } catch (_) {}
                                 }
                             }
-                        }
-                    }
+                        }}
+                    }}
 
 
                     if (platform === "x" && fileReadySignal && captionReady) {
@@ -16795,8 +16805,8 @@ class MainWindow(QMainWindow):
                             }
                         } else {
                             logActionAttempt("tiktok.save_draft.click", "attempted=false reason=button_not_found");
-                        }
-                    }
+                        }}
+                    }}
 
                     if (platform === "youtube") {
                         const youtubeOptions = (payload.youtube_options && typeof payload.youtube_options === "object") ? payload.youtube_options : {};
@@ -17030,8 +17040,8 @@ class MainWindow(QMainWindow):
                                     youtubeState.lastActionAtMs = nowMs;
                                 }
                             }
-                        }
-                    }
+                        }}
+                    }}
 
                     return {
                         fileInputFound: Boolean(fileInput),
