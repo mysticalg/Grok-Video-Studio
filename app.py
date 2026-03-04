@@ -15862,6 +15862,43 @@ class MainWindow(QMainWindow):
                         return inserted || finalText.length > 0;
                     };
 
+                    const clearEditorText = (node) => {
+                        if (!node) return false;
+                        try {
+                            if (!(node.isContentEditable || node.getAttribute("contenteditable") === "true")) {
+                                return setTextValue(node, "");
+                            }
+                        } catch (_) {
+                            return setTextValue(node, "");
+                        }
+                        try { node.focus(); } catch (_) {}
+                        try {
+                            const sel = window.getSelection();
+                            if (sel) {
+                                sel.removeAllRanges();
+                                const range = document.createRange();
+                                range.selectNodeContents(node);
+                                sel.addRange(range);
+                            }
+                        } catch (_) {}
+                        try {
+                            if (typeof document.execCommand === "function") {
+                                document.execCommand("selectAll", false);
+                                document.execCommand("delete", false);
+                            }
+                        } catch (_) {}
+                        try {
+                            node.textContent = "";
+                            node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" }));
+                            node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+                        } catch (_) {}
+                        const finalText = String(node.innerText || node.textContent || "")
+                            .replace(/\u200B/g, "")
+                            .replace(/\s+/g, " ")
+                            .trim();
+                        return finalText.length === 0;
+                    };
+
                     const emulateTypingIntoEditor = (node, value) => {
                         if (!node) return false;
                         const text = String(value || "");
@@ -15978,14 +16015,17 @@ class MainWindow(QMainWindow):
                                 if (!xComposer) return false;
                                 const currentText = normalizeForCompare(xComposer.innerText || xComposer.textContent || "");
                                 if (!currentText || !expectedCaption) return false;
-                                return currentText === expectedCaption
-                                    || currentText.includes(expectedCaption)
-                                    || expectedCaption.includes(currentText);
+                                return currentText === expectedCaption;
                             };
 
                             textFilled = draftTextMatches()
-                                || pasteTextIntoEditor(xComposer, captionText)
-                                || emulateTypingIntoEditor(xComposer, captionText);
+                                || (
+                                    clearEditorText(xComposer)
+                                    && (
+                                        pasteTextIntoEditor(xComposer, captionText)
+                                        || emulateTypingIntoEditor(xComposer, captionText)
+                                    )
+                                );
                             textFilled = textFilled && draftTextMatches();
 
                             const refreshKeyParts = [requestedVideoPath || "video", expectedCaption || "caption"];
@@ -16282,10 +16322,17 @@ class MainWindow(QMainWindow):
                         && !document.querySelector('[aria-label*="uploading" i], [aria-label*="processing" i]')
                     );
 
+                    const fileSelectedSignal = Boolean(fileInput && fileInput.files && fileInput.files.length > 0);
+                    const uploadCompleteUiSignal = Boolean(
+                        document.querySelector('video')
+                        || document.querySelector('[aria-label*="uploaded" i], [aria-label*="upload complete" i]')
+                    );
+                    const uploadInProgressSignal = Boolean(
+                        document.querySelector('[aria-label*="uploading" i], [aria-label*="processing" i], div[role="progressbar"], progress')
+                    );
                     const fileReadySignal = Boolean(
-                        (fileInput && fileInput.files && fileInput.files.length > 0)
-                        || document.querySelector('video')
-                        || document.querySelector('[aria-label*="uploaded" i], [aria-label*="uploading" i], progress')
+                        fileSelectedSignal
+                        || uploadCompleteUiSignal
                         || tiktokUploadCompletionSignal
                         || tiktokNetworkReadySignal
                         || tiktokSaveDraftUiReady
@@ -16389,6 +16436,9 @@ class MainWindow(QMainWindow):
 
 
                     if (platform === "x" && fileReadySignal && captionReady) {
+                        const xUploadInProgress = Boolean(
+                            document.querySelector('[aria-label*="uploading" i], [aria-label*="processing" i], div[role="progressbar"], progress')
+                        );
                         const xComposer = bySelectors([
                             'div[data-testid="tweetTextarea_0"][contenteditable="true"]',
                             'div[data-testid^="tweetTextarea"][contenteditable="true"]',
@@ -16435,13 +16485,13 @@ class MainWindow(QMainWindow):
                         ];
                         const postButton = bySelectors(xPostCandidates) || findClickableByHints(["post"], { excludeHints: ["repost", "post all"] });
 
-                        const forceEnable = (node) => {
-                            if (!node) return;
-                            try { node.removeAttribute('disabled'); } catch (_) {}
-                            try { node.setAttribute('aria-disabled', 'false'); } catch (_) {}
-                            try { node.setAttribute('data-disabled', 'false'); } catch (_) {}
-                            try { node.setAttribute('tabindex', '0'); } catch (_) {}
-                            try { node.disabled = false; } catch (_) {}
+                        const isActionEnabled = (node) => {
+                            if (!node) return false;
+                            const attrDisabled = String(node.getAttribute('aria-disabled') || '').toLowerCase() === 'true';
+                            const dataDisabled = String(node.getAttribute('data-disabled') || '').toLowerCase() === 'true';
+                            const htmlDisabled = Boolean(node.disabled);
+                            const loading = String(node.getAttribute('data-loading') || '').toLowerCase() === 'true';
+                            return !(attrDisabled || dataDisabled || htmlDisabled || loading);
                         };
                         const fireSubmitHotkeys = (node) => {
                             if (!node) return false;
@@ -16464,15 +16514,9 @@ class MainWindow(QMainWindow):
                         };
 
                         let clicked = false;
-                        if (postButton) {
-                            const postTarget = postButton.closest('button, [role="button"], div[data-testid]') || postButton;
-                            forceEnable(postButton);
-                            forceEnable(postTarget);
-                            try {
-                                const innerSpan = postButton.querySelector('span');
-                                forceEnable(innerSpan);
-                            } catch (_) {}
-
+                        const postTarget = postButton ? (postButton.closest('button, [role="button"], div[data-testid]') || postButton) : null;
+                        const xPostEnabled = Boolean(postTarget && isActionEnabled(postTarget));
+                        if (postButton && xPostEnabled && !xUploadInProgress) {
                             clicked = clickNodeSingle(postTarget) || clicked;
                             clicked = clickNodeSingle(postButton) || clicked;
                             clicked = injectClickActions(postTarget) || clicked;
@@ -16501,9 +16545,11 @@ class MainWindow(QMainWindow):
                             }
                         }
 
-                        const hotkeySubmitted = fireSubmitHotkeys(xComposer);
+                        const hotkeySubmitted = (!xUploadInProgress && xPostEnabled)
+                            ? fireSubmitHotkeys(xComposer)
+                            : false;
                         let formSubmitted = false;
-                        if (xForm) {
+                        if (xForm && !xUploadInProgress && xPostEnabled) {
                             try {
                                 if (typeof xForm.requestSubmit === 'function') {
                                     xForm.requestSubmit();
@@ -16525,7 +16571,7 @@ class MainWindow(QMainWindow):
                         }
 
                         submitClicked = clicked || hotkeySubmitted || formSubmitted || submitClicked;
-                        logActionAttempt('x_submit', `clicked=${Boolean(clicked)} hotkey=${Boolean(hotkeySubmitted)} form=${Boolean(formSubmitted)} button_found=${Boolean(postButton)}`);
+                        logActionAttempt('x_submit', `clicked=${Boolean(clicked)} hotkey=${Boolean(hotkeySubmitted)} form=${Boolean(formSubmitted)} button_found=${Boolean(postButton)} button_enabled=${Boolean(xPostEnabled)} upload_in_progress=${Boolean(xUploadInProgress)}`);
                     }
 
                     let tiktokPostEnabled = false;
@@ -16673,7 +16719,7 @@ class MainWindow(QMainWindow):
                         ]) || findClickableByHints(["save draft"], { excludeHints: ["discard"] });
                         logActionAttempt(
                             "tiktok.save_draft.lookup",
-                            `found=${Boolean(tiktokPostButton)} caption_ready=${captionReady} upload_ready=${Boolean(fileReadySignal || tiktokUploadCompletionSignal || tiktokNetworkReadySignal || tiktokSaveDraftUiReady)} delay_ok=${tiktokSubmitDelayElapsed} spacing_ok=${actionSpacingElapsed && tiktokSubmitSpacingElapsed}`,
+                            `found=${Boolean(tiktokPostButton)} caption_ready=${captionReady} upload_ready=${Boolean(!uploadInProgressSignal && (tiktokSaveDraftUiReady || tiktokUploadCompletionSignal || tiktokNetworkReadySignal || uploadCompleteUiSignal))} upload_in_progress=${Boolean(uploadInProgressSignal)} delay_ok=${tiktokSubmitDelayElapsed} spacing_ok=${actionSpacingElapsed && tiktokSubmitSpacingElapsed}`,
                         );
                         if (tiktokPostButton) {
                             const tiktokPostTarget = tiktokPostButton.closest('button, [role="button"]') || tiktokPostButton;
@@ -16687,7 +16733,12 @@ class MainWindow(QMainWindow):
                             const explicitEnabled = ariaDisabled === "false" || dataDisabled === "false";
                             tiktokPostEnabled = !isDiscardButton && (explicitEnabled || (!nativeDisabled && ariaDisabled !== "true" && dataDisabled !== "true" && !loading));
                             const waitingForDraftAfterGesture = Boolean(tiktokState.awaitingDraftAfterUserGesture);
-                            const tiktokUploadReadyForDraft = fileReadySignal || tiktokUploadCompletionSignal || tiktokNetworkReadySignal || tiktokSaveDraftUiReady;
+                            const tiktokUploadReadyForDraft = !uploadInProgressSignal && (
+                                tiktokSaveDraftUiReady
+                                || tiktokUploadCompletionSignal
+                                || tiktokNetworkReadySignal
+                                || uploadCompleteUiSignal
+                            );
                             const canSubmitNormally = captionReady && tiktokUploadReadyForDraft && tiktokSubmitDelayElapsed && actionSpacingElapsed && tiktokSubmitSpacingElapsed;
                             const canSubmitAfterGesture = waitingForDraftAfterGesture && tiktokPostEnabled && tiktokUploadReadyForDraft;
                             logActionAttempt(
