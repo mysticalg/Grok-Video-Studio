@@ -4868,8 +4868,19 @@ class MainWindow(QMainWindow):
 
         create_video_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "Create New Video", self)
         create_video_action.setToolTip("Create a new video from the current prompt in Grok.")
-        create_video_action.triggered.connect(self.start_image_generation)
+        create_video_action.triggered.connect(self.populate_video_prompt)
         self.quick_actions_toolbar.addAction(create_video_action)
+
+        create_video_from_image_action = QAction(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+            "Create video from Image",
+            self,
+        )
+        create_video_from_image_action.setToolTip(
+            "Generate image first, then pick it and continue with the image-to-video flow."
+        )
+        create_video_from_image_action.triggered.connect(self.start_image_generation)
+        self.quick_actions_toolbar.addAction(create_video_from_image_action)
 
         continue_last_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward), "Continue Last Video", self)
         continue_last_action.setToolTip("Continue from the last generated video's final frame.")
