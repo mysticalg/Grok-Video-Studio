@@ -8557,18 +8557,8 @@ class MainWindow(QMainWindow):
             phase = "submit"
 
         if phase == "pick":
-            current_url = self.browser.url().toString().strip() if self.browser is not None else ""
-            post_id = self._extract_valid_grok_post_id(current_url)
-            if post_id:
-                self._append_log(
-                    f"Variant {variant}: detected valid /imagine/post URL ({post_id}); advancing from pick to video-mode options."
-                )
-                self.manual_image_pick_clicked = True
-                self.manual_image_pick_retry_count = 0
-                self.manual_image_video_mode_retry_count = 0
-                self.manual_image_submit_retry_count = 0
-                QTimer.singleShot(700, self._poll_for_manual_image)
-                return
+            # Do not auto-advance on URL alone; image->video flow must confirm an actual generated-image pick first.
+            pass
 
         submit_attempt_allowed = phase != "submit" or not self.manual_image_submit_in_flight
 
@@ -9314,15 +9304,8 @@ class MainWindow(QMainWindow):
                                 f"postView={bool(probe_result.get('onPostView'))}"
                             )
                             self._append_log(
-                                f"Variant {current_variant}: detected post/make-video UI after empty callback ({ready_flags}); treating image pick as complete."
+                                f"Variant {current_variant}: post/make-video UI detected ({ready_flags}) but image pick is not yet confirmed; staying in pick stage."
                             )
-                            self.manual_image_pick_clicked = True
-                            self.manual_image_video_mode_selected = True
-                            self.manual_image_pick_retry_count = 0
-                            self.manual_image_video_mode_retry_count = 0
-                            self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
-                            return
                         _queue_pick_retry(status)
 
                     self._run_active_browser_javascript(pick_ready_probe_script, _after_pick_ready_probe)
