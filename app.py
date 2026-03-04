@@ -8707,6 +8707,17 @@ class MainWindow(QMainWindow):
                     }};
                     const isMakeVideoItem = (el) => /\\bmake\\s+video\\b/i.test(descriptorOf(el))
                         || /animate\\s+this\\s+image\\s+into\\s+a\\s+video/i.test(descriptorOf(el));
+                    const isPrimaryVideoActionButton = (el) => {{
+                        if (!el) return false;
+                        const tag = String(el.tagName || "").toLowerCase();
+                        if (tag !== "button") return false;
+                        const aria = ariaOf(el).toLowerCase();
+                        const text = textOf(el).toLowerCase();
+                        const descriptor = `${{aria}} ${{text}}`.trim();
+                        return /\\bmake\\s+video\\b/.test(descriptor)
+                            || /\\bcreate\\s+video\\b/.test(descriptor)
+                            || /\\bgenerate\\s+video\\b/.test(descriptor);
+                    }};
                     const looksLikeEditImageControl = (el) => /\\bedit\\s+image\\b/i.test(descriptorOf(el));
                     const isBlockedMoreOptionsControl = (el) => {{
                         if (!el) return false;
@@ -8738,18 +8749,29 @@ class MainWindow(QMainWindow):
                     }}
 
                     if (!makeVideoItemFound || !makeVideoClicked) {{
-                        const triggerCandidates = [
+                        const explicitSettingsTriggers = [
+                            ...document.querySelectorAll("button[aria-label='Settings']"),
+                            ...document.querySelectorAll("button[aria-label*='settings' i]"),
+                            ...document.querySelectorAll("button[id^='radix-'][aria-haspopup='menu']"),
                             ...document.querySelectorAll("#model-select-trigger"),
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                            .filter((el) => isVisible(el) && !el.disabled && !isSidebarControl(el));
+
+                        const triggerCandidates = [
                             ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
                             ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
                             ...document.querySelectorAll("button, [role='button']"),
-                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el) && !isSidebarControl(el));
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                            .filter((el) => isVisible(el) && !el.disabled)
+                            .filter((el) => !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el) && !isSidebarControl(el) && !isPrimaryVideoActionButton(el));
 
                         const likelyTriggers = triggerCandidates.filter((el) => {{
                             const descriptor = descriptorOf(el);
                             return /model|video|image|options|settings/i.test(descriptor) || (el.id || "") === "model-select-trigger";
                         }});
-                        const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
+                        const candidates = explicitSettingsTriggers.length
+                            ? explicitSettingsTriggers
+                            : (likelyTriggers.length ? likelyTriggers : triggerCandidates);
 
                         for (const trigger of candidates) {{
                             const opened = emulateClick(trigger);
