@@ -707,6 +707,13 @@ class UdpAutomationService:
 
                 file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
                 skip_direct_upload_probe = platform == "x" and file_size_mb > REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB
+                extension_clients_connected = bool(self.bus.clients)
+                if skip_direct_upload_probe and not extension_clients_connected:
+                    raise RuntimeError(
+                        "Large x.com uploads require an extension client connected to the browser host "
+                        f"(sizeMb={round(file_size_mb, 2)} > {REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB:.0f}Mb); "
+                        "remote CDP cannot transfer this file and no extension client is connected"
+                    )
                 input_locators = [
                     page.locator("input[type='file']"),
                     page.locator("input[type='file'][accept*='video']"),
@@ -754,10 +761,11 @@ class UdpAutomationService:
                         last_err = str(exc)
 
                 if skip_direct_upload_probe:
-                    last_err = (
+                    skip_reason = (
                         "Locator.set_input_files skipped for x.com because remote CDP cannot transfer "
                         f"files larger than {REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB:.0f}Mb"
                     )
+                    last_err = f"{last_err}; {skip_reason}" if last_err else skip_reason
 
                 await _prime_upload_surface()
                 probe_rounds = 8 if platform == "tiktok" else 24
