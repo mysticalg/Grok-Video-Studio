@@ -14906,13 +14906,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Video", "The selected generated video file no longer exists on disk.")
             return
 
-        _, description, hashtags, _, accepted, x_post_preview = self._show_upload_dialog("X", title_enabled=False)
+        _, description, _, _, accepted, _ = self._show_upload_dialog("X", title_enabled=False)
         if not accepted:
             return
 
-        caption_text = x_post_preview or self._compose_x_post_text(description, hashtags)
+        caption_text = description.strip()
         if not caption_text:
-            caption_text = self._compose_x_post_text(self.ai_social_metadata.x_post or self.ai_social_metadata.description, self.ai_social_metadata.hashtags)
+            caption_text = str(self.ai_social_metadata.description or "").strip()
 
         self._run_social_upload_via_mode(
             platform_name="X",
