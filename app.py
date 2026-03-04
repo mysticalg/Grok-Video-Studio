@@ -8848,8 +8848,7 @@ class MainWindow(QMainWindow):
                     const videoSelected = makeVideoClicked
                         || selectedViaMarker
                         || promptInputVisible
-                        || generationInProgress
-                        || (onPostView && submitButtonVisible);
+                        || generationInProgress;
 
                     if (!videoSelected) {{
                         return {{
@@ -8866,9 +8865,13 @@ class MainWindow(QMainWindow):
                         }};
                     }}
 
+                    const resolvedStatus = makeVideoClicked || selectedViaMarker
+                        ? "video-mode-selected"
+                        : (promptInputVisible || generationInProgress ? "video-mode-ready" : "waiting-for-video-mode");
+
                     return {{
-                        ok: true,
-                        status: makeVideoClicked || selectedViaMarker ? "video-mode-selected" : "video-mode-ready",
+                        ok: resolvedStatus !== "waiting-for-video-mode",
+                        status: resolvedStatus,
                         optionsOpened,
                         videoItemFound: makeVideoItemFound,
                         videoClicked: makeVideoClicked,
