@@ -1015,7 +1015,8 @@ class UdpAutomationService:
                 return await self.bus.send_cmd(client_id, wrap_cmd(name, payload), timeout_s=timeout_s)
             except Exception as exc:
                 last_error = exc
-                self.bus.clients.pop(client_id, None)
+                if self._is_connection_closed_error(exc) or "client not connected" in str(exc).lower():
+                    self.bus.clients.pop(client_id, None)
                 continue
         raise RuntimeError(str(last_error) if last_error else "No extension client connected")
 
