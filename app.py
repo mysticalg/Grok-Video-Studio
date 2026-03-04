@@ -3001,10 +3001,19 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(prompt_group)
 
         self.generate_image_btn = QPushButton("🎬 Create New Video")
-        self.generate_image_btn.setToolTip("Build and paste an image prompt into the Grok browser tab.")
+        self.generate_image_btn.setToolTip("Build and paste a video prompt into the Grok browser tab.")
         self.generate_image_btn.setCheckable(True)
         self.generate_image_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.generate_image_btn, self.start_image_generation)
+            lambda: self._run_with_button_feedback(self.generate_image_btn, self.populate_video_prompt)
+        )
+
+        self.create_video_from_image_btn = QPushButton("🖼️ Create video from Image")
+        self.create_video_from_image_btn.setToolTip(
+            "Generate an image first, then switch that image to Make Video and download the result."
+        )
+        self.create_video_from_image_btn.setCheckable(True)
+        self.create_video_from_image_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.create_video_from_image_btn, self.start_image_generation)
         )
 
         self.multi_video_btn = QPushButton("🎞️ Multi Video")
@@ -3109,6 +3118,7 @@ class MainWindow(QMainWindow):
         )
 
         self.generate_image_btn.setMaximumWidth(170)
+        self.create_video_from_image_btn.setMaximumWidth(210)
         self.multi_video_btn.setMaximumWidth(170)
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
@@ -3497,12 +3507,13 @@ class MainWindow(QMainWindow):
         grok_browser_layout = QVBoxLayout(self.grok_browser_tab)
         grok_browser_controls = QGridLayout()
         grok_browser_controls.addWidget(self.generate_image_btn, 0, 0)
-        grok_browser_controls.addWidget(self.multi_video_btn, 0, 1)
-        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 2)
-        grok_browser_controls.addWidget(self.continue_image_btn, 0, 3)
-        grok_browser_controls.addWidget(self.browser_home_btn, 0, 4)
-        grok_browser_controls.addWidget(self.browser_external_btn, 0, 5)
-        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 6)
+        grok_browser_controls.addWidget(self.create_video_from_image_btn, 0, 1)
+        grok_browser_controls.addWidget(self.multi_video_btn, 0, 2)
+        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 3)
+        grok_browser_controls.addWidget(self.continue_image_btn, 0, 4)
+        grok_browser_controls.addWidget(self.browser_home_btn, 0, 5)
+        grok_browser_controls.addWidget(self.browser_external_btn, 0, 6)
+        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 7)
         grok_browser_controls.addWidget(self.multi_video_count_label, 1, 0)
         grok_browser_controls.addWidget(self.multi_video_count_spin, 1, 1)
         grok_browser_controls.addWidget(self.multi_video_manual_pick_checkbox, 1, 2, 1, 3)
