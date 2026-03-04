@@ -8584,6 +8584,17 @@ class MainWindow(QMainWindow):
                     el.dispatchEvent(new MouseEvent("click", common));
                     return true;
                 }};
+                const emulateActivate = (el) => {{
+                    if (!el || !isActuallyVisible(el) || el.disabled) return false;
+                    let fired = emulateClick(el);
+                    try {{ el.focus({{ preventScroll: true }}); fired = true; }} catch (_) {{}}
+                    try {{ el.click(); fired = true; }} catch (_) {{}}
+                    try {{ el.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Enter", code: "Enter", bubbles: true }})); fired = true; }} catch (_) {{}}
+                    try {{ el.dispatchEvent(new KeyboardEvent("keyup", {{ key: "Enter", code: "Enter", bubbles: true }})); fired = true; }} catch (_) {{}}
+                    try {{ el.dispatchEvent(new KeyboardEvent("keydown", {{ key: " ", code: "Space", bubbles: true }})); fired = true; }} catch (_) {{}}
+                    try {{ el.dispatchEvent(new KeyboardEvent("keyup", {{ key: " ", code: "Space", bubbles: true }})); fired = true; }} catch (_) {{}}
+                    return fired;
+                }};
 
                 if (phase === "pick") {{
                     const scrollBottomNow = () => {{
