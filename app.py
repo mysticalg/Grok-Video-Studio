@@ -17218,26 +17218,14 @@ class MainWindow(QMainWindow):
     def _extract_hashtag_keys(self, text: str) -> set[str]:
         return {match.lower() for match in re.findall(r"#([A-Za-z0-9_]+)", str(text or ""))}
 
-    def _dedupe_hashtags_in_text(self, text: str) -> str:
-        value = " ".join(str(text or "").split())
-        if not value:
-            return ""
+    def _extract_hashtag_tokens_from_text(self, text: str) -> list[str]:
+        prepared = re.sub(r"(?<=[A-Za-z0-9_])#", " #", str(text or ""))
+        return self._normalize_hashtag_tokens(re.findall(r"#([A-Za-z0-9_]+)", prepared))
 
-        # Handle adjacent hashtags such as "#tag1#tag2" so each token can be deduped.
-        value = re.sub(r"(?<=[A-Za-z0-9_])#", " #", value)
-
-        seen: set[str] = set()
-
-        def _replace(match: re.Match[str]) -> str:
-            token = match.group(1)
-            key = token.lower()
-            if key in seen:
-                return ""
-            seen.add(key)
-            return f"#{token}"
-
-        value = re.sub(r"#([A-Za-z0-9_]+)", _replace, value)
-        return " ".join(value.split()).strip()
+    def _strip_hashtags_from_text(self, text: str) -> str:
+        prepared = re.sub(r"(?<=[A-Za-z0-9_])#", " #", str(text or ""))
+        without_tags = re.sub(r"(?:^|\s)#[A-Za-z0-9_]+", " ", prepared)
+        return " ".join(without_tags.split()).strip()
 
     def _compose_social_text(self, base_text: str, hashtags: list[str]) -> str:
         tag_text = " ".join(self._normalize_hashtag_tokens(hashtags))
@@ -17247,28 +17235,25 @@ class MainWindow(QMainWindow):
         return combined.strip()
 
     def _compose_x_post_text(self, base_text: str, hashtags: list[str], max_chars: int = 275) -> str:
-        text = self._dedupe_hashtags_in_text(base_text)
-        existing_tag_keys = self._extract_hashtag_keys(text)
-        tag_tokens = [
-            token
-            for token in self._normalize_hashtag_tokens(hashtags)
-            if token.lstrip("#").lower() not in existing_tag_keys
-        ]
+        description = self._strip_hashtags_from_text(base_text)
+        embedded_tokens = self._extract_hashtag_tokens_from_text(base_text)
 
-        if not text and not tag_tokens:
+        tag_tokens = self._normalize_hashtag_tokens([*embedded_tokens, *hashtags])
+
+        if not description and not tag_tokens:
             return ""
 
         if not tag_tokens:
-            return text[:max_chars].rstrip()
+            return description[:max_chars].rstrip()
 
         while tag_tokens:
             tag_text = " ".join(tag_tokens)
-            combined = f"{text} {tag_text}".strip() if text else tag_text
+            combined = f"{description}\n\n{tag_text}".strip() if description else tag_text
             if len(combined) <= max_chars:
-                return self._dedupe_hashtags_in_text(combined)
+                return combined
             tag_tokens.pop()
 
-        return self._dedupe_hashtags_in_text(text[:max_chars].rstrip())
+        return description[:max_chars].rstrip()
 
     def _tiktok_overlay_text(self) -> str:
         raw_text = str(self.ai_social_metadata.tiktok_subheading or "").strip()
