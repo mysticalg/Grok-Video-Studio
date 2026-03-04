@@ -8726,7 +8726,7 @@ class MainWindow(QMainWindow):
                         return hasPopup && /\\bmore\\s+options\\b/.test(descriptor);
                     }};
                     const getMenuItems = () => [
-                        ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitemradio'], [role='menuitem'], [role='option'], [data-radix-collection-item]")
+                        ...document.querySelectorAll("[role='menuitem'][data-radix-collection-item], [role='menuitem']")
                     ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
 
                     const makeVideoFromOpenMenu = async () => {{
@@ -8940,9 +8940,12 @@ class MainWindow(QMainWindow):
 
                 const submitCandidates = [...document.querySelectorAll("button[type='submit'], button[aria-label], button")]
                     .filter((btn) => isVisible(btn) && !isInsideInvisibleDiv(btn) && !btn.disabled)
-                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"));
+                    .filter((btn) => !btn.closest("[role='dialog'][aria-modal='true']"))
+                    .filter((btn) => !btn.closest("div.w-full.mx-auto"));
                 const submitButton = submitCandidates.find((btn) => {{
                     if (btn.closest("[role='listitem'], li, article, figure")) return false;
+                    if (btn.closest("[role='menu'], [data-radix-menu-content], [role='menuitem']")) return false;
+                    if (String(btn.getAttribute("aria-haspopup") || "").toLowerCase() === "menu") return false;
                     const aria = String(btn.getAttribute("aria-label") || "").trim();
                     const txt = String(btn.textContent || "").trim();
                     const raw = `${{aria}} ${{txt}}`.trim().toLowerCase();
