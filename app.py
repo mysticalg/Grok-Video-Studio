@@ -17197,8 +17197,17 @@ class MainWindow(QMainWindow):
         normalized: list[str] = []
         seen: set[str] = set()
         for tag in hashtags:
-            cleaned = str(tag).strip().lstrip("#")
-            if cleaned:
+            raw = str(tag or "").strip()
+            if not raw:
+                continue
+
+            # Some metadata sources can return multiple hashtags inside one
+            # list entry (for example: "#tag1 #tag2" or "tag1#tag2").
+            # Split those entries so downstream dedupe works per hashtag.
+            for part in re.split(r"[\s,]+", raw.replace("#", " #")):
+                cleaned = part.strip().lstrip("#")
+                if not cleaned or not re.fullmatch(r"[A-Za-z0-9_]+", cleaned):
+                    continue
                 key = cleaned.lower()
                 if key in seen:
                     continue
