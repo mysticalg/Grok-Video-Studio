@@ -735,7 +735,7 @@ async function handleCmd(msg) {
               clearEditable(tiktokEl);
               await wait(150);
             }
-            const filled = matches() || setValue(tiktokEl, text);
+            const filled = matches() || await typeTextIntoEditable(tiktokEl, text);
             await wait(120);
             out[rawKey] = Boolean(filled) && matches();
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
