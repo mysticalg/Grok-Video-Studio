@@ -9391,11 +9391,15 @@ class MainWindow(QMainWindow):
                         generation_signal_probe = bool(isinstance(probe_result, dict) and probe_result.get("generationSignalVisible"))
                         has_video_source_probe = bool(isinstance(probe_result, dict) and probe_result.get("hasVideoSource"))
                         can_download_probe = bool(isinstance(probe_result, dict) and probe_result.get("canDownload"))
-                        if on_post_view_probe and (generation_signal_probe or has_video_source_probe or can_download_probe):
+                        make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
+                        prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
+                        download_probe_ready = can_download_probe and not make_video_visible and not prompt_visible
+                        if on_post_view_probe and (generation_signal_probe or has_video_source_probe or download_probe_ready):
                             self._append_log(
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
-                                f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
+                                f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}, "
+                                f"makeVideoVisible={make_video_visible}, promptVisible={prompt_visible}); "
                                 "switching to download polling to prevent duplicate submits."
                             )
                             self.manual_image_video_submit_sent = True
