@@ -8752,10 +8752,10 @@ class MainWindow(QMainWindow):
                         const explicitSettingsTriggers = [
                             ...document.querySelectorAll("button[aria-label='Settings']"),
                             ...document.querySelectorAll("button[aria-label*='settings' i]"),
-                            ...document.querySelectorAll("button[id^='radix-'][aria-haspopup='menu']"),
                             ...document.querySelectorAll("#model-select-trigger"),
                         ].filter((el, idx, arr) => arr.indexOf(el) === idx)
-                            .filter((el) => isVisible(el) && !el.disabled && !isSidebarControl(el));
+                            .filter((el) => isVisible(el) && !el.disabled)
+                            .filter((el) => !isSidebarControl(el) && !isBlockedMoreOptionsControl(el));
 
                         const triggerCandidates = [
                             ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
