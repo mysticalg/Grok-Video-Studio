@@ -731,6 +731,9 @@ async function handleCmd(msg) {
               return current === expected || current.includes(expected) || expected.includes(current);
             };
 
+            if (!matches()) {
+              clearEditable(tiktokEl);
+            }
             const filled = matches() || setValue(tiktokEl, text);
             out[rawKey] = Boolean(filled) && matches();
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
