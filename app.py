@@ -8965,7 +8965,7 @@ class MainWindow(QMainWindow):
                 let submitted = false;
                 let submitLabel = "";
                 if (submitButton) {{
-                    await sleep(ACTION_DELAY_MS);
+                    await sleep(ACTION_DELAY_MS * 2);
                     submitted = emulateClick(submitButton);
                     if (!submitted) {{
                         try {{ submitButton.click(); submitted = true; }} catch (_) {{}}
@@ -9003,7 +9003,7 @@ class MainWindow(QMainWindow):
                             )
                         else:
                             self._append_log(
-                                f"Variant {current_variant}: clicked generated image tile after Make video became available; moving to video-mode/download polling (prompt+submit disabled)."
+                                f"Variant {current_variant}: clicked generated image tile after Make video became available; setting Make Video in options."
                             )
                     self.manual_image_pick_clicked = True
                     self._run_active_browser_javascript("""
@@ -9022,7 +9022,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_pick_retry_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(1000, self._poll_for_manual_image)
+                    QTimer.singleShot(1200, self._poll_for_manual_image)
                     return
 
                 if status in ("video-mode-selected", "video-mode-ready"):
@@ -9034,21 +9034,18 @@ class MainWindow(QMainWindow):
                     make_video_visible = bool(result.get("makeVideoButtonVisible"))
                     submit_visible = bool(result.get("submitButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
-                    self._append_log(
-                        f"Variant {current_variant}: video stage ready "
-                        f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
-                        f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
-                        f"submitVisible={submit_visible}, postView={on_post_view}); "
-                        "skipping prompt+submit for test run and switching to download polling."
-                    )
+                    if not self.manual_image_video_mode_selected:
+                        self._append_log(
+                            f"Variant {current_variant}: video stage ready "
+                            f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
+                            f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
+                            f"submitVisible={submit_visible}, postView={on_post_view}); "
+                            "Make Video set in options; pausing before prompt entry."
+                        )
                     self.manual_image_video_mode_selected = True
-                    self.manual_image_video_submit_sent = True
-                    self.manual_image_submit_in_flight = False
-                    self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    self.pending_manual_download_type = "video"
-                    self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                    QTimer.singleShot(1400, self._poll_for_manual_image)
                     return
 
                 if status == "make-video-click-failed":
@@ -9070,7 +9067,7 @@ class MainWindow(QMainWindow):
 
                 if status in ("video-submit-clicked", "video-submit-already-clicked"):
                     if status == "video-submit-clicked":
-                        message = "video prompt submitted via Make video click"
+                        message = "video prompt entered and submitted after staged pauses"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
 
