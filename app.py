@@ -4266,6 +4266,20 @@ class MainWindow(QMainWindow):
         controls.addStretch(1)
         layout.addLayout(controls)
 
+        layout.addWidget(QLabel("Prompt Template"))
+        self.word_tool_prompt_template = QPlainTextEdit()
+        self.word_tool_prompt_template.setMaximumHeight(120)
+        self.word_tool_prompt_template.setPlaceholderText(
+            "Use {word_count} as a placeholder for the selected count."
+        )
+        self.word_tool_prompt_template.setPlainText(
+            "Generate exactly {word_count} words as one flowing surreal sentence. "
+            "Every word must be made up and non-dictionary while still looking pronounceable in English. "
+            "No numbering, no bullet points, no intro text, no quotes, and no markdown. "
+            "Return only the generated sentence."
+        )
+        layout.addWidget(self.word_tool_prompt_template)
+
         self.word_tool_output = QPlainTextEdit()
         self.word_tool_output.setPlaceholderText("Generated surreal text will appear here...")
         layout.addWidget(self.word_tool_output, 1)
@@ -4279,16 +4293,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "AI Source Required", "Set Prompt Source to Grok API, OpenAI API, or Ollama (local).")
             return
 
+        prompt_template = self.word_tool_prompt_template.toPlainText().strip() if hasattr(self, "word_tool_prompt_template") else ""
+        if not prompt_template:
+            QMessageBox.warning(self, "Missing Prompt Template", "Please enter a prompt template for Word Tool generation.")
+            return
+
+        prompt_user = prompt_template.replace("{word_count}", str(requested_words))
         self._append_log(f"Word Tool: generating {requested_words} surreal invented words with {str(source).title()}...")
         try:
             response_text = self._call_selected_ai(
                 "You generate fictional words that look English-like but are entirely invented.",
-                (
-                    f"Generate exactly {requested_words} words as one flowing surreal sentence. "
-                    "Every word must be made up and non-dictionary while still looking pronounceable in English. "
-                    "No numbering, no bullet points, no intro text, no quotes, and no markdown. "
-                    "Return only the generated sentence."
-                ),
+                prompt_user,
             )
         except Exception as exc:
             self._append_log(f"Word Tool ERROR: {exc}")
