@@ -1143,6 +1143,27 @@ class PromptGenerationWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class WordToolGenerationWorker(QThread):
+    finished_text = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, requested_words: int, prompt_user: str, caller):
+        super().__init__()
+        self.requested_words = requested_words
+        self.prompt_user = prompt_user
+        self.caller = caller
+
+    def run(self) -> None:
+        try:
+            response_text = self.caller._call_selected_ai(
+                "You generate fictional words that look English-like but are entirely invented.",
+                self.prompt_user,
+            )
+            self.finished_text.emit(str(response_text).strip())
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class GenerateWorker(QThread):
     finished_video = Signal(dict)
     failed = Signal(str)
@@ -2727,6 +2748,7 @@ class MainWindow(QMainWindow):
         self.automation_chrome_instance: ChromeInstance | None = None
         self.udp_workflow_worker: UdpWorkflowWorker | None = None
         self.prompt_generation_worker: PromptGenerationWorker | None = None
+        self.word_tool_generation_worker: WordToolGenerationWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -4293,6 +4315,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "AI Source Required", "Set Prompt Source to Grok API, OpenAI API, or Ollama (local).")
             return
 
+        if self.word_tool_generation_worker and self.word_tool_generation_worker.isRunning():
+            self._append_log("Word Tool generation is already in progress.")
+            return
+
         prompt_template = self.word_tool_prompt_template.toPlainText().strip() if hasattr(self, "word_tool_prompt_template") else ""
         if not prompt_template:
             QMessageBox.warning(self, "Missing Prompt Template", "Please enter a prompt template for Word Tool generation.")
@@ -4300,19 +4326,34 @@ class MainWindow(QMainWindow):
 
         prompt_user = prompt_template.replace("{word_count}", str(requested_words))
         self._append_log(f"Word Tool: generating {requested_words} surreal invented words with {str(source).title()}...")
-        try:
-            response_text = self._call_selected_ai(
-                "You generate fictional words that look English-like but are entirely invented.",
-                prompt_user,
-            )
-        except Exception as exc:
-            self._append_log(f"Word Tool ERROR: {exc}")
-            QMessageBox.critical(self, "Word Tool Generation Failed", str(exc))
-            return
 
+        self.word_tool_generate_btn.setEnabled(False)
+        self.word_tool_generate_btn.setText("⏳ Generating...")
+
+        worker = WordToolGenerationWorker(
+            requested_words=requested_words,
+            prompt_user=prompt_user,
+            caller=self,
+        )
+        worker.finished_text.connect(lambda text, n=requested_words: self._on_word_tool_generation_success(text, n))
+        worker.failed.connect(self._on_word_tool_generation_failed)
+        worker.finished.connect(self._on_word_tool_generation_finished)
+        self.word_tool_generation_worker = worker
+        worker.start()
+
+    def _on_word_tool_generation_success(self, response_text: str, requested_words: int) -> None:
         if hasattr(self, "word_tool_output") and self.word_tool_output is not None:
-            self.word_tool_output.setPlainText(response_text.strip())
+            self.word_tool_output.setPlainText((response_text or "").strip())
         self._append_log(f"Word Tool: generation complete ({requested_words} requested words).")
+
+    def _on_word_tool_generation_failed(self, message: str) -> None:
+        self._append_log(f"Word Tool ERROR: {message}")
+        QMessageBox.critical(self, "Word Tool Generation Failed", message)
+
+    def _on_word_tool_generation_finished(self) -> None:
+        self.word_tool_generate_btn.setEnabled(True)
+        self.word_tool_generate_btn.setText("Generate Words")
+        self.word_tool_generation_worker = None
 
     def _build_model_api_settings_dialog(self) -> None:
         self.model_api_settings_dialog = QDialog(self)
