@@ -9074,6 +9074,37 @@ class MainWindow(QMainWindow):
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
+                    if (manualSinglePickMode && onPostView) {{
+                        let refreshState = null;
+                        try {{
+                            const raw = String(window.sessionStorage?.getItem("__grokManualPostRefreshState") || "");
+                            refreshState = raw ? JSON.parse(raw) : null;
+                        }} catch (_) {{
+                            refreshState = null;
+                        }}
+
+                        const stateToken = Number(refreshState?.token || 0);
+                        const refreshedAt = Number(refreshState?.refreshedAt || 0);
+                        const now = Date.now();
+                        if (stateToken !== Number(submitToken || 0)) {{
+                            try {{
+                                window.sessionStorage?.setItem(
+                                    "__grokManualPostRefreshState",
+                                    JSON.stringify({{ token: Number(submitToken || 0), refreshedAt: now }})
+                                );
+                            }} catch (_) {{}}
+                            try {{
+                                window.location.reload();
+                            }} catch (_) {{}}
+                            return {{ ok: false, status: "manual-post-refreshing", onPostView: true }};
+                        }}
+
+                        const elapsed = Math.max(0, now - refreshedAt);
+                        if (elapsed < 2000) {{
+                            return {{ ok: false, status: "manual-post-refresh-wait", onPostView: true, waitMs: 2000 - elapsed }};
+                        }}
+                    }}
+
                     const promptSelectors = [
                         "textarea[placeholder*='Type to customize video' i]",
                         "input[placeholder*='Type to customize video' i]",
@@ -9155,6 +9186,11 @@ class MainWindow(QMainWindow):
                                 break;
                             }}
                         }}
+                    }}
+
+                    if (menuAttempt.item) {{
+                        makeVideoClicked = emulateClick(menuAttempt.item);
+                        if (makeVideoClicked) await sleep(ACTION_DELAY_MS);
                     }}
 
                     const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
@@ -9680,6 +9716,22 @@ class MainWindow(QMainWindow):
                 return
 
             if not self.manual_image_video_mode_selected:
+                if status in ("manual-post-refreshing", "manual-post-refresh-wait"):
+                    if status == "manual-post-refreshing":
+                        self._append_log(
+                            f"Variant {current_variant}: manual pick detected on /post; refreshing post page before selecting video options."
+                        )
+                        QTimer.singleShot(1000, self._poll_for_manual_image)
+                        return
+
+                    wait_ms = int(result.get("waitMs") or 750) if isinstance(result, dict) else 750
+                    wait_ms = max(250, min(wait_ms, 2200))
+                    self._append_log(
+                        f"Variant {current_variant}: post page refreshed; waiting {wait_ms}ms before opening video options."
+                    )
+                    QTimer.singleShot(wait_ms, self._poll_for_manual_image)
+                    return
+
                 if status == "waiting-for-video-mode":
                     generation_state_probe_script = r"""
                         (() => {
