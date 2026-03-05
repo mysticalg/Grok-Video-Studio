@@ -9198,27 +9198,47 @@ class MainWindow(QMainWindow):
                     }}
 
                     if (!makeVideoItemFound) {{
-                        const triggerCandidates = [
-                            ...document.querySelectorAll("#model-select-trigger"),
-                            ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
-                            ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
-                            ...document.querySelectorAll("button, [role='button']"),
-                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el) && !isSidebarControl(el));
-
-                        const likelyTriggers = triggerCandidates.filter((el) => {{
-                            const descriptor = descriptorOf(el);
-                            return /model|video|image|options|settings/i.test(descriptor) || (el.id || "") === "model-select-trigger";
-                        }});
-                        const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
-
-                        for (const trigger of candidates) {{
-                            const opened = emulateClick(trigger);
-                            optionsOpened = optionsOpened || opened;
+                        if (manualSinglePickMode) {{
+                            const settingsButton = [
+                                ...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]"),
+                                ...document.querySelectorAll("button#radix-_r_2i_"),
+                            ].find((el) => isActuallyVisible(el) && !el.disabled) || null;
+                            if (!settingsButton) {{
+                                return {{ ok: false, status: "strict-settings-button-missing", onPostView }};
+                            }}
+                            optionsOpened = emulateClick(settingsButton);
+                            if (!optionsOpened) {{
+                                return {{ ok: false, status: "strict-settings-button-click-failed", onPostView }};
+                            }}
                             await sleep(ACTION_DELAY_MS);
                             menuAttempt = findMakeVideoInOpenMenu();
-                            if (menuAttempt.item) {{
-                                makeVideoItemFound = true;
-                                break;
+                            if (!menuAttempt.item) {{
+                                return {{ ok: false, status: "strict-menu-make-video-missing", onPostView }};
+                            }}
+                            makeVideoItemFound = true;
+                        }} else {{
+                            const triggerCandidates = [
+                                ...document.querySelectorAll("#model-select-trigger"),
+                                ...document.querySelectorAll("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']"),
+                                ...document.querySelectorAll("button[aria-label*='option' i], [role='button'][aria-label*='option' i], button[aria-label*='setting' i], [role='button'][aria-label*='setting' i]"),
+                                ...document.querySelectorAll("button, [role='button']"),
+                            ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el) && !looksLikeEditImageControl(el) && !isBlockedMoreOptionsControl(el) && !isSidebarControl(el));
+
+                            const likelyTriggers = triggerCandidates.filter((el) => {{
+                                const descriptor = descriptorOf(el);
+                                return /model|video|image|options|settings/i.test(descriptor) || (el.id || "") === "model-select-trigger";
+                            }});
+                            const candidates = likelyTriggers.length ? likelyTriggers : triggerCandidates;
+
+                            for (const trigger of candidates) {{
+                                const opened = emulateClick(trigger);
+                                optionsOpened = optionsOpened || opened;
+                                await sleep(ACTION_DELAY_MS);
+                                menuAttempt = findMakeVideoInOpenMenu();
+                                if (menuAttempt.item) {{
+                                    makeVideoItemFound = true;
+                                    break;
+                                }}
                             }}
                         }}
                     }}
@@ -9318,31 +9338,23 @@ class MainWindow(QMainWindow):
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
                 await sleep(ACTION_DELAY_MS);
-                let dispatched = false;
-                const enterCommon = {{ key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true }};
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keydown", enterCommon)); dispatched = true; }} catch (_) {{}}
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keypress", enterCommon)); dispatched = true; }} catch (_) {{}}
-                try {{ promptInput.dispatchEvent(new KeyboardEvent("keyup", enterCommon)); dispatched = true; }} catch (_) {{}}
-                if (!dispatched) {{
-                    try {{
-                        const form = promptInput.closest("form");
-                        if (form && typeof form.requestSubmit === "function") {{
-                            form.requestSubmit();
-                            dispatched = true;
-                        }}
-                    }} catch (_) {{}}
-                }}
+                const makeVideoSubmitBtn = [...document.querySelectorAll("button[aria-label='Make video' i], button[aria-label*='make video' i]")]
+                    .find((btn) => isActuallyVisible(btn) && !btn.disabled) || null;
+                if (!makeVideoSubmitBtn) return {{ ok: false, status: "strict-submit-make-video-button-missing" }};
+
+                const clickedSubmit = emulateClick(makeVideoSubmitBtn);
+                if (!clickedSubmit) return {{ ok: false, status: "strict-submit-make-video-click-failed" }};
 
                 const postUrlNow = String((window.location && window.location.href) || "");
                 const onPostUrlNow = /\\/imagine\\/post\\//i.test(postUrlNow);
-                if (dispatched) window.__grokManualVideoSubmitToken = submitToken;
+                window.__grokManualVideoSubmitToken = submitToken;
                 return {{
-                    ok: dispatched,
-                    status: dispatched ? "video-submit-enter-dispatched" : "video-submit-enter-failed",
-                    buttonLabel: "enter-keypress",
+                    ok: true,
+                    status: "video-submit-clicked",
+                    buttonLabel: "make-video-button",
                     filledLength: typedValue.length,
                     onPostUrlNow,
-                    makeVideoFound: false,
+                    makeVideoFound: true,
                 }};
             }})()
         """
@@ -9355,6 +9367,16 @@ class MainWindow(QMainWindow):
 
             if isinstance(result, dict) and result.get("ok"):
                 status = result.get("status") or "ok"
+                if status in (
+                    "strict-settings-button-missing",
+                    "strict-settings-button-click-failed",
+                    "strict-menu-make-video-missing",
+                    "strict-submit-make-video-button-missing",
+                    "strict-submit-make-video-click-failed",
+                ):
+                    self._abort_manual_create_video_polling(current_variant, status)
+                    return
+
                 if status == "generated-image-clicked":
                     if not self.manual_image_pick_clicked:
                         if isinstance(result, dict) and result.get("detectedViaUrl"):
@@ -9466,6 +9488,18 @@ class MainWindow(QMainWindow):
                     return
 
             status = result.get("status") if isinstance(result, dict) else "callback-empty"
+            if status in (
+                "strict-settings-button-missing",
+                "strict-settings-button-click-failed",
+                "strict-menu-make-video-missing",
+                "strict-submit-make-video-button-missing",
+                "strict-submit-make-video-click-failed",
+                "prompt-fill-empty",
+                "image-clicked-waiting-prompt-input",
+            ):
+                self._abort_manual_create_video_polling(current_variant, status)
+                return
+
             if status == "enter-dispatched":
                 self._append_log(
                     f"Variant {current_variant}: Enter key dispatched in video prompt; switching to download polling to avoid duplicate submits."
@@ -9826,11 +9860,11 @@ class MainWindow(QMainWindow):
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
                                 f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
-                                "still forcing submit stage so the prompt is re-filled and Make Video is clicked again."
+                                "running strict Settings → Make Video → prompt → Make video path."
                             )
                             self.manual_image_submit_in_flight = False
                             self.manual_image_submit_in_flight_since = 0.0
-                            self.manual_image_video_mode_selected = True
+                            self.manual_image_video_mode_selected = False
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
                             QTimer.singleShot(700, self._poll_for_manual_image)
@@ -9855,6 +9889,13 @@ class MainWindow(QMainWindow):
                                 )
                                 self.manual_image_video_mode_retry_count = 0
                                 QTimer.singleShot(1800, self._poll_for_manual_image)
+                                return
+
+                            if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
+                                self._abort_manual_create_video_polling(
+                                    current_variant,
+                                    f"video-mode validation timeout ({status}) in strict manual flow",
+                                )
                                 return
 
                             self._append_log(
@@ -9905,6 +9946,13 @@ class MainWindow(QMainWindow):
                         )
                         self.manual_image_video_mode_retry_count = 0
                         QTimer.singleShot(1800, self._poll_for_manual_image)
+                        return
+
+                    if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
+                        self._abort_manual_create_video_polling(
+                            current_variant,
+                            f"video-mode validation timeout ({status}) in strict manual flow",
+                        )
                         return
 
                     self._append_log(
@@ -12282,6 +12330,26 @@ class MainWindow(QMainWindow):
             self.multi_video_download_timer.start(1200)
 
         QTimer.singleShot(200, _finish_download)
+
+    def _abort_manual_create_video_polling(self, variant: int, reason: str) -> None:
+        self._append_log(
+            f"ERROR: Variant {variant}: create-video automation stopped ({reason}). No fallback path will be used; restart manually."
+        )
+        self.manual_generation_queue.clear()
+        self.manual_download_poll_timer.stop()
+        self.multi_video_download_timer.stop()
+        self._clear_manual_direct_download_tracking()
+        self.pending_manual_variant_for_download = None
+        self.pending_manual_download_type = None
+        self.pending_manual_image_prompt = None
+        self.manual_image_pick_clicked = False
+        self.manual_image_video_mode_selected = False
+        self.manual_image_video_submit_sent = False
+        self.manual_image_submit_in_flight = False
+        self.manual_image_submit_in_flight_since = 0.0
+        self.manual_image_pick_retry_count = 0
+        self.manual_image_video_mode_retry_count = 0
+        self.manual_image_submit_retry_count = 0
 
     def _abort_manual_video_generation_due_to_moderation(self, variant: int, reason: str) -> None:
         self._append_log(
