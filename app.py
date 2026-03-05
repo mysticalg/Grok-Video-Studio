@@ -8747,6 +8747,31 @@ class MainWindow(QMainWindow):
             return
 
         prompt = self.pending_manual_image_prompt or ""
+
+        if (
+            not self.manual_image_pick_clicked
+            and self.manual_single_video_manual_pick
+            and not self.multi_video_mode_active
+        ):
+            active_browser = getattr(self, "browser", None)
+            current_url = ""
+            try:
+                if active_browser is not None:
+                    current_url = active_browser.url().toString()
+            except Exception:
+                current_url = ""
+            post_id_from_browser = self._extract_valid_grok_post_id(current_url)
+            if post_id_from_browser:
+                self._append_log(
+                    f"Variant {variant}: detected manual pick from active browser URL ({post_id_from_browser}); proceeding to video-mode options."
+                )
+                self.manual_image_pick_clicked = True
+                self.manual_image_pick_retry_count = 0
+                self.manual_image_video_mode_retry_count = 0
+                self.manual_image_submit_retry_count = 0
+                QTimer.singleShot(250, self._poll_for_manual_image)
+                return
+
         if not self.manual_image_pick_clicked:
             phase = "pick"
         elif not self.manual_image_video_mode_selected:
@@ -8797,17 +8822,34 @@ class MainWindow(QMainWindow):
                 }};
 
                 if (phase === "pick") {{
+                    const extractPostId = (raw) => {{
+                        const text = String(raw || "").trim();
+                        if (!text) return "";
+                        const match = text.match(/(?:[/]imagine)?[/]post[/]([^/?#]+)/i);
+                        if (!match) return "";
+                        const candidate = String(match[1] || "").trim();
+                        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)) return "";
+                        if (/^placeholder-/i.test(candidate)) return "";
+                        return candidate;
+                    }};
+
+                    let topHref = "";
+                    try {{
+                        topHref = String((window.top && window.top.location && window.top.location.href) || "");
+                    }} catch (_) {{}}
+                    const href = String((location && location.href) || "");
                     const path = String((location && location.pathname) || "");
-                    const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
-                    const postId = postMatch ? String(postMatch[1] || "") : "";
-                    const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
-                        && !/^placeholder-/i.test(postId);
+                    const docUrl = String((document && document.URL) || "");
+                    const postId = extractPostId(href) || extractPostId(path) || extractPostId(docUrl) || extractPostId(topHref);
+                    const onPostView = !!postId;
                     if (onPostView) {{
                         return {{
                             ok: true,
                             status: "generated-image-clicked",
                             detectedViaUrl: true,
                             path,
+                            href,
+                            topHref,
                             postId,
                             manualPickMode: manualSinglePickMode,
                         }};
@@ -9208,6 +9250,13 @@ class MainWindow(QMainWindow):
                 return
 
             if not self.manual_image_pick_clicked:
+                if self.manual_single_video_manual_pick and not self.multi_video_mode_active and status == "waiting-for-manual-image-pick":
+                    self._append_log(
+                        f"Variant {current_variant}: waiting for manual image pick. Open a generated image so URL changes to /imagine/post/<id> (or /post/<id>)."
+                    )
+                    QTimer.singleShot(1200, self._poll_for_manual_image)
+                    return
+
                 def _queue_pick_retry(current_status: str) -> None:
                     self.manual_image_pick_retry_count += 1
                     if self.manual_image_pick_retry_count >= int(self.automation_retry_attempts.value()):
@@ -9226,13 +9275,6 @@ class MainWindow(QMainWindow):
                             f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
                         )
                         self.manual_image_pick_retry_count = 0
-                    if self.manual_single_video_manual_pick and not self.multi_video_mode_active and current_status == "waiting-for-manual-image-pick":
-                        self._append_log(
-                            f"Variant {current_variant}: waiting for manual image pick. Open a generated image so URL changes to /imagine/post/<id>."
-                        )
-                        QTimer.singleShot(1200, self._poll_for_manual_image)
-                        return
-
                     self._append_log(
                         f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
                     )
