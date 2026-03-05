@@ -7291,9 +7291,9 @@ class MainWindow(QMainWindow):
     def _active_manual_browser_target(self) -> str:
         return "sora" if self.browser is self.sora_browser else "grok"
 
-    def _return_embedded_browser_after_download(self) -> None:
-        redirect_target = (self.pending_manual_redirect_target or "grok").lower()
-        if redirect_target == "sora":
+    def _return_embedded_browser_after_download(self, redirect_target: str | None = None) -> None:
+        target = str(redirect_target or self.pending_manual_redirect_target or "grok").lower()
+        if target == "sora":
             self._append_log("Download complete; returning embedded browser to sora.chatgpt.com/drafts.")
             QTimer.singleShot(0, self.show_sora_browser_page)
             return
@@ -11865,7 +11865,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"Multi Video: starting background download polling for {len(self.multi_video_pending_downloads)} videos."
             )
-            self._return_embedded_browser_after_download()
+            self._return_embedded_browser_after_download(redirect_target=redirect_target)
         self.multi_video_download_timer.start(0)
 
     def _poll_multi_video_downloads(self) -> None:
@@ -12014,9 +12014,10 @@ class MainWindow(QMainWindow):
 
     def _start_manual_direct_download(self, variant: int, source_url: str) -> bool:
         output_path: Path | None = None
+        redirect_target = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
         try:
             self.download_dir.mkdir(parents=True, exist_ok=True)
-            browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+            browser_provider = redirect_target
             filename = self._build_session_download_filename("video", variant, "mp4", provider_override=browser_provider)
             output_path = self.download_dir / filename
             final_url = _ensure_public_download_query(source_url)
@@ -12085,7 +12086,7 @@ class MainWindow(QMainWindow):
 
         self.manual_public_not_ready_count = 0
         self.manual_public_moderation_count = 0
-        self._complete_manual_video_download(download_path, variant)
+        self._complete_manual_video_download(download_path, variant, redirect_target=redirect_target)
         return True
 
     @staticmethod
@@ -12398,7 +12399,7 @@ class MainWindow(QMainWindow):
                         handle.write(chunk)
         return output_path
 
-    def _complete_manual_video_download(self, video_path: Path, variant: int) -> None:
+    def _complete_manual_video_download(self, video_path: Path, variant: int, redirect_target: str | None = None) -> None:
         completed_download_type = str(self.pending_manual_download_type or "video").strip().lower() or "video"
         self._clear_manual_direct_download_tracking()
         self._advance_automation_counter_tracking()
@@ -12411,7 +12412,7 @@ class MainWindow(QMainWindow):
                 "source_url": "browser-session",
             }
         )
-        self._return_embedded_browser_after_download()
+        self._return_embedded_browser_after_download(redirect_target=redirect_target)
         self.pending_manual_variant_for_download = None
         self.pending_manual_download_type = None
         self.pending_manual_image_prompt = None
@@ -12503,6 +12504,7 @@ class MainWindow(QMainWindow):
         download_type = self.pending_manual_download_type or "video"
         extension = self._resolve_download_extension(download, download_type)
         browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+        download_redirect_target = browser_provider
         filename = self._build_session_download_filename(
             download_type,
             variant,
@@ -12572,7 +12574,7 @@ class MainWindow(QMainWindow):
                     self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                     return
 
-                self._complete_manual_video_download(video_path, variant)
+                self._complete_manual_video_download(video_path, variant, redirect_target=download_redirect_target)
             elif state == download.DownloadState.DownloadInterrupted:
                 reason_text = ""
                 try:
