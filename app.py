@@ -2354,6 +2354,7 @@ class AutomationRuntimeWorker(QThread):
         self.cdp_controller: CDPController | None = None
         self.udp_service: UdpAutomationService | None = None
         self._udp_started = False
+        self.automation_flow_pages: dict[str, Any] = {}
 
     def run(self) -> None:
         self.loop = asyncio.new_event_loop()
@@ -2397,35 +2398,73 @@ class AutomationRuntimeWorker(QThread):
             return "already-connected"
         return self.connect_cdp()
 
-    def open_url_in_automation_chrome(self, url: str) -> str:
+    def open_url_in_automation_chrome(
+        self,
+        url: str,
+        *,
+        reuse_tab: bool = True,
+        flow_scope: str | None = None,
+        force_new_tab: bool = False,
+    ) -> str:
         target_url = str(url or "").strip()
         if not target_url:
             raise ValueError("URL is required")
         if self.chrome_instance is None:
             self.start_chrome()
 
+        scope_key = str(flow_scope or "").strip().lower()
+
         async def _open() -> str:
             if self.cdp_controller is None:
                 self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
-            page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=True)
+
+            page = None
+            if scope_key:
+                scoped_page = self.automation_flow_pages.get(scope_key)
+                if scoped_page is not None and not scoped_page.is_closed() and not force_new_tab:
+                    page = scoped_page
+
+            if page is None:
+                if force_new_tab:
+                    page = await self.cdp_controller.create_new_page(target_url)
+                else:
+                    page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=reuse_tab)
+
             await self.cdp_controller.navigate(page, target_url)
+
+            if scope_key:
+                self.automation_flow_pages[scope_key] = page
+
             return page.url or target_url
 
         opened_url = self._run_coro(_open())
         self.log.emit(f"Automation Chrome opened URL: {opened_url}")
         return opened_url
 
-    def run_javascript_in_automation_chrome(self, url: str, script: str) -> Any:
+    def run_javascript_in_automation_chrome(self, url: str, script: str, *, flow_scope: str | None = None) -> Any:
         target_url = str(url or "").strip()
         if not target_url:
             raise ValueError("URL is required")
         if self.chrome_instance is None:
             self.start_chrome()
 
+        scope_key = str(flow_scope or "").strip().lower()
+
         async def _run_script() -> Any:
             if self.cdp_controller is None:
                 self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
-            page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=True)
+
+            page = None
+            if scope_key:
+                scoped_page = self.automation_flow_pages.get(scope_key)
+                if scoped_page is not None and not scoped_page.is_closed():
+                    page = scoped_page
+
+            if page is None:
+                page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=True)
+                if scope_key:
+                    self.automation_flow_pages[scope_key] = page
+
             await page.bring_to_front()
             return await page.evaluate(script)
 
@@ -3030,7 +3069,7 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.generate_image_btn, self.populate_video_prompt)
         )
 
-        self.create_video_from_image_btn = QPushButton("🖼️ Create video from Image")
+        self.create_video_from_image_btn = QPushButton("🖼️ Create Video")
         self.create_video_from_image_btn.setToolTip(
             "Generate an image first, then switch that image to Make Video and download the result."
         )
@@ -3529,14 +3568,12 @@ class MainWindow(QMainWindow):
         self.grok_browser_tab = QWidget()
         grok_browser_layout = QVBoxLayout(self.grok_browser_tab)
         grok_browser_controls = QGridLayout()
-        grok_browser_controls.addWidget(self.generate_image_btn, 0, 0)
-        grok_browser_controls.addWidget(self.create_video_from_image_btn, 0, 1)
-        grok_browser_controls.addWidget(self.multi_video_btn, 0, 2)
-        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 3)
-        grok_browser_controls.addWidget(self.continue_image_btn, 0, 4)
-        grok_browser_controls.addWidget(self.browser_home_btn, 0, 5)
-        grok_browser_controls.addWidget(self.browser_external_btn, 0, 6)
-        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 7)
+        grok_browser_controls.addWidget(self.create_video_from_image_btn, 0, 0)
+        grok_browser_controls.addWidget(self.multi_video_btn, 0, 1)
+        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 2)
+        grok_browser_controls.addWidget(self.continue_image_btn, 0, 3)
+        grok_browser_controls.addWidget(self.browser_home_btn, 0, 4)
+        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 5)
         grok_browser_controls.addWidget(self.multi_video_count_label, 1, 0)
         grok_browser_controls.addWidget(self.multi_video_count_spin, 1, 1)
         grok_browser_controls.addWidget(self.multi_video_manual_pick_checkbox, 1, 2, 1, 3)
@@ -7326,7 +7363,23 @@ class MainWindow(QMainWindow):
         if not manual_prompt:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
-        
+
+        if self._active_ai_browser_external_control_enabled() and self._active_ai_browser_provider() == "grok":
+            try:
+                runtime = self._ensure_automation_runtime()
+                if runtime.chrome_instance is None:
+                    runtime.start_chrome()
+                runtime.ensure_cdp_connected()
+                runtime.open_url_in_automation_chrome(
+                    GROK_IMAGINE_URL,
+                    reuse_tab=False,
+                    flow_scope="grok",
+                    force_new_tab=True,
+                )
+                self._append_log("Prepared a fresh external Automation Chrome tab for Grok Create Video flow.")
+            except Exception as exc:
+                self._append_log(f"Could not prepare a fresh external Grok tab: {exc}")
+
         self._start_manual_browser_image_generation(manual_prompt, self.count.value())
 
     def start_multi_video_generation(self) -> None:
@@ -14226,8 +14279,11 @@ class MainWindow(QMainWindow):
     def _active_ai_browser_external_control_enabled(self) -> bool:
         return self._is_external_ai_browser_mode_active() and bool(getattr(self, "cdp_enabled", False))
 
+    def _active_ai_browser_provider(self) -> str:
+        return "sora" if self.browser is self.sora_browser else "grok"
+
     def _active_ai_browser_url_hint(self) -> str:
-        browser_provider = "sora" if self.browser is self.sora_browser else "grok"
+        browser_provider = self._active_ai_browser_provider()
         return SORA_DRAFTS_URL if browser_provider == "sora" else GROK_IMAGINE_URL
 
     def _run_active_browser_javascript(self, script: str, callback=None) -> None:
@@ -14238,7 +14294,11 @@ class MainWindow(QMainWindow):
                 if runtime.chrome_instance is None:
                     runtime.start_chrome()
                 runtime.ensure_cdp_connected()
-                result = runtime.run_javascript_in_automation_chrome(self._active_ai_browser_url_hint(), script)
+                result = runtime.run_javascript_in_automation_chrome(
+                    self._active_ai_browser_url_hint(),
+                    script,
+                    flow_scope=self._active_ai_browser_provider(),
+                )
             except Exception as exc:
                 self._append_log(f"External browser automation script failed: {exc}")
                 if callback is not None:
@@ -14312,7 +14372,7 @@ class MainWindow(QMainWindow):
                     if runtime.chrome_instance is None:
                         runtime.start_chrome()
                     runtime.ensure_cdp_connected()
-                    runtime.open_url_in_automation_chrome(GROK_IMAGINE_URL)
+                    runtime.open_url_in_automation_chrome(GROK_IMAGINE_URL, flow_scope="grok")
                     self._append_log(f"Opened external Automation Chrome tab: {GROK_IMAGINE_URL}")
                 except Exception as exc:
                     self._append_log(f"Failed to open external Automation Chrome tab for URL {GROK_IMAGINE_URL}: {exc}")
@@ -14337,7 +14397,7 @@ class MainWindow(QMainWindow):
                     if runtime.chrome_instance is None:
                         runtime.start_chrome()
                     runtime.ensure_cdp_connected()
-                    runtime.open_url_in_automation_chrome(SORA_DRAFTS_URL)
+                    runtime.open_url_in_automation_chrome(SORA_DRAFTS_URL, flow_scope="sora")
                     self._append_log(f"Opened external Automation Chrome tab: {SORA_DRAFTS_URL}")
                 except Exception as exc:
                     self._append_log(f"Failed to open external Automation Chrome tab for URL {SORA_DRAFTS_URL}: {exc}")

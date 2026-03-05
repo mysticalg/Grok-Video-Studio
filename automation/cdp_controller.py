@@ -114,6 +114,13 @@ class CDPController:
         await self._goto_best_effort(page, url)
         return self._ensure_dialog_guard(page)
 
+
+    async def create_new_page(self, url: str) -> Page:
+        context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+        page = await context.new_page()
+        await self._goto_best_effort(page, url)
+        return self._ensure_dialog_guard(page)
+
     async def navigate(self, page: Page, url: str) -> None:
         await page.goto(url)
 
