@@ -17,7 +17,7 @@ import math
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urlparse, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlparse, urlsplit
 from typing import Any, Callable, Iterable
 
 import requests
@@ -323,6 +323,28 @@ def _ensure_public_download_query(url: str) -> str:
     parsed = urlparse(raw)
     if not parsed.scheme or not parsed.netloc:
         return raw
+    host = str(parsed.netloc or "").lower()
+
+    # Sora draft video elements commonly expose signed preview URLs in the form:
+    #   /az/files/<prefix>_<uuid>%2Fdrvs%2Fmd%2Fraw?...sig=...
+    # The downloadable object is the signed raw blob URL:
+    #   /az/files/<uuid>%2Fraw?...sig=...
+    # Keep signed query params intact for videos.openai.com URLs.
+    if host == "videos.openai.com":
+        path = str(parsed.path or "")
+        if "/files/" in path:
+            base, _, tail = path.rpartition("/files/")
+            decoded_tail = unquote(tail)
+            sora_id_match = re.search(
+                r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+                decoded_tail,
+            )
+            if sora_id_match:
+                canonical_tail = quote(f"{sora_id_match.group(1)}/raw", safe="")
+                canonical_path = f"{base}/files/{canonical_tail}" if base else f"/files/{canonical_tail}"
+                return parsed._replace(path=canonical_path).geturl()
+        return raw
+
     # Public imagine-public media URLs should be probed without transient query params
     # such as cache/dl. Keep only the clean .mp4 URL.
     return parsed._replace(query="").geturl()
