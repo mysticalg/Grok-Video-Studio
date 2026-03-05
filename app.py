@@ -2909,6 +2909,8 @@ class MainWindow(QMainWindow):
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
+        self.manual_headless_refresh_inflight = False
+        self.manual_headless_refresh_last_at = 0.0
         self.manual_video_allow_make_click = True
         self.manual_continue_setup_in_progress = False
         self.manual_download_in_progress = False
@@ -11191,6 +11193,8 @@ class MainWindow(QMainWindow):
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
+        self.manual_headless_refresh_inflight = False
+        self.manual_headless_refresh_last_at = 0.0
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
@@ -11201,6 +11205,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_active_browser_page_before_download(self, variant: int, reason: str) -> None:
         self._append_log(f"Variant {variant}: refreshing browser page before download detection ({reason}).")
+        self._trigger_headless_post_refresh_probe(variant, reason)
         refresh_script = r"""
             (() => {
                 try {
@@ -11227,6 +11232,118 @@ class MainWindow(QMainWindow):
                 pass
 
         self._run_active_browser_javascript(refresh_script, _after_refresh)
+
+    def _trigger_headless_post_refresh_probe(self, variant: int, reason: str) -> None:
+        now = time.time()
+        if bool(getattr(self, "manual_headless_refresh_inflight", False)):
+            return
+        if (now - float(getattr(self, "manual_headless_refresh_last_at", 0.0) or 0.0)) < 2.0:
+            return
+
+        candidate_url = str(getattr(self, "manual_last_generated_post_url", "") or "").strip()
+        if not candidate_url:
+            active_browser = getattr(self, "browser", None)
+            try:
+                if active_browser is not None:
+                    current_url = str(active_browser.url().toString()).strip()
+                    if re.search(r"https?://(?:www\.)?grok\.com/imagine/post/", current_url, re.IGNORECASE):
+                        candidate_url = current_url
+            except Exception:
+                candidate_url = ""
+
+        if not re.search(r"https?://(?:www\.)?grok\.com/imagine/post/", candidate_url, re.IGNORECASE):
+            return
+
+        self.manual_last_generated_post_url = candidate_url
+        self.manual_headless_refresh_inflight = True
+        self.manual_headless_refresh_last_at = now
+        self._append_log(
+            f"Variant {variant}: issuing background headless refresh probe ({reason}) via CLI/HTTP on {candidate_url}."
+        )
+
+        def _probe_task() -> None:
+            user_agent = os.getenv("GROK_BROWSER_USER_AGENT", "").strip() or DEFAULT_EMBEDDED_CHROME_USER_AGENT
+            referrer = "https://grok.com/"
+            tool_used = "requests"
+            status_text = "not-run"
+            try:
+                curl_cmd = shutil.which("curl")
+                wget_cmd = shutil.which("wget")
+                if curl_cmd:
+                    tool_used = "curl"
+                    result = subprocess.run(
+                        [
+                            curl_cmd,
+                            "--silent",
+                            "--show-error",
+                            "--location",
+                            "--max-time",
+                            "20",
+                            "--output",
+                            os.devnull,
+                            "--user-agent",
+                            user_agent,
+                            "--referer",
+                            referrer,
+                            "--header",
+                            "Cache-Control: no-cache, no-store, max-age=0",
+                            "--header",
+                            "Pragma: no-cache",
+                            candidate_url,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        check=False,
+                    )
+                    status_text = f"exit={result.returncode}"
+                elif wget_cmd:
+                    tool_used = "wget"
+                    result = subprocess.run(
+                        [
+                            wget_cmd,
+                            "--quiet",
+                            "--tries=1",
+                            "--timeout=20",
+                            "--output-document",
+                            os.devnull,
+                            "--user-agent",
+                            user_agent,
+                            "--referer",
+                            referrer,
+                            "--header=Cache-Control: no-cache, no-store, max-age=0",
+                            "--header=Pragma: no-cache",
+                            candidate_url,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        check=False,
+                    )
+                    status_text = f"exit={result.returncode}"
+                else:
+                    response = requests.get(
+                        candidate_url,
+                        timeout=20,
+                        headers={
+                            "User-Agent": user_agent,
+                            "Referer": referrer,
+                            "Cache-Control": "no-cache, no-store, max-age=0",
+                            "Pragma": "no-cache",
+                        },
+                    )
+                    status_text = f"status={response.status_code}"
+            except Exception as exc:
+                status_text = f"error={exc}"
+            finally:
+                self.manual_headless_refresh_inflight = False
+                self._append_log(
+                    f"Variant {variant}: background headless refresh probe finished using {tool_used} ({status_text})."
+                )
+
+        threading.Thread(target=_probe_task, name="manual-post-refresh", daemon=True).start()
 
     @staticmethod
     def _extract_grok_video_id_from_url(url: str) -> str:
@@ -11333,6 +11450,7 @@ class MainWindow(QMainWindow):
             self.manual_download_deadline = None
             self.manual_refresh_after_generating_sent = False
             self.manual_refresh_after_progress_100_sent = False
+            self.manual_headless_refresh_inflight = False
             self.manual_public_video_url = ""
             self.manual_last_generated_post_url = ""
             self.manual_download_attempt_count = 0
@@ -12189,6 +12307,7 @@ class MainWindow(QMainWindow):
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
+        self.manual_headless_refresh_inflight = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
