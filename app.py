@@ -7251,6 +7251,9 @@ class MainWindow(QMainWindow):
     def _active_manual_browser_target(self) -> str:
         return "sora" if self.browser is self.sora_browser else "grok"
 
+    def _is_sora_manual_redirect_target(self) -> bool:
+        return (self.pending_manual_redirect_target or "grok").strip().lower() == "sora"
+
     def _return_embedded_browser_after_download(self) -> None:
         redirect_target = (self.pending_manual_redirect_target or "grok").lower()
         if redirect_target == "sora":
@@ -11351,7 +11354,10 @@ class MainWindow(QMainWindow):
                 self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_allow_make_click = True
                 self.continue_from_frame_active = False
-                QTimer.singleShot(0, self.show_browser_page)
+                if self._is_sora_manual_redirect_target():
+                    QTimer.singleShot(0, self.show_sora_browser_page)
+                else:
+                    QTimer.singleShot(0, self.show_browser_page)
                 return
 
             if status == "progress":
@@ -11470,10 +11476,15 @@ class MainWindow(QMainWindow):
                 )
                 if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
                     if self.manual_download_attempt_count == 1:
-                        self._append_log(
-                            f"Variant {current_variant}: direct URL detected; loading Grok homepage before starting public URL polling/download attempts."
-                        )
-                        self._load_grok_homepage_then_return_to_post(resolved_url, current_variant)
+                        if self._is_sora_manual_redirect_target():
+                            self._append_log(
+                                f"Variant {current_variant}: direct URL detected in Sora flow; skipping Grok homepage hop and retrying polling/download directly."
+                            )
+                        else:
+                            self._append_log(
+                                f"Variant {current_variant}: direct URL detected; loading Grok homepage before starting public URL polling/download attempts."
+                            )
+                            self._load_grok_homepage_then_return_to_post(resolved_url, current_variant)
                         self.manual_download_click_sent = False
                         self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                         return
@@ -11897,12 +11908,18 @@ class MainWindow(QMainWindow):
 
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
-            self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
-            )
+            if self._is_sora_manual_redirect_target():
+                self._append_log(
+                    f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); retrying download detection without Grok homepage hop for Sora flow."
+                )
+            else:
+                self._append_log(
+                    f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
+                )
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
-            self._load_grok_homepage_then_return_to_post(source_url, variant)
+            if not self._is_sora_manual_redirect_target():
+                self._load_grok_homepage_then_return_to_post(source_url, variant)
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
