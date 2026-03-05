@@ -177,6 +177,7 @@ DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE_LOCAL = (
 )
 GROK_IMAGINE_URL = "https://grok.com/imagine"
 SORA_DRAFTS_URL = "https://sora.chatgpt.com/drafts"
+AUTOMATION_CDP_SMOKE_TEST_URL = os.getenv("GROK_AUTOMATION_SMOKE_TEST_URL", "https://example.com")
 DEFAULT_EMBEDDED_CHROME_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -2880,6 +2881,7 @@ class MainWindow(QMainWindow):
             app.installEventFilter(self)
         self._load_startup_preferences()
         self._apply_default_theme()
+        QTimer.singleShot(800, self._preload_external_automation_tabs_on_startup)
         QTimer.singleShot(1200, self.check_for_updates_on_startup)
 
     def eventFilter(self, watched, event):
@@ -6010,6 +6012,34 @@ class MainWindow(QMainWindow):
 
     def _load_startup_preferences(self) -> None:
         self._load_preferences_from_path(DEFAULT_PREFERENCES_FILE, show_feedback=False)
+
+    def _preload_external_automation_tabs_on_startup(self) -> None:
+        if not self._is_external_ai_browser_mode_active():
+            return
+        if not getattr(self, "cdp_enabled", False):
+            return
+
+        try:
+            runtime = self._ensure_automation_runtime()
+            runtime.start_chrome()
+            cdp_state = runtime.ensure_cdp_connected()
+            self._append_automation_log(f"Startup preload CDP readiness: {cdp_state}")
+            runtime.ensure_udp_service()
+            ping_result = runtime.dom_ping()
+            self._append_automation_log(f"Startup preload UDP/extension ping: {json.dumps(ping_result, ensure_ascii=False)}")
+
+            smoke_url = str(AUTOMATION_CDP_SMOKE_TEST_URL or "https://example.com").strip() or "https://example.com"
+            runtime.open_url_in_automation_chrome(smoke_url)
+            self._append_automation_log(f"Startup preload opened smoke test page: {smoke_url}")
+
+            if self._is_browser_tab_enabled("Sora"):
+                runtime.open_url_in_automation_chrome(SORA_DRAFTS_URL)
+                self._append_automation_log(f"Startup preload opened Sora page: {SORA_DRAFTS_URL}")
+            if self._is_browser_tab_enabled("Grok"):
+                runtime.open_url_in_automation_chrome(GROK_IMAGINE_URL)
+                self._append_automation_log(f"Startup preload opened Grok page: {GROK_IMAGINE_URL}")
+        except Exception as exc:
+            self._append_automation_log(f"Startup external preload skipped due to error: {exc}")
 
     def save_preferences(self) -> None:
         self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=True)
