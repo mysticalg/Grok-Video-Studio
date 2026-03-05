@@ -2972,11 +2972,13 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._applying_preferences = False
         self._last_saved_preferences_signature: str | None = None
+        self._startup_cdp_bootstrap_attempted = False
         self._initialize_preferences_autosave()
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
         self._load_startup_preferences()
+        QTimer.singleShot(300, self._bootstrap_cdp_on_startup_if_enabled)
         self._apply_default_theme()
         QTimer.singleShot(1200, self.check_for_updates_on_startup)
 
@@ -6240,6 +6242,25 @@ class MainWindow(QMainWindow):
 
     def _load_startup_preferences(self) -> None:
         self._load_preferences_from_path(DEFAULT_PREFERENCES_FILE, show_feedback=False)
+
+    def _bootstrap_cdp_on_startup_if_enabled(self) -> None:
+        if self._startup_cdp_bootstrap_attempted:
+            return
+        self._startup_cdp_bootstrap_attempted = True
+
+        if not bool(getattr(self, "cdp_enabled", False)):
+            return
+
+        try:
+            runtime = self._ensure_automation_runtime()
+            instance = runtime.start_chrome()
+            self.automation_chrome_instance = instance
+            title = runtime.ensure_cdp_connected()
+            self._append_automation_log(
+                f"Startup CDP bootstrap complete: Chrome on port {instance.port}, smoke test '{title}'."
+            )
+        except Exception as exc:
+            self._append_automation_log(f"Startup CDP bootstrap skipped due to error: {exc}")
 
     def save_preferences(self) -> None:
         self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=True)
