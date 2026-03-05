@@ -2470,6 +2470,58 @@ class AutomationRuntimeWorker(QThread):
 
         return self._run_coro(_run_script())
 
+    def find_automation_page_url(self, *, flow_scope: str | None = None, url_regex: str | None = None) -> str:
+        if self.chrome_instance is None:
+            self.start_chrome()
+
+        scope_key = str(flow_scope or "").strip().lower()
+        pattern = re.compile(str(url_regex), re.IGNORECASE) if str(url_regex or "").strip() else None
+
+        async def _find() -> str:
+            if self.cdp_controller is None:
+                self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+
+            candidates: list[str] = []
+
+            scoped_page = self.automation_flow_pages.get(scope_key) if scope_key else None
+            if scoped_page is not None and not scoped_page.is_closed():
+                candidates.append(str(scoped_page.url or "").strip())
+
+            pages: list[Any] = []
+            for context in self.cdp_controller.browser.contexts:
+                pages.extend(context.pages)
+            pages.reverse()
+
+            scope_host_hint = ""
+            if scope_key == "grok":
+                scope_host_hint = "grok.com"
+            elif scope_key == "sora":
+                scope_host_hint = "sora.chatgpt.com"
+
+            for page in pages:
+                url = str(page.url or "").strip()
+                if not url:
+                    continue
+                if scope_host_hint and scope_host_hint not in url.lower():
+                    continue
+                candidates.append(url)
+
+            seen: set[str] = set()
+            ordered = []
+            for url in candidates:
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                ordered.append(url)
+
+            if pattern is not None:
+                for url in ordered:
+                    if pattern.search(url):
+                        return url
+            return ordered[0] if ordered else ""
+
+        return str(self._run_coro(_find()) or "")
+
     def dom_ping(self) -> dict[str, Any]:
         if self.bus is None:
             raise RuntimeError("Control bus is not running")
@@ -8713,7 +8765,7 @@ class MainWindow(QMainWindow):
         candidate = str(url or "").strip()
         if not candidate:
             return ""
-        match = re.search(r"/imagine/post/([^/?#]+)", candidate, re.IGNORECASE)
+        match = re.search(r"/(?:imagine/)?post/([^/?#]+)", candidate, re.IGNORECASE)
         if not match:
             return ""
         post_id = str(match.group(1) or "").strip()
@@ -8760,10 +8812,23 @@ class MainWindow(QMainWindow):
                     current_url = active_browser.url().toString()
             except Exception:
                 current_url = ""
-            post_id_from_browser = self._extract_valid_grok_post_id(current_url)
+
+            detected_url = current_url
+            if not self._extract_valid_grok_post_id(detected_url) and self._active_ai_browser_external_control_enabled():
+                try:
+                    runtime = self._ensure_automation_runtime()
+                    runtime.ensure_cdp_connected()
+                    detected_url = runtime.find_automation_page_url(
+                        flow_scope=self._active_ai_browser_provider(),
+                        url_regex=r"/(?:imagine/)?post/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    ) or detected_url
+                except Exception as exc:
+                    self._append_log(f"Manual-pick URL scan (external browser) failed: {exc}")
+
+            post_id_from_browser = self._extract_valid_grok_post_id(detected_url)
             if post_id_from_browser:
                 self._append_log(
-                    f"Variant {variant}: detected manual pick from active browser URL ({post_id_from_browser}); proceeding to video-mode options."
+                    f"Variant {variant}: detected manual pick from URL ({post_id_from_browser}); proceeding to video-mode options."
                 )
                 self.manual_image_pick_clicked = True
                 self.manual_image_pick_retry_count = 0
