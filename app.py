@@ -2807,6 +2807,7 @@ class MainWindow(QMainWindow):
         self.multi_video_mode_active = False
         self.multi_video_target_count = 0
         self.multi_video_manual_pick = False
+        self.manual_single_video_manual_pick = False
         self.multi_video_prompt = ""
         self.multi_video_collected_post_urls: list[str] = []
         self.multi_video_pending_downloads: list[dict[str, Any]] = []
@@ -3132,6 +3133,11 @@ class MainWindow(QMainWindow):
         self.multi_video_manual_pick_checkbox = QCheckBox("Manual image pick")
         self.multi_video_manual_pick_checkbox.setToolTip(
             "When enabled, click generated image cards manually; automation will detect ready make-video cards and download in background."
+        )
+
+        self.manual_pick_after_prompt_checkbox = QCheckBox("Manual pick (single)")
+        self.manual_pick_after_prompt_checkbox.setToolTip(
+            "For single Create Video runs, wait after Enter until you manually open a generated image post (/imagine/post/<id>)."
         )
 
         self.multi_video_count_label = QLabel("Multi count")
@@ -3577,6 +3583,7 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.multi_video_count_label, 1, 0)
         grok_browser_controls.addWidget(self.multi_video_count_spin, 1, 1)
         grok_browser_controls.addWidget(self.multi_video_manual_pick_checkbox, 1, 2, 1, 3)
+        grok_browser_controls.addWidget(self.manual_pick_after_prompt_checkbox, 2, 0, 1, 3)
 
         self.sora_browser_tab = QWidget()
         sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
@@ -7487,6 +7494,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = "image"
         self.pending_manual_image_prompt = prompt
         self.pending_manual_redirect_target = self._active_manual_browser_target()
+        self.manual_single_video_manual_pick = bool((not self.multi_video_mode_active) and getattr(self, "manual_pick_after_prompt_checkbox", None) and self.manual_pick_after_prompt_checkbox.isChecked())
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
@@ -8758,6 +8766,7 @@ class MainWindow(QMainWindow):
                 const phase = {phase!r};
                 const submitToken = {self.manual_image_submit_token};
                 const submitAttemptAllowed = {"true" if submit_attempt_allowed else "false"};
+                const manualSinglePickMode = {"true" if (self.manual_single_video_manual_pick and not self.multi_video_mode_active) else "false"};
                 const ACTION_DELAY_MS = 200;
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -8788,32 +8797,42 @@ class MainWindow(QMainWindow):
                 }};
 
                 if (phase === "pick") {{
+                    const path = String((location && location.pathname) || "");
+                    const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
+                    const postId = postMatch ? String(postMatch[1] || "") : "";
+                    const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
+                        && !/^placeholder-/i.test(postId);
+                    if (onPostView) {{
+                        return {{
+                            ok: true,
+                            status: "generated-image-clicked",
+                            detectedViaUrl: true,
+                            path,
+                            postId,
+                            manualPickMode: manualSinglePickMode,
+                        }};
+                    }}
+
+                    if (manualSinglePickMode) {{
+                        return {{ ok: false, status: "waiting-for-manual-image-pick" }};
+                    }}
+
                     const scrollBottomNow = () => {{
                         const fullWidthContainers = [...document.querySelectorAll("div.w-full")];
                         for (const el of fullWidthContainers) {{
                             try {{ el.style.overflowY = "scroll"; }} catch (_) {{}}
                         }}
-
-                        const scrollTargets = [
-                            document.scrollingElement,
-                            document.documentElement,
-                            document.body,
-                            ...fullWidthContainers,
+                        const scrollTargets = [document.scrollingElement, document.documentElement, document.body, ...fullWidthContainers,
                             ...document.querySelectorAll("[data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
                         ].filter((el, idx, arr) => el && arr.indexOf(el) === idx);
-
                         for (const target of scrollTargets) {{
                             const maxTop = Math.max(0, (target.scrollHeight || 0) - (target.clientHeight || 0));
-                            if (typeof target.scrollTo === "function") {{
-                                target.scrollTo({{ top: maxTop, left: 0, behavior: "instant" }});
-                            }} else if ("scrollTop" in target) {{
-                                target.scrollTop = maxTop;
-                            }}
+                            if (typeof target.scrollTo === "function") target.scrollTo({{ top: maxTop, left: 0, behavior: "instant" }});
+                            else if ("scrollTop" in target) target.scrollTop = maxTop;
                         }}
                         window.scrollTo({{ top: document.body?.scrollHeight || 999999, left: 0, behavior: "instant" }});
                     }};
                     scrollBottomNow();
-
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
                     const allListItems = () => [...document.querySelectorAll("[role='listitem'], li, article, figure")]
                         .filter((item) => isActuallyVisible(item) && !item.querySelector("div.invisible"));
@@ -8829,34 +8848,10 @@ class MainWindow(QMainWindow):
                         if (!listItem) return true;
                         return !listItem.querySelector("div.invisible");
                     }};
-
-                    const path = String((location && location.pathname) || "");
-                    const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
-                    const postId = postMatch ? String(postMatch[1] || "") : "";
-                    const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
-                        && !/^placeholder-/i.test(postId);
-                    if (onPostView) {{
-                        return {{
-                            ok: true,
-                            status: "generated-image-clicked",
-                            detectedViaUrl: true,
-                            path,
-                            postId,
-                        }};
-                    }}
-
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
                         .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
-
                     if (makeVideoButtons.length) {{
-                        makeVideoButtons.sort((a, b) => {{
-                            const ar = a.getBoundingClientRect();
-                            const br = b.getBoundingClientRect();
-                            const rowDelta = Math.abs(ar.top - br.top);
-                            if (rowDelta > 20) return ar.top - br.top;
-                            return ar.left - br.left;
-                        }});
-
+                        makeVideoButtons.sort((a, b) => {{ const ar = a.getBoundingClientRect(); const br = b.getBoundingClientRect(); const rowDelta = Math.abs(ar.top - br.top); if (rowDelta > 20) return ar.top - br.top; return ar.left - br.left; }});
                         const firstButton = makeVideoButtons[0];
                         const tile = listItemOf(firstButton) || firstButton.parentElement;
                         const tileImage = tile?.querySelector?.("img") || null;
@@ -8865,7 +8860,6 @@ class MainWindow(QMainWindow):
                         await sleep(ACTION_DELAY_MS);
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
-
                     return {{ ok: false, status: "waiting-for-make-video-button" }};
                 }}
 
@@ -9232,6 +9226,13 @@ class MainWindow(QMainWindow):
                             f"{self.manual_image_pick_retry_count} checks; continuing to wait for pick state."
                         )
                         self.manual_image_pick_retry_count = 0
+                    if self.manual_single_video_manual_pick and not self.multi_video_mode_active and current_status == "waiting-for-manual-image-pick":
+                        self._append_log(
+                            f"Variant {current_variant}: waiting for manual image pick. Open a generated image so URL changes to /imagine/post/<id>."
+                        )
+                        QTimer.singleShot(1200, self._poll_for_manual_image)
+                        return
+
                     self._append_log(
                         f"Variant {current_variant}: generated image not ready for pick+submit yet ({current_status}); retrying..."
                     )
@@ -11919,6 +11920,7 @@ class MainWindow(QMainWindow):
             self.multi_video_mode_active = False
             self.multi_video_target_count = 0
             self.multi_video_manual_pick = False
+            self.manual_single_video_manual_pick = False
             self.multi_video_prompt = ""
             self.multi_video_collected_post_urls = []
             self.multi_video_pending_downloads = []
@@ -12700,6 +12702,7 @@ class MainWindow(QMainWindow):
         self.multi_video_mode_active = False
         self.multi_video_target_count = 0
         self.multi_video_manual_pick = False
+        self.manual_single_video_manual_pick = False
         self.multi_video_prompt = ""
         self.multi_video_collected_post_urls = []
         self.multi_video_pending_downloads = []
