@@ -2821,6 +2821,12 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
+        self.sora_pending_download_jobs: list[dict[str, Any]] = []
+        self.sora_downloaded_urls_seen: set[str] = set()
+        self.sora_background_download_future: concurrent.futures.Future | None = None
+        self.sora_background_download_timer = QTimer(self)
+        self.sora_background_download_timer.setSingleShot(True)
+        self.sora_background_download_timer.timeout.connect(self._poll_sora_pending_downloads)
         self.continue_from_frame_active = False
         self.continue_from_frame_target_count = 0
         self.continue_from_frame_completed = 0
@@ -7260,15 +7266,27 @@ class MainWindow(QMainWindow):
 
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
         self.manual_image_generation_queue.clear()
-        self.manual_generation_queue = [{"variant": idx} for idx in range(1, count + 1)]
-        self._start_automation_counter_tracking(count)
+        browser_target = self._active_manual_browser_target()
+        next_variant = 1
+        if self.manual_generation_queue:
+            next_variant = max(int(item.get("variant", 0)) for item in self.manual_generation_queue) + 1
+        self.manual_generation_queue.extend(
+            {
+                "variant": next_variant + idx,
+                "target": browser_target,
+                "prompt": str(prompt),
+            }
+            for idx in range(max(0, int(count)))
+        )
+        self.automation_counter_total += max(0, int(count))
         self._append_log(
             "Manual mode now reuses the current browser page exactly as-is. "
             "No navigation or reload will happen."
         )
-        self._append_log(f"Manual mode queued with counter={count}.")
+        self._append_log(f"Manual mode queued with counter={count} on target={browser_target}.")
         self._append_log("Attempting to populate the visible Grok prompt box on the current page...")
-        self._submit_next_manual_variant()
+        if self.pending_manual_variant_for_download is None:
+            self._submit_next_manual_variant()
 
     def _active_manual_browser_target(self) -> str:
         return "sora" if self.browser is self.sora_browser else "grok"
@@ -9678,7 +9696,12 @@ class MainWindow(QMainWindow):
         item = self.manual_generation_queue.pop(0)
         remaining_count = len(self.manual_generation_queue)
         variant = item["variant"]
-        prompt = self.manual_prompt.toPlainText().strip()
+        target = str(item.get("target") or "grok").strip().lower()
+        prompt = str(item.get("prompt") or "").strip()
+        if target == "sora":
+            self.browser = self.sora_browser
+        else:
+            self.browser = self.grok_browser_view
         if not prompt:
             self._append_log(
                 f"ERROR: Manual variant {variant} skipped because the Manual Prompt box is empty."
@@ -10537,6 +10560,14 @@ class MainWindow(QMainWindow):
                 f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
             self.manual_continue_setup_in_progress = False
+            if is_sora_manual_flow:
+                self._enqueue_sora_download_job(variant)
+                self.pending_manual_variant_for_download = None
+                self.pending_manual_download_type = None
+                self.manual_download_click_sent = False
+                self.manual_download_request_pending = False
+                QTimer.singleShot(0, self._submit_next_manual_variant)
+                return
             # Avoid duplicate submit clicks: if button-submit succeeded, polling should only wait for
             # progress/download controls and must not click Make/Create video again.
             self._trigger_browser_video_download(variant, allow_make_video_click=not submit_ok)
@@ -10623,6 +10654,14 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
                                 )
                             self.manual_continue_setup_in_progress = False
+                            if is_sora_manual_flow:
+                                self._enqueue_sora_download_job(variant)
+                                self.pending_manual_variant_for_download = None
+                                self.pending_manual_download_type = None
+                                self.manual_download_click_sent = False
+                                self.manual_download_request_pending = False
+                                QTimer.singleShot(0, self._submit_next_manual_variant)
+                                return
                             QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
@@ -10807,6 +10846,117 @@ class MainWindow(QMainWindow):
         if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
             return CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS
         return max(1000, int(self.manual_download_poll_interval_ms.value()))
+
+    def _enqueue_sora_download_job(self, variant: int) -> None:
+        self.sora_pending_download_jobs.append({"variant": int(variant), "queued_at": time.time()})
+        self._append_log(
+            f"Variant {variant}: queued Sora background polling job "
+            f"({len(self.sora_pending_download_jobs)} pending)."
+        )
+        if not self.sora_background_download_timer.isActive():
+            self.sora_background_download_timer.start(0)
+
+    def _poll_sora_pending_downloads(self) -> None:
+        if not self.sora_pending_download_jobs:
+            return
+        if isinstance(self.sora_background_download_future, concurrent.futures.Future) and not self.sora_background_download_future.done():
+            self.sora_background_download_timer.start(self._manual_download_poll_interval_ms())
+            return
+
+        script = r"""
+            (() => {
+                const normalizeAbsoluteUrl = (rawUrl) => {
+                    const value = String(rawUrl || "").trim();
+                    if (!value) return "";
+                    try { return new URL(value, window.location.href).toString(); } catch (_) { return value; }
+                };
+                const urls = [];
+                const push = (value) => {
+                    const normalized = normalizeAbsoluteUrl(value);
+                    if (!normalized) return;
+                    const lowered = normalized.toLowerCase();
+                    if (!/^https?:\/\//i.test(normalized)) return;
+                    if (!/videos\.openai\.com/.test(lowered)) return;
+                    if (!/\/raw(?:[/?#]|$)/.test(lowered) && !/%2fraw(?:[?#]|$)/.test(lowered) && !/\/drvs\//.test(lowered)) return;
+                    if (!urls.includes(normalized)) urls.push(normalized);
+                };
+                document.querySelectorAll("video, source, [data-video-url], [data-url], [data-src]").forEach((el) => {
+                    push(el.getAttribute?.("src"));
+                    push(el.getAttribute?.("data-video-url"));
+                    push(el.getAttribute?.("data-url"));
+                    push(el.getAttribute?.("data-src"));
+                });
+                return { urls };
+            })()
+        """
+
+        def _after_probe(result) -> None:
+            if not self.sora_pending_download_jobs:
+                return
+            urls = [str(url).strip() for url in (result.get("urls") or [])] if isinstance(result, dict) else []
+            candidate = ""
+            for raw_url in urls:
+                normalized = _ensure_public_download_query(raw_url)
+                if not normalized or normalized in self.sora_downloaded_urls_seen:
+                    continue
+                candidate = normalized
+                break
+
+            if not candidate:
+                self.sora_background_download_timer.start(self._manual_download_poll_interval_ms())
+                return
+
+            job = self.sora_pending_download_jobs.pop(0)
+            variant = int(job.get("variant") or 0)
+            output_path = self.download_dir / self._build_session_download_filename(
+                "video",
+                variant,
+                "mp4",
+                provider_override="sora",
+            )
+            self._append_log(f"Variant {variant}: Sora background poll found downloadable URL; fetching to {output_path.name}.")
+
+            def _download_task() -> Path:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                return self._download_video_from_public_url(candidate, output_path)
+
+            self.sora_background_download_future = self._manual_download_executor.submit(_download_task)
+
+            def _finish_download() -> None:
+                future = self.sora_background_download_future
+                if not isinstance(future, concurrent.futures.Future) or not future.done():
+                    self.sora_background_download_timer.start(self._manual_download_poll_interval_ms())
+                    return
+                self.sora_background_download_future = None
+                try:
+                    video_path = future.result()
+                except Exception as exc:
+                    self._append_log(f"Variant {variant}: Sora background download failed ({exc}); will retry polling.")
+                    self.sora_pending_download_jobs.insert(0, job)
+                    self.sora_background_download_timer.start(self._manual_download_poll_interval_ms())
+                    return
+
+                self.sora_downloaded_urls_seen.add(candidate)
+                self._advance_automation_counter_tracking()
+                self.on_video_finished(
+                    {
+                        "title": f"Manual Browser Video {variant}",
+                        "prompt": self.manual_prompt.toPlainText().strip(),
+                        "resolution": "web",
+                        "video_file_path": str(video_path),
+                        "source_url": candidate,
+                    }
+                )
+                if self.sora_pending_download_jobs:
+                    self.sora_background_download_timer.start(0)
+
+            QTimer.singleShot(200, _finish_download)
+
+        try:
+            self.sora_browser.page().runJavaScript(script, _after_probe)
+        except Exception as exc:
+            self._append_log(f"Sora background polling script failed: {exc}")
+            self.sora_background_download_timer.start(self._manual_download_poll_interval_ms())
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         if (
@@ -11818,8 +11968,12 @@ class MainWindow(QMainWindow):
         )
         self.manual_generation_queue.clear()
         self.manual_download_poll_timer.stop()
+        self.sora_background_download_timer.stop()
         self.multi_video_download_timer.stop()
         self._clear_manual_direct_download_tracking()
+        self.sora_pending_download_jobs = []
+        self.sora_downloaded_urls_seen = set()
+        self.sora_background_download_future = None
         self.pending_manual_variant_for_download = None
         self.pending_manual_download_type = None
         self.pending_manual_image_prompt = None
@@ -12477,8 +12631,12 @@ class MainWindow(QMainWindow):
         self.manual_generation_queue.clear()
         self.manual_image_generation_queue.clear()
         self.manual_download_poll_timer.stop()
+        self.sora_background_download_timer.stop()
         self.multi_video_download_timer.stop()
         self._clear_manual_direct_download_tracking()
+        self.sora_pending_download_jobs = []
+        self.sora_downloaded_urls_seen = set()
+        self.sora_background_download_future = None
         self.continue_from_frame_reload_timeout_timer.stop()
         self.pending_manual_variant_for_download = None
         self.pending_manual_download_type = None
