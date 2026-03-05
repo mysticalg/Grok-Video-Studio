@@ -2902,6 +2902,8 @@ class MainWindow(QMainWindow):
         self.manual_post_submit_idle_token = -1
         self.manual_post_refresh_log_token = -1
         self.manual_post_refresh_wait_log_token = -1
+        self.manual_post_refresh_requested_token = -1
+        self.manual_post_refresh_detected_post_id = ""
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
@@ -7656,6 +7658,8 @@ class MainWindow(QMainWindow):
         self.manual_post_submit_idle_token = -1
         self.manual_post_refresh_log_token = -1
         self.manual_post_refresh_wait_log_token = -1
+        self.manual_post_refresh_requested_token = -1
+        self.manual_post_refresh_detected_post_id = ""
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
@@ -8925,8 +8929,35 @@ class MainWindow(QMainWindow):
 
             post_id_from_browser = self._extract_valid_grok_post_id(detected_url)
             if post_id_from_browser:
+                if self.manual_post_refresh_requested_token != self.manual_image_submit_token:
+                    self.manual_post_refresh_requested_token = self.manual_image_submit_token
+                    self.manual_post_refresh_detected_post_id = post_id_from_browser
+                    self._append_log(f"Variant {variant}: detected manual pick from URL")
+                    self._append_log(f"Variant {variant}: refreshing /post page after manual pick detection.")
+                    refresh_submit_token = int(self.manual_image_submit_token)
+                    refresh_script = f"""
+                        (() => {{
+                            try {{
+                                window.sessionStorage?.setItem(
+                                    "__grokManualPostRefreshState",
+                                    JSON.stringify({{ token: {refresh_submit_token}, refreshedAt: Date.now() }})
+                                );
+                            }} catch (_) {{}}
+                            try {{
+                                window.location.reload();
+                                return true;
+                            }} catch (_) {{
+                                return false;
+                            }}
+                        }})()
+                    """
+                    self._run_active_browser_javascript(refresh_script)
+                    QTimer.singleShot(1100, self._poll_for_manual_image)
+                    return
+
+                resolved_post_id = self.manual_post_refresh_detected_post_id or post_id_from_browser
                 self._append_log(
-                    f"Variant {variant}: detected manual pick from URL ({post_id_from_browser}); proceeding to video-mode options."
+                    f"Variant {variant}: ({resolved_post_id}); proceeding to video-mode options."
                 )
                 self.manual_image_pick_clicked = True
                 self.manual_image_pick_retry_count = 0
@@ -12720,6 +12751,8 @@ class MainWindow(QMainWindow):
         self.manual_post_submit_idle_token = -1
         self.manual_post_refresh_log_token = -1
         self.manual_post_refresh_wait_log_token = -1
+        self.manual_post_refresh_requested_token = -1
+        self.manual_post_refresh_detected_post_id = ""
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
