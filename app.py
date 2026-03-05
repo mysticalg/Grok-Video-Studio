@@ -2862,6 +2862,7 @@ class MainWindow(QMainWindow):
         self._ffmpeg_nvenc_available = False
         self.preview_fullscreen_overlay_btn: QPushButton | None = None
         self.preview_fullscreen_progress_bar: QProgressBar | None = None
+        self._last_browser_tab_has_visible_embedded: bool | None = None
         self.stop_all_requested = False
         self._active_ffmpeg_process: subprocess.Popen[str] | None = None
         self.manual_generation_queue: list[dict] = []
@@ -3686,6 +3687,7 @@ class MainWindow(QMainWindow):
         sora_browser_layout.addWidget(self._build_browser_container(self.sora_browser, role="ai"), 1)
 
         self.browser_tabs = QTabWidget()
+        self.browser_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
         self.grok_browser_tab_index = self.browser_tabs.addTab(self.grok_browser_tab, "Grok Browser")
         self.sora_browser_tab_index = self.browser_tabs.addTab(self.sora_browser_tab, "Sora Browser")
         self.social_upload_tab_indices["Facebook"] = self.browser_tabs.addTab(
@@ -3752,14 +3754,14 @@ class MainWindow(QMainWindow):
         self._refresh_browser_tab_selection()
         self._sync_social_embedded_browser_state_for_automation_mode()
 
-        right_splitter = QSplitter(Qt.Vertical)
-        right_splitter.setOpaqueResize(True)
-        right_splitter.setChildrenCollapsible(False)
-        right_splitter.addWidget(self.browser_tabs)
-        right_splitter.addWidget(bottom_splitter)
-        right_splitter.setStretchFactor(0, 3)
-        right_splitter.setStretchFactor(1, 2)
-        right_splitter.setSizes([620, 280])
+        self.right_splitter = QSplitter(Qt.Vertical)
+        self.right_splitter.setOpaqueResize(True)
+        self.right_splitter.setChildrenCollapsible(False)
+        self.right_splitter.addWidget(self.browser_tabs)
+        self.right_splitter.addWidget(bottom_splitter)
+        self.right_splitter.setStretchFactor(0, 3)
+        self.right_splitter.setStretchFactor(1, 2)
+        self.right_splitter.setSizes([620, 280])
 
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
@@ -3767,7 +3769,7 @@ class MainWindow(QMainWindow):
         left_scroll.setWidget(left)
 
         splitter.addWidget(left_scroll)
-        splitter.addWidget(right_splitter)
+        splitter.addWidget(self.right_splitter)
         splitter.setSizes([760, 1140])
 
         # Keep browser visible as a fixed right-hand pane
@@ -3823,6 +3825,7 @@ class MainWindow(QMainWindow):
         self._sync_video_options_label()
         self._reset_cdp_relay_session_state()
         self._refresh_status_bar_visibility()
+        self._refresh_bottom_panel_layout(force=True)
 
     def _build_social_upload_tab(self, platform_name: str, upload_url: str) -> QWidget:
         tab = QWidget()
@@ -6465,6 +6468,40 @@ class MainWindow(QMainWindow):
     def _on_automation_mode_changed(self, _index: int) -> None:
         self._sync_social_embedded_browser_state_for_automation_mode(log_change=True)
         self._sync_embedded_browser_container_visibility()
+        self._refresh_bottom_panel_layout(force=True)
+
+    def _tab_has_visible_embedded_browser(self, index: int) -> bool:
+        browser = self._browser_for_tab_index(index)
+        if browser is None:
+            return False
+        return not self._should_hide_embedded_browser_container(browser)
+
+    def _refresh_bottom_panel_layout(self, force: bool = False) -> None:
+        if not hasattr(self, "right_splitter") or not hasattr(self, "browser_tabs"):
+            return
+
+        has_visible_embedded_browser = self._tab_has_visible_embedded_browser(self.browser_tabs.currentIndex())
+        previous = self._last_browser_tab_has_visible_embedded
+        if not force and previous is has_visible_embedded_browser:
+            return
+        self._last_browser_tab_has_visible_embedded = has_visible_embedded_browser
+
+        if has_visible_embedded_browser:
+            self.right_splitter.setStretchFactor(0, 3)
+            self.right_splitter.setStretchFactor(1, 2)
+            if force or previous is False:
+                self.right_splitter.setSizes([620, 280])
+            return
+
+        self.right_splitter.setStretchFactor(0, 1)
+        self.right_splitter.setStretchFactor(1, 4)
+        sizes = self.right_splitter.sizes()
+        total_height = sum(sizes) if sizes else 0
+        if total_height <= 0:
+            total_height = max(self.height(), 600)
+        target_bottom_height = max(420, int(total_height * 0.55))
+        target_top_height = max(150, total_height - target_bottom_height)
+        self.right_splitter.setSizes([target_top_height, target_bottom_height])
 
     def _sync_social_embedded_browser_state_for_automation_mode(self, log_change: bool = False) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded").strip().lower()
@@ -14218,6 +14255,7 @@ class MainWindow(QMainWindow):
             self.browser = self.grok_browser_view
         elif index == getattr(self, "sora_browser_tab_index", -1):
             self.browser = self.sora_browser
+        self._refresh_bottom_panel_layout()
 
     def _should_hide_embedded_browser_container(self, browser: QWebEngineView) -> bool:
         role = self.browser_roles.get(browser, "")
