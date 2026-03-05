@@ -12728,9 +12728,11 @@ class MainWindow(QMainWindow):
                         self._remove_file_best_effort(video_path, "manual browser download cleanup")
                     self.manual_download_click_sent = False
                     self.manual_download_request_pending = False
-                    self.manual_video_start_click_sent = False
-                    self.manual_video_make_click_fallback_used = False
-                    self.manual_video_allow_make_click = True
+                    # Keep render-start guards enabled here so a tiny/partial download retry
+                    # does not re-click "Make video" and accidentally start a fresh render.
+                    self.manual_video_start_click_sent = True
+                    self.manual_video_make_click_fallback_used = True
+                    self.manual_video_allow_make_click = False
                     self.manual_download_in_progress = False
                     self.manual_download_started_at = time.time()
                     self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
