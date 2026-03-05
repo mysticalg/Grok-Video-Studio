@@ -7608,10 +7608,10 @@ class MainWindow(QMainWindow):
         variant = item["variant"]
         attempts = int(item.get("attempts", 0)) + 1
         item["attempts"] = attempts
-        prompt = self.manual_prompt.toPlainText().strip()
+        prompt = self._manual_prompt_with_styling()
         if not prompt:
             self._append_log(
-                f"ERROR: Manual image variant {variant} skipped because the Manual Prompt box is empty."
+                f"ERROR: Manual image variant {variant} skipped because both Styling and Manual Prompt are empty."
             )
             QTimer.singleShot(0, self._submit_next_manual_image_variant)
             return
@@ -10027,10 +10027,10 @@ class MainWindow(QMainWindow):
         item = self.manual_generation_queue.pop(0)
         remaining_count = len(self.manual_generation_queue)
         variant = item["variant"]
-        prompt = self.manual_prompt.toPlainText().strip()
+        prompt = self._manual_prompt_with_styling()
         if not prompt:
             self._append_log(
-                f"ERROR: Manual variant {variant} skipped because the Manual Prompt box is empty."
+                f"ERROR: Manual variant {variant} skipped because both Styling and Manual Prompt are empty."
             )
             QTimer.singleShot(0, self._submit_next_manual_variant)
             return
