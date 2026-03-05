@@ -7436,17 +7436,17 @@ class MainWindow(QMainWindow):
 
     def populate_video_prompt(self) -> None:
         self.stop_all_requested = False
-        manual_prompt = self.manual_prompt.toPlainText().strip()
-        if not manual_prompt:
+        prompt_text = self._manual_prompt_with_styling()
+        if not prompt_text:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
-        self._start_manual_browser_generation(manual_prompt, self.count.value())
+        self._start_manual_browser_generation(prompt_text, self.count.value())
 
     def start_image_generation(self) -> None:
         self.stop_all_requested = False
-        manual_prompt = self.manual_prompt.toPlainText().strip()
+        prompt_text = self._manual_prompt_with_styling()
 
-        if not manual_prompt:
+        if not prompt_text:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
 
@@ -7466,12 +7466,12 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._append_log(f"Could not prepare a fresh external Grok tab: {exc}")
 
-        self._start_manual_browser_image_generation(manual_prompt, self.count.value())
+        self._start_manual_browser_image_generation(prompt_text, self.count.value())
 
     def start_multi_video_generation(self) -> None:
         self.stop_all_requested = False
-        manual_prompt = self.manual_prompt.toPlainText().strip()
-        if not manual_prompt:
+        prompt_text = self._manual_prompt_with_styling()
+        if not prompt_text:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
 
@@ -7480,7 +7480,7 @@ class MainWindow(QMainWindow):
         self.multi_video_mode_active = True
         self.multi_video_target_count = target_count
         self.multi_video_manual_pick = manual_pick
-        self.multi_video_prompt = manual_prompt
+        self.multi_video_prompt = prompt_text
         self.multi_video_collected_post_urls = []
         self.multi_video_pending_downloads = []
         self.multi_video_completed_downloads = 0
@@ -7492,13 +7492,13 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"Starting Multi Video mode (count={target_count}, manual_pick={'on' if manual_pick else 'off'})."
         )
-        self._start_manual_browser_image_generation(manual_prompt, 1)
+        self._start_manual_browser_image_generation(prompt_text, 1)
 
     def start_sora_video_generation(self) -> None:
         self.stop_all_requested = False
-        manual_prompt = self.manual_prompt.toPlainText().strip()
+        prompt_text = self._manual_prompt_with_styling()
 
-        if not manual_prompt:
+        if not prompt_text:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
 
@@ -7507,7 +7507,16 @@ class MainWindow(QMainWindow):
             self.browser = self.sora_browser
 
         self._append_log("Starting Sora video prompt run (video-only mode, no image-mode toggles).")
-        self._start_manual_browser_generation(manual_prompt, self.count.value())
+        self._start_manual_browser_generation(prompt_text, self.count.value())
+
+    def _manual_prompt_with_styling(self) -> str:
+        styling_prompt = self.styling_prompt.toPlainText().strip()
+        manual_prompt = self.manual_prompt.toPlainText().strip()
+        if not styling_prompt:
+            return manual_prompt
+        if not manual_prompt:
+            return styling_prompt
+        return f"{styling_prompt} {manual_prompt}".strip()
 
     def _start_manual_browser_generation(self, prompt: str, count: int) -> None:
         self.manual_image_generation_queue.clear()
@@ -13839,8 +13848,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Videos", "Generate or open a video first.")
             return
 
-        manual_prompt = self.manual_prompt.toPlainText().strip()
-        if not manual_prompt:
+        prompt_text = self._manual_prompt_with_styling()
+        if not prompt_text:
             QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
             return
 
@@ -13850,7 +13859,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_target_count = self.count.value()
         self._start_automation_counter_tracking(self.continue_from_frame_target_count)
         self.continue_from_frame_completed = 0
-        self.continue_from_frame_prompt = manual_prompt
+        self.continue_from_frame_prompt = prompt_text
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
         self._append_log(
@@ -13860,8 +13869,8 @@ class MainWindow(QMainWindow):
         self._start_continue_iteration()
 
     def continue_from_local_image(self) -> None:
-        manual_prompt = self.manual_prompt.toPlainText().strip()
-        if not manual_prompt:
+        prompt_text = self._manual_prompt_with_styling()
+        if not prompt_text:
             QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
             return
 
@@ -13880,7 +13889,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_target_count = self.count.value()
         self._start_automation_counter_tracking(self.continue_from_frame_target_count)
         self.continue_from_frame_completed = 0
-        self.continue_from_frame_prompt = manual_prompt
+        self.continue_from_frame_prompt = prompt_text
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = seed_image
 
