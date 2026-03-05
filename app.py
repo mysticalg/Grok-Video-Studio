@@ -1056,6 +1056,7 @@ class PromptConfig:
     prompt_source: str
     video_provider: str
     concept: str
+    styling_prompt: str
     manual_prompt: str
     openai_api_key: str
     openai_access_token: str
@@ -1261,7 +1262,7 @@ class GenerateWorker(QThread):
         self._ensure_not_stopped()
         source = self.prompt_config.prompt_source
         if source == "manual":
-            return self.prompt_config.manual_prompt
+            return self._prepend_styling_prompt(self.prompt_config.manual_prompt)
 
         system = "You write highly visual prompts for short cinematic AI videos."
         user = (
@@ -1272,8 +1273,17 @@ class GenerateWorker(QThread):
         )
 
         if source == "openai":
-            return self.call_openai_chat(system, user)
-        return self.call_grok_chat(system, user)
+            return self._prepend_styling_prompt(self.call_openai_chat(system, user))
+        return self._prepend_styling_prompt(self.call_grok_chat(system, user))
+
+    def _prepend_styling_prompt(self, prompt: str) -> str:
+        styling_prompt = str(self.prompt_config.styling_prompt or "").strip()
+        prompt_text = str(prompt or "").strip()
+        if not styling_prompt:
+            return prompt_text
+        if not prompt_text:
+            return styling_prompt
+        return f"{styling_prompt} {prompt_text}".strip()
 
     def start_video_job(self, prompt: str, resolution: str, duration_seconds: int) -> str:
         self._ensure_not_stopped()
@@ -3025,6 +3035,12 @@ class MainWindow(QMainWindow):
         self.concept.setPlaceholderText("Describe the video idea...")
         self.concept.setMaximumHeight(90)
         prompt_group_layout.addWidget(self.concept)
+
+        prompt_group_layout.addWidget(QLabel("Styling"))
+        self.styling_prompt = QPlainTextEdit()
+        self.styling_prompt.setPlaceholderText("Optional style guidance prepended to generated/manual prompt...")
+        self.styling_prompt.setMaximumHeight(70)
+        prompt_group_layout.addWidget(self.styling_prompt)
 
         prompt_group_layout.addWidget(QLabel("Manual Prompt (used only when source is Manual)"))
         self.manual_prompt = QPlainTextEdit()
@@ -5605,6 +5621,7 @@ class MainWindow(QMainWindow):
             "tiktok_client_secret": self.tiktok_client_secret.text(),
             "tiktok_privacy_level": self.tiktok_privacy_level.currentData(),
             "concept": self.concept.toPlainText(),
+            "styling_prompt": self.styling_prompt.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
             "word_tool_count": int(self.word_tool_count.value()) if hasattr(self, "word_tool_count") else 100,
@@ -5786,6 +5803,8 @@ class MainWindow(QMainWindow):
                 self.tiktok_privacy_level.setCurrentIndex(privacy_index)
         if "concept" in preferences:
             self.concept.setPlainText(str(preferences["concept"]))
+        if "styling_prompt" in preferences:
+            self.styling_prompt.setPlainText(str(preferences["styling_prompt"]))
         if "manual_prompt" in preferences:
             self.manual_prompt.setPlainText(str(preferences["manual_prompt"]))
         if "manual_prompt_default" in preferences:
@@ -6568,6 +6587,7 @@ class MainWindow(QMainWindow):
         prompt_source = self.prompt_source.currentData()
         video_provider = self.video_provider.currentData()
         manual_prompt = self.manual_prompt.toPlainText().strip()
+        styling_prompt = self.styling_prompt.toPlainText().strip()
         api_key = self.api_key.text().strip()
 
         if prompt_source != "manual" and not concept:
@@ -6659,6 +6679,7 @@ class MainWindow(QMainWindow):
             prompt_source=prompt_source,
             video_provider=video_provider,
             concept=concept,
+            styling_prompt=styling_prompt,
             manual_prompt=manual_prompt,
             openai_api_key=self.openai_api_key.text().strip(),
             openai_access_token=self.openai_access_token.text().strip(),
