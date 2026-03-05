@@ -2900,6 +2900,8 @@ class MainWindow(QMainWindow):
         self.manual_image_submit_token = 0
         self.manual_post_submit_idle_until = 0.0
         self.manual_post_submit_idle_token = -1
+        self.manual_post_refresh_log_token = -1
+        self.manual_post_refresh_wait_log_token = -1
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
@@ -7652,6 +7654,8 @@ class MainWindow(QMainWindow):
         self.manual_image_submit_token += 1
         self.manual_post_submit_idle_until = 0.0
         self.manual_post_submit_idle_token = -1
+        self.manual_post_refresh_log_token = -1
+        self.manual_post_refresh_wait_log_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
@@ -9718,17 +9722,22 @@ class MainWindow(QMainWindow):
             if not self.manual_image_video_mode_selected:
                 if status in ("manual-post-refreshing", "manual-post-refresh-wait"):
                     if status == "manual-post-refreshing":
-                        self._append_log(
-                            f"Variant {current_variant}: manual pick detected on /post; refreshing post page before selecting video options."
-                        )
+                        if self.manual_post_refresh_log_token != self.manual_image_submit_token:
+                            self._append_log(
+                                f"Variant {current_variant}: manual pick detected on /post; refreshing post page before selecting video options."
+                            )
+                            self.manual_post_refresh_log_token = self.manual_image_submit_token
+                            self.manual_post_refresh_wait_log_token = -1
                         QTimer.singleShot(1000, self._poll_for_manual_image)
                         return
 
                     wait_ms = int(result.get("waitMs") or 750) if isinstance(result, dict) else 750
                     wait_ms = max(250, min(wait_ms, 2200))
-                    self._append_log(
-                        f"Variant {current_variant}: post page refreshed; waiting {wait_ms}ms before opening video options."
-                    )
+                    if self.manual_post_refresh_wait_log_token != self.manual_image_submit_token:
+                        self._append_log(
+                            f"Variant {current_variant}: post page refreshed; waiting {wait_ms}ms before opening video options."
+                        )
+                        self.manual_post_refresh_wait_log_token = self.manual_image_submit_token
                     QTimer.singleShot(wait_ms, self._poll_for_manual_image)
                     return
 
@@ -12709,6 +12718,8 @@ class MainWindow(QMainWindow):
         self.manual_image_submit_retry_count = 0
         self.manual_post_submit_idle_until = 0.0
         self.manual_post_submit_idle_token = -1
+        self.manual_post_refresh_log_token = -1
+        self.manual_post_refresh_wait_log_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
