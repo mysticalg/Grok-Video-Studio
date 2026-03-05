@@ -5703,6 +5703,8 @@ class MainWindow(QMainWindow):
             "automation_action_delay_ms": int(self.automation_action_delay_ms.value()),
             "automation_retry_attempts": int(self.automation_retry_attempts.value()),
             "manual_download_poll_interval_ms": int(self.manual_download_poll_interval_ms.value()),
+            "multi_video_manual_pick": self.multi_video_manual_pick_checkbox.isChecked(),
+            "manual_pick_after_prompt": self.manual_pick_after_prompt_checkbox.isChecked(),
             "tiktok_upload_automation_options": {k: v for k, v in self.tiktok_upload_automation_options.items() if k != "music_query_effective"},
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
@@ -5956,6 +5958,10 @@ class MainWindow(QMainWindow):
                 self.manual_download_poll_interval_ms.setValue(int(preferences["manual_download_poll_interval_ms"]))
             except (TypeError, ValueError):
                 pass
+        if "multi_video_manual_pick" in preferences:
+            self.multi_video_manual_pick_checkbox.setChecked(bool(preferences["multi_video_manual_pick"]))
+        if "manual_pick_after_prompt" in preferences:
+            self.manual_pick_after_prompt_checkbox.setChecked(bool(preferences["manual_pick_after_prompt"]))
         if "tiktok_upload_automation_options" in preferences and isinstance(preferences["tiktok_upload_automation_options"], dict):
             loaded_tiktok_options = preferences["tiktok_upload_automation_options"]
             publish_mode = str(loaded_tiktok_options.get("publish_mode") or "draft").strip().lower()
