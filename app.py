@@ -1143,6 +1143,27 @@ class PromptGenerationWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class WordToolGenerationWorker(QThread):
+    finished_text = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, requested_words: int, prompt_user: str, caller):
+        super().__init__()
+        self.requested_words = requested_words
+        self.prompt_user = prompt_user
+        self.caller = caller
+
+    def run(self) -> None:
+        try:
+            response_text = self.caller._call_selected_ai(
+                "You generate fictional words that look English-like but are entirely invented.",
+                self.prompt_user,
+            )
+            self.finished_text.emit(str(response_text).strip())
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class GenerateWorker(QThread):
     finished_video = Signal(dict)
     failed = Signal(str)
@@ -2727,6 +2748,7 @@ class MainWindow(QMainWindow):
         self.automation_chrome_instance: ChromeInstance | None = None
         self.udp_workflow_worker: UdpWorkflowWorker | None = None
         self.prompt_generation_worker: PromptGenerationWorker | None = None
+        self.word_tool_generation_worker: WordToolGenerationWorker | None = None
         self.embedded_training_active = False
         self.embedded_training_events: list[dict] = []
         self.embedded_training_started_at = 0.0
@@ -2828,6 +2850,7 @@ class MainWindow(QMainWindow):
             "TikTok": True,
             "X": True,
             "YouTube": True,
+            "WordTool": True,
             "Sora2Settings": True,
             "SeedanceSettings": True,
             "AIFlowTrainer": True,
@@ -3573,6 +3596,7 @@ class MainWindow(QMainWindow):
             self._build_social_upload_tab("YouTube", "https://studio.youtube.com"),
             "YouTube Upload",
         )
+        self.word_tool_tab_index = self.browser_tabs.addTab(self._build_word_tool_tab(), "Word Tool")
         self.sora2_settings_tab_index = self.browser_tabs.addTab(self._build_sora2_settings_tab(), "Sora 2 Video Settings")
         self.seedance_settings_tab_index = self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
         self.ai_flow_trainer_tab_index = self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
@@ -3592,6 +3616,7 @@ class MainWindow(QMainWindow):
             "Grok": self.grok_browser_tab_index,
             "Sora": self.sora_browser_tab_index,
             **self.social_upload_tab_indices,
+            "WordTool": self.word_tool_tab_index,
             "Sora2Settings": self.sora2_settings_tab_index,
             "SeedanceSettings": self.seedance_settings_tab_index,
             "AIFlowTrainer": self.ai_flow_trainer_tab_index,
@@ -4234,6 +4259,102 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return tab
 
+    def _build_word_tool_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        description = QLabel(
+            "Generate surreal made-up words that look like English sentence structure using your active Prompt Source AI."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet("color: #9fb3c8;")
+        layout.addWidget(description)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Word Count"))
+        self.word_tool_count = QSpinBox()
+        self.word_tool_count.setRange(3, 1500)
+        self.word_tool_count.setValue(100)
+        self.word_tool_count.setSuffix(" words")
+        controls.addWidget(self.word_tool_count)
+
+        self.word_tool_generate_btn = QPushButton("Generate Words")
+        self.word_tool_generate_btn.setToolTip("Generate a surreal sentence made from invented words.")
+        self.word_tool_generate_btn.setCheckable(True)
+        self.word_tool_generate_btn.clicked.connect(
+            lambda: self._run_with_button_feedback(self.word_tool_generate_btn, self.generate_word_tool_text)
+        )
+        controls.addWidget(self.word_tool_generate_btn)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+        layout.addWidget(QLabel("Prompt Template"))
+        self.word_tool_prompt_template = QPlainTextEdit()
+        self.word_tool_prompt_template.setMaximumHeight(120)
+        self.word_tool_prompt_template.setPlaceholderText(
+            "Use {word_count} as a placeholder for the selected count."
+        )
+        self.word_tool_prompt_template.setPlainText(
+            "Generate exactly {word_count} words as one flowing surreal sentence. "
+            "Every word must be made up and non-dictionary while still looking pronounceable in English. "
+            "No numbering, no bullet points, no intro text, no quotes, and no markdown. "
+            "Return only the generated sentence."
+        )
+        layout.addWidget(self.word_tool_prompt_template)
+
+        self.word_tool_output = QPlainTextEdit()
+        self.word_tool_output.setPlaceholderText("Generated surreal text will appear here...")
+        layout.addWidget(self.word_tool_output, 1)
+
+        return tab
+
+    def generate_word_tool_text(self) -> None:
+        requested_words = int(self.word_tool_count.value()) if hasattr(self, "word_tool_count") else 100
+        source = self.prompt_source.currentData()
+        if source not in {"grok", "openai", "ollama"}:
+            QMessageBox.warning(self, "AI Source Required", "Set Prompt Source to Grok API, OpenAI API, or Ollama (local).")
+            return
+
+        if self.word_tool_generation_worker and self.word_tool_generation_worker.isRunning():
+            self._append_log("Word Tool generation is already in progress.")
+            return
+
+        prompt_template = self.word_tool_prompt_template.toPlainText().strip() if hasattr(self, "word_tool_prompt_template") else ""
+        if not prompt_template:
+            QMessageBox.warning(self, "Missing Prompt Template", "Please enter a prompt template for Word Tool generation.")
+            return
+
+        prompt_user = prompt_template.replace("{word_count}", str(requested_words))
+        self._append_log(f"Word Tool: generating {requested_words} surreal invented words with {str(source).title()}...")
+
+        self.word_tool_generate_btn.setEnabled(False)
+        self.word_tool_generate_btn.setText("⏳ Generating...")
+
+        worker = WordToolGenerationWorker(
+            requested_words=requested_words,
+            prompt_user=prompt_user,
+            caller=self,
+        )
+        worker.finished_text.connect(lambda text, n=requested_words: self._on_word_tool_generation_success(text, n))
+        worker.failed.connect(self._on_word_tool_generation_failed)
+        worker.finished.connect(self._on_word_tool_generation_finished)
+        self.word_tool_generation_worker = worker
+        worker.start()
+
+    def _on_word_tool_generation_success(self, response_text: str, requested_words: int) -> None:
+        if hasattr(self, "word_tool_output") and self.word_tool_output is not None:
+            self.word_tool_output.setPlainText((response_text or "").strip())
+        self._append_log(f"Word Tool: generation complete ({requested_words} requested words).")
+
+    def _on_word_tool_generation_failed(self, message: str) -> None:
+        self._append_log(f"Word Tool ERROR: {message}")
+        QMessageBox.critical(self, "Word Tool Generation Failed", message)
+
+    def _on_word_tool_generation_finished(self) -> None:
+        self.word_tool_generate_btn.setEnabled(True)
+        self.word_tool_generate_btn.setText("Generate Words")
+        self.word_tool_generation_worker = None
+
     def _build_model_api_settings_dialog(self) -> None:
         self.model_api_settings_dialog = QDialog(self)
         self.model_api_settings_dialog.setWindowTitle("Model/API Settings")
@@ -4813,6 +4934,7 @@ class MainWindow(QMainWindow):
             ("TikTok", "TikTok"),
             ("X", "X"),
             ("YouTube", "YouTube"),
+            ("WordTool", "Word Tool"),
             ("Sora2Settings", "Sora 2 Video Settings"),
             ("SeedanceSettings", "Seedance 2.0 Video Settings"),
             ("AIFlowTrainer", "AI Flow Trainer"),
@@ -5448,6 +5570,9 @@ class MainWindow(QMainWindow):
             "concept": self.concept.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
+            "word_tool_count": int(self.word_tool_count.value()) if hasattr(self, "word_tool_count") else 100,
+            "word_tool_prompt_template": self.word_tool_prompt_template.toPlainText() if hasattr(self, "word_tool_prompt_template") else "",
+            "word_tool_output": self.word_tool_output.toPlainText() if hasattr(self, "word_tool_output") else "",
             "ai_concept_instruction_template": self.ai_concept_instruction_template_input.toPlainText(),
             "ai_concept_system_prompt": self.ai_concept_system_prompt_input.toPlainText(),
             "ai_concept_user_prompt_template": self.ai_concept_user_prompt_template_input.toPlainText(),
@@ -5631,6 +5756,15 @@ class MainWindow(QMainWindow):
             self.manual_prompt_default_input.setPlainText(default_prompt)
             if "manual_prompt" not in preferences:
                 self.manual_prompt.setPlainText(default_prompt)
+        if "word_tool_count" in preferences and hasattr(self, "word_tool_count"):
+            try:
+                self.word_tool_count.setValue(int(preferences["word_tool_count"]))
+            except (TypeError, ValueError):
+                pass
+        if "word_tool_prompt_template" in preferences and hasattr(self, "word_tool_prompt_template"):
+            self.word_tool_prompt_template.setPlainText(str(preferences["word_tool_prompt_template"]))
+        if "word_tool_output" in preferences and hasattr(self, "word_tool_output"):
+            self.word_tool_output.setPlainText(str(preferences["word_tool_output"]))
         if "ai_concept_instruction_template" in preferences:
             self.ai_concept_instruction_template_input.setPlainText(str(preferences["ai_concept_instruction_template"]))
         if "ai_concept_system_prompt" in preferences:
