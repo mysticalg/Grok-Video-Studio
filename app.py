@@ -5529,6 +5529,9 @@ class MainWindow(QMainWindow):
             "concept": self.concept.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
+            "word_tool_count": int(self.word_tool_count.value()) if hasattr(self, "word_tool_count") else 100,
+            "word_tool_prompt_template": self.word_tool_prompt_template.toPlainText() if hasattr(self, "word_tool_prompt_template") else "",
+            "word_tool_output": self.word_tool_output.toPlainText() if hasattr(self, "word_tool_output") else "",
             "ai_concept_instruction_template": self.ai_concept_instruction_template_input.toPlainText(),
             "ai_concept_system_prompt": self.ai_concept_system_prompt_input.toPlainText(),
             "ai_concept_user_prompt_template": self.ai_concept_user_prompt_template_input.toPlainText(),
@@ -5712,6 +5715,15 @@ class MainWindow(QMainWindow):
             self.manual_prompt_default_input.setPlainText(default_prompt)
             if "manual_prompt" not in preferences:
                 self.manual_prompt.setPlainText(default_prompt)
+        if "word_tool_count" in preferences and hasattr(self, "word_tool_count"):
+            try:
+                self.word_tool_count.setValue(int(preferences["word_tool_count"]))
+            except (TypeError, ValueError):
+                pass
+        if "word_tool_prompt_template" in preferences and hasattr(self, "word_tool_prompt_template"):
+            self.word_tool_prompt_template.setPlainText(str(preferences["word_tool_prompt_template"]))
+        if "word_tool_output" in preferences and hasattr(self, "word_tool_output"):
+            self.word_tool_output.setPlainText(str(preferences["word_tool_output"]))
         if "ai_concept_instruction_template" in preferences:
             self.ai_concept_instruction_template_input.setPlainText(str(preferences["ai_concept_instruction_template"]))
         if "ai_concept_system_prompt" in preferences:
