@@ -2470,6 +2470,58 @@ class AutomationRuntimeWorker(QThread):
 
         return self._run_coro(_run_script())
 
+    def find_automation_page_url(self, *, flow_scope: str | None = None, url_regex: str | None = None) -> str:
+        if self.chrome_instance is None:
+            self.start_chrome()
+
+        scope_key = str(flow_scope or "").strip().lower()
+        pattern = re.compile(str(url_regex), re.IGNORECASE) if str(url_regex or "").strip() else None
+
+        async def _find() -> str:
+            if self.cdp_controller is None:
+                self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+
+            candidates: list[str] = []
+
+            scoped_page = self.automation_flow_pages.get(scope_key) if scope_key else None
+            if scoped_page is not None and not scoped_page.is_closed():
+                candidates.append(str(scoped_page.url or "").strip())
+
+            pages: list[Any] = []
+            for context in self.cdp_controller.browser.contexts:
+                pages.extend(context.pages)
+            pages.reverse()
+
+            scope_host_hint = ""
+            if scope_key == "grok":
+                scope_host_hint = "grok.com"
+            elif scope_key == "sora":
+                scope_host_hint = "sora.chatgpt.com"
+
+            for page in pages:
+                url = str(page.url or "").strip()
+                if not url:
+                    continue
+                if scope_host_hint and scope_host_hint not in url.lower():
+                    continue
+                candidates.append(url)
+
+            seen: set[str] = set()
+            ordered = []
+            for url in candidates:
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                ordered.append(url)
+
+            if pattern is not None:
+                for url in ordered:
+                    if pattern.search(url):
+                        return url
+            return ordered[0] if ordered else ""
+
+        return str(self._run_coro(_find()) or "")
+
     def dom_ping(self) -> dict[str, Any]:
         if self.bus is None:
             raise RuntimeError("Control bus is not running")
@@ -2807,6 +2859,7 @@ class MainWindow(QMainWindow):
         self.multi_video_mode_active = False
         self.multi_video_target_count = 0
         self.multi_video_manual_pick = False
+        self.manual_single_video_manual_pick = False
         self.multi_video_prompt = ""
         self.multi_video_collected_post_urls: list[str] = []
         self.multi_video_pending_downloads: list[dict[str, Any]] = []
@@ -3132,6 +3185,11 @@ class MainWindow(QMainWindow):
         self.multi_video_manual_pick_checkbox = QCheckBox("Manual image pick")
         self.multi_video_manual_pick_checkbox.setToolTip(
             "When enabled, click generated image cards manually; automation will detect ready make-video cards and download in background."
+        )
+
+        self.manual_pick_after_prompt_checkbox = QCheckBox("Manual pick (single)")
+        self.manual_pick_after_prompt_checkbox.setToolTip(
+            "For single Create Video runs, wait after Enter until you manually open a generated image post (/imagine/post/<id>)."
         )
 
         self.multi_video_count_label = QLabel("Multi count")
@@ -3577,6 +3635,7 @@ class MainWindow(QMainWindow):
         grok_browser_controls.addWidget(self.multi_video_count_label, 1, 0)
         grok_browser_controls.addWidget(self.multi_video_count_spin, 1, 1)
         grok_browser_controls.addWidget(self.multi_video_manual_pick_checkbox, 1, 2, 1, 3)
+        grok_browser_controls.addWidget(self.manual_pick_after_prompt_checkbox, 2, 0, 1, 3)
 
         self.sora_browser_tab = QWidget()
         sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
@@ -7487,6 +7546,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_download_type = "image"
         self.pending_manual_image_prompt = prompt
         self.pending_manual_redirect_target = self._active_manual_browser_target()
+        self.manual_single_video_manual_pick = bool((not self.multi_video_mode_active) and getattr(self, "manual_pick_after_prompt_checkbox", None) and self.manual_pick_after_prompt_checkbox.isChecked())
         self.manual_image_pick_clicked = False
         self.manual_image_video_mode_selected = False
         self.manual_image_video_submit_sent = False
@@ -8705,7 +8765,7 @@ class MainWindow(QMainWindow):
         candidate = str(url or "").strip()
         if not candidate:
             return ""
-        match = re.search(r"/imagine/post/([^/?#]+)", candidate, re.IGNORECASE)
+        match = re.search(r"/(?:imagine/)?post/([^/?#]+)", candidate, re.IGNORECASE)
         if not match:
             return ""
         post_id = str(match.group(1) or "").strip()
@@ -8739,6 +8799,44 @@ class MainWindow(QMainWindow):
             return
 
         prompt = self.pending_manual_image_prompt or ""
+
+        if (
+            not self.manual_image_pick_clicked
+            and self.manual_single_video_manual_pick
+            and not self.multi_video_mode_active
+        ):
+            active_browser = getattr(self, "browser", None)
+            current_url = ""
+            try:
+                if active_browser is not None:
+                    current_url = active_browser.url().toString()
+            except Exception:
+                current_url = ""
+
+            detected_url = current_url
+            if not self._extract_valid_grok_post_id(detected_url) and self._active_ai_browser_external_control_enabled():
+                try:
+                    runtime = self._ensure_automation_runtime()
+                    runtime.ensure_cdp_connected()
+                    detected_url = runtime.find_automation_page_url(
+                        flow_scope=self._active_ai_browser_provider(),
+                        url_regex=r"/(?:imagine/)?post/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    ) or detected_url
+                except Exception as exc:
+                    self._append_log(f"Manual-pick URL scan (external browser) failed: {exc}")
+
+            post_id_from_browser = self._extract_valid_grok_post_id(detected_url)
+            if post_id_from_browser:
+                self._append_log(
+                    f"Variant {variant}: detected manual pick from URL ({post_id_from_browser}); proceeding to video-mode options."
+                )
+                self.manual_image_pick_clicked = True
+                self.manual_image_pick_retry_count = 0
+                self.manual_image_video_mode_retry_count = 0
+                self.manual_image_submit_retry_count = 0
+                QTimer.singleShot(250, self._poll_for_manual_image)
+                return
+
         if not self.manual_image_pick_clicked:
             phase = "pick"
         elif not self.manual_image_video_mode_selected:
@@ -8758,6 +8856,7 @@ class MainWindow(QMainWindow):
                 const phase = {phase!r};
                 const submitToken = {self.manual_image_submit_token};
                 const submitAttemptAllowed = {"true" if submit_attempt_allowed else "false"};
+                const manualSinglePickMode = {"true" if (self.manual_single_video_manual_pick and not self.multi_video_mode_active) else "false"};
                 const ACTION_DELAY_MS = 200;
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -8788,32 +8887,59 @@ class MainWindow(QMainWindow):
                 }};
 
                 if (phase === "pick") {{
+                    const extractPostId = (raw) => {{
+                        const text = String(raw || "").trim();
+                        if (!text) return "";
+                        const match = text.match(/(?:[/]imagine)?[/]post[/]([^/?#]+)/i);
+                        if (!match) return "";
+                        const candidate = String(match[1] || "").trim();
+                        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)) return "";
+                        if (/^placeholder-/i.test(candidate)) return "";
+                        return candidate;
+                    }};
+
+                    let topHref = "";
+                    try {{
+                        topHref = String((window.top && window.top.location && window.top.location.href) || "");
+                    }} catch (_) {{}}
+                    const href = String((location && location.href) || "");
+                    const path = String((location && location.pathname) || "");
+                    const docUrl = String((document && document.URL) || "");
+                    const postId = extractPostId(href) || extractPostId(path) || extractPostId(docUrl) || extractPostId(topHref);
+                    const onPostView = !!postId;
+                    if (onPostView) {{
+                        return {{
+                            ok: true,
+                            status: "generated-image-clicked",
+                            detectedViaUrl: true,
+                            path,
+                            href,
+                            topHref,
+                            postId,
+                            manualPickMode: manualSinglePickMode,
+                        }};
+                    }}
+
+                    if (manualSinglePickMode) {{
+                        return {{ ok: false, status: "waiting-for-manual-image-pick" }};
+                    }}
+
                     const scrollBottomNow = () => {{
                         const fullWidthContainers = [...document.querySelectorAll("div.w-full")];
                         for (const el of fullWidthContainers) {{
                             try {{ el.style.overflowY = "scroll"; }} catch (_) {{}}
                         }}
-
-                        const scrollTargets = [
-                            document.scrollingElement,
-                            document.documentElement,
-                            document.body,
-                            ...fullWidthContainers,
+                        const scrollTargets = [document.scrollingElement, document.documentElement, document.body, ...fullWidthContainers,
                             ...document.querySelectorAll("[data-radix-scroll-area-viewport], main, [role='main'], [data-testid*='scroll' i]")
                         ].filter((el, idx, arr) => el && arr.indexOf(el) === idx);
-
                         for (const target of scrollTargets) {{
                             const maxTop = Math.max(0, (target.scrollHeight || 0) - (target.clientHeight || 0));
-                            if (typeof target.scrollTo === "function") {{
-                                target.scrollTo({{ top: maxTop, left: 0, behavior: "instant" }});
-                            }} else if ("scrollTop" in target) {{
-                                target.scrollTop = maxTop;
-                            }}
+                            if (typeof target.scrollTo === "function") target.scrollTo({{ top: maxTop, left: 0, behavior: "instant" }});
+                            else if ("scrollTop" in target) target.scrollTop = maxTop;
                         }}
                         window.scrollTo({{ top: document.body?.scrollHeight || 999999, left: 0, behavior: "instant" }});
                     }};
                     scrollBottomNow();
-
                     const listItemOf = (el) => el?.closest("[role='listitem'], li, article, figure") || null;
                     const allListItems = () => [...document.querySelectorAll("[role='listitem'], li, article, figure")]
                         .filter((item) => isActuallyVisible(item) && !item.querySelector("div.invisible"));
@@ -8829,34 +8955,10 @@ class MainWindow(QMainWindow):
                         if (!listItem) return true;
                         return !listItem.querySelector("div.invisible");
                     }};
-
-                    const path = String((location && location.pathname) || "");
-                    const postMatch = path.match(/[/]imagine[/]post[/]([^/?#]+)/i);
-                    const postId = postMatch ? String(postMatch[1] || "") : "";
-                    const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
-                        && !/^placeholder-/i.test(postId);
-                    if (onPostView) {{
-                        return {{
-                            ok: true,
-                            status: "generated-image-clicked",
-                            detectedViaUrl: true,
-                            path,
-                            postId,
-                        }};
-                    }}
-
                     const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
                         .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
-
                     if (makeVideoButtons.length) {{
-                        makeVideoButtons.sort((a, b) => {{
-                            const ar = a.getBoundingClientRect();
-                            const br = b.getBoundingClientRect();
-                            const rowDelta = Math.abs(ar.top - br.top);
-                            if (rowDelta > 20) return ar.top - br.top;
-                            return ar.left - br.left;
-                        }});
-
+                        makeVideoButtons.sort((a, b) => {{ const ar = a.getBoundingClientRect(); const br = b.getBoundingClientRect(); const rowDelta = Math.abs(ar.top - br.top); if (rowDelta > 20) return ar.top - br.top; return ar.left - br.left; }});
                         const firstButton = makeVideoButtons[0];
                         const tile = listItemOf(firstButton) || firstButton.parentElement;
                         const tileImage = tile?.querySelector?.("img") || null;
@@ -8865,7 +8967,6 @@ class MainWindow(QMainWindow):
                         await sleep(ACTION_DELAY_MS);
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
-
                     return {{ ok: false, status: "waiting-for-make-video-button" }};
                 }}
 
@@ -9214,6 +9315,13 @@ class MainWindow(QMainWindow):
                 return
 
             if not self.manual_image_pick_clicked:
+                if self.manual_single_video_manual_pick and not self.multi_video_mode_active and status == "waiting-for-manual-image-pick":
+                    self._append_log(
+                        f"Variant {current_variant}: waiting for manual image pick. Open a generated image so URL changes to /imagine/post/<id> (or /post/<id>)."
+                    )
+                    QTimer.singleShot(1200, self._poll_for_manual_image)
+                    return
+
                 def _queue_pick_retry(current_status: str) -> None:
                     self.manual_image_pick_retry_count += 1
                     if self.manual_image_pick_retry_count >= int(self.automation_retry_attempts.value()):
@@ -11919,6 +12027,7 @@ class MainWindow(QMainWindow):
             self.multi_video_mode_active = False
             self.multi_video_target_count = 0
             self.multi_video_manual_pick = False
+            self.manual_single_video_manual_pick = False
             self.multi_video_prompt = ""
             self.multi_video_collected_post_urls = []
             self.multi_video_pending_downloads = []
@@ -12700,6 +12809,7 @@ class MainWindow(QMainWindow):
         self.multi_video_mode_active = False
         self.multi_video_target_count = 0
         self.multi_video_manual_pick = False
+        self.manual_single_video_manual_pick = False
         self.multi_video_prompt = ""
         self.multi_video_collected_post_urls = []
         self.multi_video_pending_downloads = []
