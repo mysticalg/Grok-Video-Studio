@@ -11641,7 +11641,8 @@ class MainWindow(QMainWindow):
                     status,
                 )
                 if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
-                    if self.manual_download_attempt_count == 1:
+                    current_target = str(getattr(self, "pending_manual_redirect_target", "grok") or "grok").strip().lower()
+                    if self.manual_download_attempt_count == 1 and current_target != "sora":
                         self._append_log(
                             f"Variant {current_variant}: direct URL detected; loading Grok homepage before starting public URL polling/download attempts."
                         )
@@ -12074,12 +12075,20 @@ class MainWindow(QMainWindow):
 
         file_size = download_path.stat().st_size if download_path.exists() else 0
         if file_size < MIN_VALID_VIDEO_BYTES:
-            self._append_log(
-                f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
-            )
+            source_host = str(urlparse(source_url).netloc or "").strip().lower()
+            is_sora_source = redirect_target == "sora" or source_host == "videos.openai.com"
+            if is_sora_source:
+                self._append_log(
+                    f"Variant {variant}: direct URL download for Sora is only {file_size} bytes (< 1MB); URL is likely not ready yet, retrying without browser homepage hop."
+                )
+            else:
+                self._append_log(
+                    f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
+                )
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
-            self._load_grok_homepage_then_return_to_post(source_url, variant)
+            if not is_sora_source:
+                self._load_grok_homepage_then_return_to_post(source_url, variant)
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
