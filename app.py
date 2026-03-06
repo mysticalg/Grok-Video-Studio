@@ -12390,6 +12390,16 @@ class MainWindow(QMainWindow):
             # as model-select/video-options than a generic Settings button.
             open_menu_attempts = [
                 {
+                    "selector": "div.relative.z-0",
+                    "textContains": "video options",
+                    "timeoutMs": 4000,
+                },
+                {
+                    "selector": "div.relative.z-0",
+                    "textContains": "model",
+                    "timeoutMs": 4000,
+                },
+                {
                     "selector": "#model-select-trigger",
                     "timeoutMs": 4000,
                 },
