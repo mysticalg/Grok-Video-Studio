@@ -7505,6 +7505,8 @@ class MainWindow(QMainWindow):
         if not prompt_text:
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
+
+        self._prepare_external_grok_homepage_for_video_start()
         self._start_manual_browser_generation(prompt_text, self.count.value())
 
     def start_image_generation(self) -> None:
@@ -7515,23 +7517,29 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
             return
 
-        if self._active_ai_browser_external_control_enabled() and self._active_ai_browser_provider() == "grok":
-            try:
-                runtime = self._ensure_automation_runtime()
-                if runtime.chrome_instance is None:
-                    runtime.start_chrome()
-                runtime.ensure_cdp_connected()
-                runtime.open_url_in_automation_chrome(
-                    GROK_IMAGINE_URL,
-                    reuse_tab=False,
-                    flow_scope="grok",
-                    force_new_tab=True,
-                )
-                self._append_log("Prepared a fresh external Automation Chrome tab for Grok Create Video flow.")
-            except Exception as exc:
-                self._append_log(f"Could not prepare a fresh external Grok tab: {exc}")
+        self._prepare_external_grok_homepage_for_video_start()
 
         self._start_manual_browser_image_generation(prompt_text, self.count.value())
+
+    def _prepare_external_grok_homepage_for_video_start(self) -> None:
+        if not (self._active_ai_browser_external_control_enabled() and self._active_ai_browser_provider() == "grok"):
+            return
+        try:
+            runtime = self._ensure_automation_runtime()
+            if runtime.chrome_instance is None:
+                runtime.start_chrome()
+            runtime.ensure_cdp_connected()
+            runtime.open_url_in_automation_chrome(
+                GROK_IMAGINE_URL,
+                reuse_tab=True,
+                flow_scope="grok",
+                force_new_tab=False,
+            )
+            self._append_log(
+                "Prepared Grok Create Video flow on the existing external Grok tab and ensured it is at grok.com/imagine."
+            )
+        except Exception as exc:
+            self._append_log(f"Could not prepare external Grok homepage before video start: {exc}")
 
     def start_multi_video_generation(self) -> None:
         self.stop_all_requested = False
