@@ -12385,9 +12385,23 @@ class MainWindow(QMainWindow):
         try:
             runtime = self._ensure_automation_runtime()
             runtime.ensure_udp_service()
+            # First try selecting "Make Video" immediately in case the settings/options
+            # menu is already open (prevents toggling it closed via an extra click).
+            menu_resp = runtime.execute_local_automation_command(
+                "dom.click",
+                {
+                    "platform": "grok",
+                    "selector": "[role='menuitem'], [role='menuitemradio'], [role='option'], [data-radix-collection-item]",
+                    "textContains": "make video",
+                    "timeoutMs": 1200,
+                },
+            )
+            if bool(isinstance(menu_resp, dict) and menu_resp.get("ok")):
+                return True, "udp-relay-menu-already-open-clicked"
+
             # Keep this aligned with the in-page "open video options" targeting used in
-            # manual option selection. Grok currently exposes this trigger more reliably
-            # as model-select/video-options than a generic Settings button.
+            # manual option selection. We target wrappers/triggers by selector+aria state
+            # and let the UI set aria-expanded/data-state itself after click.
             open_menu_attempts = [
                 {
                     "selector": "div.relative.z-0",
@@ -12397,6 +12411,15 @@ class MainWindow(QMainWindow):
                 {
                     "selector": "div.relative.z-0",
                     "textContains": "model",
+                    "timeoutMs": 4000,
+                },
+                {
+                    "selector": "button[data-slot='button'][aria-label='Settings' i][aria-haspopup='menu']",
+                    "timeoutMs": 4000,
+                },
+                {
+                    "selector": "button[aria-haspopup='menu'][aria-controls][data-state='closed'], button[aria-haspopup='menu'][aria-controls]:not([aria-expanded='true'])",
+                    "textContains": "settings",
                     "timeoutMs": 4000,
                 },
                 {
