@@ -9162,13 +9162,15 @@ class MainWindow(QMainWindow):
 
                     if (!makeVideoItemFound) {{
                         if (manualSinglePickMode && onPostView) {{
+                            const exactAriaButtons = [...document.querySelectorAll("button[aria-label='Make video' i], [role='button'][aria-label='Make video' i]")]
+                                .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                                .filter((el) => isActuallyVisible(el) && !el.disabled && !isSidebarControl(el));
                             const candidateButtons = [...document.querySelectorAll("button, [role='button']")]
                                 .filter((el, idx, arr) => arr.indexOf(el) === idx)
                                 .filter((el) => isActuallyVisible(el) && !el.disabled && !isSidebarControl(el) && !isBlockedMoreOptionsControl(el))
                                 .filter((el) => /\\bmake\\s+video\\b/i.test(descriptorOf(el)));
 
-                            const exactAriaCandidates = candidateButtons.filter((el) => /\\bmake\\s+video\\b/i.test(ariaOf(el)));
-                            const preferredButtons = exactAriaCandidates.length ? exactAriaCandidates : candidateButtons;
+                            const preferredButtons = exactAriaButtons.length ? exactAriaButtons : candidateButtons;
                             const viewportCx = Math.max(0, (window.innerWidth || document.documentElement?.clientWidth || 0) / 2);
                             const viewportCy = Math.max(0, (window.innerHeight || document.documentElement?.clientHeight || 0) / 2);
                             const distanceToViewportCenter = (el) => {{
@@ -9190,8 +9192,7 @@ class MainWindow(QMainWindow):
                                 return (br.width * br.height) - (ar.width * ar.height);
                             }});
 
-                            const makeVideoButton = preferredButtons[0] || null;
-                            if (!makeVideoButton) {{
+                            if (!preferredButtons.length) {{
                                 return {{ ok: false, status: "direct-make-video-button-missing", onPostView }};
                             }}
 
@@ -9219,22 +9220,28 @@ class MainWindow(QMainWindow):
                                 return clicked;
                             }};
 
-                            makeVideoClicked = robustDirectClick(makeVideoButton);
-                            if (!makeVideoClicked) {{
-                                return {{ ok: false, status: "direct-make-video-click-failed", onPostView }};
+                            let clickConfirmed = false;
+                            for (const makeVideoButton of preferredButtons.slice(0, 3)) {{
+                                makeVideoClicked = robustDirectClick(makeVideoButton) || makeVideoClicked;
+                                if (!makeVideoClicked) continue;
+                                await sleep(ACTION_DELAY_MS + 260);
+
+                                const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
+                                    .find((el) => isActuallyVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
+                                const promptVisibleAfterClick = promptSelectors
+                                    .flatMap((sel) => [...document.querySelectorAll(sel)])
+                                    .some((el) => isActuallyVisible(el) && !el.disabled);
+
+                                if (cancelVisibleAfterClick || promptVisibleAfterClick) {{
+                                    clickConfirmed = true;
+                                    break;
+                                }}
                             }}
-                            await sleep(ACTION_DELAY_MS + 260);
 
-                            const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
-                                .find((el) => isActuallyVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
-                            const promptVisibleAfterClick = promptSelectors
-                                .flatMap((sel) => [...document.querySelectorAll(sel)])
-                                .some((el) => isActuallyVisible(el) && !el.disabled);
-
-                            if (!cancelVisibleAfterClick && !promptVisibleAfterClick) {{
+                            if (!clickConfirmed) {{
                                 return {{
                                     ok: false,
-                                    status: "waiting-for-video-mode",
+                                    status: makeVideoClicked ? "waiting-for-video-mode" : "direct-make-video-click-failed",
                                     optionsOpened,
                                     videoItemFound: makeVideoItemFound,
                                     videoClicked: makeVideoClicked,
