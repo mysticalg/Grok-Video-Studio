@@ -183,6 +183,85 @@ DEFAULT_EMBEDDED_CHROME_USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
+# Centralized automation timing defaults (all ms unless explicitly marked as attempts).
+AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
+    "automation_action_delay_ms": 1000,
+    "automation_retry_attempts": 3,
+    "manual_download_poll_interval_ms": MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS,
+    "continue_download_poll_interval_ms": CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS,
+    "manual_submit_handoff_timeout_ms": 45000,
+    "manual_submit_handoff_poll_ms": 450,
+    "manual_submit_retry_delay_ms": 500,
+    "manual_post_submit_idle_ms": 200,
+    "manual_submit_poll_delay_ms": 1200,
+    "manual_post_submit_success_delay_ms": 1000,
+    "manual_pick_detected_poll_delay_ms": 250,
+    "manual_pick_wait_poll_delay_ms": 1200,
+    "manual_phase_poll_fast_ms": 700,
+    "manual_phase_poll_medium_ms": 900,
+    "manual_phase_poll_slow_ms": 1200,
+    "manual_phase_poll_recovery_ms": 1800,
+    "manual_phase_poll_backoff_ms": 2500,
+    "manual_phase_poll_hard_backoff_ms": 3000,
+    "manual_multi_video_poll_ms": 1200,
+    "manual_multi_video_poll_fast_ms": 200,
+    "sora_option_step_delay_ms": 2000,
+    "sora_download_trigger_delay_ms": 700,
+    "manual_submit_result_poll_delay_ms": 350,
+    "manual_poll_pause_cap_ms": 1500,
+    "continue_post_reload_generation_delay_ms": 700,
+    "continue_next_iteration_delay_ms": 800,
+    "continue_reload_timeout_ms": 10000,
+    "multi_video_download_wait_active_ms": 1000,
+    "multi_video_download_wait_future_ms": 800,
+    "multi_video_download_retry_ms": 1200,
+    "multi_video_download_finish_poll_ms": 200,
+    "multi_video_status_log_every_attempts": 3,
+    "manual_menu_settle_extra_ms": 320,
+    "manual_video_mode_settle_extra_ms": 260,
+    "manual_form_option_step_delay_ms": 1000,
+    "manual_form_submit_delay_ms": 1000,
+}
+
+AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
+    {"key": "automation_action_delay_ms", "label": "Automation action delay", "min": 100, "max": 10000, "step": 10, "group": "General"},
+    {"key": "automation_retry_attempts", "label": "Retry attempts", "min": 1, "max": 20, "step": 1, "group": "General", "suffix": " attempts"},
+    {"key": "manual_download_poll_interval_ms", "label": "Manual download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General"},
+    {"key": "continue_download_poll_interval_ms", "label": "Continue download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General"},
+    {"key": "manual_submit_handoff_timeout_ms", "label": "Manual submit handoff timeout", "min": 5000, "max": 120000, "step": 500, "group": "Grok Manual Submit"},
+    {"key": "manual_submit_handoff_poll_ms", "label": "Manual submit handoff poll interval", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
+    {"key": "manual_submit_retry_delay_ms", "label": "Manual submit retry delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
+    {"key": "manual_post_submit_idle_ms", "label": "Post-submit idle window", "min": 0, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
+    {"key": "manual_submit_poll_delay_ms", "label": "Submit poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_post_submit_success_delay_ms", "label": "Post-submit success poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_pick_detected_poll_delay_ms", "label": "Manual-pick detected poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling"},
+    {"key": "manual_pick_wait_poll_delay_ms", "label": "Manual-pick wait poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_phase_poll_fast_ms", "label": "Phase poll (fast)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_phase_poll_medium_ms", "label": "Phase poll (medium)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_phase_poll_slow_ms", "label": "Phase poll (slow)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_phase_poll_recovery_ms", "label": "Phase poll (recovery)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_phase_poll_backoff_ms", "label": "Phase poll (backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_phase_poll_hard_backoff_ms", "label": "Phase poll (hard backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling"},
+    {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora"},
+    {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora"},
+    {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
+    {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "multi_video_download_finish_poll_ms", "label": "Multi-video finish poll delay", "min": 0, "max": 5000, "step": 50, "group": "Grok Polling"},
+    {"key": "multi_video_status_log_every_attempts", "label": "Multi-video status log every N attempts", "min": 1, "max": 20, "step": 1, "group": "Grok Polling", "suffix": " attempts"},
+    {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Grok Polling"},
+    {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
+    {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
+    {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
+    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
+)
+
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
 
@@ -2852,8 +2931,6 @@ class FilteredWebEnginePage(QWebEnginePage):
 
 
 class MainWindow(QMainWindow):
-    DEFAULT_AUTOMATION_ACTION_DELAY_MS = 1000
-    DEFAULT_AUTOMATION_RETRY_ATTEMPTS = 3
     DEFAULT_BROWSER_ZOOM_FACTOR = 0.5
 
     def __init__(self):
@@ -2866,6 +2943,7 @@ class MainWindow(QMainWindow):
         self.stitch_worker: StitchWorker | None = None
         self.upload_worker: UploadWorker | None = None
         self.social_upload_pending: dict[str, dict[str, Any]] = {}
+        self.automation_timing_values: dict[str, int] = dict(AUTOMATION_TIMING_DEFAULTS)
         self.tiktok_upload_automation_options: dict[str, Any] = {
             "publish_mode": "draft",
             "add_text_overlay": False,
@@ -3175,17 +3253,17 @@ class MainWindow(QMainWindow):
         self.automation_action_delay_ms.setRange(100, 10000)
         self.automation_action_delay_ms.setSingleStep(10)
         self.automation_action_delay_ms.setSuffix(" ms")
-        self.automation_action_delay_ms.setValue(self.DEFAULT_AUTOMATION_ACTION_DELAY_MS)
+        self.automation_action_delay_ms.setValue(AUTOMATION_TIMING_DEFAULTS["automation_action_delay_ms"])
 
         self.automation_retry_attempts = QSpinBox()
         self.automation_retry_attempts.setRange(1, 20)
-        self.automation_retry_attempts.setValue(self.DEFAULT_AUTOMATION_RETRY_ATTEMPTS)
+        self.automation_retry_attempts.setValue(AUTOMATION_TIMING_DEFAULTS["automation_retry_attempts"])
 
         self.manual_download_poll_interval_ms = QSpinBox()
         self.manual_download_poll_interval_ms.setRange(1000, 60000)
         self.manual_download_poll_interval_ms.setSingleStep(250)
         self.manual_download_poll_interval_ms.setSuffix(" ms")
-        self.manual_download_poll_interval_ms.setValue(MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS)
+        self.manual_download_poll_interval_ms.setValue(AUTOMATION_TIMING_DEFAULTS["manual_download_poll_interval_ms"])
 
         left_layout.addWidget(prompt_group)
 
@@ -5005,6 +5083,94 @@ class MainWindow(QMainWindow):
             action.setChecked(visible)
             action.blockSignals(False)
 
+    def _automation_timing(self, key: str) -> int:
+        default_value = int(AUTOMATION_TIMING_DEFAULTS.get(key, 0))
+        try:
+            return int(self.automation_timing_values.get(key, default_value))
+        except Exception:
+            return default_value
+
+    def _apply_automation_timing_values(self, values: dict[str, int], *, schedule_autosave: bool = True) -> None:
+        merged = dict(AUTOMATION_TIMING_DEFAULTS)
+        for key in AUTOMATION_TIMING_DEFAULTS:
+            if key in values:
+                try:
+                    merged[key] = int(values[key])
+                except Exception:
+                    pass
+        self.automation_timing_values = merged
+
+        # Keep legacy inline controls in sync for compatibility.
+        self.automation_action_delay_ms.setValue(self._automation_timing("automation_action_delay_ms"))
+        self.automation_retry_attempts.setValue(self._automation_timing("automation_retry_attempts"))
+        self.manual_download_poll_interval_ms.setValue(self._automation_timing("manual_download_poll_interval_ms"))
+
+        if schedule_autosave:
+            self._schedule_preferences_autosave()
+
+    def _reset_automation_timings_to_defaults(self) -> None:
+        self._apply_automation_timing_values(dict(AUTOMATION_TIMING_DEFAULTS), schedule_autosave=True)
+        self._append_automation_log("Automation timings reset to defaults.")
+
+    def _open_automation_timings_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Automation Timings")
+        dialog.setMinimumWidth(560)
+
+        layout = QVBoxLayout(dialog)
+        scroll = QScrollArea(dialog)
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+
+        spinboxes: dict[str, QSpinBox] = {}
+        groups: dict[str, QFormLayout] = {}
+        group_boxes: dict[str, QGroupBox] = {}
+        for field in AUTOMATION_TIMING_FIELDS:
+            group_name = str(field.get("group") or "General")
+            if group_name not in groups:
+                group_box = QGroupBox(group_name)
+                form_layout = QFormLayout(group_box)
+                form_layout.setContentsMargins(10, 8, 10, 8)
+                form_layout.setSpacing(6)
+                groups[group_name] = form_layout
+                group_boxes[group_name] = group_box
+                container_layout.addWidget(group_box)
+            spin = QSpinBox()
+            spin.setRange(int(field.get("min", 0)), int(field.get("max", 60000)))
+            spin.setSingleStep(int(field.get("step", 1)))
+            if field.get("suffix"):
+                spin.setSuffix(str(field.get("suffix")))
+            else:
+                spin.setSuffix(" ms")
+            key = str(field["key"])
+            spin.setValue(self._automation_timing(key))
+            groups[group_name].addRow(str(field.get("label") or key), spin)
+            spinboxes[key] = spin
+
+        container_layout.addStretch(1)
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.RestoreDefaults)
+
+        def _restore_defaults() -> None:
+            for key, spin in spinboxes.items():
+                spin.setValue(int(AUTOMATION_TIMING_DEFAULTS.get(key, spin.value())))
+
+        buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(_restore_defaults)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != int(QDialog.DialogCode.Accepted):
+            return
+
+        selected_values: dict[str, int] = {}
+        for key, spin in spinboxes.items():
+            selected_values[key] = int(spin.value())
+        self._apply_automation_timing_values(selected_values, schedule_autosave=True)
+
     def _refresh_browser_tab_selection(self) -> None:
         current = self.browser_tabs.currentIndex()
         if current >= 0 and self.browser_tabs.isTabVisible(current):
@@ -5052,6 +5218,13 @@ class MainWindow(QMainWindow):
         self.audio_settings_menu = audio_menu.addMenu("Settings")
 
         self.automation_menu = menu_bar.addMenu("Automation")
+        automation_timings_action = QAction("Timings…", self)
+        automation_timings_action.triggered.connect(self._open_automation_timings_dialog)
+        self.automation_menu.addAction(automation_timings_action)
+        automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
+        automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
+        self.automation_menu.addAction(automation_reset_timings_action)
+        self.automation_menu.addSeparator()
 
         cdp_settings_menu = menu_bar.addMenu("CDP Settings")
         cdp_enabled_action = QAction("Enable CDP", self)
@@ -5258,6 +5431,15 @@ class MainWindow(QMainWindow):
         self.video_grok_settings_menu.clear()
         self.audio_settings_menu.clear()
         self.automation_menu.clear()
+
+        automation_timings_action = QAction("Timings…", self)
+        automation_timings_action.triggered.connect(self._open_automation_timings_dialog)
+        self.automation_menu.addAction(automation_timings_action)
+
+        automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
+        automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
+        self.automation_menu.addAction(automation_reset_timings_action)
+        self.automation_menu.addSeparator()
 
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
         self._add_widget_to_menu(self.video_settings_menu, self.video_options_dropdown)
@@ -5760,9 +5942,10 @@ class MainWindow(QMainWindow):
             "quick_actions_toolbar_visible": self.quick_actions_toolbar.isVisible(),
             "automation_mode": self.automation_mode.currentData(),
             "counter": self.count.value(),
-            "automation_action_delay_ms": int(self.automation_action_delay_ms.value()),
-            "automation_retry_attempts": int(self.automation_retry_attempts.value()),
-            "manual_download_poll_interval_ms": int(self.manual_download_poll_interval_ms.value()),
+            "automation_action_delay_ms": self._automation_timing("automation_action_delay_ms"),
+            "automation_retry_attempts": self._automation_timing("automation_retry_attempts"),
+            "manual_download_poll_interval_ms": self._automation_timing("manual_download_poll_interval_ms"),
+            "automation_timing_values": dict(self.automation_timing_values),
             "multi_video_manual_pick": self.multi_video_manual_pick_checkbox.isChecked(),
             "manual_pick_after_prompt": self.manual_pick_after_prompt_checkbox.isChecked(),
             "tiktok_upload_automation_options": {k: v for k, v in self.tiktok_upload_automation_options.items() if k != "music_query_effective"},
@@ -6003,21 +6186,22 @@ class MainWindow(QMainWindow):
                 self.count.setValue(int(preferences["count"]))
             except (TypeError, ValueError):
                 pass
-        if "automation_action_delay_ms" in preferences:
-            try:
-                self.automation_action_delay_ms.setValue(int(preferences["automation_action_delay_ms"]))
-            except (TypeError, ValueError):
-                pass
-        if "automation_retry_attempts" in preferences:
-            try:
-                self.automation_retry_attempts.setValue(int(preferences["automation_retry_attempts"]))
-            except (TypeError, ValueError):
-                pass
-        if "manual_download_poll_interval_ms" in preferences:
-            try:
-                self.manual_download_poll_interval_ms.setValue(int(preferences["manual_download_poll_interval_ms"]))
-            except (TypeError, ValueError):
-                pass
+        loaded_automation_timings = dict(AUTOMATION_TIMING_DEFAULTS)
+        raw_automation_timings = preferences.get("automation_timing_values")
+        if isinstance(raw_automation_timings, dict):
+            for key in AUTOMATION_TIMING_DEFAULTS:
+                if key in raw_automation_timings:
+                    try:
+                        loaded_automation_timings[key] = int(raw_automation_timings[key])
+                    except (TypeError, ValueError):
+                        pass
+        for legacy_key in ("automation_action_delay_ms", "automation_retry_attempts", "manual_download_poll_interval_ms"):
+            if legacy_key in preferences:
+                try:
+                    loaded_automation_timings[legacy_key] = int(preferences[legacy_key])
+                except (TypeError, ValueError):
+                    pass
+        self._apply_automation_timing_values(loaded_automation_timings, schedule_autosave=False)
         if "multi_video_manual_pick" in preferences:
             self.multi_video_manual_pick_checkbox.setChecked(bool(preferences["multi_video_manual_pick"]))
         if "manual_pick_after_prompt" in preferences:
@@ -6518,7 +6702,7 @@ class MainWindow(QMainWindow):
                 except Exception as exc:
                     self._append_automation_log(f"WARNING: Failed to stop previous workflow cleanly: {exc}")
 
-            action_delay_ms = int(self.automation_action_delay_ms.value())
+            action_delay_ms = self._automation_timing("automation_action_delay_ms")
             worker = UdpWorkflowWorker(
                 platform_name=platform_name,
                 video_path=video_path,
@@ -6655,7 +6839,7 @@ class MainWindow(QMainWindow):
                 "Continue-from-last-frame: detected post page reload after image upload. "
                 "Applying video options, then entering continuation prompt."
             )
-            QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
+            QTimer.singleShot(self._automation_timing("continue_post_reload_generation_delay_ms"), lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
             return
 
         self._append_log(
@@ -8525,21 +8709,21 @@ class MainWindow(QMainWindow):
 
         def _retry_variant(reason: str) -> None:
             self._append_log(f"WARNING: Manual image variant {variant} attempt {attempts} failed: {reason}")
-            max_attempts = int(self.automation_retry_attempts.value())
+            max_attempts = self._automation_timing("automation_retry_attempts")
             if attempts >= max_attempts:
                 self._append_log(
                     f"WARNING: Could not prepare manual image variant {variant} after {attempts} attempts; "
                     "assuming submit already happened and continuing with image-ready polling."
                 )
-                QTimer.singleShot(700, self._poll_for_manual_image)
+                QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
                 return
             self.manual_image_generation_queue.insert(0, item)
-            QTimer.singleShot(1200, self._submit_next_manual_image_variant)
+            QTimer.singleShot(self._automation_timing("manual_submit_poll_delay_ms"), self._submit_next_manual_image_variant)
 
         submit_attempts = 0
-        max_submit_attempts = max(1, int(self.automation_retry_attempts.value()))
-        manual_handoff_timeout_ms = max(5000, _env_int("GROK_MANUAL_SUBMIT_HANDOFF_TIMEOUT_MS", 45000))
-        manual_handoff_poll_ms = 450
+        max_submit_attempts = max(1, self._automation_timing("automation_retry_attempts"))
+        manual_handoff_timeout_ms = max(5000, self._automation_timing("manual_submit_handoff_timeout_ms"))
+        manual_handoff_poll_ms = max(100, self._automation_timing("manual_submit_handoff_poll_ms"))
         manual_handoff_started_at_ms = 0
         manual_handoff_token = ""
         enter_script = r"""
@@ -8773,7 +8957,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Submitted manual image variant {variant} (attempt {attempts}); starting manual-pick polling immediately."
                 )
-                QTimer.singleShot(350, self._poll_for_manual_image)
+                QTimer.singleShot(self._automation_timing("manual_submit_result_poll_delay_ms"), self._poll_for_manual_image)
                 return
 
             if isinstance(result, dict) and result.get("waiting"):
@@ -8781,7 +8965,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Manual image variant {variant}: submit target not ready (attempt {submit_attempts}); retrying coordinate click only..."
                     )
-                    QTimer.singleShot(500, _run_submit_attempt)
+                    QTimer.singleShot(self._automation_timing("manual_submit_retry_delay_ms"), _run_submit_attempt)
                     return
                 _retry_variant(f"submit target stayed not-ready for coordinate click: {result!r}")
                 return
@@ -8791,7 +8975,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Manual image variant {variant}: submit callback returned empty result (attempt {submit_attempts}); retrying coordinate click only..."
                     )
-                    QTimer.singleShot(500, _run_submit_attempt)
+                    QTimer.singleShot(self._automation_timing("manual_submit_retry_delay_ms"), _run_submit_attempt)
                     return
                 _retry_variant(f"submit callback stayed empty after coordinate-click attempts: {result!r}")
                 return
@@ -8829,7 +9013,7 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            step_pause_ms = max(100, action_delay_ms)
+            step_pause_ms = option_step_delay_ms
             option_steps = [
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
@@ -8868,8 +9052,9 @@ class MainWindow(QMainWindow):
 
             QTimer.singleShot(step_pause_ms, lambda: _run_option_step(0))
 
-        action_delay_ms = int(self.automation_action_delay_ms.value())
-        submit_delay_ms = action_delay_ms
+        action_delay_ms = self._automation_timing("automation_action_delay_ms")
+        option_step_delay_ms = max(100, self._automation_timing("manual_form_option_step_delay_ms"))
+        submit_delay_ms = max(100, self._automation_timing("manual_form_submit_delay_ms"))
         disable_video_option_selection = os.getenv("GROK_DISABLE_VIDEO_OPTION_SELECTION", "0").strip().lower() not in {"0", "false", "no"}
 
         def _after_populate(result):
@@ -8913,7 +9098,7 @@ class MainWindow(QMainWindow):
             self._run_active_browser_javascript(set_image_mode_script, _after_set_mode)
 
     def _set_manual_post_submit_idle_window(self) -> int:
-        idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 200))
+        idle_ms = max(0, self._automation_timing("manual_post_submit_idle_ms"))
         if idle_ms <= 0:
             self.manual_post_submit_idle_until = 0.0
             self.manual_post_submit_idle_token = -1
@@ -8963,11 +9148,11 @@ class MainWindow(QMainWindow):
                     f"Variant {variant}: submit accepted; releasing page activity for {remaining_ms / 1000:.1f}s before next automation check."
                 )
                 self.manual_post_submit_idle_token = -1
-            QTimer.singleShot(min(remaining_ms, 1500), self._poll_for_manual_image)
+            QTimer.singleShot(min(remaining_ms, self._automation_timing("manual_poll_pause_cap_ms")), self._poll_for_manual_image)
             return
 
         if self.multi_video_mode_active:
-            QTimer.singleShot(200, self._poll_multi_video_post_urls)
+            QTimer.singleShot(self._automation_timing("manual_multi_video_poll_fast_ms"), self._poll_multi_video_post_urls)
             return
 
         prompt = self.pending_manual_image_prompt or ""
@@ -9006,7 +9191,7 @@ class MainWindow(QMainWindow):
                         f"Variant {variant}: post URL is already open before manual pick; waiting for you to pick an image from the image grid."
                     )
                     self.manual_manual_pick_stale_warn_token = self.manual_image_submit_token
-                QTimer.singleShot(1200, self._poll_for_manual_image)
+                QTimer.singleShot(self._automation_timing("manual_pick_wait_poll_delay_ms"), self._poll_for_manual_image)
                 return
 
             if post_id_from_browser:
@@ -9023,7 +9208,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_pick_retry_count = 0
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
-                QTimer.singleShot(250, self._poll_for_manual_image)
+                QTimer.singleShot(self._automation_timing("manual_pick_detected_poll_delay_ms"), self._poll_for_manual_image)
                 return
 
         if not self.manual_image_pick_clicked:
@@ -9046,7 +9231,7 @@ class MainWindow(QMainWindow):
                 const submitToken = {self.manual_image_submit_token};
                 const submitAttemptAllowed = {"true" if submit_attempt_allowed else "false"};
                 const manualSinglePickMode = {"true" if (self.manual_single_video_manual_pick and not self.multi_video_mode_active) else "false"};
-                const ACTION_DELAY_MS = 200;
+                const ACTION_DELAY_MS = {self._automation_timing("automation_action_delay_ms")};
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
@@ -9318,7 +9503,7 @@ class MainWindow(QMainWindow):
                                     if (remainingDelayMs > 0) await sleep(remainingDelayMs);
                                     if (robustDirectClick(cancelButton)) {{
                                         window.__grokManualCancelVideoClickToken = submitToken;
-                                        await sleep(ACTION_DELAY_MS + 320);
+                                        await sleep(ACTION_DELAY_MS + {self._automation_timing("manual_menu_settle_extra_ms")});
                                     }}
                                 }}
 
@@ -9340,7 +9525,7 @@ class MainWindow(QMainWindow):
                                     if (!clickedNow) continue;
                                     window.__grokManualVideoModeClickToken = submitToken;
                                     window.__grokManualVideoModeClickAtMs = Date.now();
-                                    await sleep(ACTION_DELAY_MS + 260);
+                                    await sleep(ACTION_DELAY_MS + {self._automation_timing("manual_video_mode_settle_extra_ms")});
 
                                     const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
                                         .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
@@ -9581,7 +9766,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_pick_retry_count = 0
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(1000, self._poll_for_manual_image)
+                    QTimer.singleShot(self._automation_timing("manual_post_submit_success_delay_ms"), self._poll_for_manual_image)
                     return
 
                 if status in ("video-mode-selected", "video-mode-ready"):
@@ -9599,7 +9784,7 @@ class MainWindow(QMainWindow):
                             f"Variant {current_variant}: video mode active but prompt controls not ready; waiting "
                             f"(cancelVisible={cancel_visible}, generationVisible={generation_visible}, promptVisible={prompt_visible}, submitVisible={submit_visible}, manualPick={self.manual_single_video_manual_pick and not self.multi_video_mode_active})."
                         )
-                        QTimer.singleShot(900, self._poll_for_manual_image)
+                        QTimer.singleShot(self._automation_timing("manual_phase_poll_medium_ms"), self._poll_for_manual_image)
                         return
                     if not self.manual_image_video_mode_selected:
                         self._append_log(
@@ -9612,24 +9797,24 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
                     return
 
                 if status in ("make-video-click-failed", "video-submit-enter-failed"):
                     self.manual_image_submit_retry_count += 1
                     self._append_log(
                         f"WARNING: Variant {current_variant}: trailing Enter submit was not confirmed; retrying prompt submit "
-                        f"(attempt {self.manual_image_submit_retry_count}/{int(self.automation_retry_attempts.value())})."
+                        f"(attempt {self.manual_image_submit_retry_count}/{self._automation_timing("automation_retry_attempts")})."
                     )
-                    if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
+                    if self.manual_image_submit_retry_count >= self._automation_timing("automation_retry_attempts"):
                         self._append_log(
                             f"ERROR: Variant {current_variant}: Make video click failed after "
                             f"{self.manual_image_submit_retry_count} attempts; keeping flow in submit stage for manual recovery."
                         )
                         self.manual_image_submit_retry_count = 0
-                        QTimer.singleShot(1800, self._poll_for_manual_image)
+                        QTimer.singleShot(self._automation_timing("manual_phase_poll_recovery_ms"), self._poll_for_manual_image)
                         return
-                    QTimer.singleShot(900, self._poll_for_manual_image)
+                    QTimer.singleShot(self._automation_timing("manual_phase_poll_medium_ms"), self._poll_for_manual_image)
                     return
 
                 if status in ("video-submit-clicked", "video-submit-enter-dispatched", "video-submit-already-clicked"):
@@ -9667,7 +9852,7 @@ class MainWindow(QMainWindow):
                         self.pending_manual_variant_for_download = None
                         self.pending_manual_download_type = None
                         self.pending_manual_image_prompt = None
-                        QTimer.singleShot(1200, self._poll_multi_video_post_urls)
+                        QTimer.singleShot(self._automation_timing("manual_multi_video_poll_ms"), self._poll_multi_video_post_urls)
                         return
                     self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                     return
@@ -9703,12 +9888,12 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"Variant {current_variant}: waiting for manual image pick. Open a generated image so URL changes to /imagine/post/<id> (or /post/<id>)."
                     )
-                    QTimer.singleShot(1200, self._poll_for_manual_image)
+                    QTimer.singleShot(self._automation_timing("manual_pick_wait_poll_delay_ms"), self._poll_for_manual_image)
                     return
 
                 def _queue_pick_retry(current_status: str) -> None:
                     self.manual_image_pick_retry_count += 1
-                    if self.manual_image_pick_retry_count >= int(self.automation_retry_attempts.value()):
+                    if self.manual_image_pick_retry_count >= self._automation_timing("automation_retry_attempts"):
                         if current_status == "callback-empty":
                             self._append_log(
                                 "WARNING: Variant "
@@ -9716,7 +9901,7 @@ class MainWindow(QMainWindow):
                                 f"{self.manual_image_pick_retry_count} checks; keeping pick stage active and continuing image-ready polling."
                             )
                             self.manual_image_pick_retry_count = 0
-                            QTimer.singleShot(1200, self._poll_for_manual_image)
+                            QTimer.singleShot(self._automation_timing("manual_pick_wait_poll_delay_ms"), self._poll_for_manual_image)
                             return
                         self._append_log(
                             "WARNING: Variant "
@@ -9896,7 +10081,7 @@ class MainWindow(QMainWindow):
                         })()
                     """
                     self._run_active_browser_javascript(scroll_to_bottom_script)
-                    QTimer.singleShot(3000, self._poll_for_manual_image)
+                    QTimer.singleShot(self._automation_timing("manual_phase_poll_hard_backoff_ms"), self._poll_for_manual_image)
 
                 if status == "callback-empty":
                     pick_ready_probe_script = """
@@ -10039,11 +10224,11 @@ class MainWindow(QMainWindow):
                             self.manual_image_video_mode_selected = False
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
                             return
 
                         self.manual_image_video_mode_retry_count += 1
-                        if self.manual_image_video_mode_retry_count >= int(self.automation_retry_attempts.value()):
+                        if self.manual_image_video_mode_retry_count >= self._automation_timing("automation_retry_attempts"):
                             prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
                             generation_visible = bool(isinstance(result, dict) and result.get("generationInProgress"))
                             make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
@@ -10061,7 +10246,7 @@ class MainWindow(QMainWindow):
                                     "holding video-mode stage to avoid duplicate submits and continuing checks."
                                 )
                                 self.manual_image_video_mode_retry_count = 0
-                                QTimer.singleShot(1800, self._poll_for_manual_image)
+                                QTimer.singleShot(self._automation_timing("manual_phase_poll_recovery_ms"), self._poll_for_manual_image)
                                 return
 
                             if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
@@ -10075,7 +10260,7 @@ class MainWindow(QMainWindow):
                                     self.manual_image_video_mode_selected = True
                                     self.manual_image_video_mode_retry_count = 0
                                     self.manual_image_submit_retry_count = 0
-                                    QTimer.singleShot(700, self._poll_for_manual_image)
+                                    QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
                                     return
                                 self._append_log(
                                     "WARNING: Variant "
@@ -10084,7 +10269,7 @@ class MainWindow(QMainWindow):
                                     "continuing to wait for cancel→prompt transition."
                                 )
                                 self.manual_image_video_mode_retry_count = 0
-                                QTimer.singleShot(1500, self._poll_for_manual_image)
+                                QTimer.singleShot(self._automation_timing("manual_phase_poll_slow_ms"), self._poll_for_manual_image)
                                 return
 
                             self._append_log(
@@ -10098,7 +10283,7 @@ class MainWindow(QMainWindow):
                             self.manual_image_video_mode_selected = True
                             self.manual_image_video_mode_retry_count = 0
                             self.manual_image_submit_retry_count = 0
-                            QTimer.singleShot(700, self._poll_for_manual_image)
+                            QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
                             return
 
                         prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
@@ -10111,13 +10296,13 @@ class MainWindow(QMainWindow):
                             f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                             f"submitVisible={submit_visible}, postView={on_post_view}, generationProbe={generation_signal_probe}); retrying..."
                         )
-                        QTimer.singleShot(2500, self._poll_for_manual_image)
+                        QTimer.singleShot(self._automation_timing("manual_phase_poll_backoff_ms"), self._poll_for_manual_image)
 
                     self._run_active_browser_javascript(generation_state_probe_script, _after_generation_state_probe)
                     return
 
                 self.manual_image_video_mode_retry_count += 1
-                if self.manual_image_video_mode_retry_count >= int(self.automation_retry_attempts.value()):
+                if self.manual_image_video_mode_retry_count >= self._automation_timing("automation_retry_attempts"):
                     prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
                     generation_visible = bool(isinstance(result, dict) and result.get("generationInProgress"))
                     make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
@@ -10134,7 +10319,7 @@ class MainWindow(QMainWindow):
                             "holding video-mode stage to avoid duplicate submits and continuing checks."
                         )
                         self.manual_image_video_mode_retry_count = 0
-                        QTimer.singleShot(1800, self._poll_for_manual_image)
+                        QTimer.singleShot(self._automation_timing("manual_phase_poll_recovery_ms"), self._poll_for_manual_image)
                         return
 
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
@@ -10155,7 +10340,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_video_mode_selected = True
                     self.manual_image_video_mode_retry_count = 0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(700, self._poll_for_manual_image)
+                    QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
                     return
 
                 prompt_visible = bool(isinstance(result, dict) and result.get("promptInputVisible"))
@@ -10168,7 +10353,7 @@ class MainWindow(QMainWindow):
                     f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                     f"submitVisible={submit_visible}, postView={on_post_view}); retrying..."
                 )
-                QTimer.singleShot(2500, self._poll_for_manual_image)
+                QTimer.singleShot(self._automation_timing("manual_phase_poll_backoff_ms"), self._poll_for_manual_image)
                 return
 
             if status in ("callback-empty", "submit-in-flight"):
@@ -10252,7 +10437,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(1200, self._poll_for_manual_image)
+                    QTimer.singleShot(self._automation_timing("manual_pick_wait_poll_delay_ms"), self._poll_for_manual_image)
 
                 self._run_active_browser_javascript(submit_ready_probe_script, _after_submit_ready_probe)
                 return
@@ -10262,7 +10447,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_submit_in_flight_since = 0.0
 
             self.manual_image_submit_retry_count += 1
-            if self.manual_image_submit_retry_count >= int(self.automation_retry_attempts.value()):
+            if self.manual_image_submit_retry_count >= self._automation_timing("automation_retry_attempts"):
                 if status == "prompt-fill-empty":
                     self._append_log(
                         "WARNING: Variant "
@@ -10272,14 +10457,14 @@ class MainWindow(QMainWindow):
                     self.manual_image_submit_in_flight = False
                     self.manual_image_submit_in_flight_since = 0.0
                     self.manual_image_submit_retry_count = 0
-                    QTimer.singleShot(1200, self._poll_for_manual_image)
+                    QTimer.singleShot(self._automation_timing("manual_pick_wait_poll_delay_ms"), self._poll_for_manual_image)
                     return
 
                 self.manual_image_submit_retry_count = 0
-                QTimer.singleShot(1200, self._poll_for_manual_image)
+                QTimer.singleShot(self._automation_timing("manual_pick_wait_poll_delay_ms"), self._poll_for_manual_image)
                 return
 
-            QTimer.singleShot(1200, self._poll_for_manual_image)
+            QTimer.singleShot(self._automation_timing("manual_phase_poll_slow_ms"), self._poll_for_manual_image)
 
         self._run_active_browser_javascript(script, _after_poll)
         if phase == "submit" and submit_attempt_allowed:
@@ -10389,7 +10574,7 @@ class MainWindow(QMainWindow):
         self.pending_manual_redirect_target = self._active_manual_browser_target()
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
-        action_delay_ms = int(self.automation_action_delay_ms.value())
+        action_delay_ms = self._automation_timing("automation_action_delay_ms")
         active_browser_target = self._active_manual_browser_target()
         is_sora_manual_flow = active_browser_target == "sora"
         selected_quality_label = self.video_resolution.currentText().split(" ", 1)[0]
@@ -11322,14 +11507,14 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(700, _run_flow_submit)
+                        QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
 
                     self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
                     return
@@ -11408,19 +11593,19 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(700, _run_flow_submit)
+                        QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
 
                     self._run_active_browser_javascript(enter_script, _after_enter_press)
                     return
 
-                QTimer.singleShot(2000, _run_flow_submit)
+                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _run_flow_submit)
 
             self._run_active_browser_javascript(script, _after_prompt_populate)
 
@@ -11452,7 +11637,7 @@ class MainWindow(QMainWindow):
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
                 self._append_log(f"Variant {variant}: all staged options attempted; continuing to prompt entry.")
-                QTimer.singleShot(2000, _populate_prompt_then_submit)
+                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _populate_prompt_then_submit)
                 return
 
             step_name, label = option_steps[step_index]
@@ -11467,7 +11652,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"WARNING: Variant {variant}: could not confirm click for {step_name} option '{label}'. result={step_result!r}"
                     )
-                QTimer.singleShot(2000, lambda: _run_option_step(step_index + 1))
+                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), lambda: _run_option_step(step_index + 1))
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
@@ -11481,7 +11666,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, _populate_prompt_then_submit)
                 return
             self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
-            QTimer.singleShot(2000, lambda: _run_option_step(0))
+            QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), lambda: _run_option_step(0))
 
         def _after_location_check(location_result):
             current_url = ""
@@ -11492,10 +11677,10 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     "Manual flow: current page is not grok.com/imagine/favorites; staying on the current page for automated flow."
                 )
-                QTimer.singleShot(2000, _open_options_then_steps)
+                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _open_options_then_steps)
             else:
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
-                QTimer.singleShot(2000, _open_options_then_steps)
+                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _open_options_then_steps)
 
         self._run_active_browser_javascript(
             "(() => ({ href: String((window.location && window.location.href) || '') }))()",
@@ -11504,8 +11689,8 @@ class MainWindow(QMainWindow):
 
     def _manual_download_poll_interval_ms(self) -> int:
         if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
-            return CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS
-        return max(1000, int(self.manual_download_poll_interval_ms.value()))
+            return max(1000, self._automation_timing("continue_download_poll_interval_ms"))
+        return max(1000, self._automation_timing("manual_download_poll_interval_ms"))
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
         if (
@@ -12270,7 +12455,7 @@ class MainWindow(QMainWindow):
             self._start_multi_video_background_downloads()
             return
         if self.browser is None:
-            QTimer.singleShot(1200, self._poll_multi_video_post_urls)
+            QTimer.singleShot(self._automation_timing("manual_multi_video_poll_ms"), self._poll_multi_video_post_urls)
             return
 
         auto_click_enabled = not self.multi_video_manual_pick
@@ -12380,7 +12565,7 @@ class MainWindow(QMainWindow):
                 )
             else:
                 self.multi_video_poll_retry_count += 1
-                if self.multi_video_poll_retry_count % 3 == 0:
+                if self.multi_video_poll_retry_count % max(1, self._automation_timing("multi_video_status_log_every_attempts")) == 0:
                     if self.multi_video_manual_pick:
                         self._append_log("Multi Video: waiting for your manual Make video picks and post ids...")
                     else:
@@ -12401,7 +12586,7 @@ class MainWindow(QMainWindow):
                 self._start_multi_video_background_downloads()
                 return
 
-            QTimer.singleShot(1200, self._poll_multi_video_post_urls)
+            QTimer.singleShot(self._automation_timing("manual_multi_video_poll_ms"), self._poll_multi_video_post_urls)
 
         self.multi_video_poll_in_flight = True
         try:
@@ -12409,7 +12594,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.multi_video_poll_in_flight = False
             self._append_log(f"WARNING: Multi Video probe script failed: {exc}")
-            QTimer.singleShot(1200, self._poll_multi_video_post_urls)
+            QTimer.singleShot(self._automation_timing("manual_multi_video_poll_ms"), self._poll_multi_video_post_urls)
 
     def _start_multi_video_background_downloads(self) -> None:
         if not self.multi_video_mode_active or self.stop_all_requested:
@@ -12429,7 +12614,7 @@ class MainWindow(QMainWindow):
         if not self.multi_video_mode_active or self.stop_all_requested:
             return
         if self.multi_video_download_future is not None and not self.multi_video_download_future.done():
-            self.multi_video_download_timer.start(1000)
+            self.multi_video_download_timer.start(self._automation_timing("multi_video_download_wait_active_ms"))
             return
 
         while self.multi_video_pending_downloads:
@@ -12488,7 +12673,7 @@ class MainWindow(QMainWindow):
             if future is None:
                 return
             if not future.done():
-                self.multi_video_download_timer.start(800)
+                self.multi_video_download_timer.start(self._automation_timing("multi_video_download_wait_future_ms"))
                 return
             self.multi_video_download_future = None
             try:
@@ -12516,9 +12701,9 @@ class MainWindow(QMainWindow):
             else:
                 self._append_log(f"Multi Video: variant {variant} not ready yet ({payload}); retrying.")
 
-            self.multi_video_download_timer.start(1200)
+            self.multi_video_download_timer.start(self._automation_timing("multi_video_download_retry_ms"))
 
-        QTimer.singleShot(200, _finish_download)
+        QTimer.singleShot(self._automation_timing("multi_video_download_finish_poll_ms"), _finish_download)
 
     def _try_udp_open_manual_video_menu(self, variant: int) -> tuple[bool, str]:
         if not self._active_ai_browser_external_control_enabled():
@@ -13071,7 +13256,7 @@ class MainWindow(QMainWindow):
         if self.continue_from_frame_active:
             self.continue_from_frame_completed += 1
             if self.continue_from_frame_completed < self.continue_from_frame_target_count:
-                QTimer.singleShot(800, self._start_continue_iteration)
+                QTimer.singleShot(self._automation_timing("continue_next_iteration_delay_ms"), self._start_continue_iteration)
             else:
                 self._append_log("Continue workflow complete.")
                 self._reset_automation_counter_tracking()
@@ -14278,7 +14463,7 @@ class MainWindow(QMainWindow):
 
     def _wait_for_continue_upload_reload(self) -> None:
         self.continue_from_frame_waiting_for_reload = True
-        self.continue_from_frame_reload_timeout_timer.start(10000)
+        self.continue_from_frame_reload_timeout_timer.start(self._automation_timing("continue_reload_timeout_ms"))
         self._append_log(
             "Continue-from-last-frame: image pasted. Grok should auto-reload after upload; "
             "waiting for the new page before entering the continuation prompt..."
@@ -16320,7 +16505,7 @@ class MainWindow(QMainWindow):
                 "caption": str(pending.get("caption") or ""),
                 "title": str(pending.get("title") or ""),
                 "platform": platform_name.lower(),
-                "action_delay_ms": int(self.automation_action_delay_ms.value()),
+                "action_delay_ms": self._automation_timing("automation_action_delay_ms"),
                 "video_path": str(pending.get("video_path") or ""),
                 "video_base64": str(pending.get("video_base64") or ""),
                 "video_name": str(pending.get("video_name") or "upload.mp4"),
