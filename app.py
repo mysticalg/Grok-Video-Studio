@@ -9236,7 +9236,7 @@ class MainWindow(QMainWindow):
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
-                    const promptSelectors = [
+                const promptSelectors = [
                         "textarea[placeholder*='Type to customize video' i]",
                         "input[placeholder*='Type to customize video' i]",
                         "textarea[aria-label*='Make a video' i]",
@@ -9548,6 +9548,24 @@ class MainWindow(QMainWindow):
                     return {{ ok: true, status: "video-submit-already-clicked" }};
                 }}
 
+                if (manualSinglePickMode) {{
+                    const preMakeVideoBtn = [...document.querySelectorAll("button[aria-label='Make video' i], button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
+                        .find((btn) => isActuallyVisible(btn) && !btn.disabled) || null;
+                    if (!preMakeVideoBtn) return {{ ok: false, status: "strict-prep-make-video-button-missing" }};
+
+                    const preClicked = emulateClick(preMakeVideoBtn);
+                    if (!preClicked) return {{ ok: false, status: "strict-prep-make-video-click-failed" }};
+
+                    await sleep(ACTION_DELAY_MS + 220);
+                    const cancelBtn = [...document.querySelectorAll("button, [role='button']")]
+                        .find((btn) => isActuallyVisible(btn) && !btn.disabled && /\bcancel\b/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim())) || null;
+                    if (cancelBtn) {{
+                        const cancelClicked = emulateClick(cancelBtn);
+                        if (!cancelClicked) return {{ ok: false, status: "strict-cancel-click-failed" }};
+                        await sleep(ACTION_DELAY_MS + 180);
+                    }}
+                }}
+
                 const promptSelectors = [
                     "textarea[placeholder*='Type to customize video' i]",
                     "input[placeholder*='Type to customize video' i]",
@@ -9627,6 +9645,9 @@ class MainWindow(QMainWindow):
                     "strict-settings-button-click-failed",
                     "strict-menu-make-video-missing",
                     "strict-make-video-click-failed",
+                    "strict-prep-make-video-button-missing",
+                    "strict-prep-make-video-click-failed",
+                    "strict-cancel-click-failed",
                     "strict-submit-make-video-button-missing",
                     "strict-submit-make-video-click-failed",
                 ):
@@ -9753,6 +9774,9 @@ class MainWindow(QMainWindow):
                 "strict-settings-button-click-failed",
                 "strict-menu-make-video-missing",
                 "strict-make-video-click-failed",
+                "strict-prep-make-video-button-missing",
+                "strict-prep-make-video-click-failed",
+                "strict-cancel-click-failed",
                 "strict-submit-make-video-button-missing",
                 "strict-submit-make-video-click-failed",
                 "prompt-fill-empty",
@@ -10049,7 +10073,7 @@ class MainWindow(QMainWindow):
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
                         self._append_log(
-                            f"Variant {current_variant}: action: running strict Settings → Make Video from image → prompt → submit path (UDP retries disabled)."
+                            f"Variant {current_variant}: action: running strict Settings → Make Video from image → cancel → prompt → submit path (UDP retries disabled)."
                         )
                     generation_state_probe_script = r"""
                         (() => {
@@ -10104,7 +10128,7 @@ class MainWindow(QMainWindow):
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
                                 f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
-                                "running strict Settings → Make Video → prompt → Make video path."
+                                "running strict Settings → Make Video → cancel → prompt → Make video path."
                             )
                             self.manual_image_submit_in_flight = False
                             self.manual_image_submit_in_flight_since = 0.0
