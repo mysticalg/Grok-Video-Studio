@@ -9235,12 +9235,31 @@ class MainWindow(QMainWindow):
                                 }})()
                                 : false;
 
+                            const attemptOpenSettings = (btn) => {{
+                                let clicked = false;
+                                try {{ btn.focus?.(); }} catch (_) {{}}
+                                clicked = emulateClick(btn) || clicked;
+                                if (!clicked) {{
+                                    try {{ btn.click?.(); clicked = true; }} catch (_) {{}}
+                                }}
+                                if (!clicked) {{
+                                    try {{
+                                        const rect = btn.getBoundingClientRect();
+                                        const cx = Math.floor(rect.left + rect.width / 2);
+                                        const cy = Math.floor(rect.top + rect.height / 2);
+                                        const hit = document.elementFromPoint(cx, cy);
+                                        if (hit) clicked = emulateClick(hit.closest("button, [role='button']") || hit) || clicked;
+                                    }} catch (_) {{}}
+                                }}
+                                return clicked;
+                            }};
+
                             optionsOpened = isExpanded || menuLinkedVisible;
                             if (!optionsOpened) {{
                                 let openedByClick = false;
-                                for (let attempt = 0; attempt < 3; attempt += 1) {{
-                                    openedByClick = emulateClick(settingsButton) || openedByClick;
-                                    await sleep(ACTION_DELAY_MS + 120);
+                                for (let attempt = 0; attempt < 4; attempt += 1) {{
+                                    openedByClick = attemptOpenSettings(settingsButton) || openedByClick;
+                                    await sleep(ACTION_DELAY_MS + 180);
                                     const expandedNow = String(settingsButton.getAttribute("aria-expanded") || "").toLowerCase() === "true";
                                     const linkedNowVisible = controlsId
                                         ? !!(() => {{
