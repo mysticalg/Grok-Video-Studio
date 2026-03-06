@@ -8944,8 +8944,38 @@ class MainWindow(QMainWindow):
                 self.manual_post_refresh_detected_post_id = post_id_from_browser
                 self._append_log(f"Variant {variant}: detected manual pick from URL ({post_id_from_browser}).")
                 self._append_log(
-                    f"Variant {variant}: manual pick confirmed; skipping refresh and attempting Settings open via DOM focus+click."
+                    f"Variant {variant}: manual pick confirmed; attempting refresh first, then Settings open via DOM focus+Tab+Space+click sequence."
                 )
+                refresh_post_script = r"""
+                    (() => {
+                        try {
+                            const url = new URL(String(window.location && window.location.href) || "", window.location.origin);
+                            url.searchParams.set("refresh", String(Date.now()));
+                            window.location.href = url.toString();
+                            return { ok: true, refreshed: true, target: url.toString() };
+                        } catch (_) {
+                            try {
+                                if (window.location && typeof window.location.reload === "function") {
+                                    window.location.reload();
+                                    return { ok: true, refreshed: true, target: "reload" };
+                                }
+                            } catch (_) {}
+                            return { ok: false, refreshed: false };
+                        }
+                    })()
+                """
+
+                def _after_manual_pick_refresh(refresh_result):
+                    if isinstance(refresh_result, dict) and refresh_result.get("ok"):
+                        self._append_log(
+                            f"Variant {variant}: post-pick refresh attempt dispatched ({refresh_result.get('target')})."
+                        )
+                    else:
+                        self._append_log(
+                            f"Variant {variant}: post-pick refresh attempt failed ({refresh_result!r}); continuing with Settings open attempts."
+                        )
+
+                self._run_active_browser_javascript(refresh_post_script, _after_manual_pick_refresh)
                 self._append_log(
                     f"Variant {variant}: ({post_id_from_browser}); proceeding to video-mode options."
                 )
@@ -8953,7 +8983,7 @@ class MainWindow(QMainWindow):
                 self.manual_image_pick_retry_count = 0
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
-                QTimer.singleShot(250, self._poll_for_manual_image)
+                QTimer.singleShot(900, self._poll_for_manual_image)
                 return
 
         if not self.manual_image_pick_clicked:
@@ -9152,6 +9182,7 @@ class MainWindow(QMainWindow):
                     let makeVideoItemFound = false;
                     let makeVideoClicked = false;
                     let settingsFocusAttempted = false;
+                    let settingsTabAttempted = false;
                     let settingsSpaceAttempted = false;
                     let settingsActivationAttempted = false;
 
@@ -9190,11 +9221,26 @@ class MainWindow(QMainWindow):
                             const attemptOpenSettings = (btn) => {{
                                 let activated = false;
                                 let focusAttempted = false;
+                                let tabAttempted = false;
                                 let spaceAttempted = false;
                                 try {{ btn.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
                                 try {{ btn.focus?.(); focusAttempted = true; }} catch (_) {{}}
 
                                 const keyboardCommon = {{ bubbles: true, cancelable: true, composed: true }};
+                                const dispatchTab = (target) => {{
+                                    if (!target) return false;
+                                    let moved = false;
+                                    try {{
+                                        target.dispatchEvent(new KeyboardEvent("keydown", {{ ...keyboardCommon, key: "Tab", code: "Tab", keyCode: 9, which: 9 }}));
+                                        moved = true;
+                                    }} catch (_) {{}}
+                                    try {{
+                                        target.dispatchEvent(new KeyboardEvent("keyup", {{ ...keyboardCommon, key: "Tab", code: "Tab", keyCode: 9, which: 9 }}));
+                                        moved = true;
+                                    }} catch (_) {{}}
+                                    return moved;
+                                }};
+                                tabAttempted = dispatchTab(document.activeElement || btn || document.body) || tabAttempted;
                                 const dispatchSpaceToggle = (target) => {{
                                     if (!target) return false;
                                     let toggled = false;
@@ -9242,7 +9288,7 @@ class MainWindow(QMainWindow):
                                         if (parentBtn && parentBtn !== btn) activated = emulateClick(parentBtn) || activated;
                                     }} catch (_) {{}}
                                 }}
-                                return {{ activated, focusAttempted, spaceAttempted }};
+                                return {{ activated, focusAttempted, tabAttempted, spaceAttempted }};
                             }};
 
                             const initialSignal = isMenuOpenSignal(settingsButton);
@@ -9255,6 +9301,7 @@ class MainWindow(QMainWindow):
                                     const openAttempt = attemptOpenSettings(settingsButton);
                                     openedByClick = !!(openAttempt && openAttempt.activated) || openedByClick;
                                     settingsFocusAttempted = !!(openAttempt && openAttempt.focusAttempted) || settingsFocusAttempted;
+                                    settingsTabAttempted = !!(openAttempt && openAttempt.tabAttempted) || settingsTabAttempted;
                                     settingsSpaceAttempted = !!(openAttempt && openAttempt.spaceAttempted) || settingsSpaceAttempted;
                                     settingsActivationAttempted = !!openAttempt || settingsActivationAttempted;
                                     await sleep(ACTION_DELAY_MS + 220);
@@ -9272,6 +9319,7 @@ class MainWindow(QMainWindow):
                                         status: "strict-settings-button-click-failed",
                                         onPostView,
                                         settingsFocusAttempted,
+                                        settingsTabAttempted,
                                         settingsSpaceAttempted,
                                         settingsActivationAttempted,
                                     }};
@@ -9312,6 +9360,7 @@ class MainWindow(QMainWindow):
                                 submitButtonVisible,
                                 onPostView,
                                 settingsFocusAttempted,
+                                settingsTabAttempted,
                                 settingsSpaceAttempted,
                                 settingsActivationAttempted,
                             }};
@@ -9368,6 +9417,7 @@ class MainWindow(QMainWindow):
                             submitButtonVisible,
                             onPostView,
                             settingsFocusAttempted,
+                            settingsTabAttempted,
                             settingsSpaceAttempted,
                             settingsActivationAttempted,
                         }};
@@ -9517,6 +9567,7 @@ class MainWindow(QMainWindow):
                     item_found = result.get("videoItemFound")
                     clicked = result.get("videoClicked")
                     settings_focus = bool(result.get("settingsFocusAttempted"))
+                    settings_tab = bool(result.get("settingsTabAttempted"))
                     settings_space = bool(result.get("settingsSpaceAttempted"))
                     settings_activation = bool(result.get("settingsActivationAttempted"))
                     prompt_visible = bool(result.get("promptInputVisible"))
@@ -9528,7 +9579,7 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"Variant {current_variant}: video stage ready "
                             f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
-                            f"settingsFocus={settings_focus}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
+                            f"settingsFocus={settings_focus}, settingsTab={settings_tab}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
                             f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                             f"submitVisible={submit_visible}, postView={on_post_view}); "
                             "refilling prompt."
@@ -9906,7 +9957,7 @@ class MainWindow(QMainWindow):
                                 QTimer.singleShot(350, self._poll_for_manual_image)
                                 return
                         self._append_log(
-                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + Space key + pointer/mouse/native click sequence), then selecting Make Video from menu."
+                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + Tab + Space key + pointer/mouse/native click sequence), then selecting Make Video from menu."
                         )
                     generation_state_probe_script = r"""
                         (() => {
@@ -10019,11 +10070,12 @@ class MainWindow(QMainWindow):
                         submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
                         on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
                         settings_focus = bool(isinstance(result, dict) and result.get("settingsFocusAttempted"))
+                        settings_tab = bool(isinstance(result, dict) and result.get("settingsTabAttempted"))
                         settings_space = bool(isinstance(result, dict) and result.get("settingsSpaceAttempted"))
                         settings_activation = bool(isinstance(result, dict) and result.get("settingsActivationAttempted"))
                         self._append_log(
                             f"Variant {current_variant}: waiting for video mode selection ({status}, "
-                            f"settingsFocus={settings_focus}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
+                            f"settingsFocus={settings_focus}, settingsTab={settings_tab}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
                             f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                             f"submitVisible={submit_visible}, postView={on_post_view}, generationProbe={generation_signal_probe}); retrying..."
                         )
@@ -10079,8 +10131,13 @@ class MainWindow(QMainWindow):
                 make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
                 submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
                 on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
+                settings_focus = bool(isinstance(result, dict) and result.get("settingsFocusAttempted"))
+                settings_tab = bool(isinstance(result, dict) and result.get("settingsTabAttempted"))
+                settings_space = bool(isinstance(result, dict) and result.get("settingsSpaceAttempted"))
+                settings_activation = bool(isinstance(result, dict) and result.get("settingsActivationAttempted"))
                 self._append_log(
                     f"Variant {current_variant}: waiting for video mode selection ({status}, "
+                    f"settingsFocus={settings_focus}, settingsTab={settings_tab}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
                     f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                     f"submitVisible={submit_visible}, postView={on_post_view}); retrying..."
                 )
