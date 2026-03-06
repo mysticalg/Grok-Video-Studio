@@ -9161,7 +9161,7 @@ class MainWindow(QMainWindow):
                     }}
 
                     if (!makeVideoItemFound) {{
-                        if (manualSinglePickMode && onPostView) {{
+                        if (manualSinglePickMode) {{
                             const exactAriaButtons = [...document.querySelectorAll("button[aria-label='Make video' i], [role='button'][aria-label='Make video' i]")]
                                 .filter((el, idx, arr) => arr.indexOf(el) === idx)
                                 .filter((el) => isActuallyVisible(el) && !el.disabled && !isSidebarControl(el));
@@ -9253,20 +9253,6 @@ class MainWindow(QMainWindow):
                                     onPostView,
                                 }};
                             }}
-                        }} else if (manualSinglePickMode && !onPostView) {{
-                            return {{
-                                ok: false,
-                                status: "waiting-for-video-mode",
-                                optionsOpened,
-                                videoItemFound: makeVideoItemFound,
-                                videoClicked: makeVideoClicked,
-                                promptInputVisible,
-                                generationInProgress,
-                                makeVideoButtonVisible,
-                                cancelVideoButtonVisible,
-                                submitButtonVisible,
-                                onPostView,
-                            }};
                         }} else {{
                             const triggerCandidates = [
                                 ...document.querySelectorAll("#model-select-trigger"),
