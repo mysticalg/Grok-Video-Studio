@@ -9084,19 +9084,20 @@ class MainWindow(QMainWindow):
                         if (!listItem) return true;
                         return !listItem.querySelector("div.invisible");
                     }};
-                    const makeVideoButtons = [...document.querySelectorAll("button[aria-label*='make video' i], [role='button'][aria-label*='make video' i]")]
-                        .filter((btn) => isActuallyVisible(btn) && !btn.disabled && !!listItemOf(btn) && listItemReady(btn) && !isInLastTwoListItems(btn));
-                    if (makeVideoButtons.length) {{
-                        makeVideoButtons.sort((a, b) => {{ const ar = a.getBoundingClientRect(); const br = b.getBoundingClientRect(); const rowDelta = Math.abs(ar.top - br.top); if (rowDelta > 20) return ar.top - br.top; return ar.left - br.left; }});
-                        const firstButton = makeVideoButtons[0];
-                        const tile = listItemOf(firstButton) || firstButton.parentElement;
-                        const tileImage = tile?.querySelector?.("img") || null;
-                        const clickedTile = emulateClick(tileImage) || emulateClick(tile);
+                    const imageTiles = [...document.querySelectorAll("img")]
+                        .map((img) => listItemOf(img) || img.closest("a, button, div, article, figure") || img)
+                        .filter((tile, idx, arr) => tile && arr.indexOf(tile) === idx)
+                        .filter((tile) => isActuallyVisible(tile) && listItemReady(tile) && !isInLastTwoListItems(tile));
+                    if (imageTiles.length) {{
+                        imageTiles.sort((a, b) => {{ const ar = a.getBoundingClientRect(); const br = b.getBoundingClientRect(); const rowDelta = Math.abs(ar.top - br.top); if (rowDelta > 20) return ar.top - br.top; return ar.left - br.left; }});
+                        const firstTile = imageTiles[0];
+                        const tileImage = firstTile?.querySelector?.("img") || null;
+                        const clickedTile = emulateClick(tileImage) || emulateClick(firstTile);
                         if (!clickedTile) return {{ ok: false, status: "generated-image-click-failed" }};
                         await sleep(ACTION_DELAY_MS);
                         return {{ ok: true, status: "generated-image-clicked" }};
                     }}
-                    return {{ ok: false, status: "waiting-for-make-video-button" }};
+                    return {{ ok: false, status: "waiting-for-generated-image-tile" }};
                 }}
 
                 if (phase === "video-mode") {{
