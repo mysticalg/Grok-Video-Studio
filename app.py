@@ -9215,19 +9215,63 @@ class MainWindow(QMainWindow):
 
                     if (!makeVideoItemFound) {{
                         if (manualSinglePickMode && onPostView) {{
-                            const settingsButton = [
+                            const settingsCandidates = [
                                 ...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]"),
+                                ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings' i], [role='button'][id^='radix-'][aria-label='Settings' i]"),
                                 ...document.querySelectorAll("button#radix-_r_2i_"),
-                            ].find((el) => isActuallyVisible(el) && !el.disabled) || null;
+                            ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                             .filter((el) => isActuallyVisible(el) && !el.disabled);
+                            const settingsButton = settingsCandidates[0] || null;
                             if (!settingsButton) {{
                                 return {{ ok: false, status: "strict-settings-button-missing", onPostView }};
                             }}
-                            optionsOpened = emulateClick(settingsButton);
+
+                            const isExpanded = String(settingsButton.getAttribute("aria-expanded") || "").toLowerCase() === "true";
+                            const controlsId = String(settingsButton.getAttribute("aria-controls") || "").trim();
+                            const menuLinkedVisible = controlsId
+                                ? !!(() => {{
+                                    const linked = document.getElementById(controlsId);
+                                    return linked && isVisible(linked);
+                                }})()
+                                : false;
+
+                            optionsOpened = isExpanded || menuLinkedVisible;
                             if (!optionsOpened) {{
-                                return {{ ok: false, status: "strict-settings-button-click-failed", onPostView }};
+                                let openedByClick = false;
+                                for (let attempt = 0; attempt < 3; attempt += 1) {{
+                                    openedByClick = emulateClick(settingsButton) || openedByClick;
+                                    await sleep(ACTION_DELAY_MS + 120);
+                                    const expandedNow = String(settingsButton.getAttribute("aria-expanded") || "").toLowerCase() === "true";
+                                    const linkedNowVisible = controlsId
+                                        ? !!(() => {{
+                                            const linked = document.getElementById(controlsId);
+                                            return linked && isVisible(linked);
+                                        }})()
+                                        : false;
+                                    menuAttempt = findMakeVideoInOpenMenu();
+                                    if (expandedNow || linkedNowVisible || !!menuAttempt.item) {{
+                                        optionsOpened = true;
+                                        break;
+                                    }}
+                                }}
+                                if (!openedByClick && !optionsOpened) {{
+                                    return {{ ok: false, status: "strict-settings-button-click-failed", onPostView }};
+                                }}
                             }}
+
                             await sleep(ACTION_DELAY_MS);
                             menuAttempt = findMakeVideoInOpenMenu();
+                            if (!menuAttempt.item && controlsId) {{
+                                const linkedMenuRoot = document.getElementById(controlsId);
+                                if (linkedMenuRoot) {{
+                                    const linkedItems = [
+                                        ...linkedMenuRoot.querySelectorAll("[role='menuitem'], [role='menuitemradio'], [role='option'], [data-radix-collection-item]")
+                                    ].filter((el) => isVisible(el));
+                                    const linkedMakeVideo = linkedItems.find((el) => isMakeVideoItem(el)) || null;
+                                    if (linkedMakeVideo) menuAttempt = {{ item: linkedMakeVideo }};
+                                }}
+                            }}
+
                             if (!menuAttempt.item) {{
                                 return {{ ok: false, status: "strict-menu-make-video-missing", onPostView }};
                             }}
