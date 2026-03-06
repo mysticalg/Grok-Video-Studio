@@ -9192,10 +9192,6 @@ class MainWindow(QMainWindow):
                                 return (br.width * br.height) - (ar.width * ar.height);
                             }});
 
-                            if (!preferredButtons.length) {{
-                                return {{ ok: false, status: "direct-make-video-button-missing", onPostView }};
-                            }}
-
                             const robustDirectClick = (btn) => {{
                                 const clickSingleTarget = (target) => {{
                                     if (!target) return false;
@@ -9233,7 +9229,23 @@ class MainWindow(QMainWindow):
                                 makeVideoClicked = true;
                             }}
 
+                            if (!clickConfirmed && clickAlreadySent) {{
+                                const cancelAlreadySent = window.__grokManualCancelVideoClickToken === submitToken;
+                                if (!cancelAlreadySent) {{
+                                    const cancelButton = [...document.querySelectorAll("button, [role='button']")]
+                                        .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el))) || null;
+                                    if (cancelButton && robustDirectClick(cancelButton)) {{
+                                        window.__grokManualCancelVideoClickToken = submitToken;
+                                        await sleep(ACTION_DELAY_MS + 220);
+                                        clickConfirmed = true;
+                                    }}
+                                }}
+                            }}
+
                             if (!clickConfirmed && !clickAlreadySent) {{
+                                if (!preferredButtons.length) {{
+                                    return {{ ok: false, status: "direct-make-video-button-missing", onPostView }};
+                                }}
                                 for (const makeVideoButton of preferredButtons.slice(0, 3)) {{
                                     const clickedNow = robustDirectClick(makeVideoButton);
                                     makeVideoClicked = clickedNow || makeVideoClicked;
@@ -9242,10 +9254,10 @@ class MainWindow(QMainWindow):
                                     await sleep(ACTION_DELAY_MS + 260);
 
                                     const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
-                                        .find((el) => isActuallyVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
+                                        .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
                                     const promptVisibleAfterClick = promptSelectors
                                         .flatMap((sel) => [...document.querySelectorAll(sel)])
-                                        .some((el) => isActuallyVisible(el) && !el.disabled);
+                                        .some((el) => isVisible(el) && !el.disabled);
 
                                     if (cancelVisibleAfterClick || promptVisibleAfterClick) {{
                                         clickConfirmed = true;
