@@ -9421,20 +9421,36 @@ class MainWindow(QMainWindow):
                 if (!typedValue.trim()) return {{ ok: false, status: "prompt-fill-empty" }};
 
                 await sleep(ACTION_DELAY_MS);
-                const makeVideoSubmitBtn = [...document.querySelectorAll("button[aria-label='Make video' i], button[aria-label*='make video' i]")]
-                    .find((btn) => isActuallyVisible(btn) && !btn.disabled) || null;
-                if (!makeVideoSubmitBtn) return {{ ok: false, status: "strict-submit-make-video-button-missing" }};
 
-                const clickedSubmit = emulateClick(makeVideoSubmitBtn);
-                if (!clickedSubmit) return {{ ok: false, status: "strict-submit-make-video-click-failed" }};
+                const dispatchEnter = (el) => {{
+                    const eventInit = {{ bubbles: true, cancelable: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 }};
+                    try {{ el.dispatchEvent(new KeyboardEvent("keydown", eventInit)); }} catch (_) {{}}
+                    try {{ el.dispatchEvent(new KeyboardEvent("keypress", eventInit)); }} catch (_) {{}}
+                    try {{ el.dispatchEvent(new KeyboardEvent("keyup", eventInit)); }} catch (_) {{}}
+                }};
+
+                if (promptInput.isContentEditable) {{
+                    try {{
+                        const sel = window.getSelection?.();
+                        if (sel && typeof sel.removeAllRanges === "function") {{
+                            const range = document.createRange();
+                            range.selectNodeContents(promptInput);
+                            range.collapse(false);
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        }}
+                    }} catch (_) {{}}
+                }}
+
+                dispatchEnter(promptInput);
 
                 const postUrlNow = String((window.location && window.location.href) || "");
                 const onPostUrlNow = /\\/imagine\\/post\\//i.test(postUrlNow);
                 window.__grokManualVideoSubmitToken = submitToken;
                 return {{
                     ok: true,
-                    status: "video-submit-clicked",
-                    buttonLabel: "make-video-button",
+                    status: "video-submit-enter-dispatched",
+                    buttonLabel: "prompt-enter",
                     filledLength: typedValue.length,
                     onPostUrlNow,
                     makeVideoFound: true,
