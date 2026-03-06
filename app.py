@@ -8696,18 +8696,12 @@ class MainWindow(QMainWindow):
 
             if isinstance(result, dict) and result.get("ok"):
                 #self.show_browser_page()
-                idle_ms = self._set_manual_post_submit_idle_window()
-                if idle_ms > 0:
-                    self._append_log(
-                        f"Submitted manual image variant {variant} (attempt {attempts}); "
-                        f"pausing automation for {idle_ms / 1000:.1f}s to let page render naturally."
-                    )
-                else:
-                    self._append_log(
-                        f"Submitted manual image variant {variant} (attempt {attempts}); "
-                        "waiting for first rendered image, then opening it for download."
-                    )
-                QTimer.singleShot(7000, self._poll_for_manual_image)
+                self.manual_post_submit_idle_until = 0.0
+                self.manual_post_submit_idle_token = -1
+                self._append_log(
+                    f"Submitted manual image variant {variant} (attempt {attempts}); starting manual-pick polling immediately."
+                )
+                QTimer.singleShot(350, self._poll_for_manual_image)
                 return
 
             if isinstance(result, dict) and result.get("waiting"):
