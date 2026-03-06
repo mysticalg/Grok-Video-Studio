@@ -9189,6 +9189,22 @@ class MainWindow(QMainWindow):
                                 try {{ btn.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
                                 try {{ btn.focus?.(); }} catch (_) {{}}
 
+                                const keyboardCommon = {{ bubbles: true, cancelable: true, composed: true }};
+                                const dispatchSpaceToggle = (target) => {{
+                                    if (!target) return false;
+                                    let toggled = false;
+                                    try {{
+                                        target.dispatchEvent(new KeyboardEvent("keydown", {{ ...keyboardCommon, key: " ", code: "Space", keyCode: 32, which: 32 }}));
+                                        toggled = true;
+                                    }} catch (_) {{}}
+                                    try {{
+                                        target.dispatchEvent(new KeyboardEvent("keyup", {{ ...keyboardCommon, key: " ", code: "Space", keyCode: 32, which: 32 }}));
+                                        toggled = true;
+                                    }} catch (_) {{}}
+                                    return toggled;
+                                }};
+                                activated = dispatchSpaceToggle(btn) || activated;
+
                                 const common = {{ bubbles: true, cancelable: true, composed: true }};
                                 try {{ btn.dispatchEvent(new PointerEvent("pointerdown", common)); activated = true; }} catch (_) {{}}
                                 try {{ btn.dispatchEvent(new MouseEvent("mousedown", common)); activated = true; }} catch (_) {{}}
