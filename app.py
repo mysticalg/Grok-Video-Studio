@@ -2906,6 +2906,7 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_detected_post_id = ""
         self.manual_manual_pick_seen_non_post = False
         self.manual_manual_pick_stale_warn_token = -1
+        self.manual_udp_menu_attempt_count = 0
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
@@ -7664,6 +7665,7 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_detected_post_id = ""
         self.manual_manual_pick_seen_non_post = False
         self.manual_manual_pick_stale_warn_token = -1
+        self.manual_udp_menu_attempt_count = 0
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
@@ -9841,6 +9843,15 @@ class MainWindow(QMainWindow):
             if not self.manual_image_video_mode_selected:
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
+                        if self._active_ai_browser_external_control_enabled() and self.manual_udp_menu_attempt_count < 6:
+                            self.manual_udp_menu_attempt_count += 1
+                            ok_udp, udp_reason = self._try_udp_open_manual_video_menu(current_variant)
+                            self._append_log(
+                                f"Variant {current_variant}: UDP relay menu attempt {self.manual_udp_menu_attempt_count}/6 -> {udp_reason}."
+                            )
+                            if ok_udp:
+                                QTimer.singleShot(350, self._poll_for_manual_image)
+                                return
                         self._append_log(
                             f"Variant {current_variant}: action: trying aggressive Settings open (focus + pointer/mouse/native click sequence), then selecting Make Video from menu."
                         )
@@ -12368,6 +12379,41 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(200, _finish_download)
 
+    def _try_udp_open_manual_video_menu(self, variant: int) -> tuple[bool, str]:
+        if not self._active_ai_browser_external_control_enabled():
+            return False, "external-browser-cdp-disabled"
+        try:
+            runtime = self._ensure_automation_runtime()
+            runtime.ensure_udp_service()
+            settings_resp = runtime.execute_local_automation_command(
+                "dom.click",
+                {
+                    "platform": "grok",
+                    "selector": "button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]",
+                    "textContains": "settings",
+                    "timeoutMs": 3500,
+                },
+            )
+            settings_ok = bool(isinstance(settings_resp, dict) and settings_resp.get("ok"))
+            if not settings_ok:
+                return False, f"settings-click-failed:{settings_resp}"
+
+            menu_resp = runtime.execute_local_automation_command(
+                "dom.click",
+                {
+                    "platform": "grok",
+                    "selector": "[role='menuitem'], [role='menuitemradio'], [role='option'], [data-radix-collection-item]",
+                    "textContains": "make video",
+                    "timeoutMs": 3500,
+                },
+            )
+            menu_ok = bool(isinstance(menu_resp, dict) and menu_resp.get("ok"))
+            if not menu_ok:
+                return False, f"menu-click-failed:{menu_resp}"
+            return True, "udp-relay-settings+menu-clicked"
+        except Exception as exc:
+            return False, f"udp-relay-exception:{exc}"
+
     def _abort_manual_create_video_polling(self, variant: int, reason: str) -> None:
         self._append_log(
             f"ERROR: Variant {variant}: create-video automation stopped ({reason}). No fallback path will be used; restart manually."
@@ -12860,6 +12906,7 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_detected_post_id = ""
         self.manual_manual_pick_seen_non_post = False
         self.manual_manual_pick_stale_warn_token = -1
+        self.manual_udp_menu_attempt_count = 0
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
