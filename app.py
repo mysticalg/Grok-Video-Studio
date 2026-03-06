@@ -9483,6 +9483,20 @@ class MainWindow(QMainWindow):
                         if (makeVideoClicked) await sleep(ACTION_DELAY_MS);
                     }}
 
+                    if (manualSinglePickMode && onPostView && (!menuAttempt.item || !makeVideoClicked)) {{
+                        return {{
+                            ok: false,
+                            status: "strict-make-video-click-failed",
+                            onPostView,
+                            optionsOpened,
+                            videoItemFound: makeVideoItemFound,
+                            videoClicked: makeVideoClicked,
+                            settingsFocusAttempted,
+                            settingsSpaceAttempted,
+                            settingsActivationAttempted,
+                        }};
+                    }}
+
                     const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
                         .filter((el) => isVisible(el));
                     const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
@@ -9612,6 +9626,7 @@ class MainWindow(QMainWindow):
                     "strict-settings-button-missing",
                     "strict-settings-button-click-failed",
                     "strict-menu-make-video-missing",
+                    "strict-make-video-click-failed",
                     "strict-submit-make-video-button-missing",
                     "strict-submit-make-video-click-failed",
                 ):
@@ -9737,6 +9752,7 @@ class MainWindow(QMainWindow):
                 "strict-settings-button-missing",
                 "strict-settings-button-click-failed",
                 "strict-menu-make-video-missing",
+                "strict-make-video-click-failed",
                 "strict-submit-make-video-button-missing",
                 "strict-submit-make-video-click-failed",
                 "prompt-fill-empty",
@@ -10032,17 +10048,8 @@ class MainWindow(QMainWindow):
             if not self.manual_image_video_mode_selected:
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
-                        if self._active_ai_browser_external_control_enabled() and self.manual_udp_menu_attempt_count < 6:
-                            self.manual_udp_menu_attempt_count += 1
-                            ok_udp, udp_reason = self._try_udp_open_manual_video_menu(current_variant)
-                            self._append_log(
-                                f"Variant {current_variant}: UDP relay menu attempt {self.manual_udp_menu_attempt_count}/6 -> {udp_reason}."
-                            )
-                            if ok_udp:
-                                QTimer.singleShot(350, self._poll_for_manual_image)
-                                return
                         self._append_log(
-                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + Space key + pointer/mouse/native click sequence), then selecting Make Video from menu."
+                            f"Variant {current_variant}: action: running strict Settings → Make Video from image → prompt → submit path (UDP retries disabled)."
                         )
                     generation_state_probe_script = r"""
                         (() => {
