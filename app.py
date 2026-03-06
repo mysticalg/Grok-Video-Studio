@@ -488,6 +488,66 @@ def _extract_first_balanced_json_object(text: str) -> str:
     return ""
 
 
+def _escape_unescaped_json_control_chars(text: str) -> str:
+    """Escape raw control characters inside JSON strings so json.loads can recover."""
+    if not text:
+        return text
+
+    result: list[str] = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if in_string:
+            if escape:
+                result.append(ch)
+                escape = False
+                continue
+            if ch == "\\":
+                result.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                result.append(ch)
+                in_string = False
+                continue
+            # JSON string values cannot contain unescaped control chars.
+            if ord(ch) < 0x20:
+                escapes = {
+                    "\b": "\\b",
+                    "\f": "\\f",
+                    "\n": "\\n",
+                    "\r": "\\r",
+                    "\t": "\\t",
+                }
+                result.append(escapes.get(ch, f"\\u{ord(ch):04x}"))
+                continue
+            result.append(ch)
+            continue
+
+        result.append(ch)
+        if ch == '"':
+            in_string = True
+
+    return "".join(result)
+
+
+def _loads_json_object_with_control_char_repair(text: str) -> dict:
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    repaired = _escape_unescaped_json_control_chars(text)
+    if repaired != text:
+        parsed = json.loads(repaired)
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise json.JSONDecodeError("JSON candidate was not an object", text, 0)
+
+
 def _parse_hashtags_from_text(raw_text: str) -> list[str]:
     text = str(raw_text or "").strip()
     if not text:
@@ -564,23 +624,17 @@ def _parse_json_object_from_text(raw: str) -> dict:
     fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
     if fence_match:
         candidate = fence_match.group(1)
-        parsed = json.loads(candidate)
-        if isinstance(parsed, dict):
-            return parsed
+        return _loads_json_object_with_control_char_repair(candidate)
 
     balanced_candidate = _extract_first_balanced_json_object(text)
     if balanced_candidate:
-        parsed = json.loads(balanced_candidate)
-        if isinstance(parsed, dict):
-            return parsed
+        return _loads_json_object_with_control_char_repair(balanced_candidate)
 
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
         candidate = text[start : end + 1]
-        parsed = json.loads(candidate)
-        if isinstance(parsed, dict):
-            return parsed
+        return _loads_json_object_with_control_char_repair(candidate)
 
     raise json.JSONDecodeError("AI response did not contain a JSON object", text, 0)
 
