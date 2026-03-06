@@ -9158,6 +9158,10 @@ class MainWindow(QMainWindow):
                     if (menuAttempt.item) {{
                         makeVideoItemFound = true;
                     }}
+                    if (manualSinglePickMode) {{
+                        menuAttempt = {{ item: null }};
+                        makeVideoItemFound = false;
+                    }}
 
                     if (!makeVideoItemFound) {{
                         if (manualSinglePickMode) {{
@@ -9319,11 +9323,15 @@ class MainWindow(QMainWindow):
                     const selectedEls = [...document.querySelectorAll("[aria-selected='true'], [aria-pressed='true'], [data-state='checked'], [data-selected='true']")]
                         .filter((el) => isVisible(el));
                     const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
-                    const videoSelected = selectedViaMarker
-                        || promptInputVisible
-                        || cancelVideoButtonVisible
-                        || generationInProgress
-                        || (onPostView && submitButtonVisible);
+                    const videoSelected = manualSinglePickMode
+                        ? (promptInputVisible || submitButtonVisible)
+                        : (
+                            selectedViaMarker
+                            || promptInputVisible
+                            || cancelVideoButtonVisible
+                            || generationInProgress
+                            || (onPostView && submitButtonVisible)
+                        );
 
                     if (!videoSelected) {{
                         return {{
