@@ -9220,21 +9220,30 @@ class MainWindow(QMainWindow):
                                 return clicked;
                             }};
 
-                            let clickConfirmed = false;
-                            for (const makeVideoButton of preferredButtons.slice(0, 3)) {{
-                                makeVideoClicked = robustDirectClick(makeVideoButton) || makeVideoClicked;
-                                if (!makeVideoClicked) continue;
-                                await sleep(ACTION_DELAY_MS + 260);
+                            let clickConfirmed = promptInputVisible || cancelVideoButtonVisible || generationInProgress;
+                            const clickAlreadySent = window.__grokManualVideoModeClickToken === submitToken;
+                            if (clickAlreadySent) {{
+                                makeVideoClicked = true;
+                            }}
 
-                                const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
-                                    .find((el) => isActuallyVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
-                                const promptVisibleAfterClick = promptSelectors
-                                    .flatMap((sel) => [...document.querySelectorAll(sel)])
-                                    .some((el) => isActuallyVisible(el) && !el.disabled);
+                            if (!clickConfirmed && !clickAlreadySent) {{
+                                for (const makeVideoButton of preferredButtons.slice(0, 3)) {{
+                                    const clickedNow = robustDirectClick(makeVideoButton);
+                                    makeVideoClicked = clickedNow || makeVideoClicked;
+                                    if (!clickedNow) continue;
+                                    window.__grokManualVideoModeClickToken = submitToken;
+                                    await sleep(ACTION_DELAY_MS + 260);
 
-                                if (cancelVisibleAfterClick || promptVisibleAfterClick) {{
-                                    clickConfirmed = true;
-                                    break;
+                                    const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
+                                        .find((el) => isActuallyVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
+                                    const promptVisibleAfterClick = promptSelectors
+                                        .flatMap((sel) => [...document.querySelectorAll(sel)])
+                                        .some((el) => isActuallyVisible(el) && !el.disabled);
+
+                                    if (cancelVisibleAfterClick || promptVisibleAfterClick) {{
+                                        clickConfirmed = true;
+                                        break;
+                                    }}
                                 }}
                             }}
 
