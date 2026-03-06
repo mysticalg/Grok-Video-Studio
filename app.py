@@ -2904,6 +2904,8 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_wait_log_token = -1
         self.manual_post_refresh_requested_token = -1
         self.manual_post_refresh_detected_post_id = ""
+        self.manual_manual_pick_seen_non_post = False
+        self.manual_manual_pick_stale_warn_token = -1
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
@@ -7660,6 +7662,8 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_wait_log_token = -1
         self.manual_post_refresh_requested_token = -1
         self.manual_post_refresh_detected_post_id = ""
+        self.manual_manual_pick_seen_non_post = False
+        self.manual_manual_pick_stale_warn_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
@@ -8928,6 +8932,17 @@ class MainWindow(QMainWindow):
                     self._append_log(f"Manual-pick URL scan (external browser) failed: {exc}")
 
             post_id_from_browser = self._extract_valid_grok_post_id(detected_url)
+            if not post_id_from_browser:
+                self.manual_manual_pick_seen_non_post = True
+            if post_id_from_browser and not self.manual_manual_pick_seen_non_post:
+                if self.manual_manual_pick_stale_warn_token != self.manual_image_submit_token:
+                    self._append_log(
+                        f"Variant {variant}: post URL is already open before manual pick; waiting for you to pick an image from the image grid."
+                    )
+                    self.manual_manual_pick_stale_warn_token = self.manual_image_submit_token
+                QTimer.singleShot(1200, self._poll_for_manual_image)
+                return
+
             if post_id_from_browser:
                 if self.manual_post_refresh_requested_token != self.manual_image_submit_token:
                     self.manual_post_refresh_requested_token = self.manual_image_submit_token
@@ -12835,6 +12850,8 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_wait_log_token = -1
         self.manual_post_refresh_requested_token = -1
         self.manual_post_refresh_detected_post_id = ""
+        self.manual_manual_pick_seen_non_post = False
+        self.manual_manual_pick_stale_warn_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -13059,6 +13076,8 @@ class MainWindow(QMainWindow):
         self.manual_image_submit_token += 1
         self.manual_post_submit_idle_until = 0.0
         self.manual_post_submit_idle_token = -1
+        self.manual_manual_pick_seen_non_post = False
+        self.manual_manual_pick_stale_warn_token = -1
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
