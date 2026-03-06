@@ -5084,6 +5084,28 @@ class MainWindow(QMainWindow):
         except Exception:
             return default_value
 
+    def _apply_automation_timing_values(self, values: dict[str, int], *, schedule_autosave: bool = True) -> None:
+        merged = dict(AUTOMATION_TIMING_DEFAULTS)
+        for key in AUTOMATION_TIMING_DEFAULTS:
+            if key in values:
+                try:
+                    merged[key] = int(values[key])
+                except Exception:
+                    pass
+        self.automation_timing_values = merged
+
+        # Keep legacy inline controls in sync for compatibility.
+        self.automation_action_delay_ms.setValue(self._automation_timing("automation_action_delay_ms"))
+        self.automation_retry_attempts.setValue(self._automation_timing("automation_retry_attempts"))
+        self.manual_download_poll_interval_ms.setValue(self._automation_timing("manual_download_poll_interval_ms"))
+
+        if schedule_autosave:
+            self._schedule_preferences_autosave()
+
+    def _reset_automation_timings_to_defaults(self) -> None:
+        self._apply_automation_timing_values(dict(AUTOMATION_TIMING_DEFAULTS), schedule_autosave=True)
+        self._append_automation_log("Automation timings reset to defaults.")
+
     def _open_automation_timings_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Automation Timings")
@@ -5138,13 +5160,10 @@ class MainWindow(QMainWindow):
         if dialog.exec() != int(QDialog.DialogCode.Accepted):
             return
 
+        selected_values: dict[str, int] = {}
         for key, spin in spinboxes.items():
-            self.automation_timing_values[key] = int(spin.value())
-
-        # Keep legacy inline controls in sync for compatibility.
-        self.automation_action_delay_ms.setValue(self._automation_timing("automation_action_delay_ms"))
-        self.automation_retry_attempts.setValue(self._automation_timing("automation_retry_attempts"))
-        self.manual_download_poll_interval_ms.setValue(self._automation_timing("manual_download_poll_interval_ms"))
+            selected_values[key] = int(spin.value())
+        self._apply_automation_timing_values(selected_values, schedule_autosave=True)
 
     def _refresh_browser_tab_selection(self) -> None:
         current = self.browser_tabs.currentIndex()
@@ -5196,6 +5215,9 @@ class MainWindow(QMainWindow):
         automation_timings_action = QAction("Timings…", self)
         automation_timings_action.triggered.connect(self._open_automation_timings_dialog)
         self.automation_menu.addAction(automation_timings_action)
+        automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
+        automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
+        self.automation_menu.addAction(automation_reset_timings_action)
         self.automation_menu.addSeparator()
 
         cdp_settings_menu = menu_bar.addMenu("CDP Settings")
@@ -5403,6 +5425,15 @@ class MainWindow(QMainWindow):
         self.video_grok_settings_menu.clear()
         self.audio_settings_menu.clear()
         self.automation_menu.clear()
+
+        automation_timings_action = QAction("Timings…", self)
+        automation_timings_action.triggered.connect(self._open_automation_timings_dialog)
+        self.automation_menu.addAction(automation_timings_action)
+
+        automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
+        automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
+        self.automation_menu.addAction(automation_reset_timings_action)
+        self.automation_menu.addSeparator()
 
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
         self._add_widget_to_menu(self.video_settings_menu, self.video_options_dropdown)
@@ -6164,10 +6195,7 @@ class MainWindow(QMainWindow):
                     loaded_automation_timings[legacy_key] = int(preferences[legacy_key])
                 except (TypeError, ValueError):
                     pass
-        self.automation_timing_values = loaded_automation_timings
-        self.automation_action_delay_ms.setValue(self._automation_timing("automation_action_delay_ms"))
-        self.automation_retry_attempts.setValue(self._automation_timing("automation_retry_attempts"))
-        self.manual_download_poll_interval_ms.setValue(self._automation_timing("manual_download_poll_interval_ms"))
+        self._apply_automation_timing_values(loaded_automation_timings, schedule_autosave=False)
         if "multi_video_manual_pick" in preferences:
             self.multi_video_manual_pick_checkbox.setChecked(bool(preferences["multi_video_manual_pick"]))
         if "manual_pick_after_prompt" in preferences:
