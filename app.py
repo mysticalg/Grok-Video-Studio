@@ -188,6 +188,7 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "automation_action_delay_ms": 1000,
     "automation_retry_attempts": 3,
     "manual_download_poll_interval_ms": MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS,
+    "continue_download_poll_interval_ms": CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS,
     "manual_submit_handoff_timeout_ms": 45000,
     "manual_submit_handoff_poll_ms": 450,
     "manual_submit_retry_delay_ms": 500,
@@ -218,12 +219,15 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "multi_video_status_log_every_attempts": 3,
     "manual_menu_settle_extra_ms": 320,
     "manual_video_mode_settle_extra_ms": 260,
+    "manual_form_option_step_delay_ms": 1000,
+    "manual_form_submit_delay_ms": 1000,
 }
 
 AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "automation_action_delay_ms", "label": "Automation action delay", "min": 100, "max": 10000, "step": 10, "group": "General"},
     {"key": "automation_retry_attempts", "label": "Retry attempts", "min": 1, "max": 20, "step": 1, "group": "General", "suffix": " attempts"},
     {"key": "manual_download_poll_interval_ms", "label": "Manual download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General"},
+    {"key": "continue_download_poll_interval_ms", "label": "Continue download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General"},
     {"key": "manual_submit_handoff_timeout_ms", "label": "Manual submit handoff timeout", "min": 5000, "max": 120000, "step": 500, "group": "Grok Manual Submit"},
     {"key": "manual_submit_handoff_poll_ms", "label": "Manual submit handoff poll interval", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
     {"key": "manual_submit_retry_delay_ms", "label": "Manual submit retry delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
@@ -254,6 +258,8 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Grok Polling"},
     {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
     {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
+    {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
+    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
 )
 
 _session_download_counter_lock = threading.Lock()
@@ -9007,7 +9013,7 @@ class MainWindow(QMainWindow):
                 f"applying aspect option {selected_aspect_ratio} next (attempt {attempts})."
             )
 
-            step_pause_ms = max(100, action_delay_ms)
+            step_pause_ms = option_step_delay_ms
             option_steps = [
                 ("resolution", selected_quality_label),
                 ("seconds", selected_duration_label),
@@ -9047,7 +9053,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(step_pause_ms, lambda: _run_option_step(0))
 
         action_delay_ms = self._automation_timing("automation_action_delay_ms")
-        submit_delay_ms = action_delay_ms
+        option_step_delay_ms = max(100, self._automation_timing("manual_form_option_step_delay_ms"))
+        submit_delay_ms = max(100, self._automation_timing("manual_form_submit_delay_ms"))
         disable_video_option_selection = os.getenv("GROK_DISABLE_VIDEO_OPTION_SELECTION", "0").strip().lower() not in {"0", "false", "no"}
 
         def _after_populate(result):
@@ -11682,7 +11689,7 @@ class MainWindow(QMainWindow):
 
     def _manual_download_poll_interval_ms(self) -> int:
         if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
-            return CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS
+            return max(1000, self._automation_timing("continue_download_poll_interval_ms"))
         return max(1000, self._automation_timing("manual_download_poll_interval_ms"))
 
     def _trigger_browser_video_download(self, variant: int, allow_make_video_click: bool = True) -> None:
