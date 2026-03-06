@@ -13,7 +13,9 @@ async function findTargetTab(platform = "") {
     youtube: ["studio.youtube.com/channel", "studio.youtube.com"],
     facebook: ["facebook.com/reels/create", "facebook.com"],
     instagram: ["instagram.com/", "instagram.com"],
-    x: ["x.com/compose/post", "x.com/compose", "x.com"]
+    x: ["x.com/compose/post", "x.com/compose", "x.com"],
+    grok: ["grok.com/imagine/post/", "grok.com/imagine", "grok.com"],
+    sora: ["sora.com", "openai.com/sora"]
   };
 
   const patternRank = (url, patterns) => {
@@ -107,9 +109,26 @@ function ackCmd(msg, ok, payload, error) {
 }
 
 async function executeInTab(fn, args = [], platform = "") {
-  const chosen = await findTargetTab(platform);
-  const results = await chrome.scripting.executeScript({ target: { tabId: chosen.id }, func: fn, args });
-  return results[0]?.result;
+  const maxAttempts = 3;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const chosen = await findTargetTab(platform);
+      const results = await chrome.scripting.executeScript({ target: { tabId: chosen.id }, func: fn, args });
+      return results[0]?.result;
+    } catch (error) {
+      lastError = error;
+      const message = String(error?.message || error || "").toLowerCase();
+      const isTransientFrameError = message.includes("frame with id 0 was removed")
+        || message.includes("cannot access a chrome:// url")
+        || message.includes("receiving end does not exist");
+      if (!isTransientFrameError || attempt >= maxAttempts) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+    }
+  }
+  throw lastError || new Error("executeInTab failed");
 }
 
 async function handleCmd(msg) {
