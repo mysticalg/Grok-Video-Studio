@@ -2897,6 +2897,7 @@ class MainWindow(QMainWindow):
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
+        self.manual_udp_menu_attempt_count = 0
         self.manual_image_submit_token = 0
         self.manual_post_submit_idle_until = 0.0
         self.manual_post_submit_idle_token = -1
@@ -7655,6 +7656,7 @@ class MainWindow(QMainWindow):
         self.manual_image_pick_retry_count = 0
         self.manual_image_video_mode_retry_count = 0
         self.manual_image_submit_retry_count = 0
+        self.manual_udp_menu_attempt_count = 0
         self.manual_image_submit_token += 1
         self.manual_post_submit_idle_until = 0.0
         self.manual_post_submit_idle_token = -1
@@ -9840,6 +9842,12 @@ class MainWindow(QMainWindow):
 
             if not self.manual_image_video_mode_selected:
                 if status == "waiting-for-video-mode":
+                    if self._active_ai_browser_external_control_enabled() and self.manual_udp_menu_attempt_count < 1:
+                        self.manual_udp_menu_attempt_count += 1
+                        ok_udp, udp_reason = self._try_udp_open_manual_video_menu(current_variant)
+                        self._append_log(
+                            f"Variant {current_variant}: UDP relay menu attempt {self.manual_udp_menu_attempt_count}/1 -> {udp_reason}."
+                        )
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
                         self._append_log(
                             f"Variant {current_variant}: action: trying aggressive Settings open (focus + pointer/mouse/native click sequence), then selecting Make Video from menu."
@@ -12367,6 +12375,39 @@ class MainWindow(QMainWindow):
             self.multi_video_download_timer.start(1200)
 
         QTimer.singleShot(200, _finish_download)
+
+    def _try_udp_open_manual_video_menu(self, variant: int) -> tuple[bool, str]:
+        if not self._active_ai_browser_external_control_enabled():
+            return False, "external-browser-cdp-disabled"
+        try:
+            runtime = self._ensure_automation_runtime()
+            runtime.ensure_udp_service()
+            settings_resp = runtime.execute_local_automation_command(
+                "dom.click",
+                {
+                    "platform": "grok",
+                    "selector": "button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]",
+                    "textContains": "settings",
+                    "timeoutMs": 3500,
+                },
+            )
+            if not bool(isinstance(settings_resp, dict) and settings_resp.get("ok")):
+                return False, f"settings-click-failed:{settings_resp}"
+
+            menu_resp = runtime.execute_local_automation_command(
+                "dom.click",
+                {
+                    "platform": "grok",
+                    "selector": "[role='menuitem'], [role='menuitemradio'], [role='option'], [data-radix-collection-item]",
+                    "textContains": "make video",
+                    "timeoutMs": 3500,
+                },
+            )
+            if not bool(isinstance(menu_resp, dict) and menu_resp.get("ok")):
+                return False, f"menu-click-failed:{menu_resp}"
+            return True, "udp-relay-settings+menu-clicked"
+        except Exception as exc:
+            return False, f"udp-relay-exception:{exc}"
 
     def _abort_manual_create_video_polling(self, variant: int, reason: str) -> None:
         self._append_log(
