@@ -9239,7 +9239,10 @@ class MainWindow(QMainWindow):
                             }};
 
                             let clickConfirmed = promptInputVisible || submitButtonVisible;
+                            const requiredCancelDelayMs = 2000;
                             const clickAlreadySent = window.__grokManualVideoModeClickToken === submitToken;
+                            const makeVideoClickAtMs = Number(window.__grokManualVideoModeClickAtMs || 0);
+                            const elapsedSinceMakeVideoMs = makeVideoClickAtMs > 0 ? Math.max(0, Date.now() - makeVideoClickAtMs) : 0;
                             if (clickAlreadySent) {{
                                 makeVideoClicked = true;
                             }}
@@ -9248,9 +9251,13 @@ class MainWindow(QMainWindow):
                                 const cancelAlreadySent = window.__grokManualCancelVideoClickToken === submitToken;
                                 const cancelButton = [...document.querySelectorAll("button, [role='button']")]
                                     .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el))) || null;
-                                if (cancelButton && !cancelAlreadySent && robustDirectClick(cancelButton)) {{
-                                    window.__grokManualCancelVideoClickToken = submitToken;
-                                    await sleep(ACTION_DELAY_MS + 320);
+                                if (cancelButton && !cancelAlreadySent) {{
+                                    const remainingDelayMs = Math.max(0, requiredCancelDelayMs - elapsedSinceMakeVideoMs);
+                                    if (remainingDelayMs > 0) await sleep(remainingDelayMs);
+                                    if (robustDirectClick(cancelButton)) {{
+                                        window.__grokManualCancelVideoClickToken = submitToken;
+                                        await sleep(ACTION_DELAY_MS + 320);
+                                    }}
                                 }}
 
                                 const promptVisibleAfterCancel = promptSelectors
@@ -9270,6 +9277,7 @@ class MainWindow(QMainWindow):
                                     makeVideoClicked = clickedNow || makeVideoClicked;
                                     if (!clickedNow) continue;
                                     window.__grokManualVideoModeClickToken = submitToken;
+                                    window.__grokManualVideoModeClickAtMs = Date.now();
                                     await sleep(ACTION_DELAY_MS + 260);
 
                                     const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
