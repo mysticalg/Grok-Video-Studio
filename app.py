@@ -9161,18 +9161,68 @@ class MainWindow(QMainWindow):
 
                     if (!makeVideoItemFound) {{
                         if (manualSinglePickMode && onPostView) {{
-                            const makeVideoButton = [...document.querySelectorAll("button[aria-label='Make video' i], [role='button'][aria-label='Make video' i], button, [role='button']")]
+                            const candidateButtons = [...document.querySelectorAll("button, [role='button']")]
                                 .filter((el, idx, arr) => arr.indexOf(el) === idx)
-                                .find((el) => isActuallyVisible(el) && !el.disabled && /\\bmake\\s+video\\b/i.test(descriptorOf(el))) || null;
+                                .filter((el) => isActuallyVisible(el) && !el.disabled && !isSidebarControl(el) && !isBlockedMoreOptionsControl(el))
+                                .filter((el) => /\\bmake\\s+video\\b/i.test(descriptorOf(el)));
+
+                            const exactAriaCandidates = candidateButtons.filter((el) => /\\bmake\\s+video\\b/i.test(ariaOf(el)));
+                            const preferredButtons = exactAriaCandidates.length ? exactAriaCandidates : candidateButtons;
+                            const viewportCx = Math.max(0, (window.innerWidth || document.documentElement?.clientWidth || 0) / 2);
+                            const viewportCy = Math.max(0, (window.innerHeight || document.documentElement?.clientHeight || 0) / 2);
+                            const distanceToViewportCenter = (el) => {{
+                                try {{
+                                    const r = el.getBoundingClientRect();
+                                    const cx = r.left + (r.width / 2);
+                                    const cy = r.top + (r.height / 2);
+                                    return Math.hypot(cx - viewportCx, cy - viewportCy);
+                                }} catch (_) {{
+                                    return Number.POSITIVE_INFINITY;
+                                }}
+                            }};
+                            preferredButtons.sort((a, b) => {{
+                                const da = distanceToViewportCenter(a);
+                                const db = distanceToViewportCenter(b);
+                                if (Math.abs(da - db) > 2) return da - db;
+                                const ar = a.getBoundingClientRect();
+                                const br = b.getBoundingClientRect();
+                                return (br.width * br.height) - (ar.width * ar.height);
+                            }});
+
+                            const makeVideoButton = preferredButtons[0] || null;
                             if (!makeVideoButton) {{
                                 return {{ ok: false, status: "direct-make-video-button-missing", onPostView }};
                             }}
 
-                            makeVideoClicked = emulateClick(makeVideoButton);
+                            const robustDirectClick = (btn) => {{
+                                let clicked = false;
+                                try {{ btn.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
+                                try {{ btn.focus?.(); }} catch (_) {{}}
+                                clicked = emulateClick(btn) || clicked;
+                                const common = {{ bubbles: true, cancelable: true, composed: true }};
+                                try {{ btn.dispatchEvent(new PointerEvent("pointerdown", common)); clicked = true; }} catch (_) {{}}
+                                try {{ btn.dispatchEvent(new MouseEvent("mousedown", common)); clicked = true; }} catch (_) {{}}
+                                try {{ btn.click?.(); clicked = true; }} catch (_) {{}}
+                                try {{ btn.dispatchEvent(new MouseEvent("mouseup", common)); clicked = true; }} catch (_) {{}}
+                                try {{ btn.dispatchEvent(new PointerEvent("pointerup", common)); clicked = true; }} catch (_) {{}}
+                                try {{ btn.dispatchEvent(new MouseEvent("click", common)); clicked = true; }} catch (_) {{}}
+                                if (!clicked) {{
+                                    try {{
+                                        const rect = btn.getBoundingClientRect();
+                                        const cx = Math.floor(rect.left + rect.width / 2);
+                                        const cy = Math.floor(rect.top + rect.height / 2);
+                                        const hit = document.elementFromPoint(cx, cy);
+                                        if (hit) clicked = emulateClick(hit.closest("button, [role='button']") || hit) || clicked;
+                                    }} catch (_) {{}}
+                                }}
+                                return clicked;
+                            }};
+
+                            makeVideoClicked = robustDirectClick(makeVideoButton);
                             if (!makeVideoClicked) {{
                                 return {{ ok: false, status: "direct-make-video-click-failed", onPostView }};
                             }}
-                            await sleep(ACTION_DELAY_MS + 180);
+                            await sleep(ACTION_DELAY_MS + 260);
 
                             const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
                                 .find((el) => isActuallyVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
