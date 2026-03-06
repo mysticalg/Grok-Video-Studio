@@ -9103,12 +9103,16 @@ class MainWindow(QMainWindow):
                     const promptSelectors = [
                         "textarea[placeholder*='Type to customize video' i]",
                         "input[placeholder*='Type to customize video' i]",
+                        "textarea[placeholder*='Type to imagine' i]",
+                        "input[placeholder*='Type to imagine' i]",
                         "textarea[aria-label*='Make a video' i]",
                         "input[aria-label*='Make a video' i]",
                         "div.tiptap.ProseMirror[contenteditable='true']",
                         "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
                         "[contenteditable='true'][aria-label*='Make a video' i]",
                         "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
                     ];
                     const promptInputVisible = promptSelectors
                         .flatMap((sel) => [...document.querySelectorAll(sel)])
@@ -9950,8 +9954,9 @@ class MainWindow(QMainWindow):
                             generation_visible = bool(isinstance(result, dict) and result.get("generationInProgress"))
                             make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
                             submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
+                            video_clicked = bool(isinstance(result, dict) and result.get("videoClicked"))
                             on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
-                            stage_evidence = prompt_visible or generation_visible or (on_post_view and submit_visible)
+                            stage_evidence = prompt_visible or generation_visible or video_clicked or (on_post_view and submit_visible)
                             if not stage_evidence:
                                 self._append_log(
                                     "WARNING: Variant "
@@ -9966,10 +9971,22 @@ class MainWindow(QMainWindow):
                                 return
 
                             if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
+                                if video_clicked and not make_video_visible:
+                                    self._append_log(
+                                        "WARNING: Variant "
+                                        f"{current_variant}: Make video/cancel cycle completed but prompt controls still not explicit "
+                                        f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}); "
+                                        "proceeding to prompt entry with Enter-submit fallback."
+                                    )
+                                    self.manual_image_video_mode_selected = True
+                                    self.manual_image_video_mode_retry_count = 0
+                                    self.manual_image_submit_retry_count = 0
+                                    QTimer.singleShot(700, self._poll_for_manual_image)
+                                    return
                                 self._append_log(
                                     "WARNING: Variant "
                                     f"{current_variant}: video-mode signal detected but prompt controls are not ready yet "
-                                    f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}); "
+                                    f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}, videoClicked={video_clicked}); "
                                     "continuing to wait for cancel→prompt transition."
                                 )
                                 self.manual_image_video_mode_retry_count = 0
