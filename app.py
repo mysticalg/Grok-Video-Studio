@@ -12379,10 +12379,152 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(200, _finish_download)
 
+    @staticmethod
+    def _set_callback_result(container: dict[str, Any], key: str, value: Any) -> None:
+        container[key] = value
+
     def _try_udp_open_manual_video_menu(self, variant: int) -> tuple[bool, str]:
         if not self._active_ai_browser_external_control_enabled():
             return False, "external-browser-cdp-disabled"
         try:
+            # Prefer the same in-page menu-open strategy used by the staged options flow
+            # ("open video options > set resolution/duration/ratio"), because that path has
+            # proven more stable than extension relay dom.click for Grok video settings.
+            open_options_script = r"""
+                (() => {
+                    try {
+                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                        const common = { bubbles: true, cancelable: true, composed: true };
+                        const emulateClick = (el) => {
+                            if (!el || !isVisible(el) || el.disabled) return false;
+                            try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                            el.dispatchEvent(new MouseEvent("mousedown", common));
+                            try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                            el.dispatchEvent(new MouseEvent("mouseup", common));
+                            el.dispatchEvent(new MouseEvent("click", common));
+                            return true;
+                        };
+                        const emulateActivate = (el) => {
+                            if (!el || !isVisible(el) || el.disabled) return false;
+                            let fired = emulateClick(el);
+                            try { el.focus({ preventScroll: true }); } catch (_) {}
+                            try { el.click(); fired = true; } catch (_) {}
+                            try { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                            try { el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true })); } catch (_) {}
+                            try { el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                            try { el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true })); } catch (_) {}
+                            return fired;
+                        };
+                        const isOptionsMenu = (el) => {
+                            if (!el || !isVisible(el)) return false;
+                            const txt = (el.textContent || "").trim();
+                            return /video\s*duration|resolution|aspect\s*ratio|\borientation\b|\bduration\b|\bvideos\b|\bimage\b|\bvideo\b/i.test(txt);
+                        };
+                        const findOpenMenu = () => {
+                            const candidates = [
+                                ...document.querySelectorAll("[role='menu'][data-state='open']"),
+                                ...document.querySelectorAll("[data-radix-menu-content][data-state='open']"),
+                                ...document.querySelectorAll("[role='menu'], [data-radix-menu-content]")
+                            ];
+                            return candidates.find((el) => isOptionsMenu(el)) || null;
+                        };
+                        const settingsCandidates = [
+                            ...document.querySelectorAll("button[aria-label='Video Options']"),
+                            ...document.querySelectorAll("button[aria-label*='video options' i]"),
+                            ...document.querySelectorAll("#model-select-trigger"),
+                            ...document.querySelectorAll("button[aria-label='Model select']"),
+                            ...document.querySelectorAll("button[aria-label*='model select' i]"),
+                            ...document.querySelectorAll("button[aria-label='Settings']"),
+                            ...document.querySelectorAll("button[aria-label*='setting' i]"),
+                            ...document.querySelectorAll("button[aria-haspopup='menu']"),
+                            ...document.querySelectorAll("button[id^='radix-']")
+                        ].filter((el, index, arr) => arr.indexOf(el) === index);
+                        const settingsButton = settingsCandidates.find((el) => (el.id || "").trim() === "model-select-trigger")
+                            || settingsCandidates.find((el) => {
+                                if (!isVisible(el) || el.disabled) return false;
+                                const aria = (el.getAttribute("aria-label") || "").trim();
+                                const txt = (el.textContent || "").trim();
+                                const id = (el.id || "").trim();
+                                return id === "model-select-trigger"
+                                    || /video\s*options?/i.test(aria)
+                                    || /video\s*options?/i.test(txt)
+                                    || /model\s*select/i.test(aria)
+                                    || /settings?|options?/i.test(aria)
+                                    || /settings?|options?/i.test(txt);
+                            })
+                            || null;
+                        if (!settingsButton) {
+                            return { ok: false, error: "Settings/model-select button not found", panelVisible: !!findOpenMenu() };
+                        }
+                        let menu = findOpenMenu();
+                        let opened = !!menu;
+                        if (!opened) {
+                            opened = emulateActivate(settingsButton);
+                            menu = findOpenMenu();
+                        }
+                        if (!menu) {
+                            emulateActivate(settingsButton);
+                            menu = findOpenMenu();
+                        }
+                        return {
+                            ok: opened || !!menu,
+                            opened,
+                            panelVisible: !!menu,
+                            triggerAriaLabel: settingsButton.getAttribute("aria-label") || "",
+                            triggerId: settingsButton.id || "",
+                        };
+                    } catch (err) {
+                        return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                    }
+                })()
+            """
+            click_make_video_script = r"""
+                (() => {
+                    try {
+                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                        const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+                        const common = { bubbles: true, cancelable: true, composed: true };
+                        const click = (el) => {
+                            if (!el || !isVisible(el) || el.disabled) return false;
+                            try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                            try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                            el.dispatchEvent(new MouseEvent("mousedown", common));
+                            try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                            el.dispatchEvent(new MouseEvent("mouseup", common));
+                            el.dispatchEvent(new MouseEvent("click", common));
+                            try { el.click(); } catch (_) {}
+                            return true;
+                        };
+                        const candidates = [
+                            ...document.querySelectorAll("[role='menuitem'], [role='menuitemradio'], [role='option'], [data-radix-collection-item], button, [role='button']")
+                        ].filter((el, idx, arr) => arr.indexOf(el) === idx && isVisible(el));
+                        const target = candidates.find((el) => /make\s+video/i.test(`${clean(el.getAttribute("aria-label"))} ${clean(el.textContent)}`)) || null;
+                        if (!target) return { ok: false, found: false };
+                        const clicked = click(target);
+                        return {
+                            ok: clicked,
+                            found: true,
+                            clicked,
+                            matchedAria: clean(target.getAttribute("aria-label")),
+                            matchedText: clean(target.textContent),
+                        };
+                    } catch (err) {
+                        return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                    }
+                })()
+            """
+
+            result_holder: dict[str, Any] = {}
+            self._run_active_browser_javascript(open_options_script, lambda value: self._set_callback_result(result_holder, "open", value))
+            open_result = result_holder.get("open")
+            if not isinstance(open_result, dict) or not open_result.get("ok"):
+                return False, f"settings-open-script-failed:{open_result}"
+
+            self._run_active_browser_javascript(click_make_video_script, lambda value: self._set_callback_result(result_holder, "click", value))
+            click_result = result_holder.get("click")
+            if isinstance(click_result, dict) and click_result.get("ok"):
+                return True, "script-opened-settings+make-video-clicked"
+
             runtime = self._ensure_automation_runtime()
             runtime.ensure_udp_service()
             settings_resp = runtime.execute_local_automation_command(
@@ -12396,7 +12538,7 @@ class MainWindow(QMainWindow):
             )
             settings_ok = bool(isinstance(settings_resp, dict) and settings_resp.get("ok"))
             if not settings_ok:
-                return False, f"settings-click-failed:{settings_resp}"
+                return False, f"settings-click-failed:{settings_resp};script-click={click_result}"
 
             menu_resp = runtime.execute_local_automation_command(
                 "dom.click",
@@ -12409,7 +12551,7 @@ class MainWindow(QMainWindow):
             )
             menu_ok = bool(isinstance(menu_resp, dict) and menu_resp.get("ok"))
             if not menu_ok:
-                return False, f"menu-click-failed:{menu_resp}"
+                return False, f"menu-click-failed:{menu_resp};script-click={click_result}"
             return True, "udp-relay-settings+menu-clicked"
         except Exception as exc:
             return False, f"udp-relay-exception:{exc}"
