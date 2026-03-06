@@ -2906,6 +2906,7 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_detected_post_id = ""
         self.manual_manual_pick_seen_non_post = False
         self.manual_manual_pick_stale_warn_token = -1
+        self.manual_active_browser_url_hint = ""
         self.manual_download_deadline: float | None = None
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
@@ -7664,6 +7665,7 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_detected_post_id = ""
         self.manual_manual_pick_seen_non_post = False
         self.manual_manual_pick_stale_warn_token = -1
+        self.manual_active_browser_url_hint = ""
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
@@ -8944,6 +8946,18 @@ class MainWindow(QMainWindow):
                 return
 
             if post_id_from_browser:
+                self.manual_active_browser_url_hint = str(detected_url or "").strip()
+                if self._active_ai_browser_external_control_enabled() and self.manual_active_browser_url_hint:
+                    try:
+                        runtime = self._ensure_automation_runtime()
+                        runtime.ensure_cdp_connected()
+                        runtime.open_url_in_automation_chrome(
+                            self.manual_active_browser_url_hint,
+                            flow_scope=self._active_ai_browser_provider(),
+                            reuse_tab=True,
+                        )
+                    except Exception as exc:
+                        self._append_log(f"Manual-pick URL bind (external browser) failed: {exc}")
                 if self.manual_post_refresh_requested_token != self.manual_image_submit_token:
                     self.manual_post_refresh_requested_token = self.manual_image_submit_token
                     self.manual_post_refresh_detected_post_id = post_id_from_browser
@@ -12915,6 +12929,7 @@ class MainWindow(QMainWindow):
         self.manual_post_refresh_detected_post_id = ""
         self.manual_manual_pick_seen_non_post = False
         self.manual_manual_pick_stale_warn_token = -1
+        self.manual_active_browser_url_hint = ""
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -13141,6 +13156,7 @@ class MainWindow(QMainWindow):
         self.manual_post_submit_idle_token = -1
         self.manual_manual_pick_seen_non_post = False
         self.manual_manual_pick_stale_warn_token = -1
+        self.manual_active_browser_url_hint = ""
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -14751,6 +14767,10 @@ class MainWindow(QMainWindow):
 
     def _active_ai_browser_url_hint(self) -> str:
         browser_provider = self._active_ai_browser_provider()
+        if browser_provider == "grok":
+            manual_hint = str(getattr(self, "manual_active_browser_url_hint", "") or "").strip()
+            if re.search(r"^https?://(?:www\.)?grok\.com/(?:imagine/)?post/[0-9a-fA-F-]{8,}", manual_hint, re.IGNORECASE):
+                return manual_hint
         return SORA_DRAFTS_URL if browser_provider == "sora" else GROK_IMAGINE_URL
 
     def _run_active_browser_javascript(self, script: str, callback=None) -> None:
