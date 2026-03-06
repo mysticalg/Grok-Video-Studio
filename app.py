@@ -9151,6 +9151,9 @@ class MainWindow(QMainWindow):
                     let optionsOpened = false;
                     let makeVideoItemFound = false;
                     let makeVideoClicked = false;
+                    let settingsFocusAttempted = false;
+                    let settingsSpaceAttempted = false;
+                    let settingsActivationAttempted = false;
 
                     let menuAttempt = findMakeVideoInOpenMenu();
                     if (menuAttempt.item) {{
@@ -9186,8 +9189,10 @@ class MainWindow(QMainWindow):
 
                             const attemptOpenSettings = (btn) => {{
                                 let activated = false;
+                                let focusAttempted = false;
+                                let spaceAttempted = false;
                                 try {{ btn.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
-                                try {{ btn.focus?.(); }} catch (_) {{}}
+                                try {{ btn.focus?.(); focusAttempted = true; }} catch (_) {{}}
 
                                 const keyboardCommon = {{ bubbles: true, cancelable: true, composed: true }};
                                 const dispatchSpaceToggle = (target) => {{
@@ -9203,7 +9208,15 @@ class MainWindow(QMainWindow):
                                     }} catch (_) {{}}
                                     return toggled;
                                 }};
-                                activated = dispatchSpaceToggle(btn) || activated;
+                                const keyboardTargets = [
+                                    btn,
+                                    document.activeElement,
+                                    btn?.closest?.("button, [role='button']") || null,
+                                ].filter((el, idx, arr) => !!el && arr.indexOf(el) === idx);
+                                for (const target of keyboardTargets) {{
+                                    spaceAttempted = dispatchSpaceToggle(target) || spaceAttempted;
+                                }}
+                                activated = spaceAttempted || activated;
 
                                 const common = {{ bubbles: true, cancelable: true, composed: true }};
                                 try {{ btn.dispatchEvent(new PointerEvent("pointerdown", common)); activated = true; }} catch (_) {{}}
@@ -9229,7 +9242,7 @@ class MainWindow(QMainWindow):
                                         if (parentBtn && parentBtn !== btn) activated = emulateClick(parentBtn) || activated;
                                     }} catch (_) {{}}
                                 }}
-                                return activated;
+                                return {{ activated, focusAttempted, spaceAttempted }};
                             }};
 
                             const initialSignal = isMenuOpenSignal(settingsButton);
@@ -9239,7 +9252,11 @@ class MainWindow(QMainWindow):
                             if (!optionsOpened) {{
                                 let openedByClick = false;
                                 for (let attempt = 0; attempt < 7; attempt += 1) {{
-                                    openedByClick = attemptOpenSettings(settingsButton) || openedByClick;
+                                    const openAttempt = attemptOpenSettings(settingsButton);
+                                    openedByClick = !!(openAttempt && openAttempt.activated) || openedByClick;
+                                    settingsFocusAttempted = !!(openAttempt && openAttempt.focusAttempted) || settingsFocusAttempted;
+                                    settingsSpaceAttempted = !!(openAttempt && openAttempt.spaceAttempted) || settingsSpaceAttempted;
+                                    settingsActivationAttempted = !!openAttempt || settingsActivationAttempted;
                                     await sleep(ACTION_DELAY_MS + 220);
                                     const openSignal = isMenuOpenSignal(settingsButton);
                                     controlsId = openSignal.controlsIdNow || controlsId;
@@ -9250,7 +9267,14 @@ class MainWindow(QMainWindow):
                                     }}
                                 }}
                                 if (!openedByClick && !optionsOpened) {{
-                                    return {{ ok: false, status: "strict-settings-button-click-failed", onPostView }};
+                                    return {{
+                                        ok: false,
+                                        status: "strict-settings-button-click-failed",
+                                        onPostView,
+                                        settingsFocusAttempted,
+                                        settingsSpaceAttempted,
+                                        settingsActivationAttempted,
+                                    }};
                                 }}
                             }}
 
@@ -9287,6 +9311,9 @@ class MainWindow(QMainWindow):
                                 makeVideoButtonVisible,
                                 submitButtonVisible,
                                 onPostView,
+                                settingsFocusAttempted,
+                                settingsSpaceAttempted,
+                                settingsActivationAttempted,
                             }};
                         }} else {{
                             const triggerCandidates = [
@@ -9340,6 +9367,9 @@ class MainWindow(QMainWindow):
                             makeVideoButtonVisible,
                             submitButtonVisible,
                             onPostView,
+                            settingsFocusAttempted,
+                            settingsSpaceAttempted,
+                            settingsActivationAttempted,
                         }};
                     }}
 
@@ -9354,6 +9384,9 @@ class MainWindow(QMainWindow):
                         makeVideoButtonVisible,
                         submitButtonVisible,
                         onPostView,
+                        settingsFocusAttempted,
+                        settingsSpaceAttempted,
+                        settingsActivationAttempted,
                     }};
                 }}
 
@@ -9483,6 +9516,9 @@ class MainWindow(QMainWindow):
                     opened = result.get("optionsOpened")
                     item_found = result.get("videoItemFound")
                     clicked = result.get("videoClicked")
+                    settings_focus = bool(result.get("settingsFocusAttempted"))
+                    settings_space = bool(result.get("settingsSpaceAttempted"))
+                    settings_activation = bool(result.get("settingsActivationAttempted"))
                     prompt_visible = bool(result.get("promptInputVisible"))
                     generation_visible = bool(result.get("generationInProgress"))
                     make_video_visible = bool(result.get("makeVideoButtonVisible"))
@@ -9492,6 +9528,7 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"Variant {current_variant}: video stage ready "
                             f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
+                            f"settingsFocus={settings_focus}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
                             f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                             f"submitVisible={submit_visible}, postView={on_post_view}); "
                             "refilling prompt."
@@ -9869,7 +9906,7 @@ class MainWindow(QMainWindow):
                                 QTimer.singleShot(350, self._poll_for_manual_image)
                                 return
                         self._append_log(
-                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + pointer/mouse/native click sequence), then selecting Make Video from menu."
+                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + Space key + pointer/mouse/native click sequence), then selecting Make Video from menu."
                         )
                     generation_state_probe_script = r"""
                         (() => {
@@ -9981,8 +10018,12 @@ class MainWindow(QMainWindow):
                         make_video_visible = bool(isinstance(result, dict) and result.get("makeVideoButtonVisible"))
                         submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
                         on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
+                        settings_focus = bool(isinstance(result, dict) and result.get("settingsFocusAttempted"))
+                        settings_space = bool(isinstance(result, dict) and result.get("settingsSpaceAttempted"))
+                        settings_activation = bool(isinstance(result, dict) and result.get("settingsActivationAttempted"))
                         self._append_log(
                             f"Variant {current_variant}: waiting for video mode selection ({status}, "
+                            f"settingsFocus={settings_focus}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
                             f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                             f"submitVisible={submit_visible}, postView={on_post_view}, generationProbe={generation_signal_probe}); retrying..."
                         )
