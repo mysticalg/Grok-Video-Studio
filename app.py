@@ -9198,7 +9198,7 @@ class MainWindow(QMainWindow):
                     }}
 
                     if (!makeVideoItemFound) {{
-                        if (manualSinglePickMode) {{
+                        if (manualSinglePickMode && onPostView) {{
                             const settingsButton = [
                                 ...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]"),
                                 ...document.querySelectorAll("button#radix-_r_2i_"),
@@ -9216,6 +9216,19 @@ class MainWindow(QMainWindow):
                                 return {{ ok: false, status: "strict-menu-make-video-missing", onPostView }};
                             }}
                             makeVideoItemFound = true;
+                        }} else if (manualSinglePickMode && !onPostView) {{
+                            return {{
+                                ok: false,
+                                status: "waiting-for-video-mode",
+                                optionsOpened,
+                                videoItemFound: makeVideoItemFound,
+                                videoClicked: makeVideoClicked,
+                                promptInputVisible,
+                                generationInProgress,
+                                makeVideoButtonVisible,
+                                submitButtonVisible,
+                                onPostView,
+                            }};
                         }} else {{
                             const triggerCandidates = [
                                 ...document.querySelectorAll("#model-select-trigger"),
