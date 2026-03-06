@@ -8944,35 +8944,14 @@ class MainWindow(QMainWindow):
                 return
 
             if post_id_from_browser:
-                if self.manual_post_refresh_requested_token != self.manual_image_submit_token:
-                    self.manual_post_refresh_requested_token = self.manual_image_submit_token
-                    self.manual_post_refresh_detected_post_id = post_id_from_browser
-                    self._append_log(f"Variant {variant}: detected manual pick from URL")
-                    self._append_log(f"Variant {variant}: refreshing /post page after manual pick detection.")
-                    refresh_submit_token = int(self.manual_image_submit_token)
-                    refresh_script = f"""
-                        (() => {{
-                            try {{
-                                window.sessionStorage?.setItem(
-                                    "__grokManualPostRefreshState",
-                                    JSON.stringify({{ token: {refresh_submit_token}, refreshedAt: Date.now() }})
-                                );
-                            }} catch (_) {{}}
-                            try {{
-                                window.location.reload();
-                                return true;
-                            }} catch (_) {{
-                                return false;
-                            }}
-                        }})()
-                    """
-                    self._run_active_browser_javascript(refresh_script)
-                    QTimer.singleShot(1100, self._poll_for_manual_image)
-                    return
-
-                resolved_post_id = self.manual_post_refresh_detected_post_id or post_id_from_browser
+                self.manual_post_refresh_requested_token = self.manual_image_submit_token
+                self.manual_post_refresh_detected_post_id = post_id_from_browser
+                self._append_log(f"Variant {variant}: detected manual pick from URL ({post_id_from_browser}).")
                 self._append_log(
-                    f"Variant {variant}: ({resolved_post_id}); proceeding to video-mode options."
+                    f"Variant {variant}: manual pick confirmed; skipping refresh and attempting Settings open via Tab then Space."
+                )
+                self._append_log(
+                    f"Variant {variant}: ({post_id_from_browser}); proceeding to video-mode options."
                 )
                 self.manual_image_pick_clicked = True
                 self.manual_image_pick_retry_count = 0
@@ -9125,37 +9104,6 @@ class MainWindow(QMainWindow):
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
-                    if (manualSinglePickMode && onPostView) {{
-                        let refreshState = null;
-                        try {{
-                            const raw = String(window.sessionStorage?.getItem("__grokManualPostRefreshState") || "");
-                            refreshState = raw ? JSON.parse(raw) : null;
-                        }} catch (_) {{
-                            refreshState = null;
-                        }}
-
-                        const stateToken = Number(refreshState?.token || 0);
-                        const refreshedAt = Number(refreshState?.refreshedAt || 0);
-                        const now = Date.now();
-                        if (stateToken !== Number(submitToken || 0)) {{
-                            try {{
-                                window.sessionStorage?.setItem(
-                                    "__grokManualPostRefreshState",
-                                    JSON.stringify({{ token: Number(submitToken || 0), refreshedAt: now }})
-                                );
-                            }} catch (_) {{}}
-                            try {{
-                                window.location.reload();
-                            }} catch (_) {{}}
-                            return {{ ok: false, status: "manual-post-refreshing", onPostView: true }};
-                        }}
-
-                        const elapsed = Math.max(0, now - refreshedAt);
-                        if (elapsed < 2000) {{
-                            return {{ ok: false, status: "manual-post-refresh-wait", onPostView: true, waitMs: 2000 - elapsed }};
-                        }}
-                    }}
-
                     const promptSelectors = [
                         "textarea[placeholder*='Type to customize video' i]",
                         "input[placeholder*='Type to customize video' i]",
@@ -9551,7 +9499,7 @@ class MainWindow(QMainWindow):
 
                 if status in ("video-submit-clicked", "video-submit-enter-dispatched", "video-submit-already-clicked"):
                     if status in ("video-submit-clicked", "video-submit-enter-dispatched"):
-                        message = "video prompt submitted via trailing Enter"
+                        message = "video prompt submitted via Make video button click"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
 
@@ -9887,28 +9835,11 @@ class MainWindow(QMainWindow):
                 return
 
             if not self.manual_image_video_mode_selected:
-                if status in ("manual-post-refreshing", "manual-post-refresh-wait"):
-                    if status == "manual-post-refreshing":
-                        if self.manual_post_refresh_log_token != self.manual_image_submit_token:
-                            self._append_log(
-                                f"Variant {current_variant}: manual pick detected on /post; refreshing post page before selecting video options."
-                            )
-                            self.manual_post_refresh_log_token = self.manual_image_submit_token
-                            self.manual_post_refresh_wait_log_token = -1
-                        QTimer.singleShot(1000, self._poll_for_manual_image)
-                        return
-
-                    wait_ms = int(result.get("waitMs") or 750) if isinstance(result, dict) else 750
-                    wait_ms = max(250, min(wait_ms, 2200))
-                    if self.manual_post_refresh_wait_log_token != self.manual_image_submit_token:
-                        self._append_log(
-                            f"Variant {current_variant}: post page refreshed; waiting {wait_ms}ms before opening video options."
-                        )
-                        self.manual_post_refresh_wait_log_token = self.manual_image_submit_token
-                    QTimer.singleShot(wait_ms, self._poll_for_manual_image)
-                    return
-
                 if status == "waiting-for-video-mode":
+                    if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
+                        self._append_log(
+                            f"Variant {current_variant}: action: trying Settings open with Tab+Space, then selecting Make Video from menu."
+                        )
                     generation_state_probe_script = r"""
                         (() => {
                             try {
