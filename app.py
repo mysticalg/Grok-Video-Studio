@@ -9197,27 +9197,34 @@ class MainWindow(QMainWindow):
                             }}
 
                             const robustDirectClick = (btn) => {{
-                                let clicked = false;
-                                try {{ btn.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
-                                try {{ btn.focus?.(); }} catch (_) {{}}
-                                clicked = emulateClick(btn) || clicked;
-                                const common = {{ bubbles: true, cancelable: true, composed: true }};
-                                try {{ btn.dispatchEvent(new PointerEvent("pointerdown", common)); clicked = true; }} catch (_) {{}}
-                                try {{ btn.dispatchEvent(new MouseEvent("mousedown", common)); clicked = true; }} catch (_) {{}}
-                                try {{ btn.click?.(); clicked = true; }} catch (_) {{}}
-                                try {{ btn.dispatchEvent(new MouseEvent("mouseup", common)); clicked = true; }} catch (_) {{}}
-                                try {{ btn.dispatchEvent(new PointerEvent("pointerup", common)); clicked = true; }} catch (_) {{}}
-                                try {{ btn.dispatchEvent(new MouseEvent("click", common)); clicked = true; }} catch (_) {{}}
-                                if (!clicked) {{
+                                const clickSingleTarget = (target) => {{
+                                    if (!target) return false;
+                                    let clicked = false;
+                                    try {{ target.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
+                                    try {{ target.focus?.(); }} catch (_) {{}}
                                     try {{
-                                        const rect = btn.getBoundingClientRect();
-                                        const cx = Math.floor(rect.left + rect.width / 2);
-                                        const cy = Math.floor(rect.top + rect.height / 2);
-                                        const hit = document.elementFromPoint(cx, cy);
-                                        if (hit) clicked = emulateClick(hit.closest("button, [role='button']") || hit) || clicked;
+                                        if (typeof target.click === "function") {{
+                                            target.click();
+                                            clicked = true;
+                                        }}
                                     }} catch (_) {{}}
+                                    if (!clicked) {{
+                                        clicked = emulateClick(target) || clicked;
+                                    }}
+                                    return clicked;
+                                }};
+
+                                if (clickSingleTarget(btn)) return true;
+                                try {{
+                                    const rect = btn.getBoundingClientRect();
+                                    const cx = Math.floor(rect.left + rect.width / 2);
+                                    const cy = Math.floor(rect.top + rect.height / 2);
+                                    const hit = document.elementFromPoint(cx, cy);
+                                    const hitButton = hit ? (hit.closest("button, [role='button']") || hit) : null;
+                                    return clickSingleTarget(hitButton);
+                                }} catch (_) {{
+                                    return false;
                                 }}
-                                return clicked;
                             }};
 
                             let clickConfirmed = promptInputVisible || cancelVideoButtonVisible || generationInProgress;
