@@ -8944,17 +8944,16 @@ class MainWindow(QMainWindow):
                 self.manual_post_refresh_detected_post_id = post_id_from_browser
                 self._append_log(f"Variant {variant}: detected manual pick from URL ({post_id_from_browser}).")
                 self._append_log(
-                    f"Variant {variant}: manual pick confirmed; refreshing post page, then clicking Make video via regular automation."
+                    f"Variant {variant}: manual pick confirmed; proceeding to Make video automation without page refresh."
                 )
                 self._append_log(
-                    f"Variant {variant}: ({post_id_from_browser}); refreshing first, then proceeding to video-mode options."
+                    f"Variant {variant}: ({post_id_from_browser}); proceeding directly to video-mode options."
                 )
                 self.manual_image_pick_clicked = True
                 self.manual_image_pick_retry_count = 0
                 self.manual_image_video_mode_retry_count = 0
                 self.manual_image_submit_retry_count = 0
-                self._reload_active_browser_post_page(detected_url, variant)
-                QTimer.singleShot(1300, self._poll_for_manual_image)
+                QTimer.singleShot(250, self._poll_for_manual_image)
                 return
 
         if not self.manual_image_pick_clicked:
@@ -9223,7 +9222,7 @@ class MainWindow(QMainWindow):
                                 }}
                             }};
 
-                            let clickConfirmed = promptInputVisible || cancelVideoButtonVisible || generationInProgress;
+                            let clickConfirmed = promptInputVisible || submitButtonVisible;
                             const clickAlreadySent = window.__grokManualVideoModeClickToken === submitToken;
                             if (clickAlreadySent) {{
                                 makeVideoClicked = true;
@@ -9231,15 +9230,19 @@ class MainWindow(QMainWindow):
 
                             if (!clickConfirmed && clickAlreadySent) {{
                                 const cancelAlreadySent = window.__grokManualCancelVideoClickToken === submitToken;
-                                if (!cancelAlreadySent) {{
-                                    const cancelButton = [...document.querySelectorAll("button, [role='button']")]
-                                        .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el))) || null;
-                                    if (cancelButton && robustDirectClick(cancelButton)) {{
-                                        window.__grokManualCancelVideoClickToken = submitToken;
-                                        await sleep(ACTION_DELAY_MS + 220);
-                                        clickConfirmed = true;
-                                    }}
+                                const cancelButton = [...document.querySelectorAll("button, [role='button']")]
+                                    .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el))) || null;
+                                if (cancelButton && !cancelAlreadySent && robustDirectClick(cancelButton)) {{
+                                    window.__grokManualCancelVideoClickToken = submitToken;
+                                    await sleep(ACTION_DELAY_MS + 320);
                                 }}
+
+                                const promptVisibleAfterCancel = promptSelectors
+                                    .flatMap((sel) => [...document.querySelectorAll(sel)])
+                                    .some((el) => isVisible(el) && !el.disabled);
+                                const submitVisibleAfterCancel = !![...document.querySelectorAll("button, [role='button']")]
+                                    .find((el) => isVisible(el) && !el.disabled && /\\b(create|generate|submit)\\b.*\\bvideo\\b|\\bvideo\\b.*\\b(create|generate|submit)\\b/i.test(descriptorOf(el)));
+                                clickConfirmed = promptVisibleAfterCancel || submitVisibleAfterCancel;
                             }}
 
                             if (!clickConfirmed && !clickAlreadySent) {{
@@ -9483,7 +9486,15 @@ class MainWindow(QMainWindow):
                     generation_visible = bool(result.get("generationInProgress"))
                     make_video_visible = bool(result.get("makeVideoButtonVisible"))
                     submit_visible = bool(result.get("submitButtonVisible"))
+                    cancel_visible = bool(result.get("cancelVideoButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
+                    if self.manual_single_video_manual_pick and not self.multi_video_mode_active and not (prompt_visible or submit_visible):
+                        self._append_log(
+                            f"Variant {current_variant}: Make video click accepted; waiting for cancel/prompt transition "
+                            f"(cancelVisible={cancel_visible}, generationVisible={generation_visible}, promptVisible={prompt_visible}, submitVisible={submit_visible})."
+                        )
+                        QTimer.singleShot(900, self._poll_for_manual_image)
+                        return
                     if not self.manual_image_video_mode_selected:
                         self._append_log(
                             f"Variant {current_variant}: video stage ready "
