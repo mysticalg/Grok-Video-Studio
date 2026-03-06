@@ -9496,10 +9496,10 @@ class MainWindow(QMainWindow):
                     submit_visible = bool(result.get("submitButtonVisible"))
                     cancel_visible = bool(result.get("cancelVideoButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
-                    if self.manual_single_video_manual_pick and not self.multi_video_mode_active and not (prompt_visible or submit_visible):
+                    if not (prompt_visible or submit_visible):
                         self._append_log(
-                            f"Variant {current_variant}: Make video click accepted; waiting for cancel/prompt transition "
-                            f"(cancelVisible={cancel_visible}, generationVisible={generation_visible}, promptVisible={prompt_visible}, submitVisible={submit_visible})."
+                            f"Variant {current_variant}: video mode active but prompt controls not ready; waiting "
+                            f"(cancelVisible={cancel_visible}, generationVisible={generation_visible}, promptVisible={prompt_visible}, submitVisible={submit_visible}, manualPick={self.manual_single_video_manual_pick and not self.multi_video_mode_active})."
                         )
                         QTimer.singleShot(900, self._poll_for_manual_image)
                         return
@@ -9966,10 +9966,14 @@ class MainWindow(QMainWindow):
                                 return
 
                             if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
-                                self._abort_manual_create_video_polling(
-                                    current_variant,
-                                    f"video-mode validation timeout ({status}) in strict manual flow",
+                                self._append_log(
+                                    "WARNING: Variant "
+                                    f"{current_variant}: video-mode signal detected but prompt controls are not ready yet "
+                                    f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}); "
+                                    "continuing to wait for cancel→prompt transition."
                                 )
+                                self.manual_image_video_mode_retry_count = 0
+                                QTimer.singleShot(1500, self._poll_for_manual_image)
                                 return
 
                             self._append_log(
