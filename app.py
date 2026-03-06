@@ -12385,15 +12385,38 @@ class MainWindow(QMainWindow):
         try:
             runtime = self._ensure_automation_runtime()
             runtime.ensure_udp_service()
-            settings_resp = runtime.execute_local_automation_command(
-                "dom.click",
+            # Keep this aligned with the in-page "open video options" targeting used in
+            # manual option selection. Grok currently exposes this trigger more reliably
+            # as model-select/video-options than a generic Settings button.
+            open_menu_attempts = [
                 {
-                    "platform": "grok",
+                    "selector": "#model-select-trigger",
+                    "timeoutMs": 4000,
+                },
+                {
+                    "selector": "button[aria-label='Video Options' i], button[aria-label*='video options' i]",
+                    "textContains": "video options",
+                    "timeoutMs": 4000,
+                },
+                {
+                    "selector": "button[aria-label='Model select' i], button[aria-label*='model select' i]",
+                    "textContains": "model",
+                    "timeoutMs": 4000,
+                },
+                {
                     "selector": "button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]",
                     "textContains": "settings",
                     "timeoutMs": 3500,
                 },
-            )
+            ]
+
+            settings_resp: dict[str, Any] | None = None
+            for payload in open_menu_attempts:
+                candidate_payload = {"platform": "grok", **payload}
+                settings_resp = runtime.execute_local_automation_command("dom.click", candidate_payload)
+                if bool(isinstance(settings_resp, dict) and settings_resp.get("ok")):
+                    break
+
             settings_ok = bool(isinstance(settings_resp, dict) and settings_resp.get("ok"))
             if not settings_ok:
                 return False, f"settings-click-failed:{settings_resp}"
