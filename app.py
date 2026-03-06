@@ -9556,14 +9556,28 @@ class MainWindow(QMainWindow):
                     const preClicked = emulateClick(preMakeVideoBtn);
                     if (!preClicked) return {{ ok: false, status: "strict-prep-make-video-click-failed" }};
 
-                    await sleep(ACTION_DELAY_MS + 220);
-                    const cancelBtn = [...document.querySelectorAll("button, [role='button']")]
-                        .find((btn) => isActuallyVisible(btn) && !btn.disabled && /\bcancel\b/i.test((btn.getAttribute("aria-label") || btn.textContent || "").trim())) || null;
-                    if (cancelBtn) {{
-                        const cancelClicked = emulateClick(cancelBtn);
-                        if (!cancelClicked) return {{ ok: false, status: "strict-cancel-click-failed" }};
+                    let cancelClicked = false;
+                    let cancelFound = false;
+                    for (let cancelAttempt = 0; cancelAttempt < 4; cancelAttempt += 1) {{
                         await sleep(ACTION_DELAY_MS + 180);
+                        const cancelCandidates = [
+                            ...document.querySelectorAll("button[data-slot='button'][type='button']"),
+                            ...document.querySelectorAll("button[type='button']"),
+                            ...document.querySelectorAll("button, [role='button']"),
+                        ].filter((btn, idx, arr) => arr.indexOf(btn) === idx)
+                         .filter((btn) => isActuallyVisible(btn) && !btn.disabled);
+                        const descriptorOfBtn = (btn) => String(btn?.getAttribute?.("aria-label") || "") + " " + String(btn?.textContent || "");
+                        const cancelBtn = cancelCandidates.find((btn) => /\\bcancel\\s*video\\b/i.test(descriptorOfBtn(btn)))
+                            || cancelCandidates.find((btn) => /\\bcancel\\b/i.test(descriptorOfBtn(btn)))
+                            || null;
+                        if (!cancelBtn) continue;
+                        cancelFound = true;
+                        cancelClicked = emulateClick(cancelBtn) || cancelClicked;
+                        if (cancelClicked) break;
                     }}
+                    if (cancelFound && !cancelClicked) return {{ ok: false, status: "strict-cancel-click-failed" }};
+                    if (!cancelFound) return {{ ok: false, status: "strict-cancel-video-button-missing" }};
+                    await sleep(ACTION_DELAY_MS + 140);
                 }}
 
                 const promptSelectors = [
@@ -9648,6 +9662,7 @@ class MainWindow(QMainWindow):
                     "strict-prep-make-video-button-missing",
                     "strict-prep-make-video-click-failed",
                     "strict-cancel-click-failed",
+                    "strict-cancel-video-button-missing",
                     "strict-submit-make-video-button-missing",
                     "strict-submit-make-video-click-failed",
                 ):
@@ -9777,6 +9792,7 @@ class MainWindow(QMainWindow):
                 "strict-prep-make-video-button-missing",
                 "strict-prep-make-video-click-failed",
                 "strict-cancel-click-failed",
+                "strict-cancel-video-button-missing",
                 "strict-submit-make-video-button-missing",
                 "strict-submit-make-video-click-failed",
                 "prompt-fill-empty",
