@@ -206,6 +206,18 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "manual_multi_video_poll_fast_ms": 200,
     "sora_option_step_delay_ms": 2000,
     "sora_download_trigger_delay_ms": 700,
+    "manual_submit_result_poll_delay_ms": 350,
+    "manual_poll_pause_cap_ms": 1500,
+    "continue_post_reload_generation_delay_ms": 700,
+    "continue_next_iteration_delay_ms": 800,
+    "continue_reload_timeout_ms": 10000,
+    "multi_video_download_wait_active_ms": 1000,
+    "multi_video_download_wait_future_ms": 800,
+    "multi_video_download_retry_ms": 1200,
+    "multi_video_download_finish_poll_ms": 200,
+    "multi_video_status_log_every_attempts": 3,
+    "manual_menu_settle_extra_ms": 320,
+    "manual_video_mode_settle_extra_ms": 260,
 }
 
 AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
@@ -230,6 +242,18 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling"},
     {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora"},
     {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora"},
+    {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
+    {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
+    {"key": "multi_video_download_finish_poll_ms", "label": "Multi-video finish poll delay", "min": 0, "max": 5000, "step": 50, "group": "Grok Polling"},
+    {"key": "multi_video_status_log_every_attempts", "label": "Multi-video status log every N attempts", "min": 1, "max": 20, "step": 1, "group": "Grok Polling", "suffix": " attempts"},
+    {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Grok Polling"},
+    {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
+    {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
 )
 
 _session_download_counter_lock = threading.Lock()
@@ -6781,7 +6805,7 @@ class MainWindow(QMainWindow):
                 "Continue-from-last-frame: detected post page reload after image upload. "
                 "Applying video options, then entering continuation prompt."
             )
-            QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
+            QTimer.singleShot(self._automation_timing("continue_post_reload_generation_delay_ms"), lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
             return
 
         self._append_log(
@@ -8899,7 +8923,7 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Submitted manual image variant {variant} (attempt {attempts}); starting manual-pick polling immediately."
                 )
-                QTimer.singleShot(350, self._poll_for_manual_image)
+                QTimer.singleShot(self._automation_timing("manual_submit_result_poll_delay_ms"), self._poll_for_manual_image)
                 return
 
             if isinstance(result, dict) and result.get("waiting"):
@@ -9089,7 +9113,7 @@ class MainWindow(QMainWindow):
                     f"Variant {variant}: submit accepted; releasing page activity for {remaining_ms / 1000:.1f}s before next automation check."
                 )
                 self.manual_post_submit_idle_token = -1
-            QTimer.singleShot(min(remaining_ms, 1500), self._poll_for_manual_image)
+            QTimer.singleShot(min(remaining_ms, self._automation_timing("manual_poll_pause_cap_ms")), self._poll_for_manual_image)
             return
 
         if self.multi_video_mode_active:
@@ -9172,7 +9196,7 @@ class MainWindow(QMainWindow):
                 const submitToken = {self.manual_image_submit_token};
                 const submitAttemptAllowed = {"true" if submit_attempt_allowed else "false"};
                 const manualSinglePickMode = {"true" if (self.manual_single_video_manual_pick and not self.multi_video_mode_active) else "false"};
-                const ACTION_DELAY_MS = 200;
+                const ACTION_DELAY_MS = {self._automation_timing("automation_action_delay_ms")};
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
@@ -9444,7 +9468,7 @@ class MainWindow(QMainWindow):
                                     if (remainingDelayMs > 0) await sleep(remainingDelayMs);
                                     if (robustDirectClick(cancelButton)) {{
                                         window.__grokManualCancelVideoClickToken = submitToken;
-                                        await sleep(ACTION_DELAY_MS + 320);
+                                        await sleep(ACTION_DELAY_MS + {self._automation_timing("manual_menu_settle_extra_ms")});
                                     }}
                                 }}
 
@@ -9466,7 +9490,7 @@ class MainWindow(QMainWindow):
                                     if (!clickedNow) continue;
                                     window.__grokManualVideoModeClickToken = submitToken;
                                     window.__grokManualVideoModeClickAtMs = Date.now();
-                                    await sleep(ACTION_DELAY_MS + 260);
+                                    await sleep(ACTION_DELAY_MS + {self._automation_timing("manual_video_mode_settle_extra_ms")});
 
                                     const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
                                         .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
@@ -12506,7 +12530,7 @@ class MainWindow(QMainWindow):
                 )
             else:
                 self.multi_video_poll_retry_count += 1
-                if self.multi_video_poll_retry_count % 3 == 0:
+                if self.multi_video_poll_retry_count % max(1, self._automation_timing("multi_video_status_log_every_attempts")) == 0:
                     if self.multi_video_manual_pick:
                         self._append_log("Multi Video: waiting for your manual Make video picks and post ids...")
                     else:
@@ -12555,7 +12579,7 @@ class MainWindow(QMainWindow):
         if not self.multi_video_mode_active or self.stop_all_requested:
             return
         if self.multi_video_download_future is not None and not self.multi_video_download_future.done():
-            self.multi_video_download_timer.start(1000)
+            self.multi_video_download_timer.start(self._automation_timing("multi_video_download_wait_active_ms"))
             return
 
         while self.multi_video_pending_downloads:
@@ -12614,7 +12638,7 @@ class MainWindow(QMainWindow):
             if future is None:
                 return
             if not future.done():
-                self.multi_video_download_timer.start(800)
+                self.multi_video_download_timer.start(self._automation_timing("multi_video_download_wait_future_ms"))
                 return
             self.multi_video_download_future = None
             try:
@@ -12642,9 +12666,9 @@ class MainWindow(QMainWindow):
             else:
                 self._append_log(f"Multi Video: variant {variant} not ready yet ({payload}); retrying.")
 
-            self.multi_video_download_timer.start(1200)
+            self.multi_video_download_timer.start(self._automation_timing("multi_video_download_retry_ms"))
 
-        QTimer.singleShot(200, _finish_download)
+        QTimer.singleShot(self._automation_timing("multi_video_download_finish_poll_ms"), _finish_download)
 
     def _try_udp_open_manual_video_menu(self, variant: int) -> tuple[bool, str]:
         if not self._active_ai_browser_external_control_enabled():
@@ -13197,7 +13221,7 @@ class MainWindow(QMainWindow):
         if self.continue_from_frame_active:
             self.continue_from_frame_completed += 1
             if self.continue_from_frame_completed < self.continue_from_frame_target_count:
-                QTimer.singleShot(800, self._start_continue_iteration)
+                QTimer.singleShot(self._automation_timing("continue_next_iteration_delay_ms"), self._start_continue_iteration)
             else:
                 self._append_log("Continue workflow complete.")
                 self._reset_automation_counter_tracking()
@@ -14404,7 +14428,7 @@ class MainWindow(QMainWindow):
 
     def _wait_for_continue_upload_reload(self) -> None:
         self.continue_from_frame_waiting_for_reload = True
-        self.continue_from_frame_reload_timeout_timer.start(10000)
+        self.continue_from_frame_reload_timeout_timer.start(self._automation_timing("continue_reload_timeout_ms"))
         self._append_log(
             "Continue-from-last-frame: image pasted. Grok should auto-reload after upload; "
             "waiting for the new page before entering the continuation prompt..."
