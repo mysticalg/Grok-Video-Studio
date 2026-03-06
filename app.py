@@ -98,6 +98,7 @@ QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
 MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS = max(1_000, int(os.getenv("MANUAL_DOWNLOAD_ATTEMPT_INTERVAL_MS", "1000")))
 CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS = max(3000, int(os.getenv("CONTINUE_LAST_VIDEO_DOWNLOAD_POLL_INTERVAL_MS", "5000")))
+CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS = max(100, int(os.getenv("CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS", "500")))
 MANUAL_PUBLIC_PAGE_SCRAPE_INTERVAL_MS = 5_000
 MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS = max(3, int(os.getenv("MANUAL_PUBLIC_NOT_READY_ABORT_ATTEMPTS", "30")))
 MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS = max(1, int(os.getenv("MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS", "2")))
@@ -6593,7 +6594,10 @@ class MainWindow(QMainWindow):
                 "Continue-from-last-frame: detected post page reload after image upload. "
                 "Applying video options, then entering continuation prompt."
             )
-            QTimer.singleShot(700, lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1))
+            QTimer.singleShot(
+                CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS,
+                lambda: self._start_manual_browser_generation(self.continue_from_frame_prompt, 1),
+            )
             return
 
         self._append_log(
@@ -11260,14 +11264,17 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(
+                                CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS,
+                                lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
+                            )
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(700, _run_flow_submit)
+                        QTimer.singleShot(CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS, _run_flow_submit)
 
                     self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
                     return
@@ -11346,19 +11353,22 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(700, lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(
+                                CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS,
+                                lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
+                            )
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(700, _run_flow_submit)
+                        QTimer.singleShot(CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS, _run_flow_submit)
 
                     self._run_active_browser_javascript(enter_script, _after_enter_press)
                     return
 
-                QTimer.singleShot(2000, _run_flow_submit)
+                QTimer.singleShot(CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS, _run_flow_submit)
 
             self._run_active_browser_javascript(script, _after_prompt_populate)
 
@@ -11390,7 +11400,7 @@ class MainWindow(QMainWindow):
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
                 self._append_log(f"Variant {variant}: all staged options attempted; continuing to prompt entry.")
-                QTimer.singleShot(2000, _populate_prompt_then_submit)
+                QTimer.singleShot(CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS, _populate_prompt_then_submit)
                 return
 
             step_name, label = option_steps[step_index]
@@ -11405,7 +11415,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"WARNING: Variant {variant}: could not confirm click for {step_name} option '{label}'. result={step_result!r}"
                     )
-                QTimer.singleShot(2000, lambda: _run_option_step(step_index + 1))
+                QTimer.singleShot(CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS, lambda: _run_option_step(step_index + 1))
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
@@ -11419,7 +11429,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, _populate_prompt_then_submit)
                 return
             self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
-            QTimer.singleShot(2000, lambda: _run_option_step(0))
+            QTimer.singleShot(CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS, lambda: _run_option_step(0))
 
         def _after_location_check(location_result):
             current_url = ""
@@ -11430,10 +11440,10 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     "Manual flow: current page is not grok.com/imagine/favorites; staying on the current page for automated flow."
                 )
-                QTimer.singleShot(2000, _open_options_then_steps)
+                QTimer.singleShot(CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS, _open_options_then_steps)
             else:
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
-                QTimer.singleShot(2000, _open_options_then_steps)
+                QTimer.singleShot(CONTINUE_LAST_VIDEO_UI_STEP_DELAY_MS, _open_options_then_steps)
 
         self._run_active_browser_javascript(
             "(() => ({ href: String((window.location && window.location.href) || '') }))()",
