@@ -9168,19 +9168,33 @@ class MainWindow(QMainWindow):
                                 return {{ ok: false, status: "strict-settings-button-missing", onPostView }};
                             }}
 
-                            const isExpanded = String(settingsButton.getAttribute("aria-expanded") || "").toLowerCase() === "true";
-                            const controlsId = String(settingsButton.getAttribute("aria-controls") || "").trim();
-                            const menuLinkedVisible = controlsId
-                                ? !!(() => {{
-                                    const linked = document.getElementById(controlsId);
-                                    return linked && isVisible(linked);
-                                }})()
-                                : false;
+                            const findSettingsControlsId = (btn) => String(btn?.getAttribute("aria-controls") || "").trim();
+                            const isMenuOpenSignal = (btn) => {{
+                                const expanded = String(btn?.getAttribute("aria-expanded") || "").toLowerCase() === "true";
+                                const stateOpen = String(btn?.getAttribute("data-state") || "").toLowerCase() === "open";
+                                const controlsIdNow = findSettingsControlsId(btn);
+                                const linkedVisible = controlsIdNow
+                                    ? !!(() => {{
+                                        const linked = document.getElementById(controlsIdNow);
+                                        return linked && isVisible(linked);
+                                    }})()
+                                    : false;
+                                return {{ expanded, stateOpen, controlsIdNow, linkedVisible }};
+                            }};
 
                             const attemptOpenSettings = (btn) => {{
                                 let activated = false;
+                                try {{ btn.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
                                 try {{ btn.focus?.(); }} catch (_) {{}}
+
+                                const common = {{ bubbles: true, cancelable: true, composed: true }};
+                                try {{ btn.dispatchEvent(new PointerEvent("pointerdown", common)); activated = true; }} catch (_) {{}}
+                                try {{ btn.dispatchEvent(new MouseEvent("mousedown", common)); activated = true; }} catch (_) {{}}
                                 try {{ btn.click?.(); activated = true; }} catch (_) {{}}
+                                try {{ btn.dispatchEvent(new MouseEvent("mouseup", common)); activated = true; }} catch (_) {{}}
+                                try {{ btn.dispatchEvent(new PointerEvent("pointerup", common)); activated = true; }} catch (_) {{}}
+                                try {{ btn.dispatchEvent(new MouseEvent("click", common)); activated = true; }} catch (_) {{}}
+
                                 if (!activated) activated = emulateClick(btn) || activated;
                                 if (!activated) {{
                                     try {{
@@ -9191,24 +9205,28 @@ class MainWindow(QMainWindow):
                                         if (hit) activated = emulateClick(hit.closest("button, [role='button']") || hit) || activated;
                                     }} catch (_) {{}}
                                 }}
+                                if (!activated) {{
+                                    try {{
+                                        const parentBtn = btn.closest("button, [role='button']");
+                                        if (parentBtn && parentBtn !== btn) activated = emulateClick(parentBtn) || activated;
+                                    }} catch (_) {{}}
+                                }}
                                 return activated;
                             }};
 
-                            optionsOpened = isExpanded || menuLinkedVisible;
+                            const initialSignal = isMenuOpenSignal(settingsButton);
+                            optionsOpened = initialSignal.expanded || initialSignal.stateOpen || initialSignal.linkedVisible;
+                            let controlsId = initialSignal.controlsIdNow;
+
                             if (!optionsOpened) {{
                                 let openedByClick = false;
-                                for (let attempt = 0; attempt < 4; attempt += 1) {{
+                                for (let attempt = 0; attempt < 7; attempt += 1) {{
                                     openedByClick = attemptOpenSettings(settingsButton) || openedByClick;
-                                    await sleep(ACTION_DELAY_MS + 180);
-                                    const expandedNow = String(settingsButton.getAttribute("aria-expanded") || "").toLowerCase() === "true";
-                                    const linkedNowVisible = controlsId
-                                        ? !!(() => {{
-                                            const linked = document.getElementById(controlsId);
-                                            return linked && isVisible(linked);
-                                        }})()
-                                        : false;
+                                    await sleep(ACTION_DELAY_MS + 220);
+                                    const openSignal = isMenuOpenSignal(settingsButton);
+                                    controlsId = openSignal.controlsIdNow || controlsId;
                                     menuAttempt = findMakeVideoInOpenMenu();
-                                    if (expandedNow || linkedNowVisible || !!menuAttempt.item) {{
+                                    if (openSignal.expanded || openSignal.stateOpen || openSignal.linkedVisible || !!menuAttempt.item) {{
                                         optionsOpened = true;
                                         break;
                                     }}
@@ -9218,7 +9236,7 @@ class MainWindow(QMainWindow):
                                 }}
                             }}
 
-                            await sleep(ACTION_DELAY_MS);
+                            await sleep(ACTION_DELAY_MS + 120);
                             menuAttempt = findMakeVideoInOpenMenu();
                             if (!menuAttempt.item && controlsId) {{
                                 const linkedMenuRoot = document.getElementById(controlsId);
@@ -9231,6 +9249,10 @@ class MainWindow(QMainWindow):
                                 }}
                             }}
 
+                            if (!menuAttempt.item) {{
+                                await sleep(ACTION_DELAY_MS + 160);
+                                menuAttempt = findMakeVideoInOpenMenu();
+                            }}
                             if (!menuAttempt.item) {{
                                 return {{ ok: false, status: "strict-menu-make-video-missing", onPostView }};
                             }}
@@ -9820,7 +9842,7 @@ class MainWindow(QMainWindow):
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
                         self._append_log(
-                            f"Variant {current_variant}: action: trying Settings open via DOM focus+click, then selecting Make Video from menu."
+                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + pointer/mouse/native click sequence), then selecting Make Video from menu."
                         )
                     generation_state_probe_script = r"""
                         (() => {
