@@ -9833,15 +9833,6 @@ class MainWindow(QMainWindow):
             if not self.manual_image_video_mode_selected:
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
-                        if self._active_ai_browser_external_control_enabled() and self.manual_udp_menu_attempt_count < 6:
-                            self.manual_udp_menu_attempt_count += 1
-                            ok_udp, udp_reason = self._try_udp_open_manual_video_menu(current_variant)
-                            self._append_log(
-                                f"Variant {current_variant}: UDP relay menu attempt {self.manual_udp_menu_attempt_count}/6 -> {udp_reason}."
-                            )
-                            if ok_udp:
-                                QTimer.singleShot(350, self._poll_for_manual_image)
-                                return
                         self._append_log(
                             f"Variant {current_variant}: action: clicking visible Make video button directly, then waiting for Cancel Video/prompt readiness."
                         )
