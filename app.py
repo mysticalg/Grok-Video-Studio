@@ -8948,7 +8948,7 @@ class MainWindow(QMainWindow):
                 self.manual_post_refresh_detected_post_id = post_id_from_browser
                 self._append_log(f"Variant {variant}: detected manual pick from URL ({post_id_from_browser}).")
                 self._append_log(
-                    f"Variant {variant}: manual pick confirmed; skipping refresh and attempting Settings open via Tab then Space."
+                    f"Variant {variant}: manual pick confirmed; skipping refresh and attempting Settings open via DOM focus+click."
                 )
                 self._append_log(
                     f"Variant {variant}: ({post_id_from_browser}); proceeding to video-mode options."
@@ -9185,21 +9185,9 @@ class MainWindow(QMainWindow):
 
                             const attemptOpenSettings = (btn) => {{
                                 let activated = false;
-                                try {{
-                                    btn.dispatchEvent(new KeyboardEvent("keydown", {{ key: "Tab", code: "Tab", which: 9, keyCode: 9, bubbles: true, cancelable: true }}));
-                                }} catch (_) {{}}
                                 try {{ btn.focus?.(); }} catch (_) {{}}
-                                try {{
-                                    const spaceCommon = {{ key: " ", code: "Space", which: 32, keyCode: 32, bubbles: true, cancelable: true }};
-                                    btn.dispatchEvent(new KeyboardEvent("keydown", spaceCommon));
-                                    btn.dispatchEvent(new KeyboardEvent("keypress", spaceCommon));
-                                    btn.dispatchEvent(new KeyboardEvent("keyup", spaceCommon));
-                                    activated = true;
-                                }} catch (_) {{}}
+                                try {{ btn.click?.(); activated = true; }} catch (_) {{}}
                                 if (!activated) activated = emulateClick(btn) || activated;
-                                if (!activated) {{
-                                    try {{ btn.click?.(); activated = true; }} catch (_) {{}}
-                                }}
                                 if (!activated) {{
                                     try {{
                                         const rect = btn.getBoundingClientRect();
@@ -9838,7 +9826,7 @@ class MainWindow(QMainWindow):
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
                         self._append_log(
-                            f"Variant {current_variant}: action: trying Settings open with Tab+Space, then selecting Make Video from menu."
+                            f"Variant {current_variant}: action: trying Settings open via DOM focus+click, then selecting Make Video from menu."
                         )
                     generation_state_probe_script = r"""
                         (() => {
