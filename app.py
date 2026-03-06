@@ -9117,6 +9117,8 @@ class MainWindow(QMainWindow):
                         .find((el) => isActuallyVisible(el) && /\\bgenerating\\b|\\brendering\\b|\\bcancel\\b/i.test((el.textContent || "").trim()));
                     const makeVideoButtonVisible = !![...document.querySelectorAll("button, [role='button']")]
                         .find((el) => isActuallyVisible(el) && !el.disabled && /\\bmake\\s+video\\b/i.test(descriptorOf(el)));
+                    const cancelVideoButtonVisible = !![...document.querySelectorAll("button, [role='button']")]
+                        .find((el) => isActuallyVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
                     const submitButtonVisible = !![...document.querySelectorAll("button, [role='button']")]
                         .find((el) => isActuallyVisible(el) && !el.disabled && /\\b(create|generate|submit)\\b.*\\bvideo\\b|\\bvideo\\b.*\\b(create|generate|submit)\\b/i.test(descriptorOf(el)));
                     const isSidebarControl = (el) => {{
@@ -9159,106 +9161,40 @@ class MainWindow(QMainWindow):
 
                     if (!makeVideoItemFound) {{
                         if (manualSinglePickMode && onPostView) {{
-                            const settingsCandidates = [
-                                ...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]"),
-                                ...document.querySelectorAll("button[id^='radix-'][aria-label='Settings' i], [role='button'][id^='radix-'][aria-label='Settings' i]"),
-                                ...document.querySelectorAll("button#radix-_r_2i_"),
-                            ].filter((el, idx, arr) => arr.indexOf(el) === idx)
-                             .filter((el) => isActuallyVisible(el) && !el.disabled);
-                            const settingsButton = settingsCandidates[0] || null;
-                            if (!settingsButton) {{
-                                return {{ ok: false, status: "strict-settings-button-missing", onPostView }};
+                            const makeVideoButton = [...document.querySelectorAll("button[aria-label='Make video' i], [role='button'][aria-label='Make video' i], button, [role='button']")]
+                                .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                                .find((el) => isActuallyVisible(el) && !el.disabled && /\\bmake\\s+video\\b/i.test(descriptorOf(el))) || null;
+                            if (!makeVideoButton) {{
+                                return {{ ok: false, status: "direct-make-video-button-missing", onPostView }};
                             }}
 
-                            const findSettingsControlsId = (btn) => String(btn?.getAttribute("aria-controls") || "").trim();
-                            const isMenuOpenSignal = (btn) => {{
-                                const expanded = String(btn?.getAttribute("aria-expanded") || "").toLowerCase() === "true";
-                                const stateOpen = String(btn?.getAttribute("data-state") || "").toLowerCase() === "open";
-                                const controlsIdNow = findSettingsControlsId(btn);
-                                const linkedVisible = controlsIdNow
-                                    ? !!(() => {{
-                                        const linked = document.getElementById(controlsIdNow);
-                                        return linked && isVisible(linked);
-                                    }})()
-                                    : false;
-                                return {{ expanded, stateOpen, controlsIdNow, linkedVisible }};
-                            }};
-
-                            const attemptOpenSettings = (btn) => {{
-                                let activated = false;
-                                try {{ btn.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
-                                try {{ btn.focus?.(); }} catch (_) {{}}
-
-                                const common = {{ bubbles: true, cancelable: true, composed: true }};
-                                try {{ btn.dispatchEvent(new PointerEvent("pointerdown", common)); activated = true; }} catch (_) {{}}
-                                try {{ btn.dispatchEvent(new MouseEvent("mousedown", common)); activated = true; }} catch (_) {{}}
-                                try {{ btn.click?.(); activated = true; }} catch (_) {{}}
-                                try {{ btn.dispatchEvent(new MouseEvent("mouseup", common)); activated = true; }} catch (_) {{}}
-                                try {{ btn.dispatchEvent(new PointerEvent("pointerup", common)); activated = true; }} catch (_) {{}}
-                                try {{ btn.dispatchEvent(new MouseEvent("click", common)); activated = true; }} catch (_) {{}}
-
-                                if (!activated) activated = emulateClick(btn) || activated;
-                                if (!activated) {{
-                                    try {{
-                                        const rect = btn.getBoundingClientRect();
-                                        const cx = Math.floor(rect.left + rect.width / 2);
-                                        const cy = Math.floor(rect.top + rect.height / 2);
-                                        const hit = document.elementFromPoint(cx, cy);
-                                        if (hit) activated = emulateClick(hit.closest("button, [role='button']") || hit) || activated;
-                                    }} catch (_) {{}}
-                                }}
-                                if (!activated) {{
-                                    try {{
-                                        const parentBtn = btn.closest("button, [role='button']");
-                                        if (parentBtn && parentBtn !== btn) activated = emulateClick(parentBtn) || activated;
-                                    }} catch (_) {{}}
-                                }}
-                                return activated;
-                            }};
-
-                            const initialSignal = isMenuOpenSignal(settingsButton);
-                            optionsOpened = initialSignal.expanded || initialSignal.stateOpen || initialSignal.linkedVisible;
-                            let controlsId = initialSignal.controlsIdNow;
-
-                            if (!optionsOpened) {{
-                                let openedByClick = false;
-                                for (let attempt = 0; attempt < 7; attempt += 1) {{
-                                    openedByClick = attemptOpenSettings(settingsButton) || openedByClick;
-                                    await sleep(ACTION_DELAY_MS + 220);
-                                    const openSignal = isMenuOpenSignal(settingsButton);
-                                    controlsId = openSignal.controlsIdNow || controlsId;
-                                    menuAttempt = findMakeVideoInOpenMenu();
-                                    if (openSignal.expanded || openSignal.stateOpen || openSignal.linkedVisible || !!menuAttempt.item) {{
-                                        optionsOpened = true;
-                                        break;
-                                    }}
-                                }}
-                                if (!openedByClick && !optionsOpened) {{
-                                    return {{ ok: false, status: "strict-settings-button-click-failed", onPostView }};
-                                }}
+                            makeVideoClicked = emulateClick(makeVideoButton);
+                            if (!makeVideoClicked) {{
+                                return {{ ok: false, status: "direct-make-video-click-failed", onPostView }};
                             }}
+                            await sleep(ACTION_DELAY_MS + 180);
 
-                            await sleep(ACTION_DELAY_MS + 120);
-                            menuAttempt = findMakeVideoInOpenMenu();
-                            if (!menuAttempt.item && controlsId) {{
-                                const linkedMenuRoot = document.getElementById(controlsId);
-                                if (linkedMenuRoot) {{
-                                    const linkedItems = [
-                                        ...linkedMenuRoot.querySelectorAll("[role='menuitem'], [role='menuitemradio'], [role='option'], [data-radix-collection-item]")
-                                    ].filter((el) => isVisible(el));
-                                    const linkedMakeVideo = linkedItems.find((el) => isMakeVideoItem(el)) || null;
-                                    if (linkedMakeVideo) menuAttempt = {{ item: linkedMakeVideo }};
-                                }}
-                            }}
+                            const cancelVisibleAfterClick = !![...document.querySelectorAll("button, [role='button']")]
+                                .find((el) => isActuallyVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el)));
+                            const promptVisibleAfterClick = promptSelectors
+                                .flatMap((sel) => [...document.querySelectorAll(sel)])
+                                .some((el) => isActuallyVisible(el) && !el.disabled);
 
-                            if (!menuAttempt.item) {{
-                                await sleep(ACTION_DELAY_MS + 160);
-                                menuAttempt = findMakeVideoInOpenMenu();
+                            if (!cancelVisibleAfterClick && !promptVisibleAfterClick) {{
+                                return {{
+                                    ok: false,
+                                    status: "waiting-for-video-mode",
+                                    optionsOpened,
+                                    videoItemFound: makeVideoItemFound,
+                                    videoClicked: makeVideoClicked,
+                                    promptInputVisible,
+                                    generationInProgress,
+                                    makeVideoButtonVisible,
+                                    cancelVideoButtonVisible,
+                                    submitButtonVisible,
+                                    onPostView,
+                                }};
                             }}
-                            if (!menuAttempt.item) {{
-                                return {{ ok: false, status: "strict-menu-make-video-missing", onPostView }};
-                            }}
-                            makeVideoItemFound = true;
                         }} else if (manualSinglePickMode && !onPostView) {{
                             return {{
                                 ok: false,
@@ -9269,6 +9205,7 @@ class MainWindow(QMainWindow):
                                 promptInputVisible,
                                 generationInProgress,
                                 makeVideoButtonVisible,
+                                cancelVideoButtonVisible,
                                 submitButtonVisible,
                                 onPostView,
                             }};
@@ -9309,6 +9246,7 @@ class MainWindow(QMainWindow):
                     const selectedViaMarker = selectedEls.some((el) => /(^|\\s)video(\\s|$)/i.test(textOf(el)));
                     const videoSelected = selectedViaMarker
                         || promptInputVisible
+                        || cancelVideoButtonVisible
                         || generationInProgress
                         || (onPostView && submitButtonVisible);
 
@@ -9322,6 +9260,7 @@ class MainWindow(QMainWindow):
                             promptInputVisible,
                             generationInProgress,
                             makeVideoButtonVisible,
+                            cancelVideoButtonVisible,
                             submitButtonVisible,
                             onPostView,
                         }};
@@ -9336,6 +9275,7 @@ class MainWindow(QMainWindow):
                         promptInputVisible,
                         generationInProgress,
                         makeVideoButtonVisible,
+                        cancelVideoButtonVisible,
                         submitButtonVisible,
                         onPostView,
                     }};
@@ -9853,7 +9793,7 @@ class MainWindow(QMainWindow):
                                 QTimer.singleShot(350, self._poll_for_manual_image)
                                 return
                         self._append_log(
-                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + pointer/mouse/native click sequence), then selecting Make Video from menu."
+                            f"Variant {current_variant}: action: clicking visible Make video button directly, then waiting for Cancel Video/prompt readiness."
                         )
                     generation_state_probe_script = r"""
                         (() => {
@@ -9908,7 +9848,7 @@ class MainWindow(QMainWindow):
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
                                 f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
-                                "running strict Settings → Make Video → prompt → Make video path."
+                                "running direct Make video button → wait for Cancel Video → prompt → Make video path."
                             )
                             self.manual_image_submit_in_flight = False
                             self.manual_image_submit_in_flight_since = 0.0
