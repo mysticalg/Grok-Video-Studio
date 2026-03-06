@@ -9867,6 +9867,8 @@ class MainWindow(QMainWindow):
                                 const textHasGeneration = (text) => /\\bgenerating\\b|\\brendering\\b|\\bcancel\\s*video\\b|\\b\\d{1,3}%\\b/i.test(String(text || ""));
                                 const generationSignalVisible = !![...document.querySelectorAll("div, span, p, button, [role='status'], [aria-live]")]
                                     .find((el) => isActuallyVisible(el) && textHasGeneration(el.textContent || ""));
+                                const cancelVideoVisible = !![...document.querySelectorAll("button, [role='button']")]
+                                    .find((el) => isActuallyVisible(el) && !el.disabled && /\bcancel\s*video\b/i.test(String(el.getAttribute("aria-label") || el.textContent || "").trim()));
                                 const video = document.querySelector("video");
                                 const source = document.querySelector("video source");
                                 const src = (video && (video.currentSrc || video.src)) || (source && source.src) || "";
@@ -9877,11 +9879,12 @@ class MainWindow(QMainWindow):
                                     ok: true,
                                     onPostView,
                                     generationSignalVisible,
+                                    cancelVideoVisible,
                                     hasVideoSource,
                                     canDownload,
                                 };
                             } catch (_) {
-                                return { ok: false, onPostView: false, generationSignalVisible: false, hasVideoSource: false, canDownload: false };
+                                return { ok: false, onPostView: false, generationSignalVisible: false, cancelVideoVisible: false, hasVideoSource: false, canDownload: false };
                             }
                         })()
                     """
@@ -9892,12 +9895,13 @@ class MainWindow(QMainWindow):
                         on_post_view_probe = bool(isinstance(probe_result, dict) and probe_result.get("onPostView"))
                         generation_signal_probe = bool(isinstance(probe_result, dict) and probe_result.get("generationSignalVisible"))
                         has_video_source_probe = bool(isinstance(probe_result, dict) and probe_result.get("hasVideoSource"))
+                        cancel_video_probe = bool(isinstance(probe_result, dict) and probe_result.get("cancelVideoVisible"))
                         can_download_probe = bool(isinstance(probe_result, dict) and probe_result.get("canDownload"))
-                        if on_post_view_probe and (generation_signal_probe or has_video_source_probe or can_download_probe):
+                        if on_post_view_probe and (generation_signal_probe or has_video_source_probe or cancel_video_probe):
                             self._append_log(
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
-                                f"(generationSignal={generation_signal_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
+                                f"(generationSignal={generation_signal_probe}, cancelVideo={cancel_video_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
                                 "running direct Make video button → wait for Cancel Video → prompt → Make video path."
                             )
                             self.manual_image_submit_in_flight = False
