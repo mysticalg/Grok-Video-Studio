@@ -8842,6 +8842,111 @@ class MainWindow(QMainWindow):
         else:
             self._run_active_browser_javascript(set_image_mode_script, _after_set_mode)
 
+    def _run_manual_post_pick_ratio_option_sync(self, variant: int) -> None:
+        selected_aspect_ratio = str(self.video_aspect_ratio.currentData() or "16:9")
+        open_options_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const click = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        try { el.click(); } catch (_) {}
+                        return true;
+                    };
+                    const triggerCandidates = [
+                        ...document.querySelectorAll("#model-select-trigger"),
+                        ...document.querySelectorAll("button[aria-label='Model select']"),
+                        ...document.querySelectorAll("button[aria-label*='model select' i]"),
+                        ...document.querySelectorAll("button[aria-haspopup='menu']"),
+                        ...document.querySelectorAll("button[aria-haspopup='listbox']"),
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                      .filter((el) => isVisible(el) && !el.disabled);
+                    const trigger = triggerCandidates.find((el) => /image|video|model|ratio|resolution|duration|settings/i.test(clean(el.getAttribute("aria-label")) + " " + clean(el.textContent)))
+                        || triggerCandidates[0]
+                        || null;
+                    if (!trigger) return { ok: false, error: "options-trigger-not-found" };
+                    const clicked = click(trigger);
+                    return { ok: clicked, triggerText: clean(trigger.textContent), triggerAriaLabel: clean(trigger.getAttribute("aria-label")) };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+        click_ratio_script_template = r"""
+            (() => {
+                try {
+                    const targetLabel = "{target_label}";
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (v) => String(v || "").replace(/\s+/g, " ").trim();
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const click = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mousedown", common));
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); } catch (_) {}
+                        el.dispatchEvent(new MouseEvent("mouseup", common));
+                        el.dispatchEvent(new MouseEvent("click", common));
+                        try { el.click(); } catch (_) {}
+                        return true;
+                    };
+                    const candidates = [
+                        ...document.querySelectorAll("button"),
+                        ...document.querySelectorAll("[role='button']"),
+                        ...document.querySelectorAll("[role='menuitem']"),
+                        ...document.querySelectorAll("[role='menuitemradio']"),
+                        ...document.querySelectorAll("[role='option']"),
+                    ].filter((el, idx, arr) => arr.indexOf(el) === idx)
+                      .filter((el) => isVisible(el) && !el.disabled);
+                    const exactMatch = (el) => {
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        return aria.toLowerCase() === targetLabel.toLowerCase() || txt.toLowerCase() === targetLabel.toLowerCase();
+                    };
+                    const fuzzyMatch = (el) => {
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
+                    };
+                    const target = candidates.find(exactMatch) || candidates.find(fuzzyMatch) || null;
+                    if (!target) return { ok: false, found: false, targetLabel };
+                    const clicked = click(target);
+                    return { ok: clicked, found: true, clicked, targetLabel, matchedText: clean(target.textContent), matchedAria: clean(target.getAttribute("aria-label")) };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err), targetLabel: "{target_label}" };
+                }
+            })()
+        """
+        click_ratio_script = click_ratio_script_template.replace('"{target_label}"', json.dumps(selected_aspect_ratio))
+
+        self._append_log(
+            f"Variant {variant}: post-pick ratio sync: open options menu then set ratio='{selected_aspect_ratio}' (same staged method as flow start)."
+        )
+
+        def _after_ratio_click(result):
+            if isinstance(result, dict) and result.get("ok"):
+                self._append_log(
+                    f"Variant {variant}: post-pick ratio sync complete (ratio='{selected_aspect_ratio}')."
+                )
+            else:
+                self._append_log(
+                    f"WARNING: Variant {variant}: post-pick ratio sync could not confirm ratio='{selected_aspect_ratio}'. result={result!r}"
+                )
+
+        def _after_open(_open_result):
+            self._run_active_browser_javascript(click_ratio_script, _after_ratio_click)
+
+        self._run_active_browser_javascript(open_options_script, _after_open)
+
     def _set_manual_post_submit_idle_window(self) -> int:
         idle_ms = max(0, _env_int("GROK_MANUAL_POST_SUBMIT_IDLE_MS", 200))
         if idle_ms <= 0:
@@ -8976,6 +9081,7 @@ class MainWindow(QMainWindow):
                         )
 
                 self._run_active_browser_javascript(refresh_post_script, _after_manual_pick_refresh)
+                self._run_manual_post_pick_ratio_option_sync(variant)
                 self._append_log(
                     f"Variant {variant}: ({post_id_from_browser}); proceeding to video-mode options."
                 )
@@ -9182,8 +9288,7 @@ class MainWindow(QMainWindow):
                     let makeVideoItemFound = false;
                     let makeVideoClicked = false;
                     let settingsFocusAttempted = false;
-                    let settingsTabAttempted = false;
-                    let settingsSpaceAttempted = false;
+                                        let settingsSpaceAttempted = false;
                     let settingsActivationAttempted = false;
 
                     let menuAttempt = findMakeVideoInOpenMenu();
@@ -9221,26 +9326,11 @@ class MainWindow(QMainWindow):
                             const attemptOpenSettings = (btn) => {{
                                 let activated = false;
                                 let focusAttempted = false;
-                                let tabAttempted = false;
                                 let spaceAttempted = false;
                                 try {{ btn.scrollIntoView?.({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (_) {{}}
                                 try {{ btn.focus?.(); focusAttempted = true; }} catch (_) {{}}
 
                                 const keyboardCommon = {{ bubbles: true, cancelable: true, composed: true }};
-                                const dispatchTab = (target) => {{
-                                    if (!target) return false;
-                                    let moved = false;
-                                    try {{
-                                        target.dispatchEvent(new KeyboardEvent("keydown", {{ ...keyboardCommon, key: "Tab", code: "Tab", keyCode: 9, which: 9 }}));
-                                        moved = true;
-                                    }} catch (_) {{}}
-                                    try {{
-                                        target.dispatchEvent(new KeyboardEvent("keyup", {{ ...keyboardCommon, key: "Tab", code: "Tab", keyCode: 9, which: 9 }}));
-                                        moved = true;
-                                    }} catch (_) {{}}
-                                    return moved;
-                                }};
-                                tabAttempted = dispatchTab(document.activeElement || btn || document.body) || tabAttempted;
                                 const dispatchSpaceToggle = (target) => {{
                                     if (!target) return false;
                                     let toggled = false;
@@ -9288,7 +9378,7 @@ class MainWindow(QMainWindow):
                                         if (parentBtn && parentBtn !== btn) activated = emulateClick(parentBtn) || activated;
                                     }} catch (_) {{}}
                                 }}
-                                return {{ activated, focusAttempted, tabAttempted, spaceAttempted }};
+                                return {{ activated, focusAttempted, spaceAttempted }};
                             }};
 
                             const initialSignal = isMenuOpenSignal(settingsButton);
@@ -9301,7 +9391,6 @@ class MainWindow(QMainWindow):
                                     const openAttempt = attemptOpenSettings(settingsButton);
                                     openedByClick = !!(openAttempt && openAttempt.activated) || openedByClick;
                                     settingsFocusAttempted = !!(openAttempt && openAttempt.focusAttempted) || settingsFocusAttempted;
-                                    settingsTabAttempted = !!(openAttempt && openAttempt.tabAttempted) || settingsTabAttempted;
                                     settingsSpaceAttempted = !!(openAttempt && openAttempt.spaceAttempted) || settingsSpaceAttempted;
                                     settingsActivationAttempted = !!openAttempt || settingsActivationAttempted;
                                     await sleep(ACTION_DELAY_MS + 220);
@@ -9319,7 +9408,6 @@ class MainWindow(QMainWindow):
                                         status: "strict-settings-button-click-failed",
                                         onPostView,
                                         settingsFocusAttempted,
-                                        settingsTabAttempted,
                                         settingsSpaceAttempted,
                                         settingsActivationAttempted,
                                     }};
@@ -9360,7 +9448,6 @@ class MainWindow(QMainWindow):
                                 submitButtonVisible,
                                 onPostView,
                                 settingsFocusAttempted,
-                                settingsTabAttempted,
                                 settingsSpaceAttempted,
                                 settingsActivationAttempted,
                             }};
@@ -9417,7 +9504,6 @@ class MainWindow(QMainWindow):
                             submitButtonVisible,
                             onPostView,
                             settingsFocusAttempted,
-                            settingsTabAttempted,
                             settingsSpaceAttempted,
                             settingsActivationAttempted,
                         }};
@@ -9567,7 +9653,6 @@ class MainWindow(QMainWindow):
                     item_found = result.get("videoItemFound")
                     clicked = result.get("videoClicked")
                     settings_focus = bool(result.get("settingsFocusAttempted"))
-                    settings_tab = bool(result.get("settingsTabAttempted"))
                     settings_space = bool(result.get("settingsSpaceAttempted"))
                     settings_activation = bool(result.get("settingsActivationAttempted"))
                     prompt_visible = bool(result.get("promptInputVisible"))
@@ -9579,7 +9664,7 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"Variant {current_variant}: video stage ready "
                             f"(status={status}, opened={opened}, itemFound={item_found}, itemClicked={clicked}, "
-                            f"settingsFocus={settings_focus}, settingsTab={settings_tab}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
+                            f"settingsFocus={settings_focus}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
                             f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                             f"submitVisible={submit_visible}, postView={on_post_view}); "
                             "refilling prompt."
@@ -9957,7 +10042,7 @@ class MainWindow(QMainWindow):
                                 QTimer.singleShot(350, self._poll_for_manual_image)
                                 return
                         self._append_log(
-                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + Tab + Space key + pointer/mouse/native click sequence), then selecting Make Video from menu."
+                            f"Variant {current_variant}: action: trying aggressive Settings open (focus + Space key + pointer/mouse/native click sequence), then selecting Make Video from menu."
                         )
                     generation_state_probe_script = r"""
                         (() => {
@@ -10070,12 +10155,11 @@ class MainWindow(QMainWindow):
                         submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
                         on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
                         settings_focus = bool(isinstance(result, dict) and result.get("settingsFocusAttempted"))
-                        settings_tab = bool(isinstance(result, dict) and result.get("settingsTabAttempted"))
                         settings_space = bool(isinstance(result, dict) and result.get("settingsSpaceAttempted"))
                         settings_activation = bool(isinstance(result, dict) and result.get("settingsActivationAttempted"))
                         self._append_log(
                             f"Variant {current_variant}: waiting for video mode selection ({status}, "
-                            f"settingsFocus={settings_focus}, settingsTab={settings_tab}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
+                            f"settingsFocus={settings_focus}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
                             f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                             f"submitVisible={submit_visible}, postView={on_post_view}, generationProbe={generation_signal_probe}); retrying..."
                         )
@@ -10132,12 +10216,11 @@ class MainWindow(QMainWindow):
                 submit_visible = bool(isinstance(result, dict) and result.get("submitButtonVisible"))
                 on_post_view = bool(isinstance(result, dict) and result.get("onPostView"))
                 settings_focus = bool(isinstance(result, dict) and result.get("settingsFocusAttempted"))
-                settings_tab = bool(isinstance(result, dict) and result.get("settingsTabAttempted"))
                 settings_space = bool(isinstance(result, dict) and result.get("settingsSpaceAttempted"))
                 settings_activation = bool(isinstance(result, dict) and result.get("settingsActivationAttempted"))
                 self._append_log(
                     f"Variant {current_variant}: waiting for video mode selection ({status}, "
-                    f"settingsFocus={settings_focus}, settingsTab={settings_tab}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
+                    f"settingsFocus={settings_focus}, settingsSpace={settings_space}, settingsActivation={settings_activation}, "
                     f"promptVisible={prompt_visible}, generationVisible={generation_visible}, makeVideoVisible={make_video_visible}, "
                     f"submitVisible={submit_visible}, postView={on_post_view}); retrying..."
                 )
