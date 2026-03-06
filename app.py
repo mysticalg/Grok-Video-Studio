@@ -2366,6 +2366,60 @@ class AutomationRuntimeWorker(QThread):
         self._udp_started = False
         self.automation_flow_pages: dict[str, Any] = {}
 
+    async def _find_recent_page_for_scope(self, scope_key: str) -> Any:
+        scope = str(scope_key or "").strip().lower()
+        if not scope or self.cdp_controller is None:
+            return None
+
+        scope_host_hint = ""
+        if scope == "grok":
+            scope_host_hint = "grok.com"
+        elif scope == "sora":
+            scope_host_hint = "sora.chatgpt.com"
+
+        if not scope_host_hint:
+            return None
+
+        pages: list[Any] = []
+        for context in self.cdp_controller.browser.contexts:
+            pages.extend(context.pages)
+        pages.reverse()
+
+        for page in pages:
+            try:
+                if page.is_closed():
+                    continue
+            except Exception:
+                continue
+            page_url = str(page.url or "").strip().lower()
+            if scope_host_hint in page_url:
+                return page
+        return None
+
+    async def _resolve_scoped_page(
+        self,
+        *,
+        scope_key: str,
+        target_url: str,
+        reuse_tab: bool,
+        allow_new_tab: bool,
+    ) -> Any:
+        page = None
+        if scope_key:
+            scoped_page = self.automation_flow_pages.get(scope_key)
+            if scoped_page is not None and not scoped_page.is_closed():
+                page = scoped_page
+
+        if page is None and scope_key:
+            page = await self._find_recent_page_for_scope(scope_key)
+
+        if page is None and allow_new_tab:
+            page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=reuse_tab)
+
+        if scope_key and page is not None:
+            self.automation_flow_pages[scope_key] = page
+        return page
+
     def run(self) -> None:
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -2429,21 +2483,19 @@ class AutomationRuntimeWorker(QThread):
                 self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
 
             page = None
-            if scope_key:
-                scoped_page = self.automation_flow_pages.get(scope_key)
-                if scoped_page is not None and not scoped_page.is_closed() and not force_new_tab:
-                    page = scoped_page
-
-            if page is None:
-                if force_new_tab:
-                    page = await self.cdp_controller.create_new_page(target_url)
-                else:
-                    page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=reuse_tab)
+            if force_new_tab:
+                page = await self.cdp_controller.create_new_page(target_url)
+                if scope_key:
+                    self.automation_flow_pages[scope_key] = page
+            else:
+                page = await self._resolve_scoped_page(
+                    scope_key=scope_key,
+                    target_url=target_url,
+                    reuse_tab=reuse_tab,
+                    allow_new_tab=True,
+                )
 
             await self.cdp_controller.navigate(page, target_url)
-
-            if scope_key:
-                self.automation_flow_pages[scope_key] = page
 
             return page.url or target_url
 
@@ -2464,16 +2516,12 @@ class AutomationRuntimeWorker(QThread):
             if self.cdp_controller is None:
                 self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
 
-            page = None
-            if scope_key:
-                scoped_page = self.automation_flow_pages.get(scope_key)
-                if scoped_page is not None and not scoped_page.is_closed():
-                    page = scoped_page
-
-            if page is None:
-                page = await self.cdp_controller.get_or_create_page(target_url, reuse_tab=True)
-                if scope_key:
-                    self.automation_flow_pages[scope_key] = page
+            page = await self._resolve_scoped_page(
+                scope_key=scope_key,
+                target_url=target_url,
+                reuse_tab=True,
+                allow_new_tab=True,
+            )
 
             await page.bring_to_front()
             return await page.evaluate(script)
@@ -6266,6 +6314,20 @@ class MainWindow(QMainWindow):
             self._append_automation_log(
                 f"Startup CDP bootstrap complete: Chrome on port {instance.port}, smoke test '{title}'."
             )
+
+            if self._active_ai_browser_external_control_enabled() and self._is_browser_tab_enabled("Grok"):
+                try:
+                    runtime.open_url_in_automation_chrome(
+                        GROK_IMAGINE_URL,
+                        reuse_tab=True,
+                        flow_scope="grok",
+                        force_new_tab=False,
+                    )
+                    self._append_automation_log(
+                        "Startup preload: opened Grok tab in external Automation Chrome so continue/generation flows are ready."
+                    )
+                except Exception as preload_exc:
+                    self._append_automation_log(f"Startup Grok preload skipped due to error: {preload_exc}")
         except Exception as exc:
             self._append_automation_log(f"Startup CDP bootstrap skipped due to error: {exc}")
 
@@ -14251,6 +14313,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_prompt = prompt_text
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
+        self._prepare_external_grok_homepage_for_video_start()
         self._append_log(
             f"Continue-from-last-frame started for {self.continue_from_frame_target_count} iteration(s)."
         )
@@ -14281,6 +14344,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_prompt = prompt_text
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = seed_image
+        self._prepare_external_grok_homepage_for_video_start()
 
         self._append_log(
             f"Continue-from-image started for {self.continue_from_frame_target_count} iteration(s) using {seed_image}."
