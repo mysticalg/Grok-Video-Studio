@@ -2903,7 +2903,7 @@ class UdpWorkflowWorker(QThread):
                     {**self.tiktok_options, "_log_callback": _log_step},
                 )
             elif platform == "facebook":
-                result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title, self.platform_url)
+                result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title, self.platform_url, _log_step)
             elif platform == "instagram":
                 result = udp_instagram_workflow.run(executor, self.video_path, self.caption, self.platform_url)
             elif platform == "x":
