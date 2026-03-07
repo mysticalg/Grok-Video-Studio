@@ -11,9 +11,34 @@ _INSTAGRAM_NEXT_BUTTON_SELECTOR = (
 
 
 def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, timeout_ms: int = 8000) -> None:
+    log_callback = getattr(executor, "log_callback", None)
+    if callable(log_callback):
+        try:
+            log_callback(
+                f"Instagram workflow: attempting dom.click target={{platform={platform}, selector={selector!r}}} timeout_ms={timeout_ms} retry_mode=best_effort"
+            )
+        except Exception:
+            pass
     try:
-        executor.run("dom.click", {"platform": platform, "selector": selector, "timeoutMs": timeout_ms})
-    except Exception:
+        response = executor.run("dom.click", {"platform": platform, "selector": selector, "timeoutMs": timeout_ms})
+        if callable(log_callback):
+            try:
+                payload = response.get("payload") or {}
+                log_callback(
+                    "Instagram workflow: dom.click completed "
+                    f"target={{platform={platform}, selector={selector!r}}} clicked={bool(payload.get('clicked'))}"
+                )
+            except Exception:
+                pass
+    except Exception as exc:
+        if callable(log_callback):
+            try:
+                log_callback(
+                    "Instagram workflow: dom.click best-effort step failed "
+                    f"target={{platform={platform}, selector={selector!r}}} timeout_ms={timeout_ms} error={exc}"
+                )
+            except Exception:
+                pass
         return
 
 
@@ -25,6 +50,16 @@ def _safe_instagram_url(url: str | None) -> str:
 
 
 def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str = "") -> dict[str, Any]:
+    log_callback = getattr(executor, "log_callback", None)
+    if callable(log_callback):
+        try:
+            log_callback(
+                "Instagram workflow: starting run "
+                f"url={_safe_instagram_url(platform_url)!r} video_path={video_path!r} caption_chars={len(caption or '')}"
+            )
+        except Exception:
+            pass
+
     executor.run(
         "platform.open",
         {
@@ -59,4 +94,13 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
 
     executor.run("form.fill", {"platform": "instagram", "fields": {"description": caption}})
     executor.run("post.submit", {"platform": "instagram"})
-    return executor.run("post.status", {"platform": "instagram"})
+    status = executor.run("post.status", {"platform": "instagram"})
+    if callable(log_callback):
+        try:
+            log_callback(
+                "Instagram workflow: finished run "
+                f"post_status_payload={status.get('payload') or {}}"
+            )
+        except Exception:
+            pass
+    return status

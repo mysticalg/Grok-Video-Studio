@@ -32,30 +32,74 @@ class LocalServiceExecutor(BaseExecutor):
         handler: Callable[[str, dict[str, Any]], dict[str, Any]],
         stop_event: threading.Event | None = None,
         action_delay_ms: int = 0,
+        log_callback: Callable[[str], None] | None = None,
     ):
         self.handler = handler
         self.stop_event = stop_event or threading.Event()
         self.action_delay_ms = max(0, int(action_delay_ms))
         self._run_lock = threading.Lock()
         self._action_counter = 0
+        self.log_callback = log_callback
+
+    def _emit(self, message: str) -> None:
+        if self.log_callback is None:
+            return
+        try:
+            self.log_callback(str(message))
+        except Exception:
+            return
+
+    def _target_summary(self, payload: dict[str, Any]) -> str:
+        target_fields = {
+            "platform": payload.get("platform"),
+            "selector": payload.get("selector"),
+            "url": payload.get("url"),
+            "filePath": payload.get("filePath"),
+            "mode": payload.get("mode") or payload.get("publishMode"),
+            "value": payload.get("value"),
+        }
+        fields = [f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in target_fields.items() if v not in (None, "")]
+
+        fields_payload = payload.get("fields")
+        if isinstance(fields_payload, dict) and fields_payload:
+            field_keys = ",".join(sorted(str(k) for k in fields_payload.keys()))
+            fields.append(f"fields={field_keys}")
+
+        if not fields:
+            return "target=<none>"
+        return "target={" + ", ".join(fields) + "}"
 
     def run(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         with self._run_lock:
             self._action_counter += 1
+            action_idx = self._action_counter
+            target_summary = self._target_summary(payload)
             if self.stop_event.is_set():
                 raise RuntimeError("Automation workflow stopped by user")
 
             if self._action_counter > 1 and self.action_delay_ms > 0:
                 delay_s = self.action_delay_ms / 1000.0
+                self._emit(
+                    f"executor=local action={action} status=delay sequence={action_idx} sleep_ms={self.action_delay_ms} {target_summary}"
+                )
                 deadline = time.time() + delay_s
                 while time.time() < deadline:
                     if self.stop_event.is_set():
                         raise RuntimeError("Automation workflow stopped by user")
                     time.sleep(min(0.1, max(0.01, deadline - time.time())))
 
+            self._emit(
+                f"executor=local action={action} status=start sequence={action_idx} timeout_s=<handler-managed> retries=0 {target_summary}"
+            )
             response = self.handler(action, payload)
             if not bool(response.get("ok", False)):
+                self._emit(
+                    f"executor=local action={action} status=error sequence={action_idx} retries=0 {target_summary} error={str(response.get('error') or 'command failed')}"
+                )
                 raise RuntimeError(response.get("error") or f"Command failed: {action}")
+            self._emit(
+                f"executor=local action={action} status=ok sequence={action_idx} retries=0 {target_summary} payload={json.dumps(response.get('payload') or {}, ensure_ascii=False)}"
+            )
             return response
 
 
@@ -82,6 +126,7 @@ class UdpExecutor(BaseExecutor):
         retries: int = 2,
         stop_event: threading.Event | None = None,
         action_delay_ms: int = 0,
+        log_callback: Callable[[str], None] | None = None,
     ):
         self.host = host
         self.port = port
@@ -90,6 +135,7 @@ class UdpExecutor(BaseExecutor):
         self.stop_event = stop_event or threading.Event()
         self.action_delay_ms = max(0, int(action_delay_ms))
         self.log_path = self._resolve_log_path()
+        self.log_callback = log_callback
         self._run_lock = threading.Lock()
         self._action_counter = 0
 
@@ -103,6 +149,13 @@ class UdpExecutor(BaseExecutor):
         try:
             with self.log_path.open("a", encoding="utf-8") as fp:
                 fp.write(line)
+        except Exception:
+            pass
+
+        if self.log_callback is None:
+            return
+        try:
+            self.log_callback(f"UDP {line.strip()}")
         except Exception:
             return
 
@@ -169,7 +222,7 @@ class UdpExecutor(BaseExecutor):
             self._log(
                 action,
                 "start",
-                f"sequence={action_idx} id={message['id']} {target_summary} payload={json.dumps(payload, ensure_ascii=False)}",
+                f"sequence={action_idx} id={message['id']} timeout_s={action_timeout_s:.2f} retry_count={action_retries} retry_delay_s=0.35 {target_summary} payload={json.dumps(payload, ensure_ascii=False)}",
             )
 
             for attempt in range(total_attempts):
@@ -217,7 +270,11 @@ class UdpExecutor(BaseExecutor):
                             raise RuntimeError(response.get("error") or f"Command failed: {action}")
 
                 if attempt < action_retries:
-                    self._log(action, "retry", f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} {target_summary}")
+                    self._log(
+                        action,
+                        "retry",
+                        f"sequence={action_idx} attempt={attempt + 1}/{total_attempts} sleep_s=0.35 next_attempt={attempt + 2}/{total_attempts} {target_summary}",
+                    )
                     time.sleep(0.35)
 
             self._log(action, "timeout", f"sequence={action_idx} retries={action_retries} {target_summary}")
