@@ -238,7 +238,27 @@ def _attempt_fill_description(executor: BaseExecutor, description: str, *, log_f
         except Exception as exc:
             _emit_progress(log_fn, f"facebook description attempt {attempt}: form.fill error={exc}")
 
-        # Explicit type attempts into the exact textbox candidates.
+        # Secondary path: force CDP keyboard typing emulation into Facebook composer.
+        try:
+            _emit_progress(log_fn, f"facebook description attempt {attempt}: form.fill(forceCdp) start")
+            forced_response = executor.run(
+                "form.fill",
+                {"platform": "facebook", "fields": {"description": value}, "forceCdp": True},
+            )
+            forced_payload = forced_response.get("payload") or {}
+            forced_ok = bool(forced_payload.get("description") is True or forced_payload.get("description") == 1)
+            _emit_progress(log_fn, f"facebook description attempt {attempt}: form.fill(forceCdp) payload={forced_payload}")
+            if forced_ok:
+                _best_effort_log_note(
+                    executor,
+                    f"facebook description attempt {attempt}: form.fill(forceCdp) success",
+                    log_fn=log_fn,
+                )
+                return True
+        except Exception as exc:
+            _emit_progress(log_fn, f"facebook description attempt {attempt}: form.fill(forceCdp) error={exc}")
+
+        # Last fallback: explicit dom.type on exact textbox candidates.
         for selector in selectors:
             try:
                 _emit_progress(log_fn, f"facebook description attempt {attempt}: dom.type start selector={selector}")

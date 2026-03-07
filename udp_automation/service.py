@@ -1058,20 +1058,23 @@ class UdpAutomationService:
 
                 if platform == "facebook" and isinstance(fields, dict):
                     description = str(fields.get("description") or "")
+                    force_cdp = bool(payload.get("forceCdp") or payload.get("force_cdp"))
                     extension_error = ""
                     extension_payload: dict[str, Any] = {}
-                    try:
-                        ack = await self._send_extension_cmd(name, payload)
-                        extension_response = _ack_from_extension(ack)
-                        extension_payload = extension_response.get("payload") or {}
-                        extension_ok = bool(
-                            extension_response.get("ok")
-                            and (extension_payload.get("description") is True or extension_payload.get("description") == 1)
-                        )
-                        if extension_ok:
-                            return extension_response
-                    except Exception as exc:
-                        extension_error = str(exc)
+
+                    if not force_cdp:
+                        try:
+                            ack = await self._send_extension_cmd(name, payload)
+                            extension_response = _ack_from_extension(ack)
+                            extension_payload = extension_response.get("payload") or {}
+                            extension_ok = bool(
+                                extension_response.get("ok")
+                                and (extension_payload.get("description") is True or extension_payload.get("description") == 1)
+                            )
+                            if extension_ok:
+                                return extension_response
+                        except Exception as exc:
+                            extension_error = str(exc)
 
                     if description:
                         cdp_result = await self._fill_facebook_description_via_cdp(description)
@@ -1080,8 +1083,9 @@ class UdpAutomationService:
                         merged_payload.update(cdp_result)
                         if extension_error:
                             merged_payload["extensionError"] = extension_error
+                        merged_payload["forceCdp"] = force_cdp
                         if cdp_ok:
-                            merged_payload["mode"] = "facebook_cdp_fill_fallback"
+                            merged_payload["mode"] = "facebook_cdp_fill_forced" if force_cdp else "facebook_cdp_fill_fallback"
                             return {"ok": True, "payload": merged_payload}
                         return {
                             "ok": False,
