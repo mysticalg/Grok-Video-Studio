@@ -8,10 +8,21 @@ from udp_automation.executors import BaseExecutor
 
 
 FACEBOOK_STEP_DELAY_SECONDS = max(0.0, float(os.getenv("GROK_FACEBOOK_STEP_DELAY_SECONDS", "1.0")))
-FACEBOOK_FORM_FILL_ATTEMPTS = max(1, int(os.getenv("GROK_FACEBOOK_FORM_FILL_ATTEMPTS", "3")))
+FACEBOOK_FORM_FILL_ATTEMPTS = max(1, int(os.getenv("GROK_FACEBOOK_FORM_FILL_ATTEMPTS", "1")))
 
 
 LogFn = Callable[[str], None]
+
+def _abort_workflow(executor: BaseExecutor, reason: str, *, log_fn: LogFn | None = None) -> None:
+    _best_effort_log(executor, "facebook.workflow", "error", reason)
+    _emit_progress(log_fn, f"facebook workflow abort: {reason}")
+    request_stop = getattr(executor, "request_stop", None)
+    if callable(request_stop):
+        try:
+            request_stop()
+        except Exception:
+            pass
+    raise RuntimeError(reason)
 
 
 def _emit_progress(log_fn: LogFn | None, message: str) -> None:
@@ -352,13 +363,15 @@ def run(
         label="facebook composer wait",
     )
     if not composer_ready:
-        raise RuntimeError("Facebook post composer did not appear after upload")
+        _abort_workflow(executor, "Facebook post composer did not appear after upload", log_fn=log_fn)
 
     _sleep_between_actions(executor, "facebook composer description fill", log_fn=log_fn)
     description_ok = _attempt_fill_description(executor, caption, log_fn=log_fn)
     if not description_ok:
-        raise RuntimeError(
-            "Facebook description fill failed; aborting before submit to avoid posting without caption"
+        _abort_workflow(
+            executor,
+            "Facebook description fill failed; aborting before submit to avoid posting without caption",
+            log_fn=log_fn,
         )
 
     _sleep_between_actions(executor, "facebook next + post", log_fn=log_fn)
