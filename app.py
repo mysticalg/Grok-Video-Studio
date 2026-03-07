@@ -6732,6 +6732,10 @@ class MainWindow(QMainWindow):
     def _run_social_upload_via_mode(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded")
         target_url = self._social_upload_url_for_platform(platform_name, self._default_social_upload_url_for_platform(platform_name))
+        if mode == "external" and platform_name == "Facebook":
+            # External automation must start on the Facebook Reels composer surface;
+            # profile/home URLs do not reliably expose the upload description editor.
+            target_url = "https://www.facebook.com/reels/create"
 
         if mode == "external":
             self._append_automation_log(
