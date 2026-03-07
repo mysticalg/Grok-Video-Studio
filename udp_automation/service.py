@@ -572,6 +572,94 @@ class UdpAutomationService:
             "target": target_name,
         }
 
+    async def _get_facebook_reel_page(self) -> Any:
+        if self.cdp is None:
+            await self._connect_cdp()
+        if self.cdp is None:
+            return None
+
+        for needle in ("facebook.com/reels/create", "facebook.com/reel", "facebook.com"):
+            page = await self.cdp.find_page_by_url_contains(needle)
+            if page is not None:
+                return page
+        return await self.cdp.get_most_recent_page()
+
+    async def _fill_facebook_description_via_cdp(self, description: str) -> dict[str, Any]:
+        page = await self._get_facebook_reel_page()
+        if page is None:
+            return {"description": False, "mode": "cdp_fill_unavailable", "error": "No Facebook page"}
+
+        value = str(description or "")
+        if not value.strip():
+            return {"description": True, "mode": "cdp_fill", "reason": "empty_description"}
+
+        selectors = [
+            "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-label*='describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-label*='description' i]",
+            "[contenteditable='true'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][data-lexical-editor='true']",
+            "div[contenteditable='true'][role='textbox']",
+        ]
+
+        target = None
+        target_selector = ""
+        for selector in selectors:
+            locator = page.locator(selector)
+            try:
+                count = await locator.count()
+            except Exception:
+                continue
+            if count <= 0:
+                continue
+            for idx in range(count):
+                candidate = locator.nth(idx)
+                try:
+                    if await candidate.is_visible():
+                        target = candidate
+                        target_selector = selector
+                        break
+                except Exception:
+                    continue
+            if target is None:
+                target = locator.first
+                target_selector = selector
+            if target is not None:
+                break
+
+        if target is None:
+            return {"description": False, "mode": "cdp_fill", "reason": "target_not_found"}
+
+        try:
+            await target.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+
+        try:
+            await target.click(timeout=5000, force=True)
+        except Exception as exc:
+            return {"description": False, "mode": "cdp_fill", "reason": "target_click_failed", "error": str(exc), "selector": target_selector}
+
+        try:
+            await page.keyboard.press("ControlOrMeta+A")
+            await page.keyboard.press("Backspace")
+            await page.keyboard.type(value, delay=10)
+        except Exception as exc:
+            return {"description": False, "mode": "cdp_fill", "reason": "keyboard_type_failed", "error": str(exc), "selector": target_selector}
+
+        verify_script = '(sel, expectedRaw) => {\n  const normalize = (value) => String(value || \'\').replace(/\\u200B/g, \'\').replace(/\\u00a0/g, \' \').replace(/\\s+/g, \' \').trim();\n  const expected = normalize(expectedRaw);\n  const nodes = Array.from(document.querySelectorAll(sel || \'\'));\n  const node = nodes.find((el) => el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)) || nodes[0] || null;\n  if (!node) return { description: false, reason: \'verify_target_missing\', current: \'\' };\n\n  let lexical = \'\';\n  try {\n    const lexicalNodes = Array.from(node.querySelectorAll(\'[data-lexical-text="true"]\'));\n    lexical = lexicalNodes.map((n) => String(n.textContent || \'\')).join(\'\');\n  } catch (_) {}\n  const current = normalize(lexical || node.innerText || node.textContent || node.value || \'\');\n  const ok = current === expected || current.includes(expected) || expected.includes(current);\n  return { description: ok, reason: ok ? \'ok\' : \'value_mismatch\', current };\n}'
+        try:
+            verify = await asyncio.wait_for(page.evaluate(verify_script, target_selector, value), timeout=6.0)
+        except Exception as exc:
+            return {"description": False, "mode": "cdp_fill", "reason": "verify_failed", "error": str(exc), "selector": target_selector}
+
+        payload = verify if isinstance(verify, dict) else {}
+        payload["mode"] = "cdp_fill"
+        payload["selector"] = target_selector
+        return payload
+
     async def _submit_x_post_via_cdp(self, wait_for_upload: bool = False, timeout_ms: int = 120000) -> dict[str, Any]:
         page = await self._get_x_compose_page()
         if page is None:
@@ -944,6 +1032,42 @@ class UdpAutomationService:
                         "error": "YouTube form.fill could not set all requested fields",
                         "payload": {**(dom_result or {}), "mode": mode},
                     }
+
+                if platform == "facebook" and isinstance(fields, dict):
+                    description = str(fields.get("description") or "")
+                    extension_error = ""
+                    extension_payload: dict[str, Any] = {}
+                    try:
+                        ack = await self._send_extension_cmd(name, payload)
+                        extension_response = _ack_from_extension(ack)
+                        extension_payload = extension_response.get("payload") or {}
+                        extension_ok = bool(
+                            extension_response.get("ok")
+                            and (extension_payload.get("description") is True or extension_payload.get("description") == 1)
+                        )
+                        if extension_ok:
+                            return extension_response
+                    except Exception as exc:
+                        extension_error = str(exc)
+
+                    if description:
+                        cdp_result = await self._fill_facebook_description_via_cdp(description)
+                        cdp_ok = bool(cdp_result.get("description"))
+                        merged_payload = dict(extension_payload)
+                        merged_payload.update(cdp_result)
+                        if extension_error:
+                            merged_payload["extensionError"] = extension_error
+                        if cdp_ok:
+                            merged_payload["mode"] = "facebook_cdp_fill_fallback"
+                            return {"ok": True, "payload": merged_payload}
+                        return {
+                            "ok": False,
+                            "error": "Facebook form.fill failed for description",
+                            "payload": merged_payload,
+                        }
+
+                    if extension_error:
+                        raise RuntimeError(extension_error)
 
                 if platform == "x" and isinstance(fields, dict):
                     description = str(fields.get("description") or "")
