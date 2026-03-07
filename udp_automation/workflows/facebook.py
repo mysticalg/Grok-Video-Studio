@@ -24,9 +24,19 @@ def _best_effort_log_note(executor: BaseExecutor, note: str) -> None:
     _best_effort_log(executor, "facebook.workflow", "info", note)
 
 
-def _best_effort_click(executor: BaseExecutor, platform: str, selector: str) -> None:
+def _best_effort_click(
+    executor: BaseExecutor,
+    platform: str,
+    selector: str,
+    *,
+    timeout_ms: int = 8000,
+    text_contains: str = "",
+) -> None:
+    payload: dict[str, Any] = {"platform": platform, "selector": selector, "timeoutMs": timeout_ms}
+    if text_contains:
+        payload["textContains"] = text_contains
     try:
-        executor.run("dom.click", {"platform": platform, "selector": selector, "timeoutMs": 8000})
+        executor.run("dom.click", payload)
     except Exception:
         return
 
@@ -38,12 +48,24 @@ def _sleep_between_actions(executor: BaseExecutor, reason: str) -> None:
     time.sleep(FACEBOOK_STEP_DELAY_SECONDS)
 
 
+def _safe_facebook_url(url: str | None) -> str:
+    candidate = str(url or "").strip()
+    if candidate.lower().startswith(("http://", "https://")):
+        return candidate
+    return "https://www.facebook.com/"
+
+
 def _attempt_fill_description(executor: BaseExecutor, description: str) -> bool:
     selectors = [
+        "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='What\'s on your mind' i]",
+        "div[contenteditable='true'][role='textbox'][aria-placeholder*='What\'s on your mind' i]",
+        "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='What\'s on your mind' i]",
+        "div[contenteditable='true'][role='textbox'][aria-label*='What\'s on your mind' i]",
         "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
-        "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
         "div[contenteditable='true'][role='textbox'][aria-placeholder*='Describe your reel' i]",
+        "[contenteditable='true'][aria-placeholder*='What\'s on your mind' i]",
         "[contenteditable='true'][aria-placeholder*='Describe your reel' i]",
+        "div[contenteditable='true'][role='textbox']",
     ]
 
     value = str(description or "").strip()
@@ -58,12 +80,8 @@ def _attempt_fill_description(executor: BaseExecutor, description: str) -> bool:
         )
 
         for selector in selectors:
-            try:
-                executor.run("dom.click", {"platform": "facebook", "selector": selector, "timeoutMs": 8000})
-            except Exception:
-                continue
+            _best_effort_click(executor, "facebook", selector, timeout_ms=5000)
 
-        # Primary path: platform-aware form.fill.
         try:
             response = executor.run("form.fill", {"platform": "facebook", "fields": {"description": value}})
             payload = response.get("payload") or {}
@@ -83,7 +101,6 @@ def _attempt_fill_description(executor: BaseExecutor, description: str) -> bool:
         except Exception as exc:
             _best_effort_log(executor, "form.fill", "warning", f"facebook form.fill(description) attempt {attempt} failed: {exc}")
 
-        # Fallback path: direct typing into known selectors.
         for selector in selectors:
             try:
                 type_response = executor.run(
@@ -109,37 +126,42 @@ def _attempt_fill_description(executor: BaseExecutor, description: str) -> bool:
     return False
 
 
-def run(executor: BaseExecutor, video_path: str, caption: str, title: str) -> dict[str, Any]:
-    executor.run("platform.open", {"platform": "facebook", "reuseTab": True})
+def run(executor: BaseExecutor, video_path: str, caption: str, title: str, platform_url: str = "") -> dict[str, Any]:
+    executor.run(
+        "platform.open",
+        {
+            "platform": "facebook",
+            "url": _safe_facebook_url(platform_url),
+            "reuseTab": True,
+        },
+    )
     executor.run("platform.ensure_logged_in", {"platform": "facebook"})
 
-    # Facebook Reels often requires entering the upload surface before file input is present.
-    _best_effort_click(executor, "facebook", "div[aria-label='Upload video for reel'][role='button']")
-    _best_effort_click(executor, "facebook", "[role='button'][aria-label*='Upload'][aria-label*='reel' i]")
-    _best_effort_click(executor, "facebook", "div[aria-label='Upload video for reel']")
+    # User-homepage post flow: open composer from profile/home surface.
+    _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='Create post' i]", timeout_ms=10000)
+    _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='What\'s on your mind' i]", timeout_ms=10000)
+    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="create post")
+    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="what's on your mind")
+
+    # Open media picker in create-post dialog/page.
+    _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='Photo/video' i]", timeout_ms=10000)
+    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="photo/video")
+    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="add photos/videos")
 
     executor.run("upload.select_file", {"platform": "facebook", "filePath": video_path})
 
-    _sleep_between_actions(executor, "facebook reels next step 1")
-
-    # Move through the Facebook reels flow before filling the description.
-    _best_effort_click(executor, "facebook", "div[aria-label='Next'][role='button']")
-    _best_effort_click(executor, "facebook", "[role='button'][aria-label*='Next' i]")
-    _sleep_between_actions(executor, "facebook reels next step 2")
-    _best_effort_click(executor, "facebook", "div[aria-label='Next'][role='button']")
-    _best_effort_click(executor, "facebook", "[role='button'][aria-label*='Next' i]")
-
-    _sleep_between_actions(executor, "facebook description fill")
+    _sleep_between_actions(executor, "facebook composer description fill")
     description_ok = _attempt_fill_description(executor, caption)
     if not description_ok:
         raise RuntimeError(
             "Facebook description fill failed; aborting before submit to avoid posting without caption"
         )
 
-    _sleep_between_actions(executor, "facebook post submit")
-    _best_effort_click(executor, "facebook", "div[aria-label='Post'][role='button']")
-    _best_effort_click(executor, "facebook", "[role='button'][aria-label*='Post' i]")
+    _sleep_between_actions(executor, "facebook next + post")
+    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="next")
+    _best_effort_click(executor, "facebook", "div[aria-label='Next'][role='button']", timeout_ms=10000)
+    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=12000, text_contains="post")
+    _best_effort_click(executor, "facebook", "div[aria-label='Post'][role='button']", timeout_ms=12000)
 
-    # Keep standard submit path as a fallback in case the direct click misses.
     executor.run("post.submit", {"platform": "facebook"})
     return executor.run("post.status", {"platform": "facebook"})

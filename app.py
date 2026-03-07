@@ -2903,7 +2903,7 @@ class UdpWorkflowWorker(QThread):
                     {**self.tiktok_options, "_log_callback": _log_step},
                 )
             elif platform == "facebook":
-                result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title)
+                result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title, self.platform_url)
             elif platform == "instagram":
                 result = udp_instagram_workflow.run(executor, self.video_path, self.caption, self.platform_url)
             elif platform == "x":
@@ -6732,10 +6732,6 @@ class MainWindow(QMainWindow):
     def _run_social_upload_via_mode(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded")
         target_url = self._social_upload_url_for_platform(platform_name, self._default_social_upload_url_for_platform(platform_name))
-        if mode == "external" and platform_name == "Facebook":
-            # External automation must start on the Facebook Reels composer surface;
-            # profile/home URLs do not reliably expose the upload description editor.
-            target_url = "https://www.facebook.com/reels/create"
 
         if mode == "external":
             self._append_automation_log(
