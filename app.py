@@ -2875,6 +2875,9 @@ class UdpWorkflowWorker(QThread):
         self._stop_event.set()
 
     def run(self) -> None:
+        def _log_step(message: str) -> None:
+            self.progress.emit(str(message))
+
         if self.executor_mode == "local":
             if self.local_command_handler is None:
                 self.failed.emit("Local automation executor is not configured")
@@ -2883,15 +2886,17 @@ class UdpWorkflowWorker(QThread):
                 handler=self.local_command_handler,
                 stop_event=self._stop_event,
                 action_delay_ms=self.action_delay_ms,
+                log_callback=_log_step,
             )
         else:
-            executor = UdpExecutor(stop_event=self._stop_event, action_delay_ms=self.action_delay_ms)
+            executor = UdpExecutor(
+                stop_event=self._stop_event,
+                action_delay_ms=self.action_delay_ms,
+                log_callback=_log_step,
+            )
 
         try:
             platform = self.platform_name.lower()
-
-            def _log_step(message: str) -> None:
-                self.progress.emit(str(message))
 
             if platform == "youtube":
                 result = udp_youtube_workflow.run(executor, self.video_path, self.title, self.caption)
