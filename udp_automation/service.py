@@ -802,13 +802,27 @@ class UdpAutomationService:
                         f"(sizeMb={round(file_size_mb, 2)} > {REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB:.0f}Mb); "
                         "remote CDP cannot transfer this file and no extension client is connected"
                     )
-                input_locators = [
-                    page.locator("input[type='file']"),
-                    page.locator("input[type='file'][accept*='video']"),
-                    page.locator("input[type='file'][accept*='mp4' i]"),
-                    page.locator("input[type='file'][accept*='quicktime' i]"),
-                    page.locator("ytcp-uploads-dialog input[type='file']"),
-                ]
+                input_locators = []
+                if platform == "facebook":
+                    input_locators.extend(
+                        [
+                            page.locator("input[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]"),
+                            page.locator("input.x1s85apg[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]"),
+                            page.locator("input[type='file'][accept*='video/x-matroska'][accept*='video/mp4'][accept*='image/heic'][multiple]"),
+                            page.locator("div[aria-label='Photo/video'] + input[type='file']"),
+                            page.locator("input[type='file']:has(+ div[aria-label='Photo/video'])"),
+                        ]
+                    )
+
+                input_locators.extend(
+                    [
+                        page.locator("input[type='file']"),
+                        page.locator("input[type='file'][accept*='video']"),
+                        page.locator("input[type='file'][accept*='mp4' i]"),
+                        page.locator("input[type='file'][accept*='quicktime' i]"),
+                        page.locator("ytcp-uploads-dialog input[type='file']"),
+                    ]
+                )
 
                 async def _prime_upload_surface() -> None:
                     # Avoid clicking TikTok "Upload" buttons here: it opens a native file chooser,
@@ -889,12 +903,21 @@ class UdpAutomationService:
                 if not mode:
                     used_dom_fallback = False
                     if self.cdp is not None:
-                        for selector in [
+                        dom_fallback_selectors = [
                             "ytcp-uploads-dialog input[type='file']",
                             "input[type='file'][accept*='video']",
                             "input[type='file'][accept*='mp4' i]",
                             "input[type='file']",
-                        ]:
+                        ]
+                        if platform == "facebook":
+                            dom_fallback_selectors = [
+                                "input[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]",
+                                "input.x1s85apg[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]",
+                                "input[type='file'][accept*='video/x-matroska'][accept*='video/mp4'][accept*='image/heic'][multiple]",
+                                "input[type='file']:has(+ div[aria-label='Photo/video'])",
+                            ] + dom_fallback_selectors
+
+                        for selector in dom_fallback_selectors:
                             for _ in range(5):
                                 used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, selector, file_path)
                                 if used_dom_fallback:
