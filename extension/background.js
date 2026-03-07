@@ -165,6 +165,27 @@ async function handleCmd(msg) {
             const text = (status.textContent || "").toLowerCase();
             if (text.includes("uploaded") || text.includes("complete")) return true;
           }
+
+          // Facebook Create Post: progress indicator usually shows 0%..100%.
+          try {
+            const facebookProgressNodes = Array.from(document.querySelectorAll("div[role='dialog'] div, div[role='dialog'] span"));
+            let foundProgress = false;
+            for (const node of facebookProgressNodes) {
+              const text = String(node.textContent || "").trim();
+              if (!/^\d{1,3}%$/.test(text)) continue;
+              foundProgress = true;
+              const pct = Number(text.replace("%", ""));
+              if (Number.isFinite(pct) && pct >= 100) return true;
+            }
+            if (foundProgress) return false;
+
+            const uploadingIcon = document.querySelector("div[role='dialog'] i[aria-label*='Uploading' i]");
+            if (!uploadingIcon) {
+              const readyHint = document.querySelector("div[role='dialog'] div[aria-label*='Photo/video' i], div[role='dialog'] video");
+              if (readyHint) return true;
+            }
+          } catch (_) {}
+
           try {
             const entries = [];
             entries.push(...performance.getEntriesByType("measure"));
@@ -428,8 +449,19 @@ async function handleCmd(msg) {
           }
           await wait(120);
         };
+        const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
 
-        const getEditableText = (el) => String(el?.innerText || el?.textContent || "").replace(/\u00a0/g, " ").trim();
+        const getEditableText = (el) => {
+          if (!el) return "";
+          let lexicalText = "";
+          try {
+            const lexicalNodes = Array.from(el.querySelectorAll('[data-lexical-text="true"]'));
+            lexicalText = lexicalNodes.map((node) => String(node.textContent || "")).join("");
+          } catch (_) {}
+          return String(lexicalText || el.innerText || el.textContent || el.value || "")
+            .replace(/\u00a0/g, " ")
+            .trim();
+        };
 
         const clearEditable = (el) => {
           if (!el) return;
@@ -580,10 +612,13 @@ async function handleCmd(msg) {
             "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
             "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='Describe your reel' i]",
             "div[contenteditable='true'][role='textbox'][aria-placeholder*='Describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-label*='describe your reel' i]",
+            "div[contenteditable='true'][role='textbox'][aria-label*='description' i]",
             "div[contenteditable='true'][data-lexical-editor='true']",
           ];
           for (const sel of selectors) {
-            const el = document.querySelector(sel);
+            const matches = Array.from(document.querySelectorAll(sel));
+            const el = matches.find((node) => isVisible(node)) || matches[0] || null;
             if (!el) continue;
             try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
             try { el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true })); } catch (_) {}
@@ -602,7 +637,6 @@ async function handleCmd(msg) {
             "div[role='textbox'][contenteditable='true'][aria-label*='post text' i]",
           ];
 
-          const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
 
           for (const sel of selectors) {
             const editable = Array.from(document.querySelectorAll(sel)).find((node) => isVisible(node))
@@ -704,7 +738,17 @@ async function handleCmd(msg) {
             el = findYouTubeContainerField(canonicalKey);
           }
           if (!el) {
-            el = list.map((sel) => document.querySelector(sel)).find(Boolean);
+            for (const sel of list) {
+              const matches = Array.from(document.querySelectorAll(sel));
+              const visible = matches.find((node) => isVisible(node));
+              if (visible) {
+                el = visible;
+                break;
+              }
+              if (!el && matches.length) {
+                el = matches[0];
+              }
+            }
           }
           if (!el) {
             out[rawKey] = false;
@@ -735,6 +779,13 @@ async function handleCmd(msg) {
               if (!expected) return current.length === 0;
               return current === expected || current.includes(expected) || expected.includes(current);
             };
+
+            if (facebookEl) {
+              try { facebookEl.focus(); } catch (_) {}
+            }
+            if (!facebookTextMatches()) {
+              clearEditable(facebookEl);
+            }
 
             const filled = facebookTextMatches()
               || setValue(facebookEl, text)
