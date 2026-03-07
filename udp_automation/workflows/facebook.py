@@ -274,20 +274,31 @@ def run(
     )
     executor.run("platform.ensure_logged_in", {"platform": "facebook"})
 
-    # User-homepage post flow: open composer from profile/home surface.
-    _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='Create post' i]", timeout_ms=10000, log_fn=log_fn, step_name="facebook composer open")
-    _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='What\'s on your mind' i]", timeout_ms=10000, log_fn=log_fn, step_name="facebook composer open")
-    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="create post", log_fn=log_fn, step_name="facebook composer open")
-    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="what's on your mind", log_fn=log_fn, step_name="facebook composer open")
-
-    # Open media picker in create-post dialog/page.
-    _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='Photo/video' i]", timeout_ms=10000, log_fn=log_fn, step_name="facebook picker")
-    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="photo/video", log_fn=log_fn, step_name="facebook picker")
-    _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="add photos/videos", log_fn=log_fn, step_name="facebook picker")
-
+    # First step: attempt to attach media file immediately.
     _emit_progress(log_fn, f"facebook upload.select_file start: {video_path}")
-    upload_result = executor.run("upload.select_file", {"platform": "facebook", "filePath": video_path})
-    _emit_progress(log_fn, f"facebook upload.select_file done payload={upload_result.get('payload') or {}}")
+    upload_result = None
+    try:
+        upload_result = executor.run("upload.select_file", {"platform": "facebook", "filePath": video_path})
+        _emit_progress(log_fn, f"facebook upload.select_file done payload={upload_result.get('payload') or {}}")
+    except Exception as exc:
+        _emit_progress(log_fn, f"facebook upload.select_file first attempt failed: {exc}")
+
+        # Fallback: open composer/picker then retry upload.
+        _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='Create post' i]", timeout_ms=10000, log_fn=log_fn, step_name="facebook composer open")
+        _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='What\'s on your mind' i]", timeout_ms=10000, log_fn=log_fn, step_name="facebook composer open")
+        _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="create post", log_fn=log_fn, step_name="facebook composer open")
+        _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="what's on your mind", log_fn=log_fn, step_name="facebook composer open")
+
+        _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='Photo/video' i]", timeout_ms=10000, log_fn=log_fn, step_name="facebook picker")
+        _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="photo/video", log_fn=log_fn, step_name="facebook picker")
+        _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="add photos/videos", log_fn=log_fn, step_name="facebook picker")
+
+        _emit_progress(log_fn, f"facebook upload.select_file retry start: {video_path}")
+        upload_result = executor.run("upload.select_file", {"platform": "facebook", "filePath": video_path})
+        _emit_progress(log_fn, f"facebook upload.select_file retry done payload={upload_result.get('payload') or {}}")
+
+    # After file is attached, explicitly focus composer trigger as requested.
+    _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='What\'s on your mind' i]", timeout_ms=12000, log_fn=log_fn, step_name="facebook composer focus")
 
     _sleep_between_actions(executor, "facebook upload progress", log_fn=log_fn)
     _wait_for_facebook_upload_ready(executor, log_fn=log_fn)
