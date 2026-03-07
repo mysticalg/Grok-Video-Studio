@@ -2728,6 +2728,27 @@ class AutomationRuntimeWorker(QThread):
         return result
 
 
+    def wait_for_extension_connection(self, timeout_s: float = 12.0, poll_interval_s: float = 0.25) -> bool:
+        if self.bus is None:
+            raise RuntimeError("Control bus is not running")
+
+        timeout_s = max(0.0, float(timeout_s))
+        poll_interval_s = max(0.05, float(poll_interval_s))
+
+        async def _wait() -> bool:
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline:
+                if self.bus and self.bus.clients:
+                    return True
+                await asyncio.sleep(poll_interval_s)
+            return bool(self.bus and self.bus.clients)
+
+        connected = bool(self._run_coro(_wait(), timeout_s=max(2.0, timeout_s + 2.0)))
+        if connected:
+            self.log.emit("Extension client detected on control bus")
+        return connected
+
+
     def ensure_udp_service(self) -> None:
         async def _start_udp() -> None:
             if self.bus is None:
@@ -6727,9 +6748,14 @@ class MainWindow(QMainWindow):
                 runtime.start_chrome()
                 cdp_state = runtime.ensure_cdp_connected()
                 self._append_automation_log(f"CDP readiness check: {cdp_state}")
+                runtime.open_url_in_automation_chrome(target_url)
+
+                extension_connected = runtime.wait_for_extension_connection(timeout_s=12.0)
+                if not extension_connected:
+                    raise RuntimeError("Extension is not connected to the local control bus")
+
                 ping_result = runtime.dom_ping()
                 self._append_automation_log(f"Extension readiness check: {json.dumps(ping_result, ensure_ascii=False)}")
-                runtime.open_url_in_automation_chrome(target_url)
             except Exception as exc:
                 self._append_automation_log(f"External automation preparation failed: {exc}")
                 QMessageBox.warning(
