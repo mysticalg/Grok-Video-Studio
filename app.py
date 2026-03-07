@@ -17124,15 +17124,14 @@ class MainWindow(QMainWindow):
                                 return currentText === expectedCaption || currentText.includes(expectedCaption) || expectedCaption.includes(currentText);
                             };
 
+                            if (!facebookCaptionMatches()) {
+                                clearEditorText(facebookDescriptionTarget);
+                            }
+
                             textFilled = facebookCaptionMatches()
-                                || (
-                                    clearEditorText(facebookDescriptionTarget)
-                                    && (
-                                        pasteTextIntoEditor(facebookDescriptionTarget, captionText)
-                                        || emulateTypingIntoEditor(facebookDescriptionTarget, captionText)
-                                        || setTextValue(facebookDescriptionTarget, captionText)
-                                    )
-                                );
+                                || pasteTextIntoEditor(facebookDescriptionTarget, captionText)
+                                || emulateTypingIntoEditor(facebookDescriptionTarget, captionText)
+                                || setTextValue(facebookDescriptionTarget, captionText);
                             textFilled = Boolean(textFilled) && facebookCaptionMatches();
                             captionReady = textFilled;
                         }
