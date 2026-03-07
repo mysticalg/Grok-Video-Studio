@@ -63,6 +63,7 @@ jobs:
           $releaseTag = ""
           $appVersion = "0.0.0"
           $shouldRelease = "false"
+          $isPrerelease = "false"
 
           if ("${{ github.ref }}" -like "refs/tags/v*") {
             $releaseTag = "${{ github.ref_name }}"
@@ -79,11 +80,31 @@ jobs:
               $appVersion = $version
               $shouldRelease = "true"
             }
+          } elseif ("${{ github.event_name }}" -eq "schedule") {
+            $version = (Get-Content VERSION).Trim()
+            if (-not $version) {
+              $version = "0.0.0"
+            }
+
+            $releaseTag = "nightly"
+            $appVersion = $version
+            $shouldRelease = "true"
+            $isPrerelease = "true"
           }
 
           "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "app_version=$appVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "should_release=$shouldRelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "is_prerelease=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Move nightly tag to latest commit
+        if: github.event_name == 'schedule'
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f nightly
+          git push origin refs/tags/nightly --force
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -255,11 +276,28 @@ jobs:
             dist/GrokVideoDesktopStudio-setup-windows-x64.exe
             dist/GrokVideoDesktopStudio-setup-windows-x64.msi
 
-      - name: Publish release asset
-        if: steps.meta.outputs.should_release == 'true'
+      - name: Publish nightly release asset
+        if: steps.meta.outputs.should_release == 'true' && steps.meta.outputs.is_prerelease == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: Nightly Build (${{ github.run_number }})
+          body: Automated nightly build from commit `${{ github.sha }}`.
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          files: |
+            dist/GrokVideoDesktopStudio-windows-x64.zip
+            dist/GrokVideoDesktopStudio-windows-x64.exe
+            dist/GrokVideoDesktopStudio-setup-windows-x64.exe
+            dist/GrokVideoDesktopStudio-setup-windows-x64.msi
+
+      - name: Publish release asset
+        if: steps.meta.outputs.should_release == 'true' && steps.meta.outputs.is_prerelease != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          overwrite_files: true
           files: |
             dist/GrokVideoDesktopStudio-windows-x64.zip
             dist/GrokVideoDesktopStudio-windows-x64.exe
