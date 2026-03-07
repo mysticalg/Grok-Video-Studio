@@ -165,6 +165,27 @@ async function handleCmd(msg) {
             const text = (status.textContent || "").toLowerCase();
             if (text.includes("uploaded") || text.includes("complete")) return true;
           }
+
+          // Facebook Create Post: progress indicator usually shows 0%..100%.
+          try {
+            const facebookProgressNodes = Array.from(document.querySelectorAll("div[role='dialog'] div, div[role='dialog'] span"));
+            let foundProgress = false;
+            for (const node of facebookProgressNodes) {
+              const text = String(node.textContent || "").trim();
+              if (!/^\d{1,3}%$/.test(text)) continue;
+              foundProgress = true;
+              const pct = Number(text.replace("%", ""));
+              if (Number.isFinite(pct) && pct >= 100) return true;
+            }
+            if (foundProgress) return false;
+
+            const uploadingIcon = document.querySelector("div[role='dialog'] i[aria-label*='Uploading' i]");
+            if (!uploadingIcon) {
+              const readyHint = document.querySelector("div[role='dialog'] div[aria-label*='Photo/video' i], div[role='dialog'] video");
+              if (readyHint) return true;
+            }
+          } catch (_) {}
+
           try {
             const entries = [];
             entries.push(...performance.getEntriesByType("measure"));

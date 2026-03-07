@@ -55,6 +55,57 @@ def _safe_facebook_url(url: str | None) -> str:
     return "https://www.facebook.com/"
 
 
+
+
+def _wait_for_query_match(
+    executor: BaseExecutor,
+    platform: str,
+    selector: str,
+    *,
+    timeout_s: float = 60.0,
+    poll_s: float = 0.5,
+) -> bool:
+    deadline = time.monotonic() + max(1.0, float(timeout_s))
+    poll_s = max(0.1, float(poll_s))
+    while time.monotonic() < deadline:
+        try:
+            result = executor.run("dom.query", {"platform": platform, "selector": selector})
+            payload = result.get("payload") or {}
+            if int(payload.get("count") or 0) > 0:
+                return True
+        except Exception:
+            pass
+        time.sleep(poll_s)
+    return False
+
+
+def _wait_for_facebook_upload_ready(executor: BaseExecutor) -> None:
+    # Wait until progress reaches 100% (or upload indicator clears).
+    try:
+        executor.run(
+            "dom.click",
+            {
+                "platform": "facebook",
+                "selector": "div[role='button']",
+                "textContains": "next",
+                "timeoutMs": 120000,
+                "waitForUpload": True,
+                "singleClick": True,
+            },
+        )
+        return
+    except Exception:
+        pass
+
+    # Fallback: wait for explicit 100% badge in dialog if present.
+    _wait_for_query_match(
+        executor,
+        "facebook",
+        "div[role='dialog'] span:has-text('100%'), div[role='dialog'] div:has-text('100%')",
+        timeout_s=120.0,
+        poll_s=0.5,
+    )
+
 def _attempt_fill_description(executor: BaseExecutor, description: str) -> bool:
     selectors = [
         "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='What\'s on your mind' i]",
@@ -149,6 +200,20 @@ def run(executor: BaseExecutor, video_path: str, caption: str, title: str, platf
     _best_effort_click(executor, "facebook", "div[role='button']", timeout_ms=10000, text_contains="add photos/videos")
 
     executor.run("upload.select_file", {"platform": "facebook", "filePath": video_path})
+
+    _sleep_between_actions(executor, "facebook upload progress")
+    _wait_for_facebook_upload_ready(executor)
+
+    # Ensure the post composer textbox is visible before trying to fill caption + hashtags.
+    composer_ready = _wait_for_query_match(
+        executor,
+        "facebook",
+        "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='What\'s on your mind' i], div[contenteditable='true'][role='textbox'][aria-placeholder*='What\'s on your mind' i]",
+        timeout_s=45.0,
+        poll_s=0.4,
+    )
+    if not composer_ready:
+        raise RuntimeError("Facebook post composer did not appear after upload")
 
     _sleep_between_actions(executor, "facebook composer description fill")
     description_ok = _attempt_fill_description(executor, caption)
