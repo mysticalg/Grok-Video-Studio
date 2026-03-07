@@ -103,7 +103,25 @@ def _wait_for_query_match(
 
 
 def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | None = None) -> None:
-    _emit_progress(log_fn, "facebook upload readiness: waiting for Next click with waitForUpload=true")
+    # Phase 1: wait until upload has actually started in the dialog.
+    started = _wait_for_query_match(
+        executor,
+        "facebook",
+        "div[role='dialog'] i[aria-label*='Uploading' i], "
+        "div[role='dialog'] div:has-text('%'), "
+        "div[role='dialog'] span:has-text('%')",
+        timeout_s=45.0,
+        poll_s=0.35,
+        log_fn=log_fn,
+        label="facebook upload start",
+    )
+    if started:
+        _emit_progress(log_fn, "facebook upload start: detected progress indicator/icon")
+    else:
+        _emit_progress(log_fn, "facebook upload start: not detected explicitly (continuing with readiness wait)")
+
+    # Phase 2: wait until upload is ready for next step.
+    _emit_progress(log_fn, "facebook upload readiness: waiting for Next click gate (waitForUpload=true)")
     try:
         result = executor.run(
             "dom.click",
@@ -255,7 +273,7 @@ def run(
     _sleep_between_actions(executor, "facebook upload progress", log_fn=log_fn)
     _wait_for_facebook_upload_ready(executor, log_fn=log_fn)
 
-    # Ensure the post composer textbox is visible before trying to fill caption + hashtags.
+    # Wait until the dialog textbox is actually mounted (after upload has started/ready).
     composer_ready = _wait_for_query_match(
         executor,
         "facebook",
