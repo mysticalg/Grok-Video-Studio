@@ -103,45 +103,49 @@ def _wait_for_query_match(
 
 
 def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | None = None) -> None:
+    composer_selector = (
+        "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='mind' i], "
+        "div[contenteditable='true'][role='textbox'][aria-placeholder*='mind' i], "
+        "div[contenteditable='true'][data-lexical-editor='true'][aria-placeholder*='mind' i]"
+    )
+
+    # Fast-path: if the composer textbox is already present, upload is effectively ready.
+    composer_already_ready = _wait_for_query_match(
+        executor,
+        "facebook",
+        composer_selector,
+        timeout_s=3.0,
+        poll_s=0.3,
+        log_fn=log_fn,
+        label="facebook upload ready fast-path composer",
+    )
+    if composer_already_ready:
+        _emit_progress(log_fn, "facebook upload readiness: composer already visible; skipping upload-start wait")
+        return
+
     # Phase 1: wait until upload has actually started in the dialog.
     started = _wait_for_query_match(
         executor,
         "facebook",
-        "div[role='dialog'] i[aria-label*='Uploading' i], "
-        "div[role='dialog'] div:has-text('%'), "
-        "div[role='dialog'] span:has-text('%')",
-        timeout_s=45.0,
+        "div[role='dialog'] i[aria-label*='Uploading' i]",
+        timeout_s=25.0,
         poll_s=0.35,
         log_fn=log_fn,
-        label="facebook upload start",
+        label="facebook upload start icon",
     )
     if started:
-        _emit_progress(log_fn, "facebook upload start: detected progress indicator/icon")
+        _emit_progress(log_fn, "facebook upload start: detected uploading icon")
     else:
-        _emit_progress(log_fn, "facebook upload start: not detected explicitly (continuing with readiness wait)")
+        _emit_progress(log_fn, "facebook upload start: icon not detected; checking ready-state heuristics")
 
-    # Phase 2: wait until upload is complete/ready WITHOUT clicking Next.
-    _emit_progress(log_fn, "facebook upload readiness: polling progress until ready (no next click)")
-    ready_by_100 = _wait_for_query_match(
-        executor,
-        "facebook",
-        "div[role='dialog'] span:has-text('100%'), div[role='dialog'] div:has-text('100%')",
-        timeout_s=120.0,
-        poll_s=0.5,
-        log_fn=log_fn,
-        label="facebook upload readiness 100%",
-    )
-    if ready_by_100:
-        _emit_progress(log_fn, "facebook upload readiness: reached 100%")
-        return
-
-    # Secondary ready heuristic: uploading icon disappears while preview remains.
-    deadline = time.monotonic() + 30.0
+    # Phase 2: poll until uploading icon disappears and composer/next is available.
+    deadline = time.monotonic() + 120.0
     poll_idx = 0
     while time.monotonic() < deadline:
         poll_idx += 1
         uploading_count = 0
-        preview_count = 0
+        composer_count = 0
+        next_count = 0
         try:
             uploading = executor.run(
                 "dom.query",
@@ -151,23 +155,35 @@ def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | N
         except Exception:
             uploading_count = 0
         try:
-            preview = executor.run(
-                "dom.query",
-                {"platform": "facebook", "selector": "div[role='dialog'] video, div[role='dialog'] img"},
-            )
-            preview_count = int((preview.get("payload") or {}).get("count") or 0)
+            composer = executor.run("dom.query", {"platform": "facebook", "selector": composer_selector})
+            composer_count = int((composer.get("payload") or {}).get("count") or 0)
         except Exception:
-            preview_count = 0
+            composer_count = 0
+        try:
+            next_btn = executor.run(
+                "dom.query",
+                {
+                    "platform": "facebook",
+                    "selector": "div[role='dialog'] div[role='button'][aria-label*='Next' i], div[role='dialog'] [role='button'][tabindex='0']",
+                },
+            )
+            next_count = int((next_btn.get("payload") or {}).get("count") or 0)
+        except Exception:
+            next_count = 0
 
         _emit_progress(
             log_fn,
-            f"facebook upload readiness fallback: poll={poll_idx} uploading_icon_count={uploading_count} preview_count={preview_count}",
+            f"facebook upload readiness poll={poll_idx} uploading_icon_count={uploading_count} composer_count={composer_count} next_count={next_count}",
         )
-        if uploading_count == 0 and preview_count > 0:
-            _emit_progress(log_fn, "facebook upload readiness fallback: ready (upload icon gone + preview present)")
+
+        # Ready when upload icon is gone and dialog controls/composer are available.
+        if uploading_count == 0 and (composer_count > 0 or next_count > 0):
+            _emit_progress(log_fn, "facebook upload readiness: ready (upload icon gone + composer/next available)")
             return
+
         time.sleep(0.5)
 
+    _emit_progress(log_fn, "facebook upload readiness: timeout reached; proceeding to composer wait")
 
 def _attempt_fill_description(executor: BaseExecutor, description: str, *, log_fn: LogFn | None = None) -> bool:
     selectors = [
