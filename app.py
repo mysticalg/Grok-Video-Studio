@@ -9889,7 +9889,7 @@ class MainWindow(QMainWindow):
                     self.manual_image_submit_retry_count += 1
                     self._append_log(
                         f"WARNING: Variant {current_variant}: trailing Enter submit was not confirmed; retrying prompt submit "
-                        f"(attempt {self.manual_image_submit_retry_count}/{self._automation_timing("automation_retry_attempts")})."
+                        f"(attempt {self.manual_image_submit_retry_count}/{self._automation_timing('automation_retry_attempts')})."
                     )
                     if self.manual_image_submit_retry_count >= self._automation_timing("automation_retry_attempts"):
                         self._append_log(
