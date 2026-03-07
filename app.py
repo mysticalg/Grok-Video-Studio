@@ -17106,23 +17106,41 @@ class MainWindow(QMainWindow):
                                 'div[contenteditable="true"][role="textbox"][aria-label*="caption" i]',
                             ];
                             const expectedCaption = normalizeForCompare(captionText);
-                            const facebookDescriptionTarget = pick(
-                                facebookDescriptionSelectors
-                                    .map((selector) => pick(collectDeep(selector)))
-                                    .filter(Boolean)
-                            ) || findTextInputTarget();
+                            const pickFacebookDescriptionTarget = () => {
+                                for (const selector of facebookDescriptionSelectors) {
+                                    const matches = collectDeep(selector);
+                                    const visibleMatch = firstVisibleNode(matches);
+                                    if (visibleMatch) return visibleMatch;
+                                    if (matches.length) return matches[0];
+                                }
+                                return findTextInputTarget();
+                            };
+                            const facebookDescriptionTarget = pickFacebookDescriptionTarget();
 
-                            const facebookCaptionMatches = () => {
-                                if (!facebookDescriptionTarget) return false;
-                                const currentText = normalizeForCompare(
-                                    facebookDescriptionTarget.innerText
+                            const getFacebookEditorText = () => {
+                                if (!facebookDescriptionTarget) return "";
+                                let lexicalText = "";
+                                try {
+                                    const lexicalNodes = Array.from(facebookDescriptionTarget.querySelectorAll('[data-lexical-text="true"]'));
+                                    lexicalText = lexicalNodes.map((node) => String(node.textContent || "")).join("");
+                                } catch (_) {}
+                                return lexicalText
+                                    || facebookDescriptionTarget.innerText
                                     || facebookDescriptionTarget.textContent
                                     || facebookDescriptionTarget.value
-                                    || ""
-                                );
+                                    || "";
+                            };
+
+                            const facebookCaptionMatches = () => {
+                                const currentText = normalizeForCompare(getFacebookEditorText());
                                 if (!expectedCaption) return currentText.length === 0;
                                 return currentText === expectedCaption || currentText.includes(expectedCaption) || expectedCaption.includes(currentText);
                             };
+
+                            if (facebookDescriptionTarget) {
+                                clickNodeSingle(facebookDescriptionTarget) || clickNodeOrAncestor(facebookDescriptionTarget);
+                                try { facebookDescriptionTarget.focus(); } catch (_) {}
+                            }
 
                             if (!facebookCaptionMatches()) {
                                 clearEditorText(facebookDescriptionTarget);
