@@ -120,26 +120,9 @@ def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | N
     else:
         _emit_progress(log_fn, "facebook upload start: not detected explicitly (continuing with readiness wait)")
 
-    # Phase 2: wait until upload is ready for next step.
-    _emit_progress(log_fn, "facebook upload readiness: waiting for Next click gate (waitForUpload=true)")
-    try:
-        result = executor.run(
-            "dom.click",
-            {
-                "platform": "facebook",
-                "selector": "div[role='button']",
-                "textContains": "next",
-                "timeoutMs": 120000,
-                "waitForUpload": True,
-                "singleClick": True,
-            },
-        )
-        _emit_progress(log_fn, f"facebook upload readiness: waitForUpload gate passed payload={result.get('payload') or {}}")
-        return
-    except Exception as exc:
-        _emit_progress(log_fn, f"facebook upload readiness: waitForUpload gate failed error={exc}")
-
-    _wait_for_query_match(
+    # Phase 2: wait until upload is complete/ready WITHOUT clicking Next.
+    _emit_progress(log_fn, "facebook upload readiness: polling progress until ready (no next click)")
+    ready_by_100 = _wait_for_query_match(
         executor,
         "facebook",
         "div[role='dialog'] span:has-text('100%'), div[role='dialog'] div:has-text('100%')",
@@ -148,6 +131,42 @@ def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | N
         log_fn=log_fn,
         label="facebook upload readiness 100%",
     )
+    if ready_by_100:
+        _emit_progress(log_fn, "facebook upload readiness: reached 100%")
+        return
+
+    # Secondary ready heuristic: uploading icon disappears while preview remains.
+    deadline = time.monotonic() + 30.0
+    poll_idx = 0
+    while time.monotonic() < deadline:
+        poll_idx += 1
+        uploading_count = 0
+        preview_count = 0
+        try:
+            uploading = executor.run(
+                "dom.query",
+                {"platform": "facebook", "selector": "div[role='dialog'] i[aria-label*='Uploading' i]"},
+            )
+            uploading_count = int((uploading.get("payload") or {}).get("count") or 0)
+        except Exception:
+            uploading_count = 0
+        try:
+            preview = executor.run(
+                "dom.query",
+                {"platform": "facebook", "selector": "div[role='dialog'] video, div[role='dialog'] img"},
+            )
+            preview_count = int((preview.get("payload") or {}).get("count") or 0)
+        except Exception:
+            preview_count = 0
+
+        _emit_progress(
+            log_fn,
+            f"facebook upload readiness fallback: poll={poll_idx} uploading_icon_count={uploading_count} preview_count={preview_count}",
+        )
+        if uploading_count == 0 and preview_count > 0:
+            _emit_progress(log_fn, "facebook upload readiness fallback: ready (upload icon gone + preview present)")
+            return
+        time.sleep(0.5)
 
 
 def _attempt_fill_description(executor: BaseExecutor, description: str, *, log_fn: LogFn | None = None) -> bool:
