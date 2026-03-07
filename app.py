@@ -17046,12 +17046,12 @@ class MainWindow(QMainWindow):
                     let textFilled = false;
                     let captionReady = !captionRequired;
                     let xRefreshTriggered = false;
+                    const normalizeForCompare = (value) => String(value || "")
+                        .replace(/\u200B/g, "")
+                        .replace(/\s+/g, " ")
+                        .trim();
                     if ((platform === "facebook" || platform === "x") && captionRequired) {
                         if (platform === "x") {
-                            const normalizeForCompare = (value) => String(value || "")
-                                .replace(/\u200B/g, "")
-                                .replace(/\\s+/g, " ")
-                                .trim();
                             const expectedCaption = normalizeForCompare(captionText);
                             const xComposer = bySelectors([
                                 'div[data-testid="tweetTextarea_0"][contenteditable="true"]',
@@ -17097,8 +17097,43 @@ class MainWindow(QMainWindow):
                                 captionReady = textFilled;
                             }
                         } else {
-                            const textTarget = findTextInputTarget();
-                            textFilled = setTextValue(textTarget, captionText);
+                            const facebookDescriptionSelectors = [
+                                'div[contenteditable="true"][role="textbox"][data-lexical-editor="true"][aria-placeholder*="Describe your reel" i]',
+                                'div[contenteditable="true"][data-lexical-editor="true"][aria-placeholder*="Describe your reel" i]',
+                                'div[contenteditable="true"][role="textbox"][aria-placeholder*="Describe your reel" i]',
+                                '[contenteditable="true"][aria-placeholder*="describe your reel" i]',
+                                'div[contenteditable="true"][role="textbox"][aria-label*="describe" i]',
+                                'div[contenteditable="true"][role="textbox"][aria-label*="caption" i]',
+                            ];
+                            const expectedCaption = normalizeForCompare(captionText);
+                            const facebookDescriptionTarget = pick(
+                                facebookDescriptionSelectors
+                                    .map((selector) => pick(collectDeep(selector)))
+                                    .filter(Boolean)
+                            ) || findTextInputTarget();
+
+                            const facebookCaptionMatches = () => {
+                                if (!facebookDescriptionTarget) return false;
+                                const currentText = normalizeForCompare(
+                                    facebookDescriptionTarget.innerText
+                                    || facebookDescriptionTarget.textContent
+                                    || facebookDescriptionTarget.value
+                                    || ""
+                                );
+                                if (!expectedCaption) return currentText.length === 0;
+                                return currentText === expectedCaption || currentText.includes(expectedCaption) || expectedCaption.includes(currentText);
+                            };
+
+                            textFilled = facebookCaptionMatches()
+                                || (
+                                    clearEditorText(facebookDescriptionTarget)
+                                    && (
+                                        pasteTextIntoEditor(facebookDescriptionTarget, captionText)
+                                        || emulateTypingIntoEditor(facebookDescriptionTarget, captionText)
+                                        || setTextValue(facebookDescriptionTarget, captionText)
+                                    )
+                                );
+                            textFilled = Boolean(textFilled) && facebookCaptionMatches();
                             captionReady = textFilled;
                         }
                     }
