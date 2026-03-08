@@ -37,7 +37,7 @@ EXTENSION_CMD_TIMEOUTS = {
 }
 
 
-def _sanitize_upload_filename(name: str, fallback: str = "upload.mp4", *, max_chars: int = 200) -> str:
+def _sanitize_upload_filename(name: str, fallback: str = "upload.mp4", *, max_chars: int = 167) -> str:
     """Return a filesystem-safe filename for staging uploads."""
     raw_name = str(name or "").strip()
     if not raw_name:
@@ -49,7 +49,6 @@ def _sanitize_upload_filename(name: str, fallback: str = "upload.mp4", *, max_ch
 
     stem = re.sub(r"[\x00-\x1f]", " ", stem)
     stem = re.sub(r"[\\/:*?\"<>|]", " ", stem)
-    stem = stem.replace("#", " ")
     stem = " ".join(stem.split()).strip(" .")
     if not stem:
         stem = Path(fallback).stem or "upload"
@@ -860,7 +859,7 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 file_name_override = str(payload.get("fileName") or "").strip()
                 if file_name_override:
-                    file_name_override = _sanitize_upload_filename(file_name_override, fallback=Path(file_path).name or "upload.mp4", max_chars=200)
+                    file_name_override = _sanitize_upload_filename(file_name_override, fallback=Path(file_path).name or "upload.mp4", max_chars=167)
                 if not file_path:
                     raise RuntimeError("filePath (or video_path/videoPath) is required")
                 if self.cdp is None:
@@ -881,8 +880,8 @@ class UdpAutomationService:
                         staging_dir = source_file_path.parent
                     else:
                         staging_dir = Path(tempfile.mkdtemp(prefix="grok_video_studio_uploads_"))
-                    # Keep staged filename <= 200 chars to reduce upload/path failures on Windows.
-                    max_path_chars = 200
+                    # Keep staged filename <= 167 chars to reduce upload/path failures on Windows.
+                    max_path_chars = 167
                     available_name_chars = max(16, max_path_chars)
                     safe_file_name = _sanitize_upload_filename(
                         file_name_override,
