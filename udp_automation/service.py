@@ -880,6 +880,8 @@ class UdpAutomationService:
                         raise RuntimeError("No browser page available for upload")
 
                     file_size_mb = source_file_path.stat().st_size / (1024 * 1024)
+                    effective_file_path = str(staged_file_path)
+                    requested_file_path = str(source_file_path)
                     skip_direct_upload_probe = platform == "x" and file_size_mb > REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB
                     extension_clients_connected = bool(self.bus.clients)
                     if skip_direct_upload_probe and not extension_clients_connected:
@@ -946,8 +948,25 @@ class UdpAutomationService:
                             ack_payload = _ack_from_extension(ack)
                             if bool(ack_payload.get("ok")):
                                 mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
-                                await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
-                                return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                                await self._emit(
+                                    "state",
+                                    {
+                                        "state": "upload_selected",
+                                        "platform": platform,
+                                        "filePath": effective_file_path,
+                                        "requestedFilePath": requested_file_path,
+                                        "mode": mode,
+                                    },
+                                )
+                                return {
+                                    "ok": True,
+                                    "payload": {
+                                        "mode": mode,
+                                        "fileSizeMb": round(file_size_mb, 2),
+                                        "filePath": effective_file_path,
+                                        "requestedFilePath": requested_file_path,
+                                    },
+                                }
                             last_err = str(ack_payload.get("error") or "")
                         except Exception as exc:
                             last_err = str(exc)
@@ -1060,12 +1079,22 @@ class UdpAutomationService:
                                 {
                                     "state": "upload_selected",
                                     "platform": platform,
-                                    "filePath": str(source_file_path),
+                                    "filePath": effective_file_path,
+                                    "requestedFilePath": requested_file_path,
                                     "mode": mode,
                                     "detected": tiktok_upload_state,
                                 },
                             )
-                            return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2), "detected": tiktok_upload_state}}
+                            return {
+                                "ok": True,
+                                "payload": {
+                                    "mode": mode,
+                                    "fileSizeMb": round(file_size_mb, 2),
+                                    "filePath": effective_file_path,
+                                    "requestedFilePath": requested_file_path,
+                                    "detected": tiktok_upload_state,
+                                },
+                            }
 
                     if not mode:
                         # CDP file-input access is brittle across upload UIs; always try extension debugger fallback.
@@ -1075,8 +1104,25 @@ class UdpAutomationService:
                             ack_payload = _ack_from_extension(ack)
                             if bool(ack_payload.get("ok")):
                                 mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
-                                await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": str(source_file_path), "mode": mode})
-                                return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                                await self._emit(
+                                    "state",
+                                    {
+                                        "state": "upload_selected",
+                                        "platform": platform,
+                                        "filePath": effective_file_path,
+                                        "requestedFilePath": requested_file_path,
+                                        "mode": mode,
+                                    },
+                                )
+                                return {
+                                    "ok": True,
+                                    "payload": {
+                                        "mode": mode,
+                                        "fileSizeMb": round(file_size_mb, 2),
+                                        "filePath": effective_file_path,
+                                        "requestedFilePath": requested_file_path,
+                                    },
+                                }
                             extension_err = str(ack_payload.get("error") or "")
                         except Exception as exc:
                             extension_err = str(exc)
@@ -1090,8 +1136,25 @@ class UdpAutomationService:
                             f" (sizeMb={round(file_size_mb, 2)}): {reason}"
                         )
 
-                    await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": str(source_file_path), "mode": mode})
-                    return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                    await self._emit(
+                        "state",
+                        {
+                            "state": "upload_selected",
+                            "platform": platform,
+                            "filePath": effective_file_path,
+                            "requestedFilePath": requested_file_path,
+                            "mode": mode,
+                        },
+                    )
+                    return {
+                        "ok": True,
+                        "payload": {
+                            "mode": mode,
+                            "fileSizeMb": round(file_size_mb, 2),
+                            "filePath": effective_file_path,
+                            "requestedFilePath": requested_file_path,
+                        },
+                    }
 
                 finally:
                     if cleanup_staged_file:
