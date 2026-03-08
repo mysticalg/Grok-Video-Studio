@@ -22,7 +22,7 @@ from urllib.parse import unquote, urlencode, urlparse, urlsplit
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -214,7 +214,10 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "manual_multi_video_poll_ms": 1200,
     "manual_multi_video_poll_fast_ms": 200,
     "sora_option_step_delay_ms": 2000,
+    # Continue-last-video often needs slower pacing than standard Sora staged clicks.
+    "continue_option_step_delay_ms": 2000,
     "sora_download_trigger_delay_ms": 700,
+    "continue_submit_after_prompt_delay_ms": 700,
     "manual_submit_result_poll_delay_ms": 350,
     "manual_poll_pause_cap_ms": 1500,
     "continue_post_reload_generation_delay_ms": 700,
@@ -263,34 +266,36 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_submit_handoff_poll_ms", "label": "Manual submit handoff poll interval", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
     {"key": "manual_submit_retry_delay_ms", "label": "Manual submit retry delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
     {"key": "manual_post_submit_idle_ms", "label": "Post-submit idle window", "min": 0, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
-    {"key": "manual_submit_poll_delay_ms", "label": "Submit poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_post_submit_success_delay_ms", "label": "Post-submit success poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_pick_detected_poll_delay_ms", "label": "Manual-pick detected poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_pick_wait_poll_delay_ms", "label": "Manual-pick wait poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_phase_poll_fast_ms", "label": "Phase poll (fast)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_phase_poll_medium_ms", "label": "Phase poll (medium)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_phase_poll_slow_ms", "label": "Phase poll (slow)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_phase_poll_recovery_ms", "label": "Phase poll (recovery)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_phase_poll_backoff_ms", "label": "Phase poll (backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_phase_poll_hard_backoff_ms", "label": "Phase poll (hard backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_submit_poll_delay_ms", "label": "Submit poll delay", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_post_submit_success_delay_ms", "label": "Post-submit success poll delay", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_pick_detected_poll_delay_ms", "label": "Manual-pick detected poll delay", "min": 100, "max": 5000, "step": 50, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_pick_wait_poll_delay_ms", "label": "Manual-pick wait poll delay", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_fast_ms", "label": "Phase poll (fast)", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_medium_ms", "label": "Phase poll (medium)", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_slow_ms", "label": "Phase poll (slow)", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_recovery_ms", "label": "Phase poll (recovery)", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_backoff_ms", "label": "Phase poll (backoff)", "min": 100, "max": 15000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_hard_backoff_ms", "label": "Phase poll (hard backoff)", "min": 100, "max": 15000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
+    {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
+    {"key": "continue_option_step_delay_ms", "label": "Continue-last-video option step delay", "min": 100, "max": 15000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
+    {"key": "continue_submit_after_prompt_delay_ms", "label": "Continue-last-video submit delay", "min": 100, "max": 5000, "step": 50, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
-    {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "multi_video_download_finish_poll_ms", "label": "Multi-video finish poll delay", "min": 0, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "multi_video_status_log_every_attempts", "label": "Multi-video status log every N attempts", "min": 1, "max": 20, "step": 1, "group": "Grok Polling", "suffix": " attempts"},
-    {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
-    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
+    {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
+    {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
+    {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
+    {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
+    {"key": "multi_video_download_finish_poll_ms", "label": "Multi-video finish poll delay", "min": 0, "max": 5000, "step": 50, "group": "Multi-Video", "tab": "Grok Polling"},
+    {"key": "multi_video_status_log_every_attempts", "label": "Multi-video status log every N attempts", "min": 1, "max": 20, "step": 1, "group": "Multi-Video", "suffix": " attempts", "tab": "Grok Polling"},
+    {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Continue Video", "tab": "Grok Polling"},
+    {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "New Video (Manual)", "tab": "Grok Polling"},
+    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "New Video (Manual)", "tab": "Grok Polling"},
     {"key": "x_compose_click_timeout_ms", "label": "Compose button click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Composer", "tab": "X"},
     {"key": "x_description_fill_attempts", "label": "Description fill attempts", "min": 1, "max": 20, "step": 1, "group": "Composer", "suffix": " attempts", "tab": "X"},
     {"key": "x_description_fill_retry_delay_ms", "label": "Description fill retry delay", "min": 0, "max": 10000, "step": 50, "group": "Composer", "tab": "X"},
@@ -318,7 +323,7 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
 
 AUTOMATION_TIMING_TAB_DESCRIPTIONS: dict[str, str] = {
     "General": "General automation settings including Grok/Sora core actions and manual submit behavior.",
-    "Grok Polling": "Grok polling/retry cadence for manual generation, multi-video, and continue flows.",
+    "Grok Polling": "Grok generation timings grouped by function (New Video, Continue Video, and Multi-Video), including continue-last-video pacing controls.",
     "X": "Affects X upload automation steps only (compose click and description retries).",
     "TikTok": "Affects TikTok upload automation waits, click/editor timeouts, and submit behavior.",
     "Instagram": "Affects Instagram upload automation click and Next-step timing behavior.",
@@ -11652,11 +11657,6 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_current_source_video = ""
                 return
             self._append_log(f"Continue-from-last-frame: extracted last frame to {frame_path}")
-            if not self._copy_image_to_clipboard(frame_path):
-                self._append_log("ERROR: Continue-from-last-frame stopped because clipboard image copy failed.")
-                self.continue_from_frame_active = False
-                self.continue_from_frame_current_source_video = ""
-                return
 
         self.last_extracted_frame_path = frame_path
         iteration = self.continue_from_frame_completed + 1
@@ -11665,14 +11665,14 @@ class MainWindow(QMainWindow):
         )
         browser_page_pause_ms = 200
         self._append_log(
-            "Continue mode: starting image paste into the current Grok prompt area without forcing page navigation..."
+            "Continue mode: starting file-input upload into the current Grok prompt area without forcing page navigation..."
         )
         QTimer.singleShot(
             9000 + browser_page_pause_ms,
             lambda: self._upload_frame_into_grok(frame_path, on_uploaded=self._wait_for_continue_upload_reload),
         )
         self._append_log(
-            "Continue mode: image paste scheduled; waiting for upload/reload before prompt submission."
+            "Continue mode: image file upload scheduled; waiting for upload/reload before prompt submission."
         )
 
     def _resolve_latest_video_for_continuation(self) -> str | None:
@@ -12700,7 +12700,7 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated; toggled '{detail}' mode and now submitting for continue-last-video flow."
                                 )
                                 self.manual_continue_setup_in_progress = False
-                                QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
+                                QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
                                 return
                             else:
                                 detail = click_result.get("label") or "Make video"
@@ -12708,14 +12708,14 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(self._automation_timing(submit_delay_key), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
+                        QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
 
                     self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
                     return
@@ -12794,23 +12794,26 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(self._automation_timing(submit_delay_key), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
+                        QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
 
                     self._run_active_browser_javascript(enter_script, _after_enter_press)
                     return
 
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _run_flow_submit)
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), _run_flow_submit)
 
             self._run_active_browser_javascript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+        # Continue-last-video often needs independent pacing controls versus generic Sora/manual flows.
+        option_step_delay_key = "continue_option_step_delay_ms" if continue_last_video_mode else "sora_option_step_delay_ms"
+        submit_delay_key = "continue_submit_after_prompt_delay_ms" if continue_last_video_mode else "sora_download_trigger_delay_ms"
         self.manual_continue_setup_in_progress = bool(continue_last_video_mode)
         if is_sora_manual_flow:
             option_steps = []
@@ -12838,7 +12841,7 @@ class MainWindow(QMainWindow):
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
                 self._append_log(f"Variant {variant}: all staged options attempted; continuing to prompt entry.")
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _populate_prompt_then_submit)
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), _populate_prompt_then_submit)
                 return
 
             step_name, label = option_steps[step_index]
@@ -12853,7 +12856,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"WARNING: Variant {variant}: could not confirm click for {step_name} option '{label}'. result={step_result!r}"
                     )
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), lambda: _run_option_step(step_index + 1))
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), lambda: _run_option_step(step_index + 1))
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
@@ -12867,7 +12870,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, _populate_prompt_then_submit)
                 return
             self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
-            QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), lambda: _run_option_step(0))
+            QTimer.singleShot(self._automation_timing(option_step_delay_key), lambda: _run_option_step(0))
 
         def _after_location_check(location_result):
             current_url = ""
@@ -12878,10 +12881,10 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     "Manual flow: current page is not grok.com/imagine/favorites; staying on the current page for automated flow."
                 )
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _open_options_then_steps)
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), _open_options_then_steps)
             else:
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _open_options_then_steps)
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), _open_options_then_steps)
 
         self._run_active_browser_javascript(
             "(() => ({ href: String((window.location && window.location.href) || '') }))()",
@@ -15713,25 +15716,10 @@ class MainWindow(QMainWindow):
         )
         return None
 
-    def _copy_image_to_clipboard(self, frame_path: Path) -> bool:
-        self._append_log(f"Copying extracted frame to clipboard: {frame_path}")
-
-        image = QImage(str(frame_path))
-        if image.isNull():
-            QMessageBox.critical(self, "Frame Extraction Failed", "Frame image could not be loaded.")
-            return False
-
-        mime = QMimeData()
-        mime.setImageData(image)
-        mime.setText(str(frame_path))
-        QGuiApplication.clipboard().setMimeData(mime)
-        self._append_log("Clipboard image copy completed.")
-        return True
-
     def _upload_frame_into_grok(self, frame_path: Path, on_uploaded=None) -> None:
         import base64
 
-        self._append_log(f"Starting browser-side image paste for frame: {frame_path.name}")
+        self._append_log(f"Starting browser-side file-input upload for frame: {frame_path.name}")
 
         upload_file_path = frame_path
         upload_file_name = frame_path.name
@@ -15747,6 +15735,9 @@ class MainWindow(QMainWindow):
         upload_mime = mime_by_ext.get(suffix, "image/png")
         self._append_log(
             f"Continue-from-last-frame: using extracted frame in native format ({upload_file_name}, {upload_mime}) for best color/profile fidelity."
+        )
+        self._append_log(
+            "Continue-from-last-frame: attempting file-input upload first (path-style), then paste/drop fallback only if needed."
         )
 
         frame_base64 = base64.b64encode(upload_file_path.read_bytes()).decode("ascii")
@@ -15795,7 +15786,7 @@ class MainWindow(QMainWindow):
                     }
                 };
 
-                const dispatchFileEvents = (target, dt, includePaste = false) => {
+                const dispatchFileEvents = (target, dt) => {
                     try {
                         target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
                         target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -15807,12 +15798,6 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                     });
 
-                    if (includePaste) {
-                        try {
-                            const pasteEvent = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
-                            target.dispatchEvent(pasteEvent);
-                        } catch (_) {}
-                    }
                 };
 
                 for (const selector of selectors) {
@@ -15837,21 +15822,18 @@ class MainWindow(QMainWindow):
                             ? [...new Set(scopedInputs)]
                             : [...document.querySelectorAll("input[type='file']")];
 
-                        // Upload only once: pick the first visible file input near the prompt,
-                        // then emit a single paste event to the prompt node as fallback.
+                        // Upload only once: pick the first visible file input near the prompt.
+                        // We intentionally use file-input assignment only (no paste fallback)
+                        // so continuation remains deterministic and follows a path-style upload.
                         let populatedInputs = 0;
                         const preferredInput = fileInputs.find((input) => isVisible(input)) || fileInputs[0];
                         if (preferredInput) {
                             try {
                                 if (setInputFiles(preferredInput, dt.files)) {
-                                    dispatchFileEvents(preferredInput, dt, false);
+                                    dispatchFileEvents(preferredInput, dt);
                                     populatedInputs = 1;
                                 }
                             } catch (_) {}
-                        }
-
-                        if (!populatedInputs) {
-                            dispatchFileEvents(node, dt, true);
                         }
 
                         return {
@@ -15859,10 +15841,11 @@ class MainWindow(QMainWindow):
                             fileInputs: fileInputs.length,
                             populatedInputs,
                             selector,
+                            error: populatedInputs > 0 ? "" : "file-input-not-populated",
                         };
                     }
                 }
-                return { ok: false, error: 'Prompt input not found for paste' };
+                return { ok: false, error: 'Prompt input not found for file upload' };
             })()
         """
 
@@ -15872,7 +15855,22 @@ class MainWindow(QMainWindow):
             .replace("__FRAME_MIME__", repr(upload_mime))
         )
 
-        def after_focus(_result):
+        def after_focus(upload_result):
+            if not isinstance(upload_result, dict) or not upload_result.get("ok"):
+                self._append_log(
+                    "ERROR: Continue-from-last-frame file-input upload did not confirm success; "
+                    f"result={upload_result!r}."
+                )
+                self.continue_from_frame_waiting_for_reload = False
+                self.continue_from_frame_active = False
+                self.continue_from_frame_current_source_video = ""
+                return
+
+            self._append_log(
+                "Continue-from-last-frame: file-input upload confirmed "
+                f"(fileInputs={upload_result.get('fileInputs', 'unknown')}, "
+                f"populatedInputs={upload_result.get('populatedInputs', 'unknown')})."
+            )
             if callable(on_uploaded):
                 on_uploaded()
 
@@ -15882,7 +15880,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_waiting_for_reload = True
         self.continue_from_frame_reload_timeout_timer.start(self._automation_timing("continue_reload_timeout_ms"))
         self._append_log(
-            "Continue-from-last-frame: image pasted. Grok should auto-reload after upload; "
+            "Continue-from-last-frame: image file attached. Grok should auto-reload after upload; "
             "waiting for the new page before entering the continuation prompt..."
         )
 
