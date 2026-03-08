@@ -128,12 +128,25 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     add_text = bool(opts.get("add_text_overlay"))
     add_music = bool(opts.get("add_music"))
     music_add_count = max(1, min(10, int(opts.get("music_add_count") or 2)))
-    music_query = str(opts.get("music_query_effective") or opts.get("music_query") or "").strip()
+    raw_music_queries = opts.get("music_queries_effective")
+    music_queries: list[str] = []
+    if isinstance(raw_music_queries, list):
+        music_queries = [str(item).strip() for item in raw_music_queries if str(item or "").strip()]
+    fallback_query = str(opts.get("music_query_effective") or opts.get("music_query") or "").strip()
+    if not music_queries and fallback_query:
+        music_queries = [fallback_query]
+
+    if music_queries:
+        if len(music_queries) < music_add_count:
+            last_query = music_queries[-1]
+            music_queries.extend([last_query] * (music_add_count - len(music_queries)))
+        elif len(music_queries) > music_add_count:
+            music_queries = music_queries[:music_add_count]
     text_overlay = _overlay_text(opts, caption)
     action_delay_s = float(opts.get("action_delay_s") or 2.0)
     startup_delay_s = float(opts.get("startup_delay_s") or action_delay_s)
 
-    _log(log_fn, f"start: mode={publish_mode} add_text={add_text} add_music={add_music} music_add_count={music_add_count} music_query_set={bool(music_query)} text_overlay_len={len(text_overlay)}")
+    _log(log_fn, f"start: mode={publish_mode} add_text={add_text} add_music={add_music} music_add_count={music_add_count} music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}")
     executor.run("platform.open", {"platform": "tiktok", "reuseTab": True})
     _log(log_fn, "platform.open: ok")
     _pause(startup_delay_s, step="startup_wait_after_open", log_fn=log_fn)
@@ -185,18 +198,18 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             delay_s=action_delay_s,
         )
 
-    if add_music and music_query:
+    if add_music and music_queries:
         _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=60000, step="open_music_tab", log_fn=log_fn, delay_s=action_delay_s)
-        _must_type(
-            executor,
-            "input[placeholder='Search sounds']",
-            music_query,
-            step="music_search_text",
-            log_fn=log_fn,
-            submit=True,
-            delay_s=action_delay_s,
-        )
-        for add_index in range(music_add_count):
+        for add_index, music_query in enumerate(music_queries):
+            _must_type(
+                executor,
+                "input[placeholder='Search sounds']",
+                music_query,
+                step=f"music_search_text_{add_index + 1}",
+                log_fn=log_fn,
+                submit=True,
+                delay_s=action_delay_s,
+            )
             _must_click(
                 executor,
                 "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
@@ -206,7 +219,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
                 delay_s=action_delay_s,
             )
 
-    if add_text or (add_music and music_query):
+    if add_text or (add_music and music_queries):
         _must_click(
             executor,
             "button.button.Button__root--type-primary .Button__content, button.button.Button__root--type-primary, button.Button__root--type-primary",
