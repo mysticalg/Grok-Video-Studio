@@ -201,46 +201,32 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
 
     if add_music and music_queries:
         _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=60000, step="open_music_tab", log_fn=log_fn, delay_s=action_delay_s)
-        if len(music_queries) == 1 and music_add_count > 1:
-            _must_type(
-                executor,
-                "input[placeholder='Search sounds']",
-                music_queries[0],
-                step="music_search_text_1",
-                log_fn=log_fn,
-                submit=True,
-                delay_s=action_delay_s,
+        if len(music_queries) > 1 and music_add_count > 1:
+            _log(
+                log_fn,
+                "music_add_burst: multiple queries were provided, but multi-add now uses the first query and bursts Add on one selected sound",
             )
-            _log(log_fn, f"music_add_burst: triggering add button {music_add_count} times in one action")
-            _must_click(
-                executor,
-                "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
-                timeout_ms=60000,
-                step="music_add_track_burst",
-                log_fn=log_fn,
-                delay_s=action_delay_s,
-                single_click=True,
-                extra_payload={"burstClicks": music_add_count},
-            )
-        else:
-            for add_index, music_query in enumerate(music_queries):
-                _must_type(
-                    executor,
-                    "input[placeholder='Search sounds']",
-                    music_query,
-                    step=f"music_search_text_{add_index + 1}",
-                    log_fn=log_fn,
-                    submit=True,
-                    delay_s=action_delay_s,
-                )
-                _must_click(
-                    executor,
-                    "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
-                    timeout_ms=60000,
-                    step=f"music_add_track_{add_index + 1}",
-                    log_fn=log_fn,
-                    delay_s=action_delay_s,
-                )
+        _must_type(
+            executor,
+            "input[placeholder='Search sounds']",
+            music_queries[0],
+            step="music_search_text_1",
+            log_fn=log_fn,
+            submit=True,
+            delay_s=action_delay_s,
+        )
+        burst_clicks = music_add_count if music_add_count > 1 else 1
+        _log(log_fn, f"music_add_burst: triggering add button {burst_clicks} time(s) in one action")
+        _must_click(
+            executor,
+            "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
+            timeout_ms=60000,
+            step="music_add_track_burst",
+            log_fn=log_fn,
+            delay_s=action_delay_s,
+            single_click=True,
+            extra_payload={"burstClicks": burst_clicks},
+        )
 
     if add_text or (add_music and music_queries):
         _must_click(
