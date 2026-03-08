@@ -5304,25 +5304,41 @@ class MainWindow(QMainWindow):
     def _open_automation_timings_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Automation Timings")
-        dialog.setMinimumWidth(560)
+        dialog.setMinimumWidth(980)
 
         layout = QVBoxLayout(dialog)
         tabs = QTabWidget(dialog)
         layout.addWidget(tabs)
 
         spinboxes: dict[str, QSpinBox] = {}
-        tab_containers: dict[str, QVBoxLayout] = {}
+        tab_layouts: dict[str, QVBoxLayout] = {}
+        tab_columns: dict[str, tuple[QVBoxLayout, QVBoxLayout]] = {}
+        tab_column_loads: dict[str, list[int]] = {}
         tab_groups: dict[tuple[str, str], QFormLayout] = {}
+        group_columns: dict[tuple[str, str], int] = {}
         for field in AUTOMATION_TIMING_FIELDS:
             tab_name = str(field.get("tab") or "Grok")
             group_name = str(field.get("group") or "General")
 
-            if tab_name not in tab_containers:
+            if tab_name not in tab_layouts:
                 tab_widget = QWidget()
                 tab_layout = QVBoxLayout(tab_widget)
                 tab_layout.setContentsMargins(8, 8, 8, 8)
                 tab_layout.setSpacing(8)
-                tab_containers[tab_name] = tab_layout
+                tab_layouts[tab_name] = tab_layout
+
+                columns_layout = QHBoxLayout()
+                columns_layout.setSpacing(12)
+                left_column = QVBoxLayout()
+                right_column = QVBoxLayout()
+                left_column.setSpacing(8)
+                right_column.setSpacing(8)
+                columns_layout.addLayout(left_column, 1)
+                columns_layout.addLayout(right_column, 1)
+                tab_layout.addLayout(columns_layout)
+                tab_columns[tab_name] = (left_column, right_column)
+                tab_column_loads[tab_name] = [0, 0]
+
                 tab_index = tabs.addTab(tab_widget, tab_name)
                 tabs.setTabToolTip(tab_index, AUTOMATION_TIMING_TAB_DESCRIPTIONS.get(tab_name, "Settings for this automation scope."))
 
@@ -5333,7 +5349,11 @@ class MainWindow(QMainWindow):
                 form_layout.setContentsMargins(10, 8, 10, 8)
                 form_layout.setSpacing(6)
                 tab_groups[group_key] = form_layout
-                tab_containers[tab_name].addWidget(group_box)
+
+                left_load, right_load = tab_column_loads[tab_name]
+                column_index = 0 if left_load <= right_load else 1
+                group_columns[group_key] = column_index
+                tab_columns[tab_name][column_index].addWidget(group_box)
 
             spin = QSpinBox()
             spin.setRange(int(field.get("min", 0)), int(field.get("max", 60000)))
@@ -5353,7 +5373,13 @@ class MainWindow(QMainWindow):
             tab_groups[group_key].addRow(label_widget, spin)
             spinboxes[key] = spin
 
-        for tab_layout in tab_containers.values():
+            column_index = group_columns[group_key]
+            tab_column_loads[tab_name][column_index] += 1
+
+        for tab_name, tab_layout in tab_layouts.items():
+            left_column, right_column = tab_columns[tab_name]
+            left_column.addStretch(1)
+            right_column.addStretch(1)
             tab_layout.addStretch(1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.RestoreDefaults)
