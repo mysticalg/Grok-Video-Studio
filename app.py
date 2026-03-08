@@ -3522,13 +3522,6 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.create_video_from_image_btn, self.start_image_generation)
         )
 
-        self.multi_video_btn = QPushButton("🎞️ Multi Video")
-        self.multi_video_btn.setToolTip("Generate multiple videos from one image prompt run and download in background.")
-        self.multi_video_btn.setCheckable(True)
-        self.multi_video_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.multi_video_btn, self.start_multi_video_generation)
-        )
-
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
         self.stop_all_btn.setCheckable(True)
@@ -3548,29 +3541,12 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.continue_image_btn, self.continue_from_local_image)
         )
 
-        self.browser_home_btn = QPushButton("🏠 Homepage")
-        self.browser_home_btn.setToolTip("Open grok.com/imagine in the embedded browser tab.")
-        self.browser_home_btn.setCheckable(True)
-        self.browser_home_btn.clicked.connect(lambda: self._run_with_button_feedback(self.browser_home_btn, self.show_browser_page))
-
         self.browser_external_btn = QPushButton("🌐 External")
         self.browser_external_btn.setToolTip("Open the current browser tab URL in your system default browser.")
         self.browser_external_btn.setCheckable(True)
         self.browser_external_btn.clicked.connect(
             lambda: self._run_with_button_feedback(self.browser_external_btn, self.open_current_browser_in_external_browser)
         )
-
-        self.browser_devtools_btn = QPushButton("🛠 DevTools")
-        self.browser_devtools_btn.setToolTip("Open Chromium DevTools for the Grok browser tab.")
-        self.browser_devtools_btn.setCheckable(True)
-        self.browser_devtools_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.browser_devtools_btn, self.open_grok_browser_devtools)
-        )
-
-        self.multi_video_count_spin = QSpinBox()
-        self.multi_video_count_spin.setRange(1, 10)
-        self.multi_video_count_spin.setValue(2)
-        self.multi_video_count_spin.setToolTip("How many generated image cards to convert to video in Multi Video mode.")
 
         self.multi_video_manual_pick_checkbox = QCheckBox("Manual image pick")
         self.multi_video_manual_pick_checkbox.setToolTip(
@@ -3581,9 +3557,6 @@ class MainWindow(QMainWindow):
         self.manual_pick_after_prompt_checkbox.setToolTip(
             "For single Create Video runs, wait after Enter until you manually open a generated image post (/imagine/post/<id>)."
         )
-
-        self.multi_video_count_label = QLabel("Multi count")
-        self.multi_video_count_label.setToolTip("How many make-video actions Multi Video mode should collect.")
 
         self.sora_generate_image_btn = QPushButton("🎬 Create New Video")
         self.sora_generate_image_btn.setToolTip("Build and paste a video prompt into the Sora browser tab.")
@@ -3606,13 +3579,6 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.sora_continue_image_btn, self.continue_from_local_image)
         )
 
-        self.sora_browser_home_btn = QPushButton("🏠 Homepage")
-        self.sora_browser_home_btn.setToolTip("Open sora.chatgpt.com/drafts in the embedded Sora browser tab.")
-        self.sora_browser_home_btn.setCheckable(True)
-        self.sora_browser_home_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.sora_browser_home_btn, self.show_sora_browser_page)
-        )
-
         self.sora_browser_external_btn = QPushButton("🌐 External")
         self.sora_browser_external_btn.setToolTip("Open the current browser tab URL in your system default browser.")
         self.sora_browser_external_btn.setCheckable(True)
@@ -3620,27 +3586,15 @@ class MainWindow(QMainWindow):
             lambda: self._run_with_button_feedback(self.sora_browser_external_btn, self.open_current_browser_in_external_browser)
         )
 
-        self.sora_browser_devtools_btn = QPushButton("🛠 DevTools")
-        self.sora_browser_devtools_btn.setToolTip("Open Chromium DevTools for the Sora browser tab.")
-        self.sora_browser_devtools_btn.setCheckable(True)
-        self.sora_browser_devtools_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.sora_browser_devtools_btn, self.open_sora_browser_devtools)
-        )
-
         self.generate_image_btn.setMaximumWidth(170)
         self.create_video_from_image_btn.setMaximumWidth(210)
-        self.multi_video_btn.setMaximumWidth(170)
         self.continue_frame_btn.setMaximumWidth(170)
         self.continue_image_btn.setMaximumWidth(170)
-        self.browser_home_btn.setMaximumWidth(170)
         self.browser_external_btn.setMaximumWidth(170)
-        self.browser_devtools_btn.setMaximumWidth(170)
         self.sora_generate_image_btn.setMaximumWidth(170)
         self.sora_continue_frame_btn.setMaximumWidth(170)
         self.sora_continue_image_btn.setMaximumWidth(170)
-        self.sora_browser_home_btn.setMaximumWidth(170)
         self.sora_browser_external_btn.setMaximumWidth(170)
-        self.sora_browser_devtools_btn.setMaximumWidth(170)
 
         self.stitch_btn = QPushButton("🧵 Stitch All Videos")
         self.stitch_btn.setToolTip("Combine all downloaded videos into one stitched output file.")
@@ -4094,26 +4048,22 @@ class MainWindow(QMainWindow):
         self.grok_browser_tab = QWidget()
         grok_browser_layout = QVBoxLayout(self.grok_browser_tab)
         grok_browser_controls = QGridLayout()
+        # Keep Grok controls focused on single-video workflows for a cleaner tab layout.
         grok_browser_controls.addWidget(self.create_video_from_image_btn, 0, 0)
-        grok_browser_controls.addWidget(self.multi_video_btn, 0, 1)
-        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 2)
-        grok_browser_controls.addWidget(self.continue_image_btn, 0, 3)
-        grok_browser_controls.addWidget(self.browser_home_btn, 0, 4)
-        grok_browser_controls.addWidget(self.browser_devtools_btn, 0, 5)
-        grok_browser_controls.addWidget(self.multi_video_count_label, 1, 0)
-        grok_browser_controls.addWidget(self.multi_video_count_spin, 1, 1)
-        grok_browser_controls.addWidget(self.multi_video_manual_pick_checkbox, 1, 2, 1, 3)
-        grok_browser_controls.addWidget(self.manual_pick_after_prompt_checkbox, 2, 0, 1, 3)
+        grok_browser_controls.addWidget(self.continue_frame_btn, 0, 1)
+        grok_browser_controls.addWidget(self.continue_image_btn, 0, 2)
+        grok_browser_controls.addWidget(self.browser_external_btn, 0, 3)
+        grok_browser_controls.addWidget(self.multi_video_manual_pick_checkbox, 1, 0, 1, 2)
+        grok_browser_controls.addWidget(self.manual_pick_after_prompt_checkbox, 2, 0, 1, 2)
 
         self.sora_browser_tab = QWidget()
         sora_browser_layout = QVBoxLayout(self.sora_browser_tab)
         sora_browser_controls = QGridLayout()
+        # Keep Sora controls aligned with Grok by exposing only creation/continue/external actions.
         sora_browser_controls.addWidget(self.sora_generate_image_btn, 0, 0)
         sora_browser_controls.addWidget(self.sora_continue_frame_btn, 0, 1)
         sora_browser_controls.addWidget(self.sora_continue_image_btn, 0, 2)
-        sora_browser_controls.addWidget(self.sora_browser_home_btn, 0, 3)
-        sora_browser_controls.addWidget(self.sora_browser_external_btn, 0, 4)
-        sora_browser_controls.addWidget(self.sora_browser_devtools_btn, 0, 5)
+        sora_browser_controls.addWidget(self.sora_browser_external_btn, 0, 3)
 
         self.video_resolution = QComboBox()
         self.video_resolution.addItem("480p (854x480)", "854x480")
@@ -4166,16 +4116,6 @@ class MainWindow(QMainWindow):
         self.seedance_settings_tab_index = self.browser_tabs.addTab(self._build_seedance_settings_tab(), "Seedance 2.0 Video Settings")
         self.ai_flow_trainer_tab_index = self.browser_tabs.addTab(self._build_browser_training_tab(), "AI Flow Trainer")
         self.browser_tabs.currentChanged.connect(self._on_browser_tab_changed)
-
-        self.devtools_action = QAction("Open Browser DevTools", self)
-        self.devtools_action.setShortcut("Ctrl+Shift+I")
-        self.devtools_action.triggered.connect(self.open_current_browser_devtools)
-        self.addAction(self.devtools_action)
-
-        self.devtools_action_f12 = QAction("Open Browser DevTools (F12)", self)
-        self.devtools_action_f12.setShortcut("F12")
-        self.devtools_action_f12.triggered.connect(self.open_current_browser_devtools)
-        self.addAction(self.devtools_action_f12)
 
         self.browser_tab_indices = {
             "Grok": self.grok_browser_tab_index,
@@ -4296,7 +4236,7 @@ class MainWindow(QMainWindow):
         controls = QHBoxLayout()
         api_btn = QPushButton(f"Upload to {platform_name} via API")
         browser_btn = QPushButton(f"Automate {platform_name} in Browser")
-        open_btn = QPushButton("Open Upload Page")
+        # Keep social-tab controls minimal: direct automation/API plus external handoff.
         external_btn = QPushButton("Open in External Browser")
 
         if platform_name == "Facebook":
@@ -4317,7 +4257,6 @@ class MainWindow(QMainWindow):
             browser_btn.clicked.connect(self.start_youtube_browser_upload)
             self.upload_youtube_btn = api_btn
 
-        open_btn.clicked.connect(lambda _=False, p=platform_name, u=upload_url: self._open_social_upload_page(p, self._social_upload_url_for_platform(p, u)))
         external_btn.clicked.connect(
             lambda _=False, p=platform_name, u=upload_url: self._open_social_upload_page_external(
                 p, self._social_upload_url_for_platform(p, u)
@@ -4325,7 +4264,6 @@ class MainWindow(QMainWindow):
         )
         controls.addWidget(api_btn)
         controls.addWidget(browser_btn)
-        controls.addWidget(open_btn)
         controls.addWidget(external_btn)
         layout.addLayout(controls)
 
@@ -9009,7 +8947,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
-        target_count = int(self.multi_video_count_spin.value())
+        target_count = 2  # Fixed internal fallback; multi-video UI controls are intentionally hidden.
         manual_pick = bool(self.multi_video_manual_pick_checkbox.isChecked())
         self.multi_video_mode_active = True
         self.multi_video_target_count = target_count
