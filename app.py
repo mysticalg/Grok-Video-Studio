@@ -12496,7 +12496,7 @@ class MainWindow(QMainWindow):
                         return aria.toLowerCase().includes(targetLabel.toLowerCase()) || txt.toLowerCase().includes(targetLabel.toLowerCase());
                     };
 
-                    const menuOptionCandidates = [...document.querySelectorAll("[role='menuitem'], [role='menuitemradio']")]
+                    const menuOptionCandidates = [...document.querySelectorAll("[role='menuitem'], [role='menuitemradio'], [role='radio']")]
                         .filter((el) => isVisible(el) && !el.disabled);
                     const menuMakeVideoTarget = (optionType === "type" && /make\s+video/i.test(targetLabel))
                         ? (menuOptionCandidates.find((el) => {
@@ -12505,8 +12505,16 @@ class MainWindow(QMainWindow):
                             return /make\s+video/i.test(strongTxt || txt);
                         }) || null)
                         : null;
+                    const radioVideoTarget = (optionType === "type" && /make\s+video/i.test(targetLabel))
+                        ? (menuOptionCandidates.find((el) => {
+                            const aria = clean(el.getAttribute("aria-label"));
+                            const txt = clean(el.textContent);
+                            const role = clean(el.getAttribute("role"));
+                            return role.toLowerCase() === "radio" && (/^video$/i.test(aria) || /^video$/i.test(txt));
+                        }) || null)
+                        : null;
                     const strictTypeTarget = (optionType === "type")
-                        ? (menuOptionCandidates.find(exactMatch) || menuOptionCandidates.find(fuzzyMatch) || null)
+                        ? (menuOptionCandidates.find(exactMatch) || menuOptionCandidates.find(fuzzyMatch) || radioVideoTarget || null)
                         : null;
 
                     const target = (optionType === "type")
@@ -12626,22 +12634,41 @@ class MainWindow(QMainWindow):
                                 if (window.__grokContinueSubmitGuardToken === submitGuardToken) {
                                     return { ok: true, guarded: true, status: "already-clicked" };
                                 }
-                                const candidates = [...document.querySelectorAll("button")]
+                                // Continue-last-video changed on the live site in some sessions: the old
+                                // "Make Video" submit button may be absent and only a "Video" radio is present.
+                                // We handle both patterns explicitly so the flow remains stable.
+                                const candidates = [...document.querySelectorAll("button, [role='radio']")]
                                     .filter((btn) => isVisible(btn) && !btn.disabled);
-                                const target = candidates.find((btn) => {
+                                const submitTarget = candidates.find((btn) => {
                                     const aria = clean(btn.getAttribute("aria-label"));
                                     const text = clean(btn.textContent);
                                     const sr = clean(btn.querySelector("span.sr-only")?.textContent || "");
                                     if (/create\s+share\s+link|share\s+link|copy\s+link/.test(`${aria} ${text} ${sr}`)) return false;
                                     return /^make\s+video$/.test(aria) || /^make\s+video$/.test(text) || /create\s+video/.test(sr);
                                 }) || null;
+                                const videoToggleTarget = submitTarget ? null : (candidates.find((btn) => {
+                                    const aria = clean(btn.getAttribute("aria-label"));
+                                    const text = clean(btn.textContent);
+                                    const role = clean(btn.getAttribute("role"));
+                                    return /^video$/.test(aria) || /^video$/.test(text) || role === "radio";
+                                }) || null);
+                                const target = submitTarget || videoToggleTarget;
                                 if (!target) return { ok: false, error: "make-video-button-not-found" };
                                 try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
                                 try { target.focus({ preventScroll: true }); } catch (_) {}
-                                try { target.click(); } catch (_) { return { ok: false, error: "make-video-click-failed" }; }
+                                try { target.click(); } catch (_) { return { ok: false, error: submitTarget ? "make-video-click-failed" : "video-toggle-click-failed" }; }
                                 window.__grokContinueSubmitGuardToken = submitGuardToken;
                                 window.__grokContinueSubmitClickedAt = now;
-                                return { ok: true, guarded: false, status: "clicked", label: (target.getAttribute("aria-label") || target.textContent || "").trim() };
+                                if (!submitTarget) {
+                                    return {
+                                        ok: true,
+                                        guarded: false,
+                                        status: "video-toggle-clicked",
+                                        requiresSubmit: true,
+                                        label: (target.getAttribute("aria-label") || target.textContent || "").trim()
+                                    };
+                                }
+                                return { ok: true, guarded: false, status: "clicked", requiresSubmit: false, label: (target.getAttribute("aria-label") || target.textContent || "").trim() };
                             } catch (err) {
                                 return { ok: false, error: String(err && err.stack ? err.stack : err) };
                             }
@@ -12654,6 +12681,14 @@ class MainWindow(QMainWindow):
                                 self._append_log(
                                     f"Variant {variant}: continue-last-video submit guard prevented duplicate Make Video click; proceeding with download polling."
                                 )
+                            elif click_result.get("requiresSubmit"):
+                                detail = click_result.get("label") or "Video"
+                                self._append_log(
+                                    f"Variant {variant}: prompt populated; toggled '{detail}' mode and now submitting for continue-last-video flow."
+                                )
+                                self.manual_continue_setup_in_progress = False
+                                QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
+                                return
                             else:
                                 detail = click_result.get("label") or "Make video"
                                 self._append_log(
