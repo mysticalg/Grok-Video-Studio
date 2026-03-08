@@ -5631,7 +5631,7 @@ class MainWindow(QMainWindow):
         self.automation_menu.addAction(automation_reset_timings_action)
         self.automation_menu.addSeparator()
 
-        cdp_settings_menu = menu_bar.addMenu("CDP Settings")
+        cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
         cdp_enabled_action = QAction("Enable CDP", self)
         cdp_enabled_action.triggered.connect(lambda: self._set_cdp_enabled(True))
         cdp_settings_menu.addAction(cdp_enabled_action)
