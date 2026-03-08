@@ -221,6 +221,22 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "manual_video_mode_settle_extra_ms": 260,
     "manual_form_option_step_delay_ms": 1000,
     "manual_form_submit_delay_ms": 1000,
+    "x_compose_click_timeout_ms": 8000,
+    "x_description_fill_attempts": 3,
+    "x_description_fill_retry_delay_ms": 500,
+    "tiktok_action_delay_ms": 1000,
+    "tiktok_click_timeout_ms": 60000,
+    "tiktok_editor_timeout_ms": 120000,
+    "tiktok_submit_timeout_ms": 120000,
+    "instagram_click_timeout_ms": 10000,
+    "instagram_next_timeout_ms": 12000,
+    "youtube_step_delay_ms": 1200,
+    "youtube_form_fill_attempts": 3,
+    "youtube_publish_attempts": 2,
+    "youtube_click_timeout_ms": 8000,
+    "facebook_step_delay_ms": 1000,
+    "facebook_form_fill_attempts": 1,
+    "facebook_click_timeout_ms": 10000,
 }
 
 AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
@@ -259,7 +275,23 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
     {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
     {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
-    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
+    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling", "tab": "Grok"},
+    {"key": "x_compose_click_timeout_ms", "label": "Compose button click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Composer", "tab": "X"},
+    {"key": "x_description_fill_attempts", "label": "Description fill attempts", "min": 1, "max": 20, "step": 1, "group": "Composer", "suffix": " attempts", "tab": "X"},
+    {"key": "x_description_fill_retry_delay_ms", "label": "Description fill retry delay", "min": 0, "max": 10000, "step": 50, "group": "Composer", "tab": "X"},
+    {"key": "tiktok_action_delay_ms", "label": "Action settle delay", "min": 0, "max": 10000, "step": 50, "group": "Core", "tab": "TikTok"},
+    {"key": "tiktok_click_timeout_ms", "label": "General click timeout", "min": 1000, "max": 180000, "step": 500, "group": "Core", "tab": "TikTok"},
+    {"key": "tiktok_editor_timeout_ms", "label": "Editor open timeout", "min": 1000, "max": 240000, "step": 500, "group": "Core", "tab": "TikTok"},
+    {"key": "tiktok_submit_timeout_ms", "label": "Submit timeout", "min": 1000, "max": 240000, "step": 500, "group": "Core", "tab": "TikTok"},
+    {"key": "instagram_click_timeout_ms", "label": "Default click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Instagram"},
+    {"key": "instagram_next_timeout_ms", "label": "Next button timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Instagram"},
+    {"key": "youtube_step_delay_ms", "label": "Step delay", "min": 0, "max": 10000, "step": 50, "group": "Core", "tab": "YouTube"},
+    {"key": "youtube_form_fill_attempts", "label": "Metadata fill attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "YouTube"},
+    {"key": "youtube_publish_attempts", "label": "Publish attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "YouTube"},
+    {"key": "youtube_click_timeout_ms", "label": "Default click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "YouTube"},
+    {"key": "facebook_step_delay_ms", "label": "Step delay", "min": 0, "max": 10000, "step": 50, "group": "Core", "tab": "Facebook"},
+    {"key": "facebook_form_fill_attempts", "label": "Description fill attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "Facebook"},
+    {"key": "facebook_click_timeout_ms", "label": "Default click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Facebook"},
 )
 
 _session_download_counter_lock = threading.Lock()
@@ -2863,6 +2895,7 @@ class UdpWorkflowWorker(QThread):
         executor_mode: str = "udp",
         local_command_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
         tiktok_options: dict[str, Any] | None = None,
+        upload_timing_values: dict[str, int] | None = None,
     ):
         super().__init__()
         self.platform_name = platform_name
@@ -2875,6 +2908,7 @@ class UdpWorkflowWorker(QThread):
         self.executor_mode = str(executor_mode or "udp").lower()
         self.local_command_handler = local_command_handler
         self.tiktok_options = dict(tiktok_options or {})
+        self.upload_timing_values = dict(upload_timing_values or {})
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -2904,20 +2938,40 @@ class UdpWorkflowWorker(QThread):
             platform = self.platform_name.lower()
 
             if platform == "youtube":
-                result = udp_youtube_workflow.run(executor, self.video_path, self.title, self.caption)
+                result = udp_youtube_workflow.run(
+                    executor,
+                    self.video_path,
+                    self.title,
+                    self.caption,
+                    options=self.upload_timing_values,
+                )
             elif platform == "tiktok":
                 result = udp_tiktok_workflow.run(
                     executor,
                     self.video_path,
                     self.caption,
-                    {**self.tiktok_options, "_log_callback": _log_step},
+                    {**self.tiktok_options, **self.upload_timing_values, "_log_callback": _log_step},
                 )
             elif platform == "facebook":
-                result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title, self.platform_url, _log_step)
+                result = udp_facebook_workflow.run(
+                    executor,
+                    self.video_path,
+                    self.caption,
+                    self.title,
+                    self.platform_url,
+                    _log_step,
+                    options=self.upload_timing_values,
+                )
             elif platform == "instagram":
-                result = udp_instagram_workflow.run(executor, self.video_path, self.caption, self.platform_url)
+                result = udp_instagram_workflow.run(
+                    executor,
+                    self.video_path,
+                    self.caption,
+                    self.platform_url,
+                    options=self.upload_timing_values,
+                )
             elif platform == "x":
-                result = udp_x_workflow.run(executor, self.video_path, self.caption)
+                result = udp_x_workflow.run(executor, self.video_path, self.caption, options=self.upload_timing_values)
             else:
                 raise RuntimeError(f"UDP workflow not implemented for {self.platform_name}")
             self.finished_with_result.emit(json.dumps(result, ensure_ascii=False))
@@ -5213,24 +5267,33 @@ class MainWindow(QMainWindow):
         dialog.setMinimumWidth(560)
 
         layout = QVBoxLayout(dialog)
-        scroll = QScrollArea(dialog)
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
+        tabs = QTabWidget(dialog)
+        layout.addWidget(tabs)
 
         spinboxes: dict[str, QSpinBox] = {}
-        groups: dict[str, QFormLayout] = {}
-        group_boxes: dict[str, QGroupBox] = {}
+        tab_containers: dict[str, QVBoxLayout] = {}
+        tab_groups: dict[tuple[str, str], QFormLayout] = {}
         for field in AUTOMATION_TIMING_FIELDS:
+            tab_name = str(field.get("tab") or "Grok")
             group_name = str(field.get("group") or "General")
-            if group_name not in groups:
+
+            if tab_name not in tab_containers:
+                tab_widget = QWidget()
+                tab_layout = QVBoxLayout(tab_widget)
+                tab_layout.setContentsMargins(8, 8, 8, 8)
+                tab_layout.setSpacing(8)
+                tab_containers[tab_name] = tab_layout
+                tabs.addTab(tab_widget, tab_name)
+
+            group_key = (tab_name, group_name)
+            if group_key not in tab_groups:
                 group_box = QGroupBox(group_name)
                 form_layout = QFormLayout(group_box)
                 form_layout.setContentsMargins(10, 8, 10, 8)
                 form_layout.setSpacing(6)
-                groups[group_name] = form_layout
-                group_boxes[group_name] = group_box
-                container_layout.addWidget(group_box)
+                tab_groups[group_key] = form_layout
+                tab_containers[tab_name].addWidget(group_box)
+
             spin = QSpinBox()
             spin.setRange(int(field.get("min", 0)), int(field.get("max", 60000)))
             spin.setSingleStep(int(field.get("step", 1)))
@@ -5240,12 +5303,11 @@ class MainWindow(QMainWindow):
                 spin.setSuffix(" ms")
             key = str(field["key"])
             spin.setValue(self._automation_timing(key))
-            groups[group_name].addRow(str(field.get("label") or key), spin)
+            tab_groups[group_key].addRow(str(field.get("label") or key), spin)
             spinboxes[key] = spin
 
-        container_layout.addStretch(1)
-        scroll.setWidget(container)
-        layout.addWidget(scroll)
+        for tab_layout in tab_containers.values():
+            tab_layout.addStretch(1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.RestoreDefaults)
 
@@ -6794,6 +6856,38 @@ class MainWindow(QMainWindow):
         runtime = self._ensure_automation_runtime()
         runtime.ensure_udp_service()
 
+    def _upload_timing_options(self, platform_name: str) -> dict[str, int]:
+        platform = str(platform_name or "").strip().lower()
+        keys_by_platform: dict[str, tuple[str, ...]] = {
+            "x": (
+                "x_compose_click_timeout_ms",
+                "x_description_fill_attempts",
+                "x_description_fill_retry_delay_ms",
+            ),
+            "tiktok": (
+                "tiktok_action_delay_ms",
+                "tiktok_click_timeout_ms",
+                "tiktok_editor_timeout_ms",
+                "tiktok_submit_timeout_ms",
+            ),
+            "instagram": (
+                "instagram_click_timeout_ms",
+                "instagram_next_timeout_ms",
+            ),
+            "youtube": (
+                "youtube_step_delay_ms",
+                "youtube_form_fill_attempts",
+                "youtube_publish_attempts",
+                "youtube_click_timeout_ms",
+            ),
+            "facebook": (
+                "facebook_step_delay_ms",
+                "facebook_form_fill_attempts",
+                "facebook_click_timeout_ms",
+            ),
+        }
+        return {key: self._automation_timing(key) for key in keys_by_platform.get(platform, ())}
+
     def _run_social_upload_via_mode(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded")
         target_url = self._social_upload_url_for_platform(platform_name, self._default_social_upload_url_for_platform(platform_name))
@@ -6858,6 +6952,7 @@ class MainWindow(QMainWindow):
                 executor_mode="local",
                 local_command_handler=runtime.execute_local_automation_command,
                 tiktok_options=dict(self.tiktok_upload_automation_options),
+                upload_timing_values=self._upload_timing_options(platform_name),
             )
             worker.progress.connect(lambda message: self._append_automation_log(f"{platform_name} external automation step: {message}"))
             worker.finished_with_result.connect(

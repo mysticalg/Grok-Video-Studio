@@ -274,7 +274,11 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         elif len(music_queries) > music_add_count:
             music_queries = music_queries[:music_add_count]
     text_overlay = _overlay_text(opts, caption)
-    action_delay_s = float(opts.get("action_delay_s") or 2.0)
+    action_delay_ms = max(0, int(opts.get("tiktok_action_delay_ms") or opts.get("action_delay_ms") or 1000))
+    action_delay_s = action_delay_ms / 1000.0
+    click_timeout_ms = max(1000, int(opts.get("tiktok_click_timeout_ms") or 60000))
+    editor_timeout_ms = max(click_timeout_ms, int(opts.get("tiktok_editor_timeout_ms") or 120000))
+    submit_timeout_ms = max(1000, int(opts.get("tiktok_submit_timeout_ms") or 120000))
 
     _log(
         log_fn,
@@ -319,18 +323,18 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         _must_click(
             executor,
             "button[data-button-name='edit'], button.editor-entrance",
-            timeout_ms=120000,
+            timeout_ms=editor_timeout_ms,
             step="open_editor",
             log_fn=log_fn,
             delay_s=action_delay_s,
         )
 
     if add_text and text_overlay:
-        _must_click(executor, "div[data-name='AddTextPresetPanel']", timeout_ms=60000, step="open_text_tab", log_fn=log_fn, delay_s=action_delay_s)
+        _must_click(executor, "div[data-name='AddTextPresetPanel']", timeout_ms=click_timeout_ms, step="open_text_tab", log_fn=log_fn, delay_s=action_delay_s)
         _must_click(
             executor,
             "button.AddTextPanel__addTextBasicButton",
-            timeout_ms=60000,
+            timeout_ms=click_timeout_ms,
             step="add_text_once",
             log_fn=log_fn,
             delay_s=action_delay_s,
@@ -346,7 +350,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         )
 
     if add_music and music_queries:
-        _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=60000, step="open_music_tab", log_fn=log_fn, delay_s=action_delay_s)
+        _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=click_timeout_ms, step="open_music_tab", log_fn=log_fn, delay_s=action_delay_s)
         if len(music_queries) > 1 and music_add_count > 1:
             _log(
                 log_fn,
@@ -366,7 +370,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         _must_click(
             executor,
             "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
-            timeout_ms=60000,
+            timeout_ms=click_timeout_ms,
             step="music_add_track_burst",
             log_fn=log_fn,
             delay_s=action_delay_s,
@@ -388,7 +392,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
                 _must_click(
                     executor,
                     audio_clip_selector,
-                    timeout_ms=60000,
+                    timeout_ms=click_timeout_ms,
                     step=f"music_focus_audio_clip_{clip_number}",
                     log_fn=log_fn,
                     single_click=True,
@@ -408,7 +412,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
                     executor,
                     "div.MusicPanelMusicItem__operation [data-testid='ArrowLeftRight'], "
                     "div.MusicPanelMusicItem__operation [data-icon='ArrowLeftRight']",
-                    timeout_ms=60000,
+                    timeout_ms=click_timeout_ms,
                     step=f"music_replace_track_{clip_number}",
                     log_fn=log_fn,
                     single_click=True,
@@ -434,7 +438,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             _must_click(
                 executor,
                 audio_clip_selector,
-                timeout_ms=60000,
+                timeout_ms=click_timeout_ms,
                 step=f"music_focus_audio_clip_{clip_number}",
                 log_fn=log_fn,
                 single_click=True,
@@ -457,7 +461,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         _must_click(
             executor,
             "button.button.Button__root--type-primary .Button__content, button.button.Button__root--type-primary, button.Button__root--type-primary",
-            timeout_ms=60000,
+            timeout_ms=click_timeout_ms,
             step="editor_save",
             log_fn=log_fn,
             text_contains="save",
@@ -471,7 +475,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             "platform": "tiktok",
             "mode": publish_mode,
             "waitForUpload": True,
-            "timeoutMs": 120000,
+            "timeoutMs": submit_timeout_ms,
             "singleClick": True,
         },
     )
