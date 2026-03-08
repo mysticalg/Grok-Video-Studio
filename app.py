@@ -4792,18 +4792,34 @@ class MainWindow(QMainWindow):
         settings_layout = QVBoxLayout(settings_container)
 
         ai_group = QGroupBox("AI Generation")
-        ai_layout = QFormLayout(ai_group)
+        ai_columns_layout = QHBoxLayout(ai_group)
+        ai_columns_layout.setContentsMargins(10, 8, 10, 8)
+        ai_columns_layout.setSpacing(14)
+        ai_left_form = QFormLayout()
+        ai_right_form = QFormLayout()
+        ai_left_form.setSpacing(6)
+        ai_right_form.setSpacing(6)
+        ai_columns_layout.addLayout(ai_left_form, 1)
+        ai_columns_layout.addLayout(ai_right_form, 1)
+        ai_row_count = 0
+
+        def ai_add_row(label: str, widget: QWidget | QLayout) -> None:
+            nonlocal ai_row_count
+            target_layout = ai_left_form if ai_row_count % 2 == 0 else ai_right_form
+            target_layout.addRow(label, widget)
+            ai_row_count += 1
 
         self.api_key = QLineEdit()
         self.api_key.setEchoMode(QLineEdit.Password)
         self.api_key.setText(os.getenv("GROK_API_KEY", ""))
-        ai_layout.addRow("Grok API Key", self.api_key)
+        self.api_key.setMaximumWidth(420)
+        ai_add_row("Grok API Key", self.api_key)
 
         self.chat_model = QLineEdit(os.getenv("GROK_CHAT_MODEL", "grok-3-mini"))
-        ai_layout.addRow("Chat Model", self.chat_model)
+        ai_add_row("Chat Model", self.chat_model)
 
         self.image_model = QLineEdit(os.getenv("GROK_VIDEO_MODEL", "grok-video-latest"))
-        ai_layout.addRow("Video Model", self.image_model)
+        ai_add_row("Video Model", self.image_model)
 
         self.prompt_source = QComboBox()
         self.prompt_source.addItem("Manual prompt (no API)", "manual")
@@ -4811,53 +4827,55 @@ class MainWindow(QMainWindow):
         self.prompt_source.addItem("OpenAI API", "openai")
         self.prompt_source.addItem("Ollama (local)", "ollama")
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
-        ai_layout.addRow("Prompt Source", self.prompt_source)
+        ai_add_row("Prompt Source", self.prompt_source)
 
         self.video_provider = QComboBox()
         self.video_provider.addItem("Grok Imagine API", "grok")
         self.video_provider.addItem("OpenAI Sora 2 API", "openai")
         self.video_provider.addItem("Seedance 2.0 API", "seedance")
         self.video_provider.currentIndexChanged.connect(self._toggle_prompt_source_fields)
-        ai_layout.addRow("Video Provider", self.video_provider)
+        ai_add_row("Video Provider", self.video_provider)
 
         self.openai_api_key = QLineEdit()
         self.openai_api_key.setEchoMode(QLineEdit.Password)
         self.openai_api_key.setPlaceholderText("Optional OpenAI API key (preferred when available)")
         self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
-        ai_layout.addRow("OpenAI API Key", self.openai_api_key)
+        self.openai_api_key.setMaximumWidth(420)
+        ai_add_row("OpenAI API Key", self.openai_api_key)
 
         self.openai_access_token = QLineEdit()
         self.openai_access_token.setEchoMode(QLineEdit.Password)
         self.openai_access_token.setPlaceholderText("Optional bearer token from OAuth/browser sign-in flow")
         self.openai_access_token.setText(os.getenv("OPENAI_ACCESS_TOKEN", ""))
-        ai_layout.addRow("OpenAI Access Token", self.openai_access_token)
+        self.openai_access_token.setMaximumWidth(420)
+        ai_add_row("OpenAI Access Token", self.openai_access_token)
 
         self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-5.1-codex"))
-        ai_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
+        ai_add_row("OpenAI Chat Model", self.openai_chat_model)
 
         self.ai_timeout_seconds = QSpinBox()
         self.ai_timeout_seconds.setRange(5, 3600)
         self.ai_timeout_seconds.setValue(int(AI_TEXT_TIMEOUT_SECONDS))
         self.ai_timeout_seconds.setSuffix(" s")
         self.ai_timeout_seconds.setToolTip("Timeout used for AI text requests (Grok/OpenAI/Ollama prompt calls).")
-        ai_layout.addRow("AI Text Timeout", self.ai_timeout_seconds)
+        ai_add_row("AI Text Timeout", self.ai_timeout_seconds)
 
         self.ai_max_output_tokens = QSpinBox()
         self.ai_max_output_tokens.setRange(128, 65536)
         self.ai_max_output_tokens.setValue(int(AI_MAX_OUTPUT_TOKENS))
         self.ai_max_output_tokens.setToolTip("Max tokens for Grok/OpenAI text responses.")
-        ai_layout.addRow("AI Max Output Tokens", self.ai_max_output_tokens)
+        ai_add_row("AI Max Output Tokens", self.ai_max_output_tokens)
 
         self.ai_max_output_tokens_local = QSpinBox()
         self.ai_max_output_tokens_local.setRange(64, 65536)
         self.ai_max_output_tokens_local.setValue(int(AI_MAX_OUTPUT_TOKENS_LOCAL))
         self.ai_max_output_tokens_local.setToolTip("Max tokens for Ollama local responses.")
-        ai_layout.addRow("AI Max Output Tokens (Ollama)", self.ai_max_output_tokens_local)
+        ai_add_row("AI Max Output Tokens (Ollama)", self.ai_max_output_tokens_local)
 
         self.ollama_api_base = QLineEdit(os.getenv("OLLAMA_API_BASE", OLLAMA_API_BASE))
         self.ollama_api_base.setPlaceholderText("http://127.0.0.1:11434/v1")
         self.ollama_api_base.editingFinished.connect(self._refresh_ollama_chat_models)
-        ai_layout.addRow("Ollama API Base", self.ollama_api_base)
+        ai_add_row("Ollama API Base", self.ollama_api_base)
 
         self.ollama_chat_model = QComboBox()
         self.ollama_chat_model.setEditable(True)
@@ -4868,32 +4886,49 @@ class MainWindow(QMainWindow):
         ollama_model_row = QHBoxLayout()
         ollama_model_row.addWidget(self.ollama_chat_model, 1)
         ollama_model_row.addWidget(self.refresh_ollama_models_btn)
-        ai_layout.addRow("Ollama Chat Model", ollama_model_row)
+        ai_add_row("Ollama Chat Model", ollama_model_row)
         self._refresh_ollama_chat_models(initial=True)
 
         self.seedance_api_key = QLineEdit()
         self.seedance_api_key.setEchoMode(QLineEdit.Password)
         self.seedance_api_key.setPlaceholderText("Seedance API key")
         self.seedance_api_key.setText(os.getenv("SEEDANCE_API_KEY", ""))
-        ai_layout.addRow("Seedance API Key", self.seedance_api_key)
+        self.seedance_api_key.setMaximumWidth(420)
+        ai_add_row("Seedance API Key", self.seedance_api_key)
 
         self.seedance_oauth_token = QLineEdit()
         self.seedance_oauth_token.setEchoMode(QLineEdit.Password)
         self.seedance_oauth_token.setPlaceholderText("Optional OAuth bearer token (if provided by Seedance)")
         self.seedance_oauth_token.setText(os.getenv("SEEDANCE_OAUTH_TOKEN", ""))
-        ai_layout.addRow("Seedance OAuth Token", self.seedance_oauth_token)
+        self.seedance_oauth_token.setMaximumWidth(420)
+        ai_add_row("Seedance OAuth Token", self.seedance_oauth_token)
 
         self.ai_auth_method = QComboBox()
         self.ai_auth_method.addItem("API key", "api_key")
         self.ai_auth_method.addItem("Browser sign-in (preferred)", "browser")
-        ai_layout.addRow("AI Authorization", self.ai_auth_method)
+        ai_add_row("AI Authorization", self.ai_auth_method)
 
         self.browser_auth_btn = QPushButton("Open Provider Login in Browser")
         self.browser_auth_btn.clicked.connect(self.open_ai_provider_login)
-        ai_layout.addRow("Browser Authorization", self.browser_auth_btn)
+        ai_add_row("Browser Authorization", self.browser_auth_btn)
 
         app_group = QGroupBox("App Preferences")
-        app_layout = QFormLayout(app_group)
+        app_columns_layout = QHBoxLayout(app_group)
+        app_columns_layout.setContentsMargins(10, 8, 10, 8)
+        app_columns_layout.setSpacing(14)
+        app_left_form = QFormLayout()
+        app_right_form = QFormLayout()
+        app_left_form.setSpacing(6)
+        app_right_form.setSpacing(6)
+        app_columns_layout.addLayout(app_left_form, 1)
+        app_columns_layout.addLayout(app_right_form, 1)
+        app_row_count = 0
+
+        def app_add_row(label: str, widget: QWidget | QLayout) -> None:
+            nonlocal app_row_count
+            target_layout = app_left_form if app_row_count % 2 == 0 else app_right_form
+            target_layout.addRow(label, widget)
+            app_row_count += 1
 
         self.download_path_input = QLineEdit(str(self.download_dir))
         self.download_path_input.setReadOnly(True)
@@ -4902,7 +4937,7 @@ class MainWindow(QMainWindow):
         download_path_row = QHBoxLayout()
         download_path_row.addWidget(self.download_path_input)
         download_path_row.addWidget(choose_download_path_btn)
-        app_layout.addRow("Download Folder", download_path_row)
+        app_add_row("Download Folder", download_path_row)
 
         self.crossfade_duration = QDoubleSpinBox()
         self.crossfade_duration.setRange(0.1, 3.0)
@@ -4911,65 +4946,65 @@ class MainWindow(QMainWindow):
         self.crossfade_duration.setValue(0.5)
         self.crossfade_duration.setSuffix(" s")
         self.crossfade_duration.valueChanged.connect(self._sync_video_options_label)
-        app_layout.addRow("Crossfade Duration", self.crossfade_duration)
+        app_add_row("Crossfade Duration", self.crossfade_duration)
 
         self.manual_prompt_default_input = QPlainTextEdit()
         self.manual_prompt_default_input.setMaximumHeight(90)
         self.manual_prompt_default_input.setPlaceholderText("Default text used to prefill Manual Prompt.")
         self.manual_prompt_default_input.setPlainText(DEFAULT_MANUAL_PROMPT_TEXT)
-        app_layout.addRow("Default Manual Prompt", self.manual_prompt_default_input)
+        app_add_row("Default Manual Prompt", self.manual_prompt_default_input)
 
         self.ai_concept_instruction_template_input = QPlainTextEdit()
         self.ai_concept_instruction_template_input.setMaximumHeight(70)
         self.ai_concept_instruction_template_input.setPlaceholderText("Template for concept-to-instruction text. Use {concept} placeholder.")
         self.ai_concept_instruction_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE)
-        app_layout.addRow("AI Concept Instruction Template", self.ai_concept_instruction_template_input)
+        app_add_row("AI Concept Instruction Template", self.ai_concept_instruction_template_input)
 
         self.ai_concept_system_prompt_input = QPlainTextEdit()
         self.ai_concept_system_prompt_input.setMaximumHeight(80)
         self.ai_concept_system_prompt_input.setPlaceholderText("System prompt used for AI concept prompt generation.")
         self.ai_concept_system_prompt_input.setPlainText(DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT)
-        app_layout.addRow("AI Concept System Prompt", self.ai_concept_system_prompt_input)
+        app_add_row("AI Concept System Prompt", self.ai_concept_system_prompt_input)
 
         self.ai_concept_user_prompt_template_input = QPlainTextEdit()
         self.ai_concept_user_prompt_template_input.setMaximumHeight(140)
         self.ai_concept_user_prompt_template_input.setPlaceholderText("User prompt template used for AI concept prompt generation. Use {instruction} placeholder.")
         self.ai_concept_user_prompt_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE)
-        app_layout.addRow("AI Concept User Prompt Template", self.ai_concept_user_prompt_template_input)
+        app_add_row("AI Concept User Prompt Template", self.ai_concept_user_prompt_template_input)
 
         self.reset_ai_concept_templates_btn = QPushButton("Reset AI Concept Templates")
         self.reset_ai_concept_templates_btn.setToolTip("Restore recommended concept/system/user templates for the selected Prompt Source.")
         self.reset_ai_concept_templates_btn.clicked.connect(self.reset_ai_concept_templates)
-        app_layout.addRow("AI Concept Defaults", self.reset_ai_concept_templates_btn)
+        app_add_row("AI Concept Defaults", self.reset_ai_concept_templates_btn)
 
         self.custom_ai_hashtags_input = QLineEdit()
         self.custom_ai_hashtags_input.setPlaceholderText("Optional custom hashtags to append (comma or space separated)")
-        app_layout.addRow("Append Custom AI Hashtags", self.custom_ai_hashtags_input)
+        app_add_row("Append Custom AI Hashtags", self.custom_ai_hashtags_input)
 
         self.qtwebengine_remote_debug_enabled = QCheckBox("Enable QtWebEngine CDP remote debugging")
         self.qtwebengine_remote_debug_enabled.setChecked(_env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 0) > 0)
-        app_layout.addRow("CDP Remote Debugging", self.qtwebengine_remote_debug_enabled)
+        app_add_row("CDP Remote Debugging", self.qtwebengine_remote_debug_enabled)
 
         self.qtwebengine_remote_debug_port = QSpinBox()
         self.qtwebengine_remote_debug_port.setRange(1, 65535)
         self.qtwebengine_remote_debug_port.setValue(max(1, _env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 9222)))
         self.qtwebengine_remote_debug_port.setToolTip("Port used for QTWEBENGINE_REMOTE_DEBUGGING when enabled.")
-        app_layout.addRow("CDP Debug Port", self.qtwebengine_remote_debug_port)
+        app_add_row("CDP Debug Port", self.qtwebengine_remote_debug_port)
 
         remote_debug_note = QLabel("Applies on next app launch. Save settings, then restart the app.")
         remote_debug_note.setWordWrap(True)
-        app_layout.addRow("CDP Note", remote_debug_note)
+        app_add_row("CDP Note", remote_debug_note)
 
         self.cdp_social_upload_relay_enabled = QCheckBox("Use CDP relay for social browser automation")
         self.cdp_social_upload_relay_enabled.setChecked(False)
-        app_layout.addRow("CDP Relay Mode", self.cdp_social_upload_relay_enabled)
+        app_add_row("CDP Relay Mode", self.cdp_social_upload_relay_enabled)
 
         self.cdp_social_upload_relay_url = QLineEdit(CDP_RELAY_SOCIAL_UPLOAD_URL)
         self.cdp_social_upload_relay_url.setPlaceholderText("http://127.0.0.1:8765/social-upload-step")
         self.cdp_social_upload_relay_url.setToolTip("Optional HTTP relay endpoint that performs CDP-backed social upload actions.")
         self.cdp_social_upload_relay_enabled.toggled.connect(lambda _: self._reset_cdp_relay_session_state())
         self.cdp_social_upload_relay_url.editingFinished.connect(self._reset_cdp_relay_session_state)
-        app_layout.addRow("CDP Relay URL", self.cdp_social_upload_relay_url)
+        app_add_row("CDP Relay URL", self.cdp_social_upload_relay_url)
 
         settings_layout.addWidget(ai_group)
         settings_layout.addWidget(app_group)
