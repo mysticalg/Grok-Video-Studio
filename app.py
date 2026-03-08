@@ -3036,6 +3036,11 @@ class MainWindow(QMainWindow):
             "music_add_count": 2,
             "music_unique_per_add": False,
             "music_query": "",
+            "music_fade_in_enabled": False,
+            "music_fade_in_seconds": 0.0,
+            "music_fade_out_enabled": False,
+            "music_fade_out_seconds": 0.0,
+            "music_volume_db": 0,
             "rename_upload_filename": True,
             "upload_filename_char_limit": 167,
             "text_overlay": "",
@@ -6312,6 +6317,11 @@ class MainWindow(QMainWindow):
                 "music_add_count": min(100, max(1, int(loaded_tiktok_options.get("music_add_count") or 2))),
                 "music_unique_per_add": bool(loaded_tiktok_options.get("music_unique_per_add")),
                 "music_query": str(loaded_tiktok_options.get("music_query") or "").strip(),
+                "music_fade_in_enabled": bool(loaded_tiktok_options.get("music_fade_in_enabled")),
+                "music_fade_in_seconds": min(10.0, max(0.0, float(loaded_tiktok_options.get("music_fade_in_seconds") or 0.0))),
+                "music_fade_out_enabled": bool(loaded_tiktok_options.get("music_fade_out_enabled")),
+                "music_fade_out_seconds": min(10.0, max(0.0, float(loaded_tiktok_options.get("music_fade_out_seconds") or 0.0))),
+                "music_volume_db": min(20, max(-59, int(loaded_tiktok_options.get("music_volume_db") if loaded_tiktok_options.get("music_volume_db") is not None else 0))),
                 "rename_upload_filename": bool(loaded_tiktok_options.get("rename_upload_filename", True)),
                 "upload_filename_char_limit": min(3000, max(16, int(loaded_tiktok_options.get("upload_filename_char_limit") or 167))),
                 "text_overlay": str(loaded_tiktok_options.get("text_overlay") or "").strip(),
@@ -18536,6 +18546,11 @@ class MainWindow(QMainWindow):
         tiktok_music_query_input = None
         tiktok_music_add_count_input = None
         tiktok_music_unique_per_add_input = None
+        tiktok_music_fade_in_enabled_input = None
+        tiktok_music_fade_in_seconds_input = None
+        tiktok_music_fade_out_enabled_input = None
+        tiktok_music_fade_out_seconds_input = None
+        tiktok_music_volume_db_input = None
         tiktok_rename_upload_filename_input = None
         tiktok_upload_filename_char_limit_input = None
         if platform_name == "TikTok":
@@ -18544,6 +18559,9 @@ class MainWindow(QMainWindow):
             if saved_publish_mode not in {"draft", "post"}:
                 saved_publish_mode = "draft"
             saved_music_add_count = min(100, max(1, int(tiktok_options.get("music_add_count") or 2)))
+            saved_music_fade_in_seconds = min(10.0, max(0.0, float(tiktok_options.get("music_fade_in_seconds") or 0.0)))
+            saved_music_fade_out_seconds = min(10.0, max(0.0, float(tiktok_options.get("music_fade_out_seconds") or 0.0)))
+            saved_music_volume_db = min(20, max(-59, int(tiktok_options.get("music_volume_db") if tiktok_options.get("music_volume_db") is not None else 0)))
             saved_upload_filename_char_limit = min(3000, max(16, int(tiktok_options.get("upload_filename_char_limit") or 167)))
 
             dialog_layout.addWidget(QLabel("TikTok Automation: Publish Mode"))
@@ -18579,6 +18597,36 @@ class MainWindow(QMainWindow):
             tiktok_music_query_input.setPlaceholderText("Search sounds")
             dialog_layout.addWidget(tiktok_music_query_input)
 
+            tiktok_music_fade_in_enabled_input = QCheckBox("Enable music fade in")
+            tiktok_music_fade_in_enabled_input.setChecked(bool(tiktok_options.get("music_fade_in_enabled")))
+            dialog_layout.addWidget(tiktok_music_fade_in_enabled_input)
+
+            dialog_layout.addWidget(QLabel("Music fade in (seconds, 0-10)"))
+            tiktok_music_fade_in_seconds_input = QDoubleSpinBox()
+            tiktok_music_fade_in_seconds_input.setRange(0.0, 10.0)
+            tiktok_music_fade_in_seconds_input.setDecimals(1)
+            tiktok_music_fade_in_seconds_input.setSingleStep(0.1)
+            tiktok_music_fade_in_seconds_input.setValue(saved_music_fade_in_seconds)
+            dialog_layout.addWidget(tiktok_music_fade_in_seconds_input)
+
+            tiktok_music_fade_out_enabled_input = QCheckBox("Enable music fade out")
+            tiktok_music_fade_out_enabled_input.setChecked(bool(tiktok_options.get("music_fade_out_enabled")))
+            dialog_layout.addWidget(tiktok_music_fade_out_enabled_input)
+
+            dialog_layout.addWidget(QLabel("Music fade out (seconds, 0-10)"))
+            tiktok_music_fade_out_seconds_input = QDoubleSpinBox()
+            tiktok_music_fade_out_seconds_input.setRange(0.0, 10.0)
+            tiktok_music_fade_out_seconds_input.setDecimals(1)
+            tiktok_music_fade_out_seconds_input.setSingleStep(0.1)
+            tiktok_music_fade_out_seconds_input.setValue(saved_music_fade_out_seconds)
+            dialog_layout.addWidget(tiktok_music_fade_out_seconds_input)
+
+            dialog_layout.addWidget(QLabel("Music volume (dB, -59 to 20)"))
+            tiktok_music_volume_db_input = QSpinBox()
+            tiktok_music_volume_db_input.setRange(-59, 20)
+            tiktok_music_volume_db_input.setValue(saved_music_volume_db)
+            dialog_layout.addWidget(tiktok_music_volume_db_input)
+
             tiktok_rename_upload_filename_input = QCheckBox("Rename uploaded file from caption (disable for very large files)")
             tiktok_rename_upload_filename_input.setChecked(bool(tiktok_options.get("rename_upload_filename", True)))
             tiktok_rename_upload_filename_input.setToolTip("When disabled, TikTok uses the original source filename instead of caption-based rename.")
@@ -18605,6 +18653,11 @@ class MainWindow(QMainWindow):
                 "music_add_count": min(100, max(1, int(tiktok_music_add_count_input.value()))) if tiktok_music_add_count_input is not None else 2,
                 "music_unique_per_add": bool(tiktok_music_unique_per_add_input.isChecked()) if tiktok_music_unique_per_add_input is not None else False,
                 "music_query": tiktok_music_query_input.text().strip() if tiktok_music_query_input is not None else "",
+                "music_fade_in_enabled": bool(tiktok_music_fade_in_enabled_input.isChecked()) if tiktok_music_fade_in_enabled_input is not None else False,
+                "music_fade_in_seconds": min(10.0, max(0.0, round(float(tiktok_music_fade_in_seconds_input.value()), 1))) if tiktok_music_fade_in_seconds_input is not None else 0.0,
+                "music_fade_out_enabled": bool(tiktok_music_fade_out_enabled_input.isChecked()) if tiktok_music_fade_out_enabled_input is not None else False,
+                "music_fade_out_seconds": min(10.0, max(0.0, round(float(tiktok_music_fade_out_seconds_input.value()), 1))) if tiktok_music_fade_out_seconds_input is not None else 0.0,
+                "music_volume_db": min(20, max(-59, int(tiktok_music_volume_db_input.value()))) if tiktok_music_volume_db_input is not None else 0,
                 "rename_upload_filename": bool(tiktok_rename_upload_filename_input.isChecked()) if tiktok_rename_upload_filename_input is not None else True,
                 "upload_filename_char_limit": min(3000, max(16, int(tiktok_upload_filename_char_limit_input.value()))) if tiktok_upload_filename_char_limit_input is not None else 167,
                 "text_overlay": str(self.tiktok_upload_automation_options.get("text_overlay") or "").strip(),

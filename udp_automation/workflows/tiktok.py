@@ -114,6 +114,112 @@ def _must_type_any(
     raise RuntimeError(f"TikTok {step or 'type'} failed for all selectors: {' | '.join(errors)}")
 
 
+
+def _must_focus_any(
+    executor: BaseExecutor,
+    selectors: list[str],
+    *,
+    step: str = "",
+    log_fn: LogFn | None = None,
+    delay_s: float = 0.0,
+    timeout_ms: int = 60000,
+) -> None:
+    errors: list[str] = []
+    for selector in selectors:
+        try:
+            _must_click(
+                executor,
+                selector,
+                timeout_ms=timeout_ms,
+                step=step,
+                log_fn=log_fn,
+                delay_s=delay_s,
+                single_click=True,
+            )
+            return
+        except RuntimeError as exc:
+            errors.append(str(exc))
+            _log(log_fn, f"{step or 'focus'}: selector failed ({selector}) err={exc}")
+    raise RuntimeError(f"TikTok {step or 'focus'} failed for all selectors: {' | '.join(errors)}")
+
+
+
+def _apply_music_clip_settings(
+    executor: BaseExecutor,
+    *,
+    music_fade_in_enabled: bool,
+    music_fade_in_seconds: float,
+    music_fade_out_enabled: bool,
+    music_fade_out_seconds: float,
+    music_volume_db: int,
+    step_prefix: str,
+    log_fn: LogFn | None = None,
+    delay_s: float = 0.0,
+) -> None:
+    fade_in_input_selectors = [
+        "div.PropSettingFadeInBase__wrap input.PropSettingInput__input",
+        "div.PropSettingFadeInBase__fieldWrap input.PropSettingInput__input",
+    ]
+    fade_out_input_selectors = [
+        "div.PropSettingFadeOutBase__wrap input.PropSettingInput__input",
+        "div.PropSettingFadeOutBase__fieldWrap input.PropSettingInput__input",
+    ]
+    volume_input_selectors = [
+        "div.PropSettingAudioVolume__wrap label.PropSettingInput__wrap input.PropSettingInput__input",
+        "div.PropSettingAudioVolume__wrap input.PropSettingInput__input",
+    ]
+
+    if music_fade_in_enabled:
+        _must_focus_any(
+            executor,
+            fade_in_input_selectors,
+            step=f"{step_prefix}_focus_fade_in_input",
+            log_fn=log_fn,
+            delay_s=delay_s,
+        )
+        _must_type_any(
+            executor,
+            fade_in_input_selectors,
+            f"{music_fade_in_seconds:.1f}",
+            step=f"{step_prefix}_set_fade_in_seconds",
+            log_fn=log_fn,
+            delay_s=delay_s,
+        )
+
+    if music_fade_out_enabled:
+        _must_focus_any(
+            executor,
+            fade_out_input_selectors,
+            step=f"{step_prefix}_focus_fade_out_input",
+            log_fn=log_fn,
+            delay_s=delay_s,
+        )
+        _must_type_any(
+            executor,
+            fade_out_input_selectors,
+            f"{music_fade_out_seconds:.1f}",
+            step=f"{step_prefix}_set_fade_out_seconds",
+            log_fn=log_fn,
+            delay_s=delay_s,
+        )
+
+    _must_focus_any(
+        executor,
+        volume_input_selectors,
+        step=f"{step_prefix}_focus_volume_input",
+        log_fn=log_fn,
+        delay_s=delay_s,
+    )
+    _must_type_any(
+        executor,
+        volume_input_selectors,
+        str(music_volume_db),
+        step=f"{step_prefix}_set_volume_db",
+        log_fn=log_fn,
+        delay_s=delay_s,
+    )
+
+
 def _overlay_text(opts: dict[str, Any], caption: str) -> str:
     configured = str(opts.get("text_overlay") or "").strip()
     raw = configured or str(caption or "").strip()
@@ -148,6 +254,11 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     upload_filename_char_limit = min(3000, max(16, int(opts.get("upload_filename_char_limit") or 167)))
     music_unique_per_add = bool(opts.get("music_unique_per_add"))
     music_add_count = max(1, min(100, int(opts.get("music_add_count") or 2)))
+    music_fade_in_enabled = bool(opts.get("music_fade_in_enabled"))
+    music_fade_in_seconds = min(10.0, max(0.0, round(float(opts.get("music_fade_in_seconds") or 0.0), 1)))
+    music_fade_out_enabled = bool(opts.get("music_fade_out_enabled"))
+    music_fade_out_seconds = min(10.0, max(0.0, round(float(opts.get("music_fade_out_seconds") or 0.0), 1)))
+    music_volume_db = min(20, max(-59, int(opts.get("music_volume_db") if opts.get("music_volume_db") is not None else 0)))
     raw_music_queries = opts.get("music_queries_effective")
     music_queries: list[str] = []
     if isinstance(raw_music_queries, list):
@@ -172,6 +283,9 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         f"rename_upload_filename={rename_upload_filename} "
         f"upload_filename_char_limit={upload_filename_char_limit} "
         f"music_add_count={music_add_count} music_unique_per_add={music_unique_per_add} "
+        f"music_fade_in_enabled={music_fade_in_enabled} music_fade_in_seconds={music_fade_in_seconds:.1f} "
+        f"music_fade_out_enabled={music_fade_out_enabled} music_fade_out_seconds={music_fade_out_seconds:.1f} "
+        f"music_volume_db={music_volume_db} "
         f"music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}",
     )
     executor.run("platform.open", {"platform": "tiktok", "reuseTab": True})
@@ -260,16 +374,22 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             extra_payload={"burstClicks": burst_clicks},
         )
 
+        audio_clip_selector = (
+            "div.AudioClip__root.AudioClip__root--isSelected-false, "
+            "div.AudioClip__root"
+        )
+        clips_updated: set[int] = set()
+
         if music_unique_per_add and len(music_queries) > 1 and music_add_count > 1:
             replacements = min(music_add_count, len(music_queries))
             _log(log_fn, f"music_replace_sequence: start replacements={replacements}")
             for replace_index in range(replacements):
+                clip_number = replace_index + 1
                 _must_click(
                     executor,
-                    "div.AudioClip__root.AudioClip__root--isSelected-false, "
-                    "div.AudioClip__root",
+                    audio_clip_selector,
                     timeout_ms=60000,
-                    step=f"music_focus_audio_clip_{replace_index + 1}",
+                    step=f"music_focus_audio_clip_{clip_number}",
                     log_fn=log_fn,
                     single_click=True,
                     delay_s=action_delay_s,
@@ -279,7 +399,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
                     executor,
                     "input[placeholder='Search sounds']",
                     music_queries[replace_index],
-                    step=f"music_search_replacement_{replace_index + 1}",
+                    step=f"music_search_replacement_{clip_number}",
                     log_fn=log_fn,
                     submit=True,
                     delay_s=action_delay_s,
@@ -289,11 +409,49 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
                     "div.MusicPanelMusicItem__operation [data-testid='ArrowLeftRight'], "
                     "div.MusicPanelMusicItem__operation [data-icon='ArrowLeftRight']",
                     timeout_ms=60000,
-                    step=f"music_replace_track_{replace_index + 1}",
+                    step=f"music_replace_track_{clip_number}",
                     log_fn=log_fn,
                     single_click=True,
                     delay_s=action_delay_s,
                 )
+                _apply_music_clip_settings(
+                    executor,
+                    music_fade_in_enabled=music_fade_in_enabled,
+                    music_fade_in_seconds=music_fade_in_seconds,
+                    music_fade_out_enabled=music_fade_out_enabled,
+                    music_fade_out_seconds=music_fade_out_seconds,
+                    music_volume_db=music_volume_db,
+                    step_prefix=f"music_clip_{clip_number}",
+                    log_fn=log_fn,
+                    delay_s=action_delay_s,
+                )
+                clips_updated.add(replace_index)
+
+        for clip_index in range(burst_clicks):
+            if clip_index in clips_updated:
+                continue
+            clip_number = clip_index + 1
+            _must_click(
+                executor,
+                audio_clip_selector,
+                timeout_ms=60000,
+                step=f"music_focus_audio_clip_{clip_number}",
+                log_fn=log_fn,
+                single_click=True,
+                delay_s=action_delay_s,
+                extra_payload={"matchIndex": clip_index},
+            )
+            _apply_music_clip_settings(
+                executor,
+                music_fade_in_enabled=music_fade_in_enabled,
+                music_fade_in_seconds=music_fade_in_seconds,
+                music_fade_out_enabled=music_fade_out_enabled,
+                music_fade_out_seconds=music_fade_out_seconds,
+                music_volume_db=music_volume_db,
+                step_prefix=f"music_clip_{clip_number}",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
 
     if add_text or (add_music and music_queries):
         _must_click(
