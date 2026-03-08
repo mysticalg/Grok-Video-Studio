@@ -152,6 +152,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         publish_mode = "draft"
     add_text = bool(opts.get("add_text_overlay"))
     add_music = bool(opts.get("add_music"))
+    music_unique_per_add = bool(opts.get("music_unique_per_add"))
     music_add_count = max(1, min(10, int(opts.get("music_add_count") or 2)))
     raw_music_queries = opts.get("music_queries_effective")
     music_queries: list[str] = []
@@ -171,7 +172,13 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     action_delay_s = float(opts.get("action_delay_s") or 2.0)
     startup_delay_s = float(opts.get("startup_delay_s") or action_delay_s)
 
-    _log(log_fn, f"start: mode={publish_mode} add_text={add_text} add_music={add_music} music_add_count={music_add_count} music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}")
+    _log(
+        log_fn,
+        "start: "
+        f"mode={publish_mode} add_text={add_text} add_music={add_music} "
+        f"music_add_count={music_add_count} music_unique_per_add={music_unique_per_add} "
+        f"music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}",
+    )
     executor.run("platform.open", {"platform": "tiktok", "reuseTab": True})
     _log(log_fn, "platform.open: ok")
     _pause(startup_delay_s, step="startup_wait_after_open", log_fn=log_fn)
@@ -252,6 +259,41 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             single_click=True,
             extra_payload={"burstClicks": burst_clicks},
         )
+
+        if music_unique_per_add and len(music_queries) > 1 and music_add_count > 1:
+            replacements = min(music_add_count, len(music_queries))
+            _log(log_fn, f"music_replace_sequence: start replacements={replacements}")
+            for replace_index in range(replacements):
+                _must_click(
+                    executor,
+                    "div.BaseClip__root--isSelected-false[data-mov-timeline-el-type='clip'], "
+                    "div[data-mov-timeline-el-type='clip'].BaseClip__root--isSelected-false, "
+                    "div[data-mov-timeline-el-type='clip'].BaseClip__root",
+                    timeout_ms=60000,
+                    step=f"music_select_clip_{replace_index + 1}",
+                    log_fn=log_fn,
+                    single_click=True,
+                    delay_s=action_delay_s,
+                )
+                _must_type(
+                    executor,
+                    "input[placeholder='Search sounds']",
+                    music_queries[replace_index],
+                    step=f"music_search_replacement_{replace_index + 1}",
+                    log_fn=log_fn,
+                    submit=True,
+                    delay_s=action_delay_s,
+                )
+                _must_click(
+                    executor,
+                    "div.MusicPanelMusicItem__operation [data-testid='ArrowLeftRight'], "
+                    "div.MusicPanelMusicItem__operation [data-icon='ArrowLeftRight']",
+                    timeout_ms=60000,
+                    step=f"music_replace_track_{replace_index + 1}",
+                    log_fn=log_fn,
+                    single_click=True,
+                    delay_s=action_delay_s,
+                )
 
     if add_text or (add_music and music_queries):
         _must_click(
