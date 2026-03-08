@@ -2798,7 +2798,12 @@ class AutomationRuntimeWorker(QThread):
             max_upload_timeout_s = 900.0
             timeout_from_size_s = min_upload_timeout_s
             try:
-                file_path = str(payload.get("filePath") or "").strip()
+                file_path = str(
+                    payload.get("filePath")
+                    or payload.get("video_path")
+                    or payload.get("videoPath")
+                    or ""
+                ).strip()
                 if file_path:
                     file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
                     # Keep enough room for slower disks/AV scanning on Windows for larger files.

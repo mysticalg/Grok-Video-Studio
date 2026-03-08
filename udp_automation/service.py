@@ -817,19 +817,28 @@ class UdpAutomationService:
                 return {"ok": True, "payload": {"url": page.url}}
 
             if name == "upload.select_file":
-                file_path = str(payload.get("filePath") or "")
+                # Keep backward/forward compatibility across caller payload renames.
+                # Historically this command used filePath; some newer call sites may send
+                # video_path/videoPath. Always normalize to filePath internally.
+                file_path = str(
+                    payload.get("filePath")
+                    or payload.get("video_path")
+                    or payload.get("videoPath")
+                    or ""
+                )
                 platform = str(payload.get("platform") or "").lower()
                 file_name_override = str(payload.get("fileName") or "").strip()
                 if file_name_override:
                     file_name_override = Path(file_name_override).name
                 if not file_path:
-                    raise RuntimeError("filePath is required")
+                    raise RuntimeError("filePath (or video_path/videoPath) is required")
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
 
                 source_file_path = Path(file_path)
                 staged_file_path = source_file_path
                 staged_payload = dict(payload)
+                staged_payload["filePath"] = file_path
                 cleanup_staged_file = False
 
                 if file_name_override:
