@@ -18490,6 +18490,7 @@ class MainWindow(QMainWindow):
         tiktok_add_text_input = None
         tiktok_add_music_input = None
         tiktok_music_query_input = None
+        tiktok_include_hashtags_input = None
         if platform_name == "TikTok":
             tiktok_options = dict(self.tiktok_upload_automation_options)
             saved_publish_mode = str(tiktok_options.get("publish_mode") or "draft").strip().lower()
@@ -18517,6 +18518,10 @@ class MainWindow(QMainWindow):
             tiktok_music_query_input.setPlaceholderText("Search sounds")
             dialog_layout.addWidget(tiktok_music_query_input)
 
+            tiktok_include_hashtags_input = QCheckBox("Include hashtags in TikTok caption")
+            tiktok_include_hashtags_input.setChecked(bool(tiktok_options.get("include_hashtags", True)))
+            dialog_layout.addWidget(tiktok_include_hashtags_input)
+
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
@@ -18535,8 +18540,11 @@ class MainWindow(QMainWindow):
                 "rotate_track_names": bool(self.tiktok_upload_automation_options.get("rotate_track_names")),
                 "track_name_rotation_index": max(0, int(self.tiktok_upload_automation_options.get("track_name_rotation_index") or 0)),
                 "music_query_effective": str(self.tiktok_upload_automation_options.get("music_query_effective") or "").strip(),
+                "include_hashtags": bool(tiktok_include_hashtags_input.isChecked()) if tiktok_include_hashtags_input is not None else True,
             }
         hashtags = [tag.strip().lstrip("#") for tag in hashtags_input.text().split(",") if tag.strip()]
+        if platform_name == "TikTok" and tiktok_include_hashtags_input is not None and not tiktok_include_hashtags_input.isChecked():
+            hashtags = []
         category_value = category_input.text().strip() if platform_name == "YouTube" else self.ai_social_metadata.category
         if platform_name == "YouTube":
             self.youtube_browser_upload_options = {
