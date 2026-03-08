@@ -65,13 +65,6 @@ def _sanitize_upload_filename(name: str, fallback: str = "upload.mp4", *, max_ch
     return f"{safe_stem}{ext}"
 
 
-def _sanitize_header_value(value: str, *, max_chars: int = 3000) -> str:
-    text = str(value or "")
-    text = text.replace("\r", " ").replace("\n", " ")
-    text = " ".join(text.split()).strip()
-    return text[:max(1, int(max_chars))]
-
-
 class UdpAutomationService:
     def __init__(self, extension_dir: Path, host: str = "127.0.0.1", port: int = 18793, bus: ControlBusServer | None = None, start_bus: bool = True):
         self.host = host
@@ -866,7 +859,6 @@ class UdpAutomationService:
                 )
                 platform = str(payload.get("platform") or "").lower()
                 file_name_override = str(payload.get("fileName") or "").strip()
-                file_name_header = _sanitize_header_value(str(payload.get("fileNameHeader") or ""), max_chars=3000)
                 if file_name_override:
                     file_name_override = _sanitize_upload_filename(file_name_override, fallback=Path(file_path).name or "upload.mp4")
                 if not file_path:
@@ -881,11 +873,19 @@ class UdpAutomationService:
                 cleanup_staged_file = False
                 cleanup_staged_dir: Path | None = None
 
-                if file_name_override and platform != "tiktok":
-                    # Stage a physical copy that uses the exact requested upload filename.
+                if file_name_override:
+                    # Stage a physical copy that uses the requested upload filename.
                     # Put it in a unique temp directory to avoid collisions across runs.
                     staging_dir = Path(tempfile.mkdtemp(prefix="grok_video_studio_uploads_"))
-                    staged_file_path = staging_dir / file_name_override
+                    # Keep full staged path <= 254 chars for Windows compatibility.
+                    max_path_chars = 254
+                    available_name_chars = max(16, max_path_chars - len(str(staging_dir)) - 1)
+                    safe_file_name = _sanitize_upload_filename(
+                        file_name_override,
+                        fallback=source_file_path.name or "upload.mp4",
+                        max_chars=available_name_chars,
+                    )
+                    staged_file_path = staging_dir / safe_file_name
                     shutil.copy2(source_file_path, staged_file_path)
                     cleanup_staged_file = True
                     cleanup_staged_dir = staging_dir
@@ -915,14 +915,6 @@ class UdpAutomationService:
                     page = await _pick_target_page()
                     if page is None:
                         raise RuntimeError("No browser page available for upload")
-
-                    if platform == "tiktok" and file_name_header:
-                        try:
-                            await page.set_extra_http_headers({
-                                "x-grok-upload-filename": file_name_header,
-                            })
-                        except Exception:
-                            pass
 
                     file_size_mb = source_file_path.stat().st_size / (1024 * 1024)
                     effective_file_path = str(staged_file_path)
@@ -984,9 +976,8 @@ class UdpAutomationService:
                     # In external automation, prefer the extension debugger path first so the
                     # local machine file path can be set directly without remote CDP transfer.
                     #
-                    # For TikTok, keep extension-first even when filename metadata overrides
-                    # are enabled (fileName/fileNameHeader), because extension path selection
-                    # is more reliable than CDP probing on larger uploads.
+                    # For TikTok, keep extension-first even when fileName override is enabled,
+                    # because extension path selection is more reliable than CDP probing on larger uploads.
                     if platform == "tiktok" or (platform == "x" and not file_name_override):
                         try:
                             ack = await self._send_extension_cmd("upload.select_file", staged_payload)
@@ -1000,7 +991,6 @@ class UdpAutomationService:
                                         "platform": platform,
                                         "filePath": effective_file_path,
                                         "requestedFilePath": requested_file_path,
-                                        "fileNameHeader": file_name_header,
                                         "mode": mode,
                                     },
                                 )
@@ -1011,7 +1001,6 @@ class UdpAutomationService:
                                         "fileSizeMb": round(file_size_mb, 2),
                                         "filePath": effective_file_path,
                                         "requestedFilePath": requested_file_path,
-                                        "fileNameHeader": file_name_header,
                                     },
                                 }
                             last_err = str(ack_payload.get("error") or "")
@@ -1128,7 +1117,6 @@ class UdpAutomationService:
                                     "platform": platform,
                                     "filePath": effective_file_path,
                                     "requestedFilePath": requested_file_path,
-                                    "fileNameHeader": file_name_header,
                                     "mode": mode,
                                     "detected": tiktok_upload_state,
                                 },
@@ -1140,7 +1128,6 @@ class UdpAutomationService:
                                     "fileSizeMb": round(file_size_mb, 2),
                                     "filePath": effective_file_path,
                                     "requestedFilePath": requested_file_path,
-                                    "fileNameHeader": file_name_header,
                                     "detected": tiktok_upload_state,
                                 },
                             }
@@ -1160,7 +1147,6 @@ class UdpAutomationService:
                                         "platform": platform,
                                         "filePath": effective_file_path,
                                         "requestedFilePath": requested_file_path,
-                                        "fileNameHeader": file_name_header,
                                         "mode": mode,
                                     },
                                 )
@@ -1171,7 +1157,6 @@ class UdpAutomationService:
                                         "fileSizeMb": round(file_size_mb, 2),
                                         "filePath": effective_file_path,
                                         "requestedFilePath": requested_file_path,
-                                        "fileNameHeader": file_name_header,
                                     },
                                 }
                             extension_err = str(ack_payload.get("error") or "")
@@ -1194,7 +1179,6 @@ class UdpAutomationService:
                             "platform": platform,
                             "filePath": effective_file_path,
                             "requestedFilePath": requested_file_path,
-                            "fileNameHeader": file_name_header,
                             "mode": mode,
                         },
                     )
@@ -1205,7 +1189,6 @@ class UdpAutomationService:
                             "fileSizeMb": round(file_size_mb, 2),
                             "filePath": effective_file_path,
                             "requestedFilePath": requested_file_path,
-                            "fileNameHeader": file_name_header,
                         },
                     }
 

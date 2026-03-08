@@ -121,7 +121,7 @@ def _overlay_text(opts: dict[str, Any], caption: str) -> str:
     return " ".join(without_tags.split()).strip()
 
 
-def _build_upload_filename_header(
+def _build_upload_filename_override(
     video_path: str,
     caption: str,
     *,
@@ -182,12 +182,12 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
 
     upload_payload_request: dict[str, Any] = {"platform": "tiktok", "filePath": video_path}
     if rename_upload_filename and str(caption or "").strip():
-        upload_file_name_header = _build_upload_filename_header(video_path, caption, max_chars=3000)
-        upload_payload_request["fileNameHeader"] = upload_file_name_header
+        upload_file_name = _build_upload_filename_override(video_path, caption, max_chars=3000)
+        upload_payload_request["fileName"] = upload_file_name
         _log(
             log_fn,
-            f"upload.filename_header_override: chars={len(upload_file_name_header)} "
-            "(using custom header, no disk rename copy)",
+            f"upload.filename_override: chars={len(upload_file_name)} "
+            "(using staged disk copy rename)",
         )
     else:
         _log(log_fn, "upload.filename_override: disabled (using original source filename)")
