@@ -3670,37 +3670,40 @@ class MainWindow(QMainWindow):
         self.video_view_stack.addWidget(self.video_details)
         generated_videos_layout.addWidget(self.video_view_stack)
 
-        video_list_controls = QHBoxLayout()
+        video_controls_grid = QGridLayout()
+        video_controls_grid.setHorizontalSpacing(8)
+        video_controls_grid.setVerticalSpacing(4)
+
         self.open_video_btn = QPushButton("📂 Open Video(s)")
         self.open_video_btn.setToolTip("Open one or more local video files and add them to Generated Videos.")
         self.open_video_btn.clicked.connect(self.open_local_video)
-        video_list_controls.addWidget(self.open_video_btn)
+        video_controls_grid.addWidget(self.open_video_btn, 0, 0)
 
         self.video_move_up_btn = QPushButton("⬆ Move Up")
         self.video_move_up_btn.setToolTip("Move selected video earlier in the Generated Videos order.")
         self.video_move_up_btn.clicked.connect(lambda: self.move_selected_video(-1))
-        video_list_controls.addWidget(self.video_move_up_btn)
+        video_controls_grid.addWidget(self.video_move_up_btn, 0, 1)
 
         self.video_move_down_btn = QPushButton("⬇ Move Down")
         self.video_move_down_btn.setToolTip("Move selected video later in the Generated Videos order.")
         self.video_move_down_btn.clicked.connect(lambda: self.move_selected_video(1))
-        video_list_controls.addWidget(self.video_move_down_btn)
+        video_controls_grid.addWidget(self.video_move_down_btn, 0, 2)
 
         self.video_remove_btn = QPushButton("🗑 Remove")
         self.video_remove_btn.setToolTip("Remove selected video from Generated Videos list.")
         self.video_remove_btn.clicked.connect(self.remove_selected_video)
-        video_list_controls.addWidget(self.video_remove_btn)
+        video_controls_grid.addWidget(self.video_remove_btn, 1, 0)
 
         self.video_overlay_btn = QPushButton("📝 Overlay Text")
         self.video_overlay_btn.setToolTip("Create subtitle-style text overlays on the selected video.")
         self.video_overlay_btn.clicked.connect(lambda: self._run_with_button_feedback(self.video_overlay_btn, self.add_overlay_to_selected_video))
-        video_list_controls.addWidget(self.video_overlay_btn)
+        video_controls_grid.addWidget(self.video_overlay_btn, 1, 1)
 
-        video_list_controls.addWidget(self.stitch_btn)
-        video_list_controls.addWidget(self.choose_music_btn)
-        video_list_controls.addWidget(self.clear_music_btn)
+        video_controls_grid.addWidget(self.stitch_btn, 1, 2)
+        video_controls_grid.addWidget(self.choose_music_btn, 2, 0, 1, 2)
+        video_controls_grid.addWidget(self.clear_music_btn, 2, 2)
 
-        generated_videos_layout.addLayout(video_list_controls)
+        generated_videos_layout.addLayout(video_controls_grid)
         generated_videos_layout.addWidget(self.music_file_label)
 
         self.player = QMediaPlayer(self)
