@@ -306,7 +306,16 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "facebook_composer_wait_timeout_ms", "label": "Composer wait timeout", "min": 1000, "max": 180000, "step": 500, "group": "Composer", "tab": "Facebook"},
     {"key": "facebook_composer_wait_poll_ms", "label": "Composer wait poll interval", "min": 100, "max": 10000, "step": 50, "group": "Composer", "tab": "Facebook"},
     {"key": "facebook_dom_type_timeout_ms", "label": "DOM type timeout", "min": 1000, "max": 60000, "step": 500, "group": "Composer", "tab": "Facebook"},
-)
+ )
+
+AUTOMATION_TIMING_TAB_DESCRIPTIONS: dict[str, str] = {
+    "Grok": "Affects Grok/Sora generation, polling, retries, and manual submission flows.",
+    "X": "Affects X upload automation steps only (compose click and description retries).",
+    "TikTok": "Affects TikTok upload automation waits, click/editor timeouts, and submit behavior.",
+    "Instagram": "Affects Instagram upload automation click and Next-step timing behavior.",
+    "YouTube": "Affects YouTube upload automation delays, retries, and publish step timing.",
+    "Facebook": "Affects Facebook upload readiness polling, composer waits, and fallback fill timing.",
+}
 
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
@@ -5275,6 +5284,23 @@ class MainWindow(QMainWindow):
         self._apply_automation_timing_values(dict(AUTOMATION_TIMING_DEFAULTS), schedule_autosave=True)
         self._append_automation_log("Automation timings reset to defaults.")
 
+    def _automation_timing_tooltip(self, field: dict[str, Any]) -> str:
+        key = str(field.get("key") or "")
+        label = str(field.get("label") or key)
+        tab_name = str(field.get("tab") or "Grok")
+        group_name = str(field.get("group") or "General")
+        minimum = int(field.get("min", 0))
+        maximum = int(field.get("max", 60000))
+        step = int(field.get("step", 1))
+        suffix = str(field.get("suffix") or " ms")
+        default_value = int(AUTOMATION_TIMING_DEFAULTS.get(key, minimum))
+        scope_text = AUTOMATION_TIMING_TAB_DESCRIPTIONS.get(tab_name, "Affects automation behavior for this tab.")
+        return (
+            f"{label}: controls '{key}'.\n"
+            f"Scope: {scope_text}\n"
+            f"Group: {group_name}. Default: {default_value}{suffix}. Range: {minimum} to {maximum}{suffix}. Step: {step}{suffix}."
+        )
+
     def _open_automation_timings_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Automation Timings")
@@ -5297,7 +5323,8 @@ class MainWindow(QMainWindow):
                 tab_layout.setContentsMargins(8, 8, 8, 8)
                 tab_layout.setSpacing(8)
                 tab_containers[tab_name] = tab_layout
-                tabs.addTab(tab_widget, tab_name)
+                tab_index = tabs.addTab(tab_widget, tab_name)
+                tabs.setTabToolTip(tab_index, AUTOMATION_TIMING_TAB_DESCRIPTIONS.get(tab_name, "Settings for this automation scope."))
 
             group_key = (tab_name, group_name)
             if group_key not in tab_groups:
@@ -5317,7 +5344,13 @@ class MainWindow(QMainWindow):
                 spin.setSuffix(" ms")
             key = str(field["key"])
             spin.setValue(self._automation_timing(key))
-            tab_groups[group_key].addRow(str(field.get("label") or key), spin)
+            tooltip_text = self._automation_timing_tooltip(field)
+            label_widget = QLabel(str(field.get("label") or key))
+            label_widget.setToolTip(tooltip_text)
+            label_widget.setStatusTip(tooltip_text)
+            spin.setToolTip(tooltip_text)
+            spin.setStatusTip(tooltip_text)
+            tab_groups[group_key].addRow(label_widget, spin)
             spinboxes[key] = spin
 
         for tab_layout in tab_containers.values():
