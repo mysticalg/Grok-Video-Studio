@@ -22,7 +22,7 @@ from urllib.parse import unquote, urlencode, urlparse, urlsplit
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QEasingCurve, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -3202,6 +3202,9 @@ class MainWindow(QMainWindow):
         self._active_upload_context: dict[str, Any] = {}
         self.video_grid_size_mode = 0
         self.video_grid_titles_visible = True
+        self.video_grid_hover_scale = 1.0
+        self._video_grid_hover_animation: QVariantAnimation | None = None
+        self.preview_zoom_percent = 100
         self._init_stats_database()
         self._load_video_metadata_cache()
         self._stats_increment("app_launch_count", 1)
@@ -3242,6 +3245,10 @@ class MainWindow(QMainWindow):
         if video_grid is not None and watched is video_grid.viewport():
             if event.type() == QEvent.Type.Resize:
                 QTimer.singleShot(0, self._apply_video_grid_layout)
+            elif event.type() == QEvent.Type.Leave:
+                self._animate_video_grid_hover(1.0)
+            elif event.type() == QEvent.Type.MouseMove and video_grid.itemAt(event.position().toPoint()) is None:
+                self._animate_video_grid_hover(1.0)
 
         if (
             self.stop_all_requested
@@ -3701,7 +3708,9 @@ class MainWindow(QMainWindow):
         self.video_grid.setGridSize(QPixmap(180, 200).size())
         self.video_grid.viewport().installEventFilter(self)
         self.video_grid.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.video_grid.setMinimumHeight(354)
+        self.video_grid.setMouseTracking(True)
+        self.video_grid.itemEntered.connect(lambda _item: self._animate_video_grid_hover(1.06))
+        self.video_grid.setMinimumHeight(260)
         self.video_grid.currentRowChanged.connect(self.show_selected_video)
 
         self.video_details = QTreeWidget()
@@ -3714,7 +3723,7 @@ class MainWindow(QMainWindow):
         self.video_details.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.video_details.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.video_details.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.video_details.setMinimumHeight(354)
+        self.video_details.setMinimumHeight(260)
         self.video_details.currentItemChanged.connect(self._on_video_details_selection_changed)
 
         self.video_view_stack.addWidget(self.video_grid)
@@ -3856,22 +3865,51 @@ class MainWindow(QMainWindow):
 
         preview_group = QGroupBox("🎞️ Preview")
         preview_layout = QVBoxLayout(preview_group)
+        self.preview.setMinimumHeight(120)
+        self.preview.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.preview.customContextMenuRequested.connect(self._show_preview_context_menu)
         preview_layout.addWidget(self.preview)
 
         preview_controls = QHBoxLayout()
-        self.preview_play_btn = QPushButton("▶️")
+        preview_controls.setSpacing(4)
+
+        self.preview_play_btn = QToolButton()
+        self.preview_play_btn.setAutoRaise(True)
+        self.preview_play_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self.preview_play_btn.setToolTip("Play the selected video in the preview pane.")
         self.preview_play_btn.clicked.connect(self.play_preview)
         preview_controls.addWidget(self.preview_play_btn)
-        self.preview_stop_btn = QPushButton("⏹️")
+
+        self.preview_pause_btn = QToolButton()
+        self.preview_pause_btn.setAutoRaise(True)
+        self.preview_pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.preview_pause_btn.setToolTip("Pause playback in the preview pane.")
+        self.preview_pause_btn.clicked.connect(self.pause_preview)
+        preview_controls.addWidget(self.preview_pause_btn)
+
+        self.preview_stop_btn = QToolButton()
+        self.preview_stop_btn.setAutoRaise(True)
+        self.preview_stop_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
         self.preview_stop_btn.setToolTip("Stop playback in the preview pane.")
         self.preview_stop_btn.clicked.connect(self.stop_preview)
         preview_controls.addWidget(self.preview_stop_btn)
 
-        self.preview_mute_checkbox = QCheckBox("🔇")
+        self.preview_mute_checkbox = QToolButton()
+        self.preview_mute_checkbox.setAutoRaise(True)
+        self.preview_mute_checkbox.setCheckable(True)
+        self.preview_mute_checkbox.setText("🔇")
         self.preview_mute_checkbox.setToolTip("Mute/unmute preview audio.")
         self.preview_mute_checkbox.toggled.connect(self._set_preview_muted)
         preview_controls.addWidget(self.preview_mute_checkbox)
+
+        self.preview_loop_checkbox = QToolButton()
+        self.preview_loop_checkbox.setAutoRaise(True)
+        self.preview_loop_checkbox.setCheckable(True)
+        self.preview_loop_checkbox.setText("🔁")
+        self.preview_loop_checkbox.setToolTip("Loop the preview video when playback reaches the end.")
+        self.preview_loop_checkbox.setChecked(self.preview_loop_enabled)
+        self.preview_loop_checkbox.toggled.connect(self._set_preview_loop_enabled)
+        preview_controls.addWidget(self.preview_loop_checkbox)
 
         self.preview_volume_label = QLabel("🔊")
         preview_controls.addWidget(self.preview_volume_label)
@@ -3881,22 +3919,20 @@ class MainWindow(QMainWindow):
         self.preview_volume_slider.setValue(self.preview_volume)
         self.preview_volume_slider.setSuffix("%")
         self.preview_volume_slider.setButtonSymbols(QSpinBox.NoButtons)
-        self.preview_volume_slider.setFixedWidth(58)
+        self.preview_volume_slider.setFixedWidth(56)
         self.preview_volume_slider.setStyleSheet("font-size: 11px;")
         self.preview_volume_slider.valueChanged.connect(self._set_preview_volume)
         preview_controls.addWidget(self.preview_volume_slider)
 
-        self.preview_fullscreen_btn = QPushButton("⛶")
+        self.preview_fullscreen_btn = QToolButton()
+        self.preview_fullscreen_btn.setAutoRaise(True)
+        self.preview_fullscreen_btn.setText("⛶")
         self.preview_fullscreen_btn.setToolTip("Toggle fullscreen preview.")
         self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
         preview_controls.addWidget(self.preview_fullscreen_btn)
 
-        self.preview_loop_checkbox = QCheckBox("🔁")
-        self.preview_loop_checkbox.setToolTip("Loop the preview video when playback reaches the end.")
-        self.preview_loop_checkbox.setChecked(self.preview_loop_enabled)
-        self.preview_loop_checkbox.toggled.connect(self._set_preview_loop_enabled)
-        preview_controls.addWidget(self.preview_loop_checkbox)
+        preview_controls.addStretch(1)
         preview_layout.addLayout(preview_controls)
 
         timeline_layout = QHBoxLayout()
@@ -14553,6 +14589,7 @@ class MainWindow(QMainWindow):
             cols -= 1
         cell_w = max(86, (viewport_width - ((cols + 1) * min_gap)) // cols)
         icon_actual = max(60, min(max_icon_for_mode, cell_w - 14))
+        icon_actual = int(max(48, round(icon_actual * float(self.video_grid_hover_scale))))
         gap = max(4, (viewport_width - (cols * cell_w)) // (cols + 1))
         cell_h = icon_actual + text_pad
 
@@ -14562,6 +14599,33 @@ class MainWindow(QMainWindow):
 
         self.video_thumb_size_toggle_btn.setText(str(cfg["text"]))
         self.video_thumb_size_toggle_btn.setToolTip(str(cfg["tooltip"]))
+
+    def _animate_video_grid_hover(self, target_scale: float) -> None:
+        if not hasattr(self, "video_grid"):
+            return
+        target = max(1.0, min(1.15, float(target_scale)))
+        current = float(getattr(self, "video_grid_hover_scale", 1.0))
+        if abs(current - target) < 0.01:
+            return
+        if self._video_grid_hover_animation is not None:
+            self._video_grid_hover_animation.stop()
+        animation = QVariantAnimation(self)
+        animation.setDuration(140)
+        animation.setStartValue(current)
+        animation.setEndValue(target)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def _on_value_changed(value: object) -> None:
+            try:
+                self.video_grid_hover_scale = float(value)
+            except Exception:
+                self.video_grid_hover_scale = target
+            self._apply_video_grid_layout()
+
+        animation.valueChanged.connect(_on_value_changed)
+        animation.finished.connect(lambda: setattr(self, "_video_grid_hover_animation", None))
+        self._video_grid_hover_animation = animation
+        animation.start()
 
     def _cycle_video_thumbnail_size(self) -> None:
         self.video_grid_size_mode = (int(self.video_grid_size_mode) + 1) % 3
@@ -14980,6 +15044,53 @@ class MainWindow(QMainWindow):
     def stop_preview(self) -> None:
         self.player.stop()
         self._append_log("Preview playback stopped.")
+
+    def pause_preview(self) -> None:
+        if self.player.source().isEmpty():
+            return
+        self.player.pause()
+        self._append_log("Preview playback paused.")
+
+    def _set_preview_zoom_percent(self, percent: int) -> None:
+        self.preview_zoom_percent = max(50, min(200, int(percent)))
+        self._append_log(f"Preview zoom set to {self.preview_zoom_percent}%.")
+
+    def _copy_preview_frame_to_clipboard(self) -> None:
+        frame_pixmap = self.preview.grab()
+        if frame_pixmap.isNull():
+            self._append_log("Preview frame copy skipped: no frame available.")
+            return
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setPixmap(frame_pixmap)
+        self._append_log("Copied preview frame to clipboard.")
+
+    def _show_preview_context_menu(self, pos: QPoint) -> None:
+        menu = QMenu(self)
+
+        zoom_menu = menu.addMenu("Zoom")
+        for zoom_value in (50, 75, 100, 125, 150, 200):
+            action = zoom_menu.addAction(f"{zoom_value}%")
+            action.setCheckable(True)
+            action.setChecked(self.preview_zoom_percent == zoom_value)
+            action.triggered.connect(lambda checked=False, z=zoom_value: self._set_preview_zoom_percent(z))
+
+        pause_action = menu.addAction("Pause")
+        pause_action.triggered.connect(self.pause_preview)
+
+        mute_action = menu.addAction("Mute")
+        mute_action.setCheckable(True)
+        mute_action.setChecked(bool(self.preview_mute_checkbox.isChecked()))
+        mute_action.triggered.connect(lambda checked: self.preview_mute_checkbox.setChecked(bool(checked)))
+
+        loop_action = menu.addAction("Loop")
+        loop_action.setCheckable(True)
+        loop_action.setChecked(bool(self.preview_loop_checkbox.isChecked()))
+        loop_action.triggered.connect(lambda checked: self.preview_loop_checkbox.setChecked(bool(checked)))
+
+        copy_frame_action = menu.addAction("Copy Frame")
+        copy_frame_action.triggered.connect(self._copy_preview_frame_to_clipboard)
+
+        menu.exec(self.preview.mapToGlobal(pos))
 
     def _set_preview_muted(self, muted: bool) -> None:
         self.preview_muted = bool(muted)
