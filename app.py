@@ -12632,103 +12632,105 @@ class MainWindow(QMainWindow):
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
                 if continue_last_video_mode:
-                    submit_guard_token = json.dumps(f"continue-last-video-submit-variant-{variant}")
-                    make_video_click_script = r"""
+                    # Continue-last-video should submit with a trailing Enter only.
+                    # We intentionally avoid button-submit fallback in this mode to prevent
+                    # accidental second renders caused by duplicate synthetic clicks.
+                    submit_guard_token = json.dumps(f"continue-last-video-enter-variant-{variant}")
+                    enter_script = r"""
                         (() => {
                             try {
-                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                                const clean = (v) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
                                 const submitGuardToken = __SUBMIT_GUARD_TOKEN__;
-                                const now = Date.now();
-                                const lastClickedAt = Number(window.__grokContinueSubmitClickedAt || 0);
-                                if (lastClickedAt > 0 && (now - lastClickedAt) < 4000) {
-                                    return { ok: true, guarded: true, status: "cooldown-active", cooldownMsRemaining: Math.max(0, 4000 - (now - lastClickedAt)) };
-                                }
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const selectors = [
+                                    "textarea[placeholder*='Type to imagine' i]",
+                                    "input[placeholder*='Type to imagine' i]",
+                                    "textarea[placeholder*='Type to customize this video' i]",
+                                    "input[placeholder*='Type to customize this video' i]",
+                                    "textarea[placeholder*='Type to customize video' i]",
+                                    "input[placeholder*='Type to customize video' i]",
+                                    "textarea[placeholder*='Customize video' i]",
+                                    "input[placeholder*='Customize video' i]",
+                                    "div.tiptap.ProseMirror[contenteditable='true']",
+                                    "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                                    "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                                ];
+                                const promptInput = selectors
+                                    .flatMap((selector) => [...document.querySelectorAll(selector)])
+                                    .find((el) => isVisible(el));
+                                if (!promptInput) return { ok: false, error: "prompt-input-not-found-for-enter" };
+
                                 if (window.__grokContinueSubmitGuardToken === submitGuardToken) {
-                                    return { ok: true, guarded: true, status: "already-clicked" };
-                                }
-                                // Continue-last-video changed on the live site in some sessions: the old
-                                // "Make Video" submit button may be absent and only a "Video" radio is present.
-                                // We handle both patterns explicitly so the flow remains stable.
-                                const candidates = [...document.querySelectorAll("button, [role='radio']")]
-                                    .filter((btn) => isVisible(btn) && !btn.disabled);
-                                const submitTarget = candidates.find((btn) => {
-                                    const aria = clean(btn.getAttribute("aria-label"));
-                                    const text = clean(btn.textContent);
-                                    const sr = clean(btn.querySelector("span.sr-only")?.textContent || "");
-                                    if (/create\s+share\s+link|share\s+link|copy\s+link/.test(`${aria} ${text} ${sr}`)) return false;
-                                    return /^make\s+video$/.test(aria) || /^make\s+video$/.test(text) || /create\s+video/.test(sr);
-                                }) || null;
-                                const videoToggleTarget = submitTarget ? null : (candidates.find((btn) => {
-                                    const aria = clean(btn.getAttribute("aria-label"));
-                                    const text = clean(btn.textContent);
-                                    const role = clean(btn.getAttribute("role"));
-                                    return role === "radio" && (/^video$/.test(aria) || /^video$/.test(text));
-                                }) || null);
-                                const target = submitTarget || videoToggleTarget;
-                                if (!target) return { ok: false, error: "make-video-button-not-found" };
-
-                                // If this UI variant only exposes a mode radio, only click it when we can
-                                // confirm it's the Video control and it is not already selected.
-                                const role = clean(target.getAttribute("role"));
-                                const checked = clean(target.getAttribute("aria-checked"));
-                                const isVideoRadio = !submitTarget && role === "radio";
-                                const alreadyVideoSelected = isVideoRadio && checked === "true";
-
-                                if (!alreadyVideoSelected) {
-                                    try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                                    try { target.focus({ preventScroll: true }); } catch (_) {}
-                                    try { target.click(); } catch (_) { return { ok: false, error: submitTarget ? "make-video-click-failed" : "video-toggle-click-failed" }; }
+                                    return { ok: true, guarded: true, enterDispatched: false, status: "already-submitted" };
                                 }
 
-                                window.__grokContinueSubmitGuardToken = submitGuardToken;
-                                window.__grokContinueSubmitClickedAt = now;
-                                if (!submitTarget) {
-                                    return {
-                                        ok: true,
-                                        guarded: false,
-                                        status: alreadyVideoSelected ? "video-toggle-already-selected" : "video-toggle-clicked",
-                                        requiresSubmit: true,
-                                        label: (target.getAttribute("aria-label") || target.textContent || "").trim()
-                                    };
+                                try { promptInput.focus({ preventScroll: true }); } catch (_) {}
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                let keydownSent = false;
+                                let keyupSent = false;
+                                let keypressSent = false;
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); keydownSent = true; } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); keypressSent = true; } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); keyupSent = true; } catch (_) {}
+
+                                if (keydownSent || keypressSent || keyupSent) {
+                                    window.__grokContinueSubmitGuardToken = submitGuardToken;
+                                    return { ok: true, guarded: false, enterDispatched: true, keydownSent, keypressSent, keyupSent };
                                 }
-                                return { ok: true, guarded: false, status: "clicked", requiresSubmit: false, label: (target.getAttribute("aria-label") || target.textContent || "").trim() };
+                                return { ok: false, error: "enter-dispatch-failed" };
                             } catch (err) {
                                 return { ok: false, error: String(err && err.stack ? err.stack : err) };
                             }
                         })()
                     """
 
-                    def _after_make_video_click(click_result):
-                        if isinstance(click_result, dict) and click_result.get("ok"):
-                            if click_result.get("guarded"):
+                    def _after_continue_enter_press(enter_result):
+                        if isinstance(enter_result, dict) and enter_result.get("ok"):
+                            if enter_result.get("guarded"):
                                 self._append_log(
-                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate Make Video click; proceeding with download polling."
+                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate trailing Enter; proceeding with download polling."
                                 )
-                            elif click_result.get("requiresSubmit"):
-                                detail = click_result.get("label") or "Video"
-                                self._append_log(
-                                    f"Variant {variant}: prompt populated; toggled '{detail}' mode and now submitting for continue-last-video flow."
-                                )
-                                self.manual_continue_setup_in_progress = False
-                                QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
-                                return
                             else:
-                                detail = click_result.get("label") or "Make video"
                                 self._append_log(
-                                    f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
+                                    f"Variant {variant}: prompt populated; submitted continue-last-video flow with trailing Enter (no submit button click)."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(self._automation_timing(submit_delay_key), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(
+                                self._automation_timing(submit_delay_key),
+                                lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
+                            )
                             return
 
                         self._append_log(
-                            f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
+                            f"WARNING: Variant {variant}: trailing Enter submit did not confirm success in continue-last-video mode. result={enter_result!r}; retrying trailing Enter once."
                         )
-                        self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
 
-                    self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
+                        def _after_continue_enter_retry(retry_result):
+                            if isinstance(retry_result, dict) and retry_result.get("ok"):
+                                self._append_log(
+                                    f"Variant {variant}: trailing Enter retry succeeded for continue-last-video mode; moving to download polling."
+                                )
+                            else:
+                                self._append_log(
+                                    f"WARNING: Variant {variant}: trailing Enter retry still not confirmed in continue-last-video mode. result={retry_result!r}; continuing with polling without button-submit fallback."
+                                )
+                            self.manual_continue_setup_in_progress = False
+                            QTimer.singleShot(
+                                self._automation_timing(submit_delay_key),
+                                lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
+                            )
+
+                        QTimer.singleShot(
+                            max(80, self._automation_timing("continue_submit_after_prompt_delay_ms") // 2),
+                            lambda: self._run_active_browser_javascript(
+                                enter_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token),
+                                _after_continue_enter_retry,
+                            ),
+                        )
+
+                    self._run_active_browser_javascript(
+                        enter_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token),
+                        _after_continue_enter_press,
+                    )
                     return
 
                 use_enter_submit = True
