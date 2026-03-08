@@ -3673,20 +3673,21 @@ class MainWindow(QMainWindow):
 
         view_toggle_row = QHBoxLayout()
         self.video_view_toggle_btn = QToolButton()
-        self.video_view_toggle_btn.setText("☷")
+        self.video_view_toggle_btn.setText("View")
         self.video_view_toggle_btn.setCheckable(True)
         self.video_view_toggle_btn.setToolTip("Toggle between thumbnail grid and details list view.")
+        self.video_view_toggle_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.video_view_toggle_btn.toggled.connect(self._toggle_video_view_mode)
         view_toggle_row.addWidget(self.video_view_toggle_btn)
 
         self.video_thumb_size_toggle_btn = QToolButton()
-        self.video_thumb_size_toggle_btn.setText("◻")
+        self.video_thumb_size_toggle_btn.setText("Size")
         self.video_thumb_size_toggle_btn.setToolTip("Cycle thumbnail size: large → small → extra small.")
         self.video_thumb_size_toggle_btn.clicked.connect(self._cycle_video_thumbnail_size)
         view_toggle_row.addWidget(self.video_thumb_size_toggle_btn)
 
         self.video_thumb_titles_toggle_btn = QToolButton()
-        self.video_thumb_titles_toggle_btn.setText("🏷")
+        self.video_thumb_titles_toggle_btn.setText("Titles")
         self.video_thumb_titles_toggle_btn.setCheckable(True)
         self.video_thumb_titles_toggle_btn.setChecked(True)
         self.video_thumb_titles_toggle_btn.setToolTip("Toggle thumbnail titles.")
@@ -3876,6 +3877,8 @@ class MainWindow(QMainWindow):
         self.preview_play_btn = QToolButton()
         self.preview_play_btn.setAutoRaise(True)
         self.preview_play_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.preview_play_btn.setText("Play")
+        self.preview_play_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.preview_play_btn.setToolTip("Play the selected video in the preview pane.")
         self.preview_play_btn.clicked.connect(self.play_preview)
         preview_controls.addWidget(self.preview_play_btn)
@@ -3883,6 +3886,8 @@ class MainWindow(QMainWindow):
         self.preview_pause_btn = QToolButton()
         self.preview_pause_btn.setAutoRaise(True)
         self.preview_pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.preview_pause_btn.setText("Pause")
+        self.preview_pause_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.preview_pause_btn.setToolTip("Pause playback in the preview pane.")
         self.preview_pause_btn.clicked.connect(self.pause_preview)
         preview_controls.addWidget(self.preview_pause_btn)
@@ -3890,22 +3895,26 @@ class MainWindow(QMainWindow):
         self.preview_stop_btn = QToolButton()
         self.preview_stop_btn.setAutoRaise(True)
         self.preview_stop_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+        self.preview_stop_btn.setText("Stop")
+        self.preview_stop_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.preview_stop_btn.setToolTip("Stop playback in the preview pane.")
         self.preview_stop_btn.clicked.connect(self.stop_preview)
         preview_controls.addWidget(self.preview_stop_btn)
 
         self.preview_mute_checkbox = QToolButton()
         self.preview_mute_checkbox.setAutoRaise(True)
+        self.preview_mute_checkbox.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.preview_mute_checkbox.setCheckable(True)
-        self.preview_mute_checkbox.setText("🔇")
+        self.preview_mute_checkbox.setText("Mute")
         self.preview_mute_checkbox.setToolTip("Mute/unmute preview audio.")
         self.preview_mute_checkbox.toggled.connect(self._set_preview_muted)
         preview_controls.addWidget(self.preview_mute_checkbox)
 
         self.preview_loop_checkbox = QToolButton()
         self.preview_loop_checkbox.setAutoRaise(True)
+        self.preview_loop_checkbox.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.preview_loop_checkbox.setCheckable(True)
-        self.preview_loop_checkbox.setText("🔁")
+        self.preview_loop_checkbox.setText("Loop")
         self.preview_loop_checkbox.setToolTip("Loop the preview video when playback reaches the end.")
         self.preview_loop_checkbox.setChecked(self.preview_loop_enabled)
         self.preview_loop_checkbox.toggled.connect(self._set_preview_loop_enabled)
@@ -3926,7 +3935,8 @@ class MainWindow(QMainWindow):
 
         self.preview_fullscreen_btn = QToolButton()
         self.preview_fullscreen_btn.setAutoRaise(True)
-        self.preview_fullscreen_btn.setText("⛶")
+        self.preview_fullscreen_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.preview_fullscreen_btn.setText("Fullscreen")
         self.preview_fullscreen_btn.setToolTip("Toggle fullscreen preview.")
         self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
@@ -4145,6 +4155,7 @@ class MainWindow(QMainWindow):
         self._refresh_prompt_history_combos()
         self._refresh_status_bar_visibility()
         self._refresh_bottom_panel_layout(force=True)
+        self._apply_icons_to_all_buttons()
 
     def _build_social_upload_tab(self, platform_name: str, upload_url: str) -> QWidget:
         tab = QWidget()
@@ -5630,6 +5641,44 @@ class MainWindow(QMainWindow):
         action = QWidgetAction(menu)
         action.setDefaultWidget(widget)
         menu.addAction(action)
+
+    def _icon_for_button_text(self, label_text: str) -> QIcon:
+        text = str(label_text or "").lower()
+        style = self.style()
+        keyword_map: tuple[tuple[tuple[str, ...], QStyle.StandardPixmap], ...] = (
+            (("play", "start", "generate", "create"), QStyle.StandardPixmap.SP_MediaPlay),
+            (("pause",), QStyle.StandardPixmap.SP_MediaPause),
+            (("stop",), QStyle.StandardPixmap.SP_MediaStop),
+            (("open", "folder", "browse"), QStyle.StandardPixmap.SP_DirOpenIcon),
+            (("save", "download", "export"), QStyle.StandardPixmap.SP_DialogSaveButton),
+            (("upload",), QStyle.StandardPixmap.SP_ArrowUp),
+            (("clear", "remove", "delete"), QStyle.StandardPixmap.SP_TrashIcon),
+            (("settings", "config", "preferences"), QStyle.StandardPixmap.SP_FileDialogDetailedView),
+            (("home",), QStyle.StandardPixmap.SP_DirHomeIcon),
+            (("refresh", "reload"), QStyle.StandardPixmap.SP_BrowserReload),
+            (("next", "continue"), QStyle.StandardPixmap.SP_ArrowForward),
+            (("back", "previous"), QStyle.StandardPixmap.SP_ArrowBack),
+            (("fullscreen", "zoom"), QStyle.StandardPixmap.SP_TitleBarMaxButton),
+        )
+        for keys, icon_kind in keyword_map:
+            if any(k in text for k in keys):
+                return style.standardIcon(icon_kind)
+        return QIcon()
+
+    def _apply_icons_to_all_buttons(self) -> None:
+        for button in self.findChildren(QPushButton):
+            if button.icon().isNull():
+                icon = self._icon_for_button_text(button.text())
+                if not icon.isNull():
+                    button.setIcon(icon)
+
+        for button in self.findChildren(QToolButton):
+            if button.icon().isNull():
+                icon = self._icon_for_button_text(button.text() or button.toolTip())
+                if not icon.isNull():
+                    button.setIcon(icon)
+            if button.toolButtonStyle() == Qt.ToolButtonIconOnly:
+                button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
     def _populate_top_settings_menus(self) -> None:
         self.video_settings_menu.clear()
@@ -14554,7 +14603,7 @@ class MainWindow(QMainWindow):
     def _toggle_video_view_mode(self, details_mode: bool) -> None:
         selected_index = self._selected_video_index()
         self.video_view_stack.setCurrentWidget(self.video_details if details_mode else self.video_grid)
-        self.video_view_toggle_btn.setText("☰" if details_mode else "☷")
+        self.video_view_toggle_btn.setText("View: List" if details_mode else "View: Grid")
         self.video_view_toggle_btn.setToolTip(
             "Switch to thumbnail grid view." if details_mode else "Switch to details list view."
         )
@@ -14597,7 +14646,7 @@ class MainWindow(QMainWindow):
         self.video_grid.setIconSize(QPixmap(icon_actual, icon_actual).size())
         self.video_grid.setGridSize(QPixmap(cell_w, cell_h).size())
 
-        self.video_thumb_size_toggle_btn.setText(str(cfg["text"]))
+        self.video_thumb_size_toggle_btn.setText(f"Size {cfg['text']}")
         self.video_thumb_size_toggle_btn.setToolTip(str(cfg["tooltip"]))
 
     def _animate_video_grid_hover(self, target_scale: float) -> None:
@@ -14634,7 +14683,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_video_thumbnail_titles(self, show_titles: bool) -> None:
         self.video_grid_titles_visible = bool(show_titles)
-        self.video_thumb_titles_toggle_btn.setText("🏷" if show_titles else "🚫🏷")
+        self.video_thumb_titles_toggle_btn.setText("Titles On" if show_titles else "Titles Off")
         self.video_thumb_titles_toggle_btn.setToolTip(
             "Hide thumbnail titles." if show_titles else "Show thumbnail titles."
         )
@@ -14992,7 +15041,7 @@ class MainWindow(QMainWindow):
         self.preview_fullscreen_progress_bar.setValue(int(ratio * 1000))
 
     def _on_preview_fullscreen_changed(self, fullscreen: bool) -> None:
-        self.preview_fullscreen_btn.setText("🗗" if fullscreen else "⛶")
+        self.preview_fullscreen_btn.setText("Window" if fullscreen else "Fullscreen")
 
         if fullscreen:
             self._ensure_preview_fullscreen_overlay()
