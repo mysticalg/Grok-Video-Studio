@@ -3450,6 +3450,7 @@ class MainWindow(QMainWindow):
         self.count = QSpinBox()
         self.count.setRange(1, 10)
         self.count.setValue(1)
+        self.count.setToolTip("How many output variants to generate per run.")
 
         self.automation_action_delay_ms = QSpinBox()
         self.automation_action_delay_ms.setRange(100, 10000)
@@ -5606,8 +5607,8 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        settings_menu = menu_bar.addMenu("Model/API Settings")
-        open_settings_action = QAction("Open Model/API Settings", self)
+        settings_menu = menu_bar.addMenu("Settings")
+        open_settings_action = QAction("AI Settings", self)
         open_settings_action.triggered.connect(self.show_model_api_settings)
         settings_menu.addAction(open_settings_action)
 
@@ -5619,8 +5620,10 @@ class MainWindow(QMainWindow):
         self.video_settings_menu = video_menu.addMenu("Settings")
         self.video_grok_settings_menu = video_menu.addMenu("Grok Settings")
 
-        audio_menu = menu_bar.addMenu("Audio")
-        self.audio_settings_menu = audio_menu.addMenu("Settings")
+        self.audio_menu = menu_bar.addMenu("Audio")
+        # Keep audio controls at the Audio menu root (no nested Settings submenu)
+        # so common toggles are one click away.
+        self.audio_settings_menu = self.audio_menu
 
         self.automation_menu = menu_bar.addMenu("Automation")
         automation_timings_action = QAction("Timings…", self)
@@ -5941,6 +5944,28 @@ class MainWindow(QMainWindow):
         if hasattr(self, "extension_dom_ping_action"):
             cdp_settings_menu.addAction(self.extension_dom_ping_action)
         self.automation_menu.addSeparator()
+
+        # Keep Counter at the end of the Automation menu so it remains visible
+        # without interfering with access to the CDP Settings submenu.
+        counter_widget = QWidget(self)
+        counter_layout = QHBoxLayout(counter_widget)
+        counter_layout.setContentsMargins(8, 4, 8, 4)
+        counter_layout.setSpacing(8)
+
+        counter_label = QLabel("Counter")
+        counter_label.setToolTip("Number of variants generated per run.")
+        counter_layout.addWidget(counter_label)
+
+        self.count.setMaximumWidth(96)
+        counter_layout.addWidget(self.count)
+
+        counter_hint = QLabel("ℹ")
+        counter_hint.setStyleSheet("color: palette(mid);")
+        counter_hint.setToolTip("Adjust Delay/Retry/Poll in Automation → Timings…")
+        counter_layout.addWidget(counter_hint)
+        counter_layout.addStretch(1)
+
+        self._add_widget_to_menu(self.automation_menu, counter_widget)
 
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
         self._add_widget_to_menu(self.video_settings_menu, self.video_options_dropdown)
@@ -19669,26 +19694,48 @@ class MainWindow(QMainWindow):
 
         category_input = QLineEdit(self.ai_social_metadata.category)
         if platform_name == "YouTube":
-            dialog_layout.addWidget(QLabel("YouTube Category ID"))
-            dialog_layout.addWidget(category_input)
+            # Keep the YouTube upload options compact and fast to scan by using
+            # a two-column settings grid instead of a single long vertical stack.
+            youtube_options_grid = QGridLayout()
+            youtube_options_grid.setHorizontalSpacing(14)
+            youtube_options_grid.setVerticalSpacing(8)
 
+            category_label = QLabel("YouTube Category ID")
+            category_label.setToolTip("Numeric YouTube category id (for example: 22 for People & Blogs).")
+            category_input.setToolTip("Set the YouTube category id used during upload.")
+            youtube_options_grid.addWidget(category_label, 0, 0)
+            youtube_options_grid.addWidget(category_input, 0, 1)
+
+            visibility_label = QLabel("Visibility")
+            visibility_label.setToolTip("Choose whether the uploaded video is public, unlisted, or private.")
             visibility_input = QComboBox()
             visibility_input.addItem("Public", "public")
             visibility_input.addItem("Unlisted", "unlisted")
             visibility_input.addItem("Private", "private")
-            dialog_layout.addWidget(QLabel("Visibility"))
-            dialog_layout.addWidget(visibility_input)
+            visibility_input.setToolTip("Default visibility used for YouTube publish automation.")
+            youtube_options_grid.addWidget(visibility_label, 0, 2)
+            youtube_options_grid.addWidget(visibility_input, 0, 3)
 
+            schedule_label = QLabel("Schedule publish time")
+            schedule_label.setToolTip("Optional local schedule time. Leave blank to publish immediately.")
             schedule_input = QLineEdit()
             schedule_input.setPlaceholderText("Optional schedule datetime (YYYY-MM-DD HH:MM)")
-            dialog_layout.addWidget(QLabel("Schedule publish time"))
-            dialog_layout.addWidget(schedule_input)
+            schedule_input.setToolTip("Format: YYYY-MM-DD HH:MM (24-hour).")
+            youtube_options_grid.addWidget(schedule_label, 1, 0)
+            youtube_options_grid.addWidget(schedule_input, 1, 1)
 
+            audience_label = QLabel("Audience")
+            audience_label.setToolTip("Select whether the content is made for kids.")
             audience_input = QComboBox()
             audience_input.addItem("Not made for kids", "not_kids")
             audience_input.addItem("Made for kids", "kids")
-            dialog_layout.addWidget(QLabel("Audience"))
-            dialog_layout.addWidget(audience_input)
+            audience_input.setToolTip("YouTube audience declaration used by automation.")
+            youtube_options_grid.addWidget(audience_label, 1, 2)
+            youtube_options_grid.addWidget(audience_input, 1, 3)
+
+            youtube_options_grid.setColumnStretch(1, 1)
+            youtube_options_grid.setColumnStretch(3, 1)
+            dialog_layout.addLayout(youtube_options_grid)
 
         tiktok_publish_mode_input = None
         tiktok_add_text_input = None
