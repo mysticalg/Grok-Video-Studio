@@ -3418,9 +3418,9 @@ class MainWindow(QMainWindow):
         self.styling_prompt.setMaximumHeight(70)
         prompt_group_layout.addWidget(self.styling_prompt)
 
-        manual_prompt_label = QLabel("Manual Prompt (used only when source is Manual)")
+        manual_prompt_label = QLabel("Main Prompt")
         manual_prompt_label.setWordWrap(True)
-        manual_prompt_label.setToolTip("Manual Prompt is the exact text sent when Prompt Source is Manual. AI generation can update this unless 'Keep Manual Prompt unchanged' is enabled.")
+        manual_prompt_label.setToolTip("Main Prompt is the exact text sent when Prompt Source is Manual. AI generation can update this unless 'Keep Main Prompt unchanged' is enabled.")
         prompt_group_layout.addWidget(manual_prompt_label)
         self.manual_prompt_history_combo = QComboBox()
         self.manual_prompt_history_combo.setToolTip("Recall a recently used manual prompt.")
@@ -3440,9 +3440,9 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
 
-        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Manual Prompt unchanged\n(update social metadata only)")
+        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Main Prompt unchanged\n(update social metadata only)")
         self.keep_manual_prompt_on_social_generate.setToolTip(
-            "If enabled, Generate Prompt + Social Metadata updates social title/description/hashtags/category but leaves Manual Prompt as-is."
+            "If enabled, Generate Prompt + Social Metadata updates social title/description/hashtags/category but leaves Main Prompt as-is."
         )
         self.keep_manual_prompt_on_social_generate.setChecked(False)
         prompt_group_layout.addWidget(self.keep_manual_prompt_on_social_generate)
@@ -5062,9 +5062,9 @@ class MainWindow(QMainWindow):
 
         self.manual_prompt_default_input = QPlainTextEdit()
         self.manual_prompt_default_input.setMaximumHeight(90)
-        self.manual_prompt_default_input.setPlaceholderText("Default text used to prefill Manual Prompt.")
+        self.manual_prompt_default_input.setPlaceholderText("Default text used to prefill Main Prompt.")
         self.manual_prompt_default_input.setPlainText(DEFAULT_MANUAL_PROMPT_TEXT)
-        app_add_row("Default Manual Prompt", self.manual_prompt_default_input, weight=3)
+        app_add_row("Default Main Prompt", self.manual_prompt_default_input, weight=3)
 
         self.ai_concept_instruction_template_input = QPlainTextEdit()
         self.ai_concept_instruction_template_input.setMaximumHeight(70)
@@ -8063,7 +8063,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
             return
         if prompt_source == "manual" and not manual_prompt:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
         if prompt_source == "openai" and not (self.openai_api_key.text().strip() or self.openai_access_token.text().strip()):
             QMessageBox.warning(
@@ -8822,13 +8822,13 @@ class MainWindow(QMainWindow):
             appended_note = f" (+{len(custom_hashtags)} custom)" if custom_hashtags else ""
             if preserve_manual_prompt:
                 self._append_log(
-                    "AI updated social metadata defaults only (Manual Prompt preserved) "
+                    "AI updated social metadata defaults only (Main Prompt preserved) "
                     f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
                     f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
                 )
             else:
                 self._append_log(
-                    "AI updated Manual Prompt and social metadata defaults "
+                    "AI updated Main Prompt and social metadata defaults "
                     f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
                     f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
                 )
@@ -8854,7 +8854,7 @@ class MainWindow(QMainWindow):
         self.stop_all_requested = False
         prompt_text = self._manual_prompt_with_styling()
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
         self._prepare_external_grok_homepage_for_video_start()
@@ -8865,7 +8865,7 @@ class MainWindow(QMainWindow):
         prompt_text = self._manual_prompt_with_styling()
 
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
         self._prepare_external_grok_homepage_for_video_start()
@@ -8896,7 +8896,7 @@ class MainWindow(QMainWindow):
         self.stop_all_requested = False
         prompt_text = self._manual_prompt_with_styling()
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
         target_count = int(self.multi_video_count_spin.value())
@@ -8923,7 +8923,7 @@ class MainWindow(QMainWindow):
         prompt_text = self._manual_prompt_with_styling()
 
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
         if hasattr(self, "sora_browser_tab_index"):
@@ -8998,7 +8998,7 @@ class MainWindow(QMainWindow):
         prompt = self._manual_prompt_with_styling()
         if not prompt:
             self._append_log(
-                f"ERROR: Manual image variant {variant} skipped because both Styling and Manual Prompt are empty."
+                f"ERROR: Manual image variant {variant} skipped because both Styling and Main Prompt are empty."
             )
             QTimer.singleShot(0, self._submit_next_manual_image_variant)
             return
@@ -11670,7 +11670,7 @@ class MainWindow(QMainWindow):
         prompt = self._manual_prompt_with_styling()
         if not prompt:
             self._append_log(
-                f"ERROR: Manual variant {variant} skipped because both Styling and Manual Prompt are empty."
+                f"ERROR: Manual variant {variant} skipped because both Styling and Main Prompt are empty."
             )
             QTimer.singleShot(0, self._submit_next_manual_variant)
             return
@@ -15747,7 +15747,7 @@ class MainWindow(QMainWindow):
 
         prompt_text = self._manual_prompt_with_styling()
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Enter a main prompt for the continuation run.")
             return
 
         self.continue_from_frame_active = True
@@ -15769,7 +15769,7 @@ class MainWindow(QMainWindow):
     def continue_from_local_image(self) -> None:
         prompt_text = self._manual_prompt_with_styling()
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Enter a main prompt for the continuation run.")
             return
 
         image_path, _ = QFileDialog.getOpenFileName(self, "Select image", str(self.download_dir), "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
