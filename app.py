@@ -11682,7 +11682,7 @@ class MainWindow(QMainWindow):
             lambda: self._upload_frame_into_grok(frame_path, on_uploaded=self._wait_for_continue_upload_reload),
         )
         self._append_log(
-            "Continue mode: image paste scheduled; waiting for upload/reload before prompt submission."
+            "Continue mode: image upload scheduled; waiting for upload/reload before prompt submission."
         )
 
     def _resolve_latest_video_for_continuation(self) -> str | None:
@@ -12594,9 +12594,10 @@ class MainWindow(QMainWindow):
                 f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
             self.manual_continue_setup_in_progress = False
-            # Avoid duplicate submit clicks: if button-submit succeeded, polling should only wait for
-            # progress/download controls and must not click Make/Create video again.
-            self._trigger_browser_video_download(variant, allow_make_video_click=not submit_ok)
+            # Continue-last-video can still return callback-empty even when the site accepted submit.
+            # Keep Make/Create click disabled for polling in this mode so we never trigger a second render.
+            allow_make_video_click = (not submit_ok) and (not continue_last_video_mode)
+            self._trigger_browser_video_download(variant, allow_make_video_click=allow_make_video_click)
 
         def _click_make_video_after_prompt() -> None:
             step_script = click_option_script_template.replace('"{target_label}"', json.dumps("Make Video"))
@@ -12945,6 +12946,10 @@ class MainWindow(QMainWindow):
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
+        if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
+            # Continue-last-video should never auto-click Make/Create during polling because the
+            # submit step is already handled in setup and duplicate clicks can start a second video.
+            self.manual_video_allow_make_click = False
         self._append_log(
             f"Variant {variant}: manual download attempts are rate-limited to every {self._manual_download_poll_interval_ms() // 1000} seconds."
         )
