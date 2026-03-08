@@ -15693,7 +15693,7 @@ class MainWindow(QMainWindow):
                     }
                 };
 
-                const dispatchFileEvents = (target, dt) => {
+                const dispatchFileEvents = (target, dt, includePaste = false) => {
                     try {
                         target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
                         target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -15705,10 +15705,12 @@ class MainWindow(QMainWindow):
                         } catch (_) {}
                     });
 
-                    try {
-                        const pasteEvent = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
-                        target.dispatchEvent(pasteEvent);
-                    } catch (_) {}
+                    if (includePaste) {
+                        try {
+                            const pasteEvent = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt });
+                            target.dispatchEvent(pasteEvent);
+                        } catch (_) {}
+                    }
                 };
 
                 for (const selector of selectors) {
@@ -15733,18 +15735,22 @@ class MainWindow(QMainWindow):
                             ? [...new Set(scopedInputs)]
                             : [...document.querySelectorAll("input[type='file']")];
 
+                        // Upload only once: pick the first visible file input near the prompt,
+                        // then emit a single paste event to the prompt node as fallback.
                         let populatedInputs = 0;
-                        for (const input of fileInputs) {
+                        const preferredInput = fileInputs.find((input) => isVisible(input)) || fileInputs[0];
+                        if (preferredInput) {
                             try {
-                                if (!setInputFiles(input, dt.files)) continue;
-                                dispatchFileEvents(input, dt);
-                                populatedInputs += 1;
+                                if (setInputFiles(preferredInput, dt.files)) {
+                                    dispatchFileEvents(preferredInput, dt, false);
+                                    populatedInputs = 1;
+                                }
                             } catch (_) {}
                         }
 
-                        dispatchFileEvents(node, dt);
-                        if (queryBar && queryBar !== node) dispatchFileEvents(queryBar, dt);
-                        if (promptRoot && promptRoot !== queryBar && promptRoot !== node) dispatchFileEvents(promptRoot, dt);
+                        if (!populatedInputs) {
+                            dispatchFileEvents(node, dt, true);
+                        }
 
                         return {
                             ok: populatedInputs > 0,
