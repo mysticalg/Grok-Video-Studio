@@ -3317,9 +3317,6 @@ class MainWindow(QMainWindow):
                 self._position_preview_fullscreen_overlay()
                 self._position_preview_fullscreen_progress_bar()
 
-        if watched is getattr(self, "automation_group", None) and event.type() == QEvent.Type.Resize:
-            self._layout_automation_controls()
-
         video_grid = getattr(self, "video_grid", None)
         if video_grid is not None and watched is video_grid.viewport():
             if event.type() == QEvent.Type.Resize:
@@ -3333,35 +3330,6 @@ class MainWindow(QMainWindow):
         ):
             self._clear_stop_all_flag(watched.text())
         return super().eventFilter(watched, event)
-
-    def _layout_automation_controls(self) -> None:
-        if not hasattr(self, "automation_buttons_layout") or not hasattr(self, "_automation_controls"):
-            return
-        controls = [control for control in self._automation_controls if control is not None]
-        if not controls:
-            return
-
-        group_width = self.automation_group.contentsRect().width() if hasattr(self, "automation_group") else 0
-        if group_width >= 980:
-            column_count = 4
-        elif group_width >= 540:
-            column_count = 2
-        else:
-            column_count = 1
-
-        while self.automation_buttons_layout.count():
-            item = self.automation_buttons_layout.takeAt(0)
-            widget = item.widget() if item is not None else None
-            if widget is not None:
-                self.automation_buttons_layout.removeWidget(widget)
-
-        for index, control in enumerate(controls):
-            row = index // column_count
-            column = index % column_count
-            self.automation_buttons_layout.addWidget(control, row, column)
-
-        for column in range(column_count):
-            self.automation_buttons_layout.setColumnStretch(column, 1)
 
     def _clear_stop_all_flag(self, button_label: str) -> None:
         if not self.stop_all_requested:
@@ -3407,6 +3375,8 @@ class MainWindow(QMainWindow):
         splitter = QSplitter()
 
         left = QWidget()
+        left.setMinimumWidth(0)
+        left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         left_layout = QVBoxLayout(left)
         left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -3414,43 +3384,13 @@ class MainWindow(QMainWindow):
         self._build_social_networking_settings_dialog()
         self._build_menu_bar()
 
-        self.automation_group = QGroupBox("🤖 Automation Chrome + CDP")
-        automation_layout = QVBoxLayout(self.automation_group)
-        self.automation_buttons_layout = QGridLayout()
-        self.automation_buttons_layout.setHorizontalSpacing(8)
-        self.automation_buttons_layout.setVerticalSpacing(8)
-        self.automation_group.installEventFilter(self)
-
-        self.start_automation_chrome_btn = QPushButton("Start Automation Chrome")
-        self.start_automation_chrome_btn.clicked.connect(self._start_automation_chrome)
-
-        self.connect_cdp_btn = QPushButton("Connect CDP")
-        self.connect_cdp_btn.clicked.connect(self._connect_automation_cdp)
-
-        self.extension_ping_btn = QPushButton("Extension DOM Ping")
-        self.extension_ping_btn.clicked.connect(self._run_extension_dom_ping)
-
         self.automation_mode = QComboBox()
         self.automation_mode.addItem("Embedded", "embedded")
         self.automation_mode.addItem("External Browser", "external")
         self.automation_mode.setCurrentIndex(0)
-        self.automation_mode.setToolTip(
-            "Embedded: run DOM automation in the in-app upload tab. External Browser: run automation only in Automation Chrome (external window)."
-        )
         self.automation_mode.currentIndexChanged.connect(self._on_automation_mode_changed)
-        self._automation_controls = [
-            self.start_automation_chrome_btn,
-            self.connect_cdp_btn,
-            self.extension_ping_btn,
-            self.automation_mode,
-        ]
-        self._layout_automation_controls()
-
-        automation_layout.addLayout(self.automation_buttons_layout)
-        left_layout.addWidget(self.automation_group)
-
         prompt_group = QGroupBox("✨ Prompt Inputs")
-        prompt_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        prompt_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
         prompt_group_layout = QVBoxLayout(prompt_group)
         prompt_group_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
@@ -3478,8 +3418,9 @@ class MainWindow(QMainWindow):
         self.styling_prompt.setMaximumHeight(70)
         prompt_group_layout.addWidget(self.styling_prompt)
 
-        manual_prompt_label = QLabel("Manual Prompt (used only when source is Manual)")
-        manual_prompt_label.setToolTip("Manual Prompt is the exact text sent when Prompt Source is Manual. AI generation can update this unless 'Keep Manual Prompt unchanged' is enabled.")
+        manual_prompt_label = QLabel("Main Prompt")
+        manual_prompt_label.setWordWrap(True)
+        manual_prompt_label.setToolTip("Main Prompt is the exact text sent when Prompt Source is Manual. AI generation can update this unless 'Keep Main Prompt unchanged' is enabled.")
         prompt_group_layout.addWidget(manual_prompt_label)
         self.manual_prompt_history_combo = QComboBox()
         self.manual_prompt_history_combo.setToolTip("Recall a recently used manual prompt.")
@@ -3491,16 +3432,17 @@ class MainWindow(QMainWindow):
         self.manual_prompt.setMaximumHeight(110)
         prompt_group_layout.addWidget(self.manual_prompt)
 
-        self.generate_prompt_btn = QPushButton("✨ Generate Prompt + Social Metadata from Concept")
+        self.generate_prompt_btn = QPushButton("✨ Generate Prompt +\nSocial Metadata from Concept")
         self.generate_prompt_btn.setToolTip(
             "Uses Prompt Source (Grok/OpenAI/Ollama) to convert Concept into a 10-second video prompt and social metadata."
         )
+        self.generate_prompt_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
 
-        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Manual Prompt unchanged (update social metadata only)")
+        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Main Prompt unchanged\n(update social metadata only)")
         self.keep_manual_prompt_on_social_generate.setToolTip(
-            "If enabled, Generate Prompt + Social Metadata updates social title/description/hashtags/category but leaves Manual Prompt as-is."
+            "If enabled, Generate Prompt + Social Metadata updates social title/description/hashtags/category but leaves Main Prompt as-is."
         )
         self.keep_manual_prompt_on_social_generate.setChecked(False)
         prompt_group_layout.addWidget(self.keep_manual_prompt_on_social_generate)
@@ -3761,6 +3703,7 @@ class MainWindow(QMainWindow):
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
         log_group = QGroupBox("📡 Activity Log")
+        log_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         log_layout = QVBoxLayout(log_group)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -3771,21 +3714,26 @@ class MainWindow(QMainWindow):
                 self.log.appendPlainText(pending_entry)
             self._pending_log_messages.clear()
 
-        log_actions_layout = QHBoxLayout()
-        log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
+        log_actions_layout = QGridLayout()
+        log_actions_layout.setHorizontalSpacing(8)
+        log_actions_layout.setVerticalSpacing(8)
 
         self.clear_log_btn = QPushButton("🧹 Clear Log")
         self.clear_log_btn.setToolTip("Clear all activity log entries.")
         self.clear_log_btn.clicked.connect(self.clear_activity_log)
-        log_actions_layout.addWidget(self.clear_log_btn, alignment=Qt.AlignLeft)
 
         self.jump_to_bottom_btn = QPushButton("⤓ Jump to Bottom")
         self.jump_to_bottom_btn.setToolTip("Jump to the latest activity log entry.")
         self.jump_to_bottom_btn.clicked.connect(self.jump_activity_log_to_bottom)
-        log_actions_layout.addWidget(self.jump_to_bottom_btn, alignment=Qt.AlignLeft)
+        for action_btn in (self.stop_all_btn, self.clear_log_btn, self.jump_to_bottom_btn, self.buy_coffee_btn):
+            action_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-        log_actions_layout.addStretch(1)
-        log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
+        log_actions_layout.addWidget(self.stop_all_btn, 0, 0)
+        log_actions_layout.addWidget(self.clear_log_btn, 0, 1)
+        log_actions_layout.addWidget(self.jump_to_bottom_btn, 1, 0)
+        log_actions_layout.addWidget(self.buy_coffee_btn, 1, 1)
+        log_actions_layout.setColumnStretch(0, 1)
+        log_actions_layout.setColumnStretch(1, 1)
         log_layout.addLayout(log_actions_layout)
         left_layout.addWidget(log_group)
 
@@ -4215,6 +4163,8 @@ class MainWindow(QMainWindow):
 
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
+        left_scroll.setMinimumWidth(260)
+        left_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         left_scroll.setWidget(left)
 
@@ -5112,9 +5062,9 @@ class MainWindow(QMainWindow):
 
         self.manual_prompt_default_input = QPlainTextEdit()
         self.manual_prompt_default_input.setMaximumHeight(90)
-        self.manual_prompt_default_input.setPlaceholderText("Default text used to prefill Manual Prompt.")
+        self.manual_prompt_default_input.setPlaceholderText("Default text used to prefill Main Prompt.")
         self.manual_prompt_default_input.setPlainText(DEFAULT_MANUAL_PROMPT_TEXT)
-        app_add_row("Default Manual Prompt", self.manual_prompt_default_input, weight=3)
+        app_add_row("Default Main Prompt", self.manual_prompt_default_input, weight=3)
 
         self.ai_concept_instruction_template_input = QPlainTextEdit()
         self.ai_concept_instruction_template_input.setMaximumHeight(70)
@@ -5681,7 +5631,7 @@ class MainWindow(QMainWindow):
         self.automation_menu.addAction(automation_reset_timings_action)
         self.automation_menu.addSeparator()
 
-        cdp_settings_menu = menu_bar.addMenu("CDP Settings")
+        cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
         cdp_enabled_action = QAction("Enable CDP", self)
         cdp_enabled_action.triggered.connect(lambda: self._set_cdp_enabled(True))
         cdp_settings_menu.addAction(cdp_enabled_action)
@@ -5695,6 +5645,18 @@ class MainWindow(QMainWindow):
         self.cdp_external_browser_action.toggled.connect(self._set_cdp_external_browser_enabled)
         cdp_settings_menu.addSeparator()
         cdp_settings_menu.addAction(self.cdp_external_browser_action)
+
+        self.start_automation_chrome_action = QAction("Start Automation Chrome", self)
+        self.start_automation_chrome_action.triggered.connect(self._start_automation_chrome)
+        cdp_settings_menu.addAction(self.start_automation_chrome_action)
+
+        self.connect_cdp_action = QAction("Connect CDP", self)
+        self.connect_cdp_action.triggered.connect(self._connect_automation_cdp)
+        cdp_settings_menu.addAction(self.connect_cdp_action)
+
+        self.extension_dom_ping_action = QAction("Extension DOM Ping", self)
+        self.extension_dom_ping_action.triggered.connect(self._run_extension_dom_ping)
+        cdp_settings_menu.addAction(self.extension_dom_ping_action)
 
         self.cdp_menu_actions = {
             True: cdp_enabled_action,
@@ -5964,6 +5926,20 @@ class MainWindow(QMainWindow):
         automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
         automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
         self.automation_menu.addAction(automation_reset_timings_action)
+
+        cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
+        if hasattr(self, "cdp_menu_actions"):
+            cdp_settings_menu.addAction(self.cdp_menu_actions[True])
+            cdp_settings_menu.addAction(self.cdp_menu_actions[False])
+        if hasattr(self, "cdp_external_browser_action"):
+            cdp_settings_menu.addSeparator()
+            cdp_settings_menu.addAction(self.cdp_external_browser_action)
+        if hasattr(self, "start_automation_chrome_action"):
+            cdp_settings_menu.addAction(self.start_automation_chrome_action)
+        if hasattr(self, "connect_cdp_action"):
+            cdp_settings_menu.addAction(self.connect_cdp_action)
+        if hasattr(self, "extension_dom_ping_action"):
+            cdp_settings_menu.addAction(self.extension_dom_ping_action)
         self.automation_menu.addSeparator()
 
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
@@ -6006,17 +5982,6 @@ class MainWindow(QMainWindow):
         self._add_widget_to_menu(self.audio_settings_menu, self.stitch_audio_fade_duration)
         self._add_widget_to_menu(self.audio_settings_menu, self.stitch_audio_fade_label)
 
-        automation_widget = QWidget(self)
-        automation_layout = QHBoxLayout(automation_widget)
-        automation_layout.setContentsMargins(8, 4, 8, 4)
-        automation_layout.addWidget(QLabel("Counter"))
-        automation_layout.addWidget(self.count)
-        automation_layout.addStretch(1)
-
-        counter_hint = QLabel("Adjust Delay/Retry/Poll in Automation → Timings…")
-        counter_hint.setStyleSheet("color: palette(mid);")
-        automation_layout.addWidget(counter_hint)
-        self._add_widget_to_menu(self.automation_menu, automation_widget)
 
     def show_app_info(self) -> None:
         dialog = QDialog(self)
@@ -6257,8 +6222,6 @@ class MainWindow(QMainWindow):
 
     def _set_cdp_enabled(self, enabled: bool) -> None:
         self.cdp_enabled = bool(enabled)
-        if hasattr(self, "automation_group"):
-            self.automation_group.setVisible(self.cdp_enabled)
         if hasattr(self, "cdp_menu_actions"):
             self.cdp_menu_actions[True].setEnabled(not self.cdp_enabled)
             self.cdp_menu_actions[False].setEnabled(self.cdp_enabled)
@@ -6266,6 +6229,11 @@ class MainWindow(QMainWindow):
 
     def _set_cdp_external_browser_enabled(self, enabled: bool) -> None:
         self.cdp_use_external_browser = bool(enabled)
+        if hasattr(self, "automation_mode"):
+            target_mode = "external" if self.cdp_use_external_browser else "embedded"
+            target_index = self.automation_mode.findData(target_mode)
+            if target_index >= 0 and self.automation_mode.currentIndex() != target_index:
+                self.automation_mode.setCurrentIndex(target_index)
         self._refresh_ai_browser_mode()
 
     def _is_external_ai_browser_mode_active(self) -> bool:
@@ -7864,6 +7832,10 @@ class MainWindow(QMainWindow):
             self._stats_increment("unexpected_exit_total", 1)
 
     def _on_automation_mode_changed(self, _index: int) -> None:
+        mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded").strip().lower()
+        should_use_external_browser = mode == "external"
+        if hasattr(self, "cdp_external_browser_action") and self.cdp_external_browser_action.isChecked() != should_use_external_browser:
+            self.cdp_external_browser_action.setChecked(should_use_external_browser)
         self._sync_social_embedded_browser_state_for_automation_mode(log_change=True)
         self._sync_embedded_browser_container_visibility()
         self._refresh_bottom_panel_layout(force=True)
@@ -8094,7 +8066,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Concept", "Please enter a concept.")
             return
         if prompt_source == "manual" and not manual_prompt:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
         if prompt_source == "openai" and not (self.openai_api_key.text().strip() or self.openai_access_token.text().strip()):
             QMessageBox.warning(
@@ -8853,13 +8825,13 @@ class MainWindow(QMainWindow):
             appended_note = f" (+{len(custom_hashtags)} custom)" if custom_hashtags else ""
             if preserve_manual_prompt:
                 self._append_log(
-                    "AI updated social metadata defaults only (Manual Prompt preserved) "
+                    "AI updated social metadata defaults only (Main Prompt preserved) "
                     f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
                     f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
                 )
             else:
                 self._append_log(
-                    "AI updated Manual Prompt and social metadata defaults "
+                    "AI updated Main Prompt and social metadata defaults "
                     f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
                     f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
                 )
@@ -8885,7 +8857,7 @@ class MainWindow(QMainWindow):
         self.stop_all_requested = False
         prompt_text = self._manual_prompt_with_styling()
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
         self._prepare_external_grok_homepage_for_video_start()
@@ -8896,7 +8868,7 @@ class MainWindow(QMainWindow):
         prompt_text = self._manual_prompt_with_styling()
 
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
         self._prepare_external_grok_homepage_for_video_start()
@@ -8927,7 +8899,7 @@ class MainWindow(QMainWindow):
         self.stop_all_requested = False
         prompt_text = self._manual_prompt_with_styling()
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
         target_count = int(self.multi_video_count_spin.value())
@@ -8954,7 +8926,7 @@ class MainWindow(QMainWindow):
         prompt_text = self._manual_prompt_with_styling()
 
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Please enter a manual prompt.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Please enter a main prompt.")
             return
 
         if hasattr(self, "sora_browser_tab_index"):
@@ -9029,7 +9001,7 @@ class MainWindow(QMainWindow):
         prompt = self._manual_prompt_with_styling()
         if not prompt:
             self._append_log(
-                f"ERROR: Manual image variant {variant} skipped because both Styling and Manual Prompt are empty."
+                f"ERROR: Manual image variant {variant} skipped because both Styling and Main Prompt are empty."
             )
             QTimer.singleShot(0, self._submit_next_manual_image_variant)
             return
@@ -11701,7 +11673,7 @@ class MainWindow(QMainWindow):
         prompt = self._manual_prompt_with_styling()
         if not prompt:
             self._append_log(
-                f"ERROR: Manual variant {variant} skipped because both Styling and Manual Prompt are empty."
+                f"ERROR: Manual variant {variant} skipped because both Styling and Main Prompt are empty."
             )
             QTimer.singleShot(0, self._submit_next_manual_variant)
             return
@@ -15778,7 +15750,7 @@ class MainWindow(QMainWindow):
 
         prompt_text = self._manual_prompt_with_styling()
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Enter a main prompt for the continuation run.")
             return
 
         self.continue_from_frame_active = True
@@ -15800,7 +15772,7 @@ class MainWindow(QMainWindow):
     def continue_from_local_image(self) -> None:
         prompt_text = self._manual_prompt_with_styling()
         if not prompt_text:
-            QMessageBox.warning(self, "Missing Manual Prompt", "Enter a manual prompt for the continuation run.")
+            QMessageBox.warning(self, "Missing Main Prompt", "Enter a main prompt for the continuation run.")
             return
 
         image_path, _ = QFileDialog.getOpenFileName(self, "Select image", str(self.download_dir), "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
