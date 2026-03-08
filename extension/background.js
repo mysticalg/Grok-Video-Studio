@@ -451,6 +451,18 @@ async function handleCmd(msg) {
         };
         const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
 
+        const stripWrappingQuotes = (value) => {
+          const text = String(value || "").trim();
+          if (!text) return "";
+          const pairs = [["\"", "\""], ["'", "'"], ["“", "”"], ["‘", "’"]];
+          for (const [open, close] of pairs) {
+            if (text.startsWith(open) && text.endsWith(close) && text.length >= 2) {
+              return text.slice(1, -1).trim();
+            }
+          }
+          return text;
+        };
+
         const getEditableText = (el) => {
           if (!el) return "";
           let lexicalText = "";
@@ -757,6 +769,7 @@ async function handleCmd(msg) {
 
           const text = String(value || "");
           if (currentPlatform === "tiktok" && canonicalKey === "description") {
+            const tiktokText = stripWrappingQuotes(text);
             const tiktokSelectors = [
               ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
               "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
@@ -768,7 +781,7 @@ async function handleCmd(msg) {
               .replace(/\u200B/g, "")
               .replace(/\s+/g, " ")
               .trim();
-            const expected = normalizeForCompare(text);
+            const expected = normalizeForCompare(tiktokText);
             const tiktokTextMatches = () => {
               const current = normalizeForCompare(getEditableText(tiktokEl));
               if (!expected) return current.length === 0;
@@ -776,10 +789,10 @@ async function handleCmd(msg) {
             };
 
             // Avoid paste/DOM mutation paths on TikTok because they can trigger bot heuristics.
-            const typed = await typeTextIntoEditable(tiktokEl, text);
+            const typed = await typeTextIntoEditable(tiktokEl, tiktokText);
             if (!tiktokTextMatches()) {
               await wait(120);
-              await typeTextIntoEditable(tiktokEl, text);
+              await typeTextIntoEditable(tiktokEl, tiktokText);
             }
             out[rawKey] = Boolean(typed) && tiktokTextMatches();
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {

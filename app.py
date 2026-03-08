@@ -16750,7 +16750,19 @@ class MainWindow(QMainWindow):
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const titleText = String(payload.title || "").trim();
-                    const captionText = String(payload.caption || "").trim();
+                    const stripWrappingQuotes = (value) => {
+                        const text = String(value || "").trim();
+                        if (!text) return "";
+                        const pairs = [["\"", "\""], ["'", "'"], ["“", "”"], ["‘", "’"]];
+                        for (const [open, close] of pairs) {
+                            if (text.startsWith(open) && text.endsWith(close) && text.length >= 2) {
+                                return text.slice(1, -1).trim();
+                            }
+                        }
+                        return text;
+                    };
+                    const captionRaw = String(payload.caption || "").trim();
+                    const captionText = platform === "tiktok" ? stripWrappingQuotes(captionRaw) : captionRaw;
                     const captionRequired = (platform === "facebook" || platform === "instagram" || platform === "x") && Boolean(captionText);
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
@@ -18405,6 +18417,11 @@ class MainWindow(QMainWindow):
     def _compose_tiktok_text(self, base_text: str, hashtags: list[str]) -> str:
         """Compose TikTok captions with inline hashtags and no line breaks."""
         normalized_base = " ".join(str(base_text or "").split())
+        quote_pairs = [('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’")]
+        for open_quote, close_quote in quote_pairs:
+            if normalized_base.startswith(open_quote) and normalized_base.endswith(close_quote) and len(normalized_base) >= 2:
+                normalized_base = normalized_base[1:-1].strip()
+                break
         tag_text = " ".join(self._normalize_hashtag_tokens(hashtags))
         if normalized_base and tag_text:
             return f"{normalized_base} {tag_text}".strip()
