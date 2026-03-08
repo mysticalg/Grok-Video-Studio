@@ -129,12 +129,20 @@ def _sanitize_filename_stem(name: str) -> str:
     return collapsed or "tiktok_upload"
 
 
-def _build_upload_filename(video_path: str, caption: str, *, max_caption_chars: int = 3000) -> str:
+def _build_upload_filename(
+    video_path: str,
+    caption: str,
+    *,
+    max_caption_chars: int = 3000,
+    max_filename_chars: int = 1000,
+) -> str:
     extension = Path(video_path).suffix or ".mp4"
     caption_source = str(caption or "").strip()[:max_caption_chars]
     safe_stem = _sanitize_filename_stem(caption_source)
     caption_hash = hashlib.sha1(caption_source.encode("utf-8")).hexdigest()[:10] if caption_source else str(int(time.time()))
-    stem = (safe_stem[:220].rstrip(" _-") or "tiktok_upload")
+    reserved_len = len(f"_{caption_hash}{extension}")
+    stem_limit = max(1, max_filename_chars - reserved_len)
+    stem = (safe_stem[:stem_limit].rstrip(" _-") or "tiktok_upload")
     return f"{stem}_{caption_hash}{extension}"
 
 
