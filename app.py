@@ -3424,15 +3424,6 @@ class MainWindow(QMainWindow):
         self.automation_buttons_layout.setVerticalSpacing(8)
         self.automation_group.installEventFilter(self)
 
-        self.start_automation_chrome_btn = QPushButton("Start Automation Chrome")
-        self.start_automation_chrome_btn.clicked.connect(self._start_automation_chrome)
-
-        self.connect_cdp_btn = QPushButton("Connect CDP")
-        self.connect_cdp_btn.clicked.connect(self._connect_automation_cdp)
-
-        self.extension_ping_btn = QPushButton("Extension DOM Ping")
-        self.extension_ping_btn.clicked.connect(self._run_extension_dom_ping)
-
         self.automation_mode = QComboBox()
         self.automation_mode.addItem("Embedded", "embedded")
         self.automation_mode.addItem("External Browser", "external")
@@ -3442,9 +3433,6 @@ class MainWindow(QMainWindow):
         )
         self.automation_mode.currentIndexChanged.connect(self._on_automation_mode_changed)
         self._automation_controls = [
-            self.start_automation_chrome_btn,
-            self.connect_cdp_btn,
-            self.extension_ping_btn,
             self.automation_mode,
         ]
         self._layout_automation_controls()
@@ -5708,6 +5696,18 @@ class MainWindow(QMainWindow):
         self.cdp_external_browser_action.toggled.connect(self._set_cdp_external_browser_enabled)
         cdp_settings_menu.addSeparator()
         cdp_settings_menu.addAction(self.cdp_external_browser_action)
+
+        self.start_automation_chrome_action = QAction("Start Automation Chrome", self)
+        self.start_automation_chrome_action.triggered.connect(self._start_automation_chrome)
+        cdp_settings_menu.addAction(self.start_automation_chrome_action)
+
+        self.connect_cdp_action = QAction("Connect CDP", self)
+        self.connect_cdp_action.triggered.connect(self._connect_automation_cdp)
+        cdp_settings_menu.addAction(self.connect_cdp_action)
+
+        self.extension_dom_ping_action = QAction("Extension DOM Ping", self)
+        self.extension_dom_ping_action.triggered.connect(self._run_extension_dom_ping)
+        cdp_settings_menu.addAction(self.extension_dom_ping_action)
 
         self.cdp_menu_actions = {
             True: cdp_enabled_action,
