@@ -3223,6 +3223,8 @@ class MainWindow(QMainWindow):
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
+        self.manual_continue_progress_seen = False
+        self.manual_continue_progress_gate_logged = False
         self.manual_video_allow_make_click = True
         self.manual_continue_setup_in_progress = False
         self.manual_download_in_progress = False
@@ -12925,6 +12927,8 @@ class MainWindow(QMainWindow):
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
+        self.manual_continue_progress_seen = False
+        self.manual_continue_progress_gate_logged = False
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
@@ -13067,6 +13071,8 @@ class MainWindow(QMainWindow):
             self.manual_download_deadline = None
             self.manual_refresh_after_generating_sent = False
             self.manual_refresh_after_progress_100_sent = False
+            self.manual_continue_progress_seen = False
+            self.manual_continue_progress_gate_logged = False
             self.manual_public_video_url = ""
             self.manual_last_generated_post_url = ""
             self.manual_download_attempt_count = 0
@@ -13087,6 +13093,9 @@ class MainWindow(QMainWindow):
         script = f"""
             (() => {{
                 const allowMakeVideoClick = {allow_make_video_click};
+                const continueFlowActive = {'true' if (self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None) else 'false'};
+                window.__grokContinueFlowActive = continueFlowActive;
+                if (!continueFlowActive) window.__grokContinueProgressSeen = false;
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
@@ -13117,6 +13126,7 @@ class MainWindow(QMainWindow):
                     }});
                 if (percentNode) {{
                     window.__grokManualDownloadClicked = false;
+                    window.__grokContinueProgressSeen = true;
                     return {{
                         status: "progress",
                         progressText: normalizeProgressText(percentNode.textContent || ""),
@@ -13139,6 +13149,7 @@ class MainWindow(QMainWindow):
                     }});
                 if (generatingIndicator) {{
                     window.__grokManualDownloadClicked = false;
+                    window.__grokContinueProgressSeen = true;
                     return {{ status: "generating-indicator-visible", progressText: "Generating" }};
                 }}
 
@@ -13242,6 +13253,12 @@ class MainWindow(QMainWindow):
 
                 const firstDirectUrl = directUrlCandidates.find((candidate) => isDirectVideoUrl(candidate));
                 if (firstDirectUrl) {{
+                    // Continue-last-video flow must observe at least one render/progress signal before
+                    // accepting a direct URL, otherwise we can accidentally grab a stale homepage/player URL.
+                    const continueProgressSeen = !!window.__grokContinueProgressSeen;
+                    if (window.__grokContinueFlowActive && !continueProgressSeen) {{
+                        return {{ status: "waiting-for-progress-before-direct-url", src: firstDirectUrl, sourceType: "page-scan" }};
+                    }}
                     return {{ status: "direct-url-ready", src: firstDirectUrl, sourceType: "page-scan" }};
                 }}
 
@@ -13256,6 +13273,10 @@ class MainWindow(QMainWindow):
                         || ""
                     );
                     if (isDirectVideoUrl(firstDraftVideoSrc)) {{
+                        const continueProgressSeen = !!window.__grokContinueProgressSeen;
+                        if (window.__grokContinueFlowActive && !continueProgressSeen) {{
+                            return {{ status: "waiting-for-progress-before-direct-url", src: firstDraftVideoSrc, sourceType: "first-draft-card" }};
+                        }}
                         return {{ status: "direct-url-ready", src: firstDraftVideoSrc, sourceType: "first-draft-card" }};
                     }}
 
@@ -13426,6 +13447,9 @@ class MainWindow(QMainWindow):
                 self.manual_generating_indicator_seen = True
                 self.manual_refresh_after_generating_sent = False
                 self.manual_refresh_after_progress_100_sent = False
+                # Treat the visible "Generating" indicator as a valid progress signal for continue-last-video.
+                self.manual_continue_progress_seen = True
+                self.manual_continue_progress_gate_logged = False
             elif was_generating:
                 self.manual_generating_indicator_seen = False
                 self._append_log(
@@ -13465,6 +13489,8 @@ class MainWindow(QMainWindow):
             if status == "progress":
                 self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
+                self.manual_continue_progress_seen = True
+                self.manual_continue_progress_gate_logged = False
                 progress_done = progress_text in {"100%", "100"}
                 if progress_done and not self.manual_refresh_after_progress_100_sent:
                     self.manual_refresh_after_progress_100_sent = True
@@ -13490,6 +13516,8 @@ class MainWindow(QMainWindow):
             if status == "generating-indicator-visible":
                 self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
+                self.manual_continue_progress_seen = True
+                self.manual_continue_progress_gate_logged = False
                 self.manual_refresh_after_progress_100_sent = False
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
@@ -13529,6 +13557,20 @@ class MainWindow(QMainWindow):
 
             if status == "make-video-visible":
                 self._append_log(f"Variant {current_variant}: '{result.get('buttonLabel') or 'Make video'}' is visible but click did not register; retrying.")
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                return
+
+            if status == "waiting-for-progress-before-direct-url":
+                if (
+                    self.continue_from_frame_active
+                    and self.continue_from_frame_seed_image_path is None
+                    and not self.manual_continue_progress_seen
+                    and not self.manual_continue_progress_gate_logged
+                ):
+                    self.manual_continue_progress_gate_logged = True
+                    self._append_log(
+                        f"Variant {current_variant}: detected a direct URL candidate before any render progress; waiting for progress polling before download."
+                    )
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
@@ -13978,6 +14020,8 @@ class MainWindow(QMainWindow):
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
+        self.manual_continue_progress_seen = False
+        self.manual_continue_progress_gate_logged = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -14440,6 +14484,8 @@ class MainWindow(QMainWindow):
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
+        self.manual_continue_progress_seen = False
+        self.manual_continue_progress_gate_logged = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
@@ -14666,6 +14712,8 @@ class MainWindow(QMainWindow):
         self.manual_generating_indicator_seen = False
         self.manual_refresh_after_generating_sent = False
         self.manual_refresh_after_progress_100_sent = False
+        self.manual_continue_progress_seen = False
+        self.manual_continue_progress_gate_logged = False
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
