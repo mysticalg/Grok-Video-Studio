@@ -842,13 +842,16 @@ class UdpAutomationService:
                 staged_payload = dict(payload)
                 staged_payload["filePath"] = file_path
                 cleanup_staged_file = False
+                cleanup_staged_dir: Path | None = None
 
                 if file_name_override:
-                    staging_dir = Path(tempfile.gettempdir()) / "grok_video_studio_uploads"
-                    staging_dir.mkdir(parents=True, exist_ok=True)
-                    staged_file_path = staging_dir / f"{int(time.time() * 1000)}_{file_name_override}"
+                    # Stage a physical copy that uses the exact requested upload filename.
+                    # Put it in a unique temp directory to avoid collisions across runs.
+                    staging_dir = Path(tempfile.mkdtemp(prefix="grok_video_studio_uploads_"))
+                    staged_file_path = staging_dir / file_name_override
                     shutil.copy2(source_file_path, staged_file_path)
                     cleanup_staged_file = True
+                    cleanup_staged_dir = staging_dir
                     staged_payload["filePath"] = str(staged_file_path)
 
                 try:
@@ -1096,6 +1099,11 @@ class UdpAutomationService:
                             staged_file_path.unlink(missing_ok=True)
                         except Exception:
                             pass
+                        if cleanup_staged_dir is not None:
+                            try:
+                                cleanup_staged_dir.rmdir()
+                            except Exception:
+                                pass
 
 
             if name == "platform.ensure_logged_in":
