@@ -152,6 +152,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         publish_mode = "draft"
     add_text = bool(opts.get("add_text_overlay"))
     add_music = bool(opts.get("add_music"))
+    rename_upload_filename = bool(opts.get("rename_upload_filename", True))
     music_unique_per_add = bool(opts.get("music_unique_per_add"))
     music_add_count = max(1, min(10, int(opts.get("music_add_count") or 2)))
     raw_music_queries = opts.get("music_queries_effective")
@@ -176,6 +177,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         log_fn,
         "start: "
         f"mode={publish_mode} add_text={add_text} add_music={add_music} "
+        f"rename_upload_filename={rename_upload_filename} "
         f"music_add_count={music_add_count} music_unique_per_add={music_unique_per_add} "
         f"music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}",
     )
@@ -187,10 +189,12 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     _pause(action_delay_s, step="startup_wait_after_login_check", log_fn=log_fn)
 
     upload_payload_request: dict[str, Any] = {"platform": "tiktok", "filePath": video_path}
-    if str(caption or "").strip():
+    if rename_upload_filename and str(caption or "").strip():
         upload_file_name = _build_upload_filename(video_path, caption, max_caption_chars=3000)
         upload_payload_request["fileName"] = upload_file_name
         _log(log_fn, f"upload.filename_override: fileName={upload_file_name} caption_chars={len(str(caption or '').strip())}")
+    else:
+        _log(log_fn, "upload.filename_override: disabled (using original source filename)")
 
     upload_result = executor.run("upload.select_file", upload_payload_request)
     upload_payload = upload_result.get("payload") or {}
