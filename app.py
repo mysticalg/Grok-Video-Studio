@@ -6309,7 +6309,7 @@ class MainWindow(QMainWindow):
                 "publish_mode": publish_mode,
                 "add_text_overlay": bool(loaded_tiktok_options.get("add_text_overlay")),
                 "add_music": bool(loaded_tiktok_options.get("add_music")),
-                "music_add_count": min(10, max(1, int(loaded_tiktok_options.get("music_add_count") or 2))),
+                "music_add_count": min(100, max(1, int(loaded_tiktok_options.get("music_add_count") or 2))),
                 "music_unique_per_add": bool(loaded_tiktok_options.get("music_unique_per_add")),
                 "music_query": str(loaded_tiktok_options.get("music_query") or "").strip(),
                 "rename_upload_filename": bool(loaded_tiktok_options.get("rename_upload_filename", True)),
@@ -6701,7 +6701,7 @@ class MainWindow(QMainWindow):
         if not track_candidates:
             return [base_query]
 
-        add_count = min(10, max(1, int(self.tiktok_upload_automation_options.get("music_add_count") or 2)))
+        add_count = min(100, max(1, int(self.tiktok_upload_automation_options.get("music_add_count") or 2)))
         unique_per_add = bool(self.tiktok_upload_automation_options.get("music_unique_per_add")) and add_count > 1
 
         rotate_tracks = bool(self.tiktok_upload_automation_options.get("rotate_track_names"))
@@ -18543,7 +18543,7 @@ class MainWindow(QMainWindow):
             saved_publish_mode = str(tiktok_options.get("publish_mode") or "draft").strip().lower()
             if saved_publish_mode not in {"draft", "post"}:
                 saved_publish_mode = "draft"
-            saved_music_add_count = min(10, max(1, int(tiktok_options.get("music_add_count") or 2)))
+            saved_music_add_count = min(100, max(1, int(tiktok_options.get("music_add_count") or 2)))
             saved_upload_filename_char_limit = min(3000, max(16, int(tiktok_options.get("upload_filename_char_limit") or 167)))
 
             dialog_layout.addWidget(QLabel("TikTok Automation: Publish Mode"))
@@ -18564,9 +18564,9 @@ class MainWindow(QMainWindow):
 
             dialog_layout.addWidget(QLabel("How many times to add the selected sound"))
             tiktok_music_add_count_input = QSpinBox()
-            tiktok_music_add_count_input.setRange(1, 10)
+            tiktok_music_add_count_input.setRange(1, 100)
             tiktok_music_add_count_input.setValue(saved_music_add_count)
-            tiktok_music_add_count_input.setToolTip("Repeatedly clicks Add sound in the editor (1-10).")
+            tiktok_music_add_count_input.setToolTip("Repeatedly clicks Add sound in the editor (1-100).")
             dialog_layout.addWidget(tiktok_music_add_count_input)
 
             tiktok_music_unique_per_add_input = QCheckBox("Use different sound search for each add (uses track list)")
@@ -18602,7 +18602,7 @@ class MainWindow(QMainWindow):
                 "publish_mode": str(tiktok_publish_mode_input.currentData() or "draft"),
                 "add_text_overlay": bool(tiktok_add_text_input.isChecked()) if tiktok_add_text_input is not None else False,
                 "add_music": bool(tiktok_add_music_input.isChecked()) if tiktok_add_music_input is not None else False,
-                "music_add_count": min(10, max(1, int(tiktok_music_add_count_input.value()))) if tiktok_music_add_count_input is not None else 2,
+                "music_add_count": min(100, max(1, int(tiktok_music_add_count_input.value()))) if tiktok_music_add_count_input is not None else 2,
                 "music_unique_per_add": bool(tiktok_music_unique_per_add_input.isChecked()) if tiktok_music_unique_per_add_input is not None else False,
                 "music_query": tiktok_music_query_input.text().strip() if tiktok_music_query_input is not None else "",
                 "rename_upload_filename": bool(tiktok_rename_upload_filename_input.isChecked()) if tiktok_rename_upload_filename_input is not None else True,

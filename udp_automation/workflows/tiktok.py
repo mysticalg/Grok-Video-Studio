@@ -147,7 +147,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     rename_upload_filename = bool(opts.get("rename_upload_filename", True))
     upload_filename_char_limit = min(3000, max(16, int(opts.get("upload_filename_char_limit") or 167)))
     music_unique_per_add = bool(opts.get("music_unique_per_add"))
-    music_add_count = max(1, min(10, int(opts.get("music_add_count") or 2)))
+    music_add_count = max(1, min(100, int(opts.get("music_add_count") or 2)))
     raw_music_queries = opts.get("music_queries_effective")
     music_queries: list[str] = []
     if isinstance(raw_music_queries, list):
