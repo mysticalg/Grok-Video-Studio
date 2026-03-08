@@ -3,6 +3,21 @@
 Desktop PySide6 app for generating AI videos, managing clips, previewing/stitching outputs, and publishing to social platforms with API + browser automation workflows.
 
 
+
+## Full documentation
+
+- **User guide (Markdown):** [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
+- **Printable PDF manual (generated locally):** run `python docs/generate_user_manual.py` to create `docs/out/Grok-Video-Studio-User-Manual.pdf`
+- **Workflow screenshots (generated locally):** created under `docs/out/assets/` by the same script
+
+## Latest feature highlights
+
+- YouTube upload workflow includes browser automation for Studio metadata, audience/visibility, optional scheduling, and publish.
+- Automation Chrome + CDP path supports extension relay messaging and DOM command execution.
+- UDP automation mode is available for cross-platform browser posting workflows (YouTube, TikTok, Facebook, Instagram, X).
+- Stitch pipeline includes crossfade, interpolation, upscale presets, GPU encode options, and music mixing.
+- AI Flow Trainer is available for recording/replaying browser workflows.
+
 ## Features
 
 - **Video generation**
