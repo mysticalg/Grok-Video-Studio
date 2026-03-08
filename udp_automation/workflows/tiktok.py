@@ -138,12 +138,17 @@ def _stage_upload_file(video_path: str, caption: str, *, max_caption_chars: int 
     caption_source = str(caption or "").strip()[:max_caption_chars]
     safe_stem = _sanitize_filename_stem(caption_source)
     caption_hash = hashlib.sha1(caption_source.encode("utf-8")).hexdigest()[:10] if caption_source else str(int(time.time()))
-    compact_stem = safe_stem[:120].rstrip(" _-") or "tiktok_upload"
     temp_dir = tempfile.mkdtemp(prefix="tiktok_upload_")
 
-    filename_attempts: list[str] = [f"{compact_stem}_{caption_hash}{extension}"]
-    if compact_stem != "tiktok_upload":
-        filename_attempts.append(f"{compact_stem[:80].rstrip(' _-')}_{caption_hash}{extension}")
+    # Prefer a long, caption-like filename stem first, then progressively shorten only if the OS rejects it.
+    stem_limits = (220, 180, 140)
+    stems: list[str] = []
+    for limit in stem_limits:
+        stem = (safe_stem[:limit].rstrip(" _-") or "tiktok_upload")
+        if stem not in stems:
+            stems.append(stem)
+
+    filename_attempts: list[str] = [f"{stem}_{caption_hash}{extension}" for stem in stems]
     filename_attempts.append(f"tiktok_upload_{caption_hash}{extension}")
 
     last_error: Exception | None = None
