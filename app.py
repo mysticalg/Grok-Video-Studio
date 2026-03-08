@@ -12514,11 +12514,11 @@ class MainWindow(QMainWindow):
                         }) || null)
                         : null;
                     const strictTypeTarget = (optionType === "type")
-                        ? (menuOptionCandidates.find(exactMatch) || menuOptionCandidates.find(fuzzyMatch) || radioVideoTarget || null)
+                        ? (menuOptionCandidates.find(exactMatch) || menuOptionCandidates.find(fuzzyMatch) || null)
                         : null;
 
                     const target = (optionType === "type")
-                        ? (menuMakeVideoTarget || strictTypeTarget)
+                        ? (menuMakeVideoTarget || radioVideoTarget || strictTypeTarget)
                         : (((optionType === "ratio" || optionType === "resolution" || optionType === "seconds")
                             ? (buttonCandidates.find(exactMatch) || buttonCandidates.find(fuzzyMatch))
                             : null)
@@ -12650,20 +12650,31 @@ class MainWindow(QMainWindow):
                                     const aria = clean(btn.getAttribute("aria-label"));
                                     const text = clean(btn.textContent);
                                     const role = clean(btn.getAttribute("role"));
-                                    return /^video$/.test(aria) || /^video$/.test(text) || role === "radio";
+                                    return role === "radio" && (/^video$/.test(aria) || /^video$/.test(text));
                                 }) || null);
                                 const target = submitTarget || videoToggleTarget;
                                 if (!target) return { ok: false, error: "make-video-button-not-found" };
-                                try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                                try { target.focus({ preventScroll: true }); } catch (_) {}
-                                try { target.click(); } catch (_) { return { ok: false, error: submitTarget ? "make-video-click-failed" : "video-toggle-click-failed" }; }
+
+                                // If this UI variant only exposes a mode radio, only click it when we can
+                                // confirm it's the Video control and it is not already selected.
+                                const role = clean(target.getAttribute("role"));
+                                const checked = clean(target.getAttribute("aria-checked"));
+                                const isVideoRadio = !submitTarget && role === "radio";
+                                const alreadyVideoSelected = isVideoRadio && checked === "true";
+
+                                if (!alreadyVideoSelected) {
+                                    try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                                    try { target.focus({ preventScroll: true }); } catch (_) {}
+                                    try { target.click(); } catch (_) { return { ok: false, error: submitTarget ? "make-video-click-failed" : "video-toggle-click-failed" }; }
+                                }
+
                                 window.__grokContinueSubmitGuardToken = submitGuardToken;
                                 window.__grokContinueSubmitClickedAt = now;
                                 if (!submitTarget) {
                                     return {
                                         ok: true,
                                         guarded: false,
-                                        status: "video-toggle-clicked",
+                                        status: alreadyVideoSelected ? "video-toggle-already-selected" : "video-toggle-clicked",
                                         requiresSubmit: true,
                                         label: (target.getAttribute("aria-label") || target.textContent || "").trim()
                                     };
