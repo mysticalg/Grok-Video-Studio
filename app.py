@@ -22,7 +22,7 @@ from urllib.parse import unquote, urlencode, urlparse, urlsplit
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QEasingCurve, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, QVariantAnimation, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -3202,8 +3202,6 @@ class MainWindow(QMainWindow):
         self._active_upload_context: dict[str, Any] = {}
         self.video_grid_size_mode = 0
         self.video_grid_titles_visible = True
-        self.video_grid_hover_scale = 1.0
-        self._video_grid_hover_animation: QVariantAnimation | None = None
         self.preview_zoom_percent = 100
         self._init_stats_database()
         self._load_video_metadata_cache()
@@ -3245,10 +3243,6 @@ class MainWindow(QMainWindow):
         if video_grid is not None and watched is video_grid.viewport():
             if event.type() == QEvent.Type.Resize:
                 QTimer.singleShot(0, self._apply_video_grid_layout)
-            elif event.type() == QEvent.Type.Leave:
-                self._animate_video_grid_hover(1.0)
-            elif event.type() == QEvent.Type.MouseMove and video_grid.itemAt(event.position().toPoint()) is None:
-                self._animate_video_grid_hover(1.0)
 
         if (
             self.stop_all_requested
@@ -3710,7 +3704,6 @@ class MainWindow(QMainWindow):
         self.video_grid.viewport().installEventFilter(self)
         self.video_grid.setSelectionMode(QAbstractItemView.SingleSelection)
         self.video_grid.setMouseTracking(True)
-        self.video_grid.itemEntered.connect(lambda _item: self._animate_video_grid_hover(1.06))
         self.video_grid.setMinimumHeight(260)
         self.video_grid.currentRowChanged.connect(self.show_selected_video)
 
@@ -14638,7 +14631,6 @@ class MainWindow(QMainWindow):
             cols -= 1
         cell_w = max(86, (viewport_width - ((cols + 1) * min_gap)) // cols)
         icon_actual = max(60, min(max_icon_for_mode, cell_w - 14))
-        icon_actual = int(max(48, round(icon_actual * float(self.video_grid_hover_scale))))
         gap = max(4, (viewport_width - (cols * cell_w)) // (cols + 1))
         cell_h = icon_actual + text_pad
 
@@ -14648,33 +14640,6 @@ class MainWindow(QMainWindow):
 
         self.video_thumb_size_toggle_btn.setText(f"Size {cfg['text']}")
         self.video_thumb_size_toggle_btn.setToolTip(str(cfg["tooltip"]))
-
-    def _animate_video_grid_hover(self, target_scale: float) -> None:
-        if not hasattr(self, "video_grid"):
-            return
-        target = max(1.0, min(1.15, float(target_scale)))
-        current = float(getattr(self, "video_grid_hover_scale", 1.0))
-        if abs(current - target) < 0.01:
-            return
-        if self._video_grid_hover_animation is not None:
-            self._video_grid_hover_animation.stop()
-        animation = QVariantAnimation(self)
-        animation.setDuration(140)
-        animation.setStartValue(current)
-        animation.setEndValue(target)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        def _on_value_changed(value: object) -> None:
-            try:
-                self.video_grid_hover_scale = float(value)
-            except Exception:
-                self.video_grid_hover_scale = target
-            self._apply_video_grid_layout()
-
-        animation.valueChanged.connect(_on_value_changed)
-        animation.finished.connect(lambda: setattr(self, "_video_grid_hover_animation", None))
-        self._video_grid_hover_animation = animation
-        animation.start()
 
     def _cycle_video_thumbnail_size(self) -> None:
         self.video_grid_size_mode = (int(self.video_grid_size_mode) + 1) % 3
