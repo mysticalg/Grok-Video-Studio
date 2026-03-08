@@ -279,9 +279,9 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
-    {"key": "continue_option_step_delay_ms", "label": "Continue-last-video option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
+    {"key": "continue_option_step_delay_ms", "label": "Continue-last-video option step delay", "min": 100, "max": 15000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
-    {"key": "continue_submit_after_prompt_delay_ms", "label": "Continue-last-video submit delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
+    {"key": "continue_submit_after_prompt_delay_ms", "label": "Continue-last-video submit delay", "min": 100, "max": 5000, "step": 50, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
     {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
     {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
@@ -323,7 +323,7 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
 
 AUTOMATION_TIMING_TAB_DESCRIPTIONS: dict[str, str] = {
     "General": "General automation settings including Grok/Sora core actions and manual submit behavior.",
-    "Grok Polling": "Grok generation timings grouped by function (New Video, Continue Video, and Multi-Video).",
+    "Grok Polling": "Grok generation timings grouped by function (New Video, Continue Video, and Multi-Video), including continue-last-video pacing controls.",
     "X": "Affects X upload automation steps only (compose click and description retries).",
     "TikTok": "Affects TikTok upload automation waits, click/editor timeouts, and submit behavior.",
     "Instagram": "Affects Instagram upload automation click and Next-step timing behavior.",
