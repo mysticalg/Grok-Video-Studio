@@ -3317,6 +3317,9 @@ class MainWindow(QMainWindow):
                 self._position_preview_fullscreen_overlay()
                 self._position_preview_fullscreen_progress_bar()
 
+        if watched is getattr(self, "automation_group", None) and event.type() == QEvent.Type.Resize:
+            self._layout_automation_controls()
+
         video_grid = getattr(self, "video_grid", None)
         if video_grid is not None and watched is video_grid.viewport():
             if event.type() == QEvent.Type.Resize:
@@ -3330,6 +3333,35 @@ class MainWindow(QMainWindow):
         ):
             self._clear_stop_all_flag(watched.text())
         return super().eventFilter(watched, event)
+
+    def _layout_automation_controls(self) -> None:
+        if not hasattr(self, "automation_buttons_layout") or not hasattr(self, "_automation_controls"):
+            return
+        controls = [control for control in self._automation_controls if control is not None]
+        if not controls:
+            return
+
+        group_width = self.automation_group.contentsRect().width() if hasattr(self, "automation_group") else 0
+        if group_width >= 980:
+            column_count = 4
+        elif group_width >= 540:
+            column_count = 2
+        else:
+            column_count = 1
+
+        while self.automation_buttons_layout.count():
+            item = self.automation_buttons_layout.takeAt(0)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                self.automation_buttons_layout.removeWidget(widget)
+
+        for index, control in enumerate(controls):
+            row = index // column_count
+            column = index % column_count
+            self.automation_buttons_layout.addWidget(control, row, column)
+
+        for column in range(column_count):
+            self.automation_buttons_layout.setColumnStretch(column, 1)
 
     def _clear_stop_all_flag(self, button_label: str) -> None:
         if not self.stop_all_requested:
@@ -3384,19 +3416,19 @@ class MainWindow(QMainWindow):
 
         self.automation_group = QGroupBox("🤖 Automation Chrome + CDP")
         automation_layout = QVBoxLayout(self.automation_group)
-        automation_buttons = QHBoxLayout()
+        self.automation_buttons_layout = QGridLayout()
+        self.automation_buttons_layout.setHorizontalSpacing(8)
+        self.automation_buttons_layout.setVerticalSpacing(8)
+        self.automation_group.installEventFilter(self)
 
         self.start_automation_chrome_btn = QPushButton("Start Automation Chrome")
         self.start_automation_chrome_btn.clicked.connect(self._start_automation_chrome)
-        automation_buttons.addWidget(self.start_automation_chrome_btn)
 
         self.connect_cdp_btn = QPushButton("Connect CDP")
         self.connect_cdp_btn.clicked.connect(self._connect_automation_cdp)
-        automation_buttons.addWidget(self.connect_cdp_btn)
 
         self.extension_ping_btn = QPushButton("Extension DOM Ping")
         self.extension_ping_btn.clicked.connect(self._run_extension_dom_ping)
-        automation_buttons.addWidget(self.extension_ping_btn)
 
         self.automation_mode = QComboBox()
         self.automation_mode.addItem("Embedded", "embedded")
@@ -3406,9 +3438,15 @@ class MainWindow(QMainWindow):
             "Embedded: run DOM automation in the in-app upload tab. External Browser: run automation only in Automation Chrome (external window)."
         )
         self.automation_mode.currentIndexChanged.connect(self._on_automation_mode_changed)
-        automation_buttons.addWidget(self.automation_mode)
+        self._automation_controls = [
+            self.start_automation_chrome_btn,
+            self.connect_cdp_btn,
+            self.extension_ping_btn,
+            self.automation_mode,
+        ]
+        self._layout_automation_controls()
 
-        automation_layout.addLayout(automation_buttons)
+        automation_layout.addLayout(self.automation_buttons_layout)
         left_layout.addWidget(self.automation_group)
 
         prompt_group = QGroupBox("✨ Prompt Inputs")
