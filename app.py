@@ -214,7 +214,10 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "manual_multi_video_poll_ms": 1200,
     "manual_multi_video_poll_fast_ms": 200,
     "sora_option_step_delay_ms": 2000,
+    # Continue-last-video often needs slower pacing than standard Sora staged clicks.
+    "continue_option_step_delay_ms": 2000,
     "sora_download_trigger_delay_ms": 700,
+    "continue_submit_after_prompt_delay_ms": 700,
     "manual_submit_result_poll_delay_ms": 350,
     "manual_poll_pause_cap_ms": 1500,
     "continue_post_reload_generation_delay_ms": 700,
@@ -276,7 +279,9 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
     {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
     {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
+    {"key": "continue_option_step_delay_ms", "label": "Continue-last-video option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
     {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
+    {"key": "continue_submit_after_prompt_delay_ms", "label": "Continue-last-video submit delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
     {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
     {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
     {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
@@ -12700,7 +12705,7 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated; toggled '{detail}' mode and now submitting for continue-last-video flow."
                                 )
                                 self.manual_continue_setup_in_progress = False
-                                QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
+                                QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
                                 return
                             else:
                                 detail = click_result.get("label") or "Make video"
@@ -12708,14 +12713,14 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(self._automation_timing(submit_delay_key), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
+                        QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
 
                     self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
                     return
@@ -12794,23 +12799,26 @@ class MainWindow(QMainWindow):
                                     f"Variant {variant}: prompt populated with trailing Enter ({flow_label} submit mode); moving to download polling (no button submit click)."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(self._automation_timing(submit_delay_key), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
                             return
 
                         self._append_log(
                             f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(self._automation_timing("sora_download_trigger_delay_ms"), _run_flow_submit)
+                        QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
 
                     self._run_active_browser_javascript(enter_script, _after_enter_press)
                     return
 
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _run_flow_submit)
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), _run_flow_submit)
 
             self._run_active_browser_javascript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+        # Continue-last-video often needs independent pacing controls versus generic Sora/manual flows.
+        option_step_delay_key = "continue_option_step_delay_ms" if continue_last_video_mode else "sora_option_step_delay_ms"
+        submit_delay_key = "continue_submit_after_prompt_delay_ms" if continue_last_video_mode else "sora_download_trigger_delay_ms"
         self.manual_continue_setup_in_progress = bool(continue_last_video_mode)
         if is_sora_manual_flow:
             option_steps = []
@@ -12838,7 +12846,7 @@ class MainWindow(QMainWindow):
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
                 self._append_log(f"Variant {variant}: all staged options attempted; continuing to prompt entry.")
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _populate_prompt_then_submit)
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), _populate_prompt_then_submit)
                 return
 
             step_name, label = option_steps[step_index]
@@ -12853,7 +12861,7 @@ class MainWindow(QMainWindow):
                     self._append_log(
                         f"WARNING: Variant {variant}: could not confirm click for {step_name} option '{label}'. result={step_result!r}"
                     )
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), lambda: _run_option_step(step_index + 1))
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), lambda: _run_option_step(step_index + 1))
 
             def _after_open(_open_result):
                 self._append_log(f"Variant {variant}: clicking {step_name} option '{label}'.")
@@ -12867,7 +12875,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, _populate_prompt_then_submit)
                 return
             self._append_log(f"Variant {variant}: starting staged option flow (re-open options before each selection).")
-            QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), lambda: _run_option_step(0))
+            QTimer.singleShot(self._automation_timing(option_step_delay_key), lambda: _run_option_step(0))
 
         def _after_location_check(location_result):
             current_url = ""
@@ -12878,10 +12886,10 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     "Manual flow: current page is not grok.com/imagine/favorites; staying on the current page for automated flow."
                 )
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _open_options_then_steps)
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), _open_options_then_steps)
             else:
                 self._append_log("Manual flow: already on grok.com/imagine/favorites.")
-                QTimer.singleShot(self._automation_timing("sora_option_step_delay_ms"), _open_options_then_steps)
+                QTimer.singleShot(self._automation_timing(option_step_delay_key), _open_options_then_steps)
 
         self._run_active_browser_javascript(
             "(() => ({ href: String((window.location && window.location.href) || '') }))()",
@@ -15748,6 +15756,9 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"Continue-from-last-frame: using extracted frame in native format ({upload_file_name}, {upload_mime}) for best color/profile fidelity."
         )
+        self._append_log(
+            "Continue-from-last-frame: attempting file-input upload first (path-style), then paste/drop fallback only if needed."
+        )
 
         frame_base64 = base64.b64encode(upload_file_path.read_bytes()).decode("ascii")
         self._remove_temp_last_frame_image(upload_file_path, context="browser upload prepared")
@@ -15837,8 +15848,9 @@ class MainWindow(QMainWindow):
                             ? [...new Set(scopedInputs)]
                             : [...document.querySelectorAll("input[type='file']")];
 
-                        // Upload only once: pick the first visible file input near the prompt,
-                        // then emit a single paste event to the prompt node as fallback.
+                        // Upload only once: pick the first visible file input near the prompt.
+                        // We intentionally prefer file-input assignment first so continuation can
+                        // work as a file-path style upload flow before any synthetic paste fallback.
                         let populatedInputs = 0;
                         const preferredInput = fileInputs.find((input) => isVisible(input)) || fileInputs[0];
                         if (preferredInput) {
