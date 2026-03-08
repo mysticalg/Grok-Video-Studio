@@ -3200,7 +3200,7 @@ class MainWindow(QMainWindow):
         self._last_usage_stats_flush_at = self.session_started_at
         self._video_metadata_cache: dict[str, dict[str, Any]] = {}
         self._active_upload_context: dict[str, Any] = {}
-        self.video_grid_compact_mode = False
+        self.video_grid_size_mode = 0
         self.video_grid_titles_visible = True
         self._init_stats_database()
         self._load_video_metadata_cache()
@@ -3237,6 +3237,11 @@ class MainWindow(QMainWindow):
             if self.preview.isFullScreen():
                 self._position_preview_fullscreen_overlay()
                 self._position_preview_fullscreen_progress_bar()
+
+        video_grid = getattr(self, "video_grid", None)
+        if video_grid is not None and watched is video_grid.viewport():
+            if event.type() == QEvent.Type.Resize:
+                QTimer.singleShot(0, self._apply_video_grid_layout)
 
         if (
             self.stop_all_requested
@@ -3669,9 +3674,8 @@ class MainWindow(QMainWindow):
 
         self.video_thumb_size_toggle_btn = QToolButton()
         self.video_thumb_size_toggle_btn.setText("◻")
-        self.video_thumb_size_toggle_btn.setCheckable(True)
-        self.video_thumb_size_toggle_btn.setToolTip("Toggle compact thumbnail size.")
-        self.video_thumb_size_toggle_btn.toggled.connect(self._toggle_video_thumbnail_size)
+        self.video_thumb_size_toggle_btn.setToolTip("Cycle thumbnail size: large → small → extra small.")
+        self.video_thumb_size_toggle_btn.clicked.connect(self._cycle_video_thumbnail_size)
         view_toggle_row.addWidget(self.video_thumb_size_toggle_btn)
 
         self.video_thumb_titles_toggle_btn = QToolButton()
@@ -3692,9 +3696,10 @@ class MainWindow(QMainWindow):
         self.video_grid.setMovement(QListWidget.Static)
         self.video_grid.setWrapping(True)
         self.video_grid.setUniformItemSizes(True)
-        self.video_grid.setSpacing(10)
+        self.video_grid.setSpacing(8)
         self.video_grid.setIconSize(QPixmap(160, 160).size())
         self.video_grid.setGridSize(QPixmap(180, 200).size())
+        self.video_grid.viewport().installEventFilter(self)
         self.video_grid.setSelectionMode(QAbstractItemView.SingleSelection)
         self.video_grid.setMinimumHeight(354)
         self.video_grid.currentRowChanged.connect(self.show_selected_video)
@@ -14519,18 +14524,48 @@ class MainWindow(QMainWindow):
         )
         self._set_selected_video_index(selected_index)
 
-    def _toggle_video_thumbnail_size(self, compact_mode: bool) -> None:
-        self.video_grid_compact_mode = bool(compact_mode)
-        if self.video_grid_compact_mode:
-            self.video_grid.setIconSize(QPixmap(110, 110).size())
-            self.video_grid.setGridSize(QPixmap(130, 150).size())
-            self.video_thumb_size_toggle_btn.setText("▫")
-            self.video_thumb_size_toggle_btn.setToolTip("Switch to larger thumbnails.")
-        else:
-            self.video_grid.setIconSize(QPixmap(160, 160).size())
-            self.video_grid.setGridSize(QPixmap(180, 200).size())
-            self.video_thumb_size_toggle_btn.setText("◻")
-            self.video_thumb_size_toggle_btn.setToolTip("Switch to compact thumbnails.")
+    def _video_thumb_mode_config(self, mode: int) -> dict[str, Any]:
+        clamped = max(0, min(2, int(mode)))
+        if clamped == 2:
+            return {"icon": 72, "cell": 86, "text": "▪", "tooltip": "Cycle thumbnail size: large → small → extra small."}
+        if clamped == 1:
+            return {"icon": 108, "cell": 126, "text": "▫", "tooltip": "Cycle thumbnail size: large → small → extra small."}
+        return {"icon": 160, "cell": 182, "text": "◻", "tooltip": "Cycle thumbnail size: large → small → extra small."}
+
+    def _apply_video_grid_layout(self) -> None:
+        if not hasattr(self, "video_grid"):
+            return
+        cfg = self._video_thumb_mode_config(self.video_grid_size_mode)
+        icon_px = int(cfg["icon"])
+        base_cell = int(cfg["cell"])
+        text_rows = 0 if not self.video_grid_titles_visible else 2
+        text_pad = 10 if not self.video_grid_titles_visible else (24 if text_rows > 1 else 18)
+        viewport_width = max(120, self.video_grid.viewport().width())
+
+        ideal_cols = max(1, round(viewport_width / max(1, base_cell)))
+        cols = max(1, ideal_cols)
+        min_gap = 6
+        max_icon_for_mode = icon_px
+        while cols > 1:
+            candidate_cell = (viewport_width - ((cols + 1) * min_gap)) // cols
+            if candidate_cell >= (max_icon_for_mode + 14):
+                break
+            cols -= 1
+        cell_w = max(86, (viewport_width - ((cols + 1) * min_gap)) // cols)
+        icon_actual = max(60, min(max_icon_for_mode, cell_w - 14))
+        gap = max(4, (viewport_width - (cols * cell_w)) // (cols + 1))
+        cell_h = icon_actual + text_pad
+
+        self.video_grid.setSpacing(gap)
+        self.video_grid.setIconSize(QPixmap(icon_actual, icon_actual).size())
+        self.video_grid.setGridSize(QPixmap(cell_w, cell_h).size())
+
+        self.video_thumb_size_toggle_btn.setText(str(cfg["text"]))
+        self.video_thumb_size_toggle_btn.setToolTip(str(cfg["tooltip"]))
+
+    def _cycle_video_thumbnail_size(self) -> None:
+        self.video_grid_size_mode = (int(self.video_grid_size_mode) + 1) % 3
+        self._apply_video_grid_layout()
         self._refresh_video_picker(selected_index=self._selected_video_index())
 
     def _toggle_video_thumbnail_titles(self, show_titles: bool) -> None:
@@ -14539,9 +14574,11 @@ class MainWindow(QMainWindow):
         self.video_thumb_titles_toggle_btn.setToolTip(
             "Hide thumbnail titles." if show_titles else "Show thumbnail titles."
         )
+        self._apply_video_grid_layout()
         self._refresh_video_picker(selected_index=self._selected_video_index())
 
     def _refresh_video_picker(self, selected_index: int = -1) -> None:
+        self._apply_video_grid_layout()
         self.video_grid.blockSignals(True)
         self.video_details.blockSignals(True)
         self.video_grid.clear()
