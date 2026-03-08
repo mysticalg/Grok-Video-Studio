@@ -49,7 +49,10 @@ def _safe_instagram_url(url: str | None) -> str:
     return "https://www.instagram.com/"
 
 
-def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str = "") -> dict[str, Any]:
+def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str = "", options: dict[str, Any] | None = None) -> dict[str, Any]:
+    opts = options or {}
+    click_timeout_ms = max(1000, int(opts.get("instagram_click_timeout_ms") or 10000))
+    next_timeout_ms = max(1000, int(opts.get("instagram_next_timeout_ms") or 12000))
     log_callback = getattr(executor, "log_callback", None)
     if callable(log_callback):
         try:
@@ -70,16 +73,15 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     )
     executor.run("platform.ensure_logged_in", {"platform": "instagram"})
 
-    # Start from profile/home page: open Create -> Post and then attach media.
-    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=10000)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=10000)
-    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)
-    _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=10000)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Post')", timeout_ms=10000)
-    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=10000)
+    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Post')", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=click_timeout_ms)
 
-    _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]")
-    _best_effort_click(executor, "instagram", "div[role='button'][aria-label*='Select from computer' i]")
+    _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "div[role='button'][aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
 
     upload_result = executor.run("upload.select_file", {"platform": "instagram", "filePath": video_path})
     upload_payload = upload_result.get("payload") or {}
@@ -88,9 +90,8 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
         detail = upload_payload.get("message") or "automatic file input was not found"
         raise RuntimeError(f"Instagram upload needs manual file selection ({reason}): {detail}")
 
-    # Instagram post flow requires two Next clicks before caption/share.
-    _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=12000)
-    _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=12000)
+    _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
+    _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
 
     executor.run("form.fill", {"platform": "instagram", "fields": {"description": caption}})
     executor.run("post.submit", {"platform": "instagram"})

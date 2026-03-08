@@ -221,46 +221,102 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "manual_video_mode_settle_extra_ms": 260,
     "manual_form_option_step_delay_ms": 1000,
     "manual_form_submit_delay_ms": 1000,
+    "x_compose_click_timeout_ms": 8000,
+    "x_description_fill_attempts": 3,
+    "x_description_fill_retry_delay_ms": 500,
+    "tiktok_action_delay_ms": 870,
+    "tiktok_click_timeout_ms": 60000,
+    "tiktok_editor_timeout_ms": 120000,
+    "tiktok_submit_timeout_ms": 120000,
+    "instagram_click_timeout_ms": 10000,
+    "instagram_next_timeout_ms": 12000,
+    "youtube_step_delay_ms": 1200,
+    "youtube_form_fill_attempts": 3,
+    "youtube_publish_attempts": 2,
+    "youtube_click_timeout_ms": 8000,
+    "facebook_step_delay_ms": 1000,
+    "facebook_form_fill_attempts": 1,
+    "facebook_click_timeout_ms": 10000,
+    "facebook_upload_start_timeout_ms": 25000,
+    "facebook_upload_start_poll_ms": 350,
+    "facebook_upload_ready_timeout_ms": 120000,
+    "facebook_upload_ready_poll_ms": 500,
+    "facebook_composer_wait_timeout_ms": 45000,
+    "facebook_composer_wait_poll_ms": 400,
+    "facebook_dom_type_timeout_ms": 8000,
 }
 
 AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
-    {"key": "automation_action_delay_ms", "label": "Automation action delay", "min": 100, "max": 10000, "step": 10, "group": "General"},
+    {"key": "automation_action_delay_ms", "label": "Automation action delay", "min": 100, "max": 10000, "step": 10, "group": "General", "tab": "General"},
     {"key": "automation_retry_attempts", "label": "Retry attempts", "min": 1, "max": 20, "step": 1, "group": "General", "suffix": " attempts"},
-    {"key": "manual_download_poll_interval_ms", "label": "Manual download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General"},
-    {"key": "continue_download_poll_interval_ms", "label": "Continue download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General"},
-    {"key": "manual_submit_handoff_timeout_ms", "label": "Manual submit handoff timeout", "min": 5000, "max": 120000, "step": 500, "group": "Grok Manual Submit"},
-    {"key": "manual_submit_handoff_poll_ms", "label": "Manual submit handoff poll interval", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
-    {"key": "manual_submit_retry_delay_ms", "label": "Manual submit retry delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
-    {"key": "manual_post_submit_idle_ms", "label": "Post-submit idle window", "min": 0, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
-    {"key": "manual_submit_poll_delay_ms", "label": "Submit poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_post_submit_success_delay_ms", "label": "Post-submit success poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_pick_detected_poll_delay_ms", "label": "Manual-pick detected poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling"},
-    {"key": "manual_pick_wait_poll_delay_ms", "label": "Manual-pick wait poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_fast_ms", "label": "Phase poll (fast)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_medium_ms", "label": "Phase poll (medium)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_slow_ms", "label": "Phase poll (slow)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_recovery_ms", "label": "Phase poll (recovery)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_backoff_ms", "label": "Phase poll (backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_hard_backoff_ms", "label": "Phase poll (hard backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling"},
-    {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora"},
-    {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora"},
-    {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
-    {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "multi_video_download_finish_poll_ms", "label": "Multi-video finish poll delay", "min": 0, "max": 5000, "step": 50, "group": "Grok Polling"},
+    {"key": "manual_download_poll_interval_ms", "label": "Manual download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General", "tab": "General"},
+    {"key": "continue_download_poll_interval_ms", "label": "Continue download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General", "tab": "General"},
+    {"key": "manual_submit_handoff_timeout_ms", "label": "Manual submit handoff timeout", "min": 5000, "max": 120000, "step": 500, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_submit_handoff_poll_ms", "label": "Manual submit handoff poll interval", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_submit_retry_delay_ms", "label": "Manual submit retry delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_post_submit_idle_ms", "label": "Post-submit idle window", "min": 0, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_submit_poll_delay_ms", "label": "Submit poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_post_submit_success_delay_ms", "label": "Post-submit success poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_pick_detected_poll_delay_ms", "label": "Manual-pick detected poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_pick_wait_poll_delay_ms", "label": "Manual-pick wait poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_fast_ms", "label": "Phase poll (fast)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_medium_ms", "label": "Phase poll (medium)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_slow_ms", "label": "Phase poll (slow)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_recovery_ms", "label": "Phase poll (recovery)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_backoff_ms", "label": "Phase poll (backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_hard_backoff_ms", "label": "Phase poll (hard backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
+    {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
+    {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "multi_video_download_finish_poll_ms", "label": "Multi-video finish poll delay", "min": 0, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
     {"key": "multi_video_status_log_every_attempts", "label": "Multi-video status log every N attempts", "min": 1, "max": 20, "step": 1, "group": "Grok Polling", "suffix": " attempts"},
-    {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Grok Polling"},
-    {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
-    {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
-    {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
-    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
-)
+    {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "x_compose_click_timeout_ms", "label": "Compose button click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Composer", "tab": "X"},
+    {"key": "x_description_fill_attempts", "label": "Description fill attempts", "min": 1, "max": 20, "step": 1, "group": "Composer", "suffix": " attempts", "tab": "X"},
+    {"key": "x_description_fill_retry_delay_ms", "label": "Description fill retry delay", "min": 0, "max": 10000, "step": 50, "group": "Composer", "tab": "X"},
+    {"key": "tiktok_action_delay_ms", "label": "Action settle delay", "min": 0, "max": 10000, "step": 50, "group": "Core", "tab": "TikTok"},
+    {"key": "tiktok_click_timeout_ms", "label": "General click timeout", "min": 1000, "max": 180000, "step": 500, "group": "Core", "tab": "TikTok"},
+    {"key": "tiktok_editor_timeout_ms", "label": "Editor open timeout", "min": 1000, "max": 240000, "step": 500, "group": "Core", "tab": "TikTok"},
+    {"key": "tiktok_submit_timeout_ms", "label": "Submit timeout", "min": 1000, "max": 240000, "step": 500, "group": "Core", "tab": "TikTok"},
+    {"key": "instagram_click_timeout_ms", "label": "Default click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Instagram"},
+    {"key": "instagram_next_timeout_ms", "label": "Next button timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Instagram"},
+    {"key": "youtube_step_delay_ms", "label": "Step delay", "min": 0, "max": 10000, "step": 50, "group": "Core", "tab": "YouTube"},
+    {"key": "youtube_form_fill_attempts", "label": "Metadata fill attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "YouTube"},
+    {"key": "youtube_publish_attempts", "label": "Publish attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "YouTube"},
+    {"key": "youtube_click_timeout_ms", "label": "Default click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "YouTube"},
+    {"key": "facebook_step_delay_ms", "label": "Step delay", "min": 0, "max": 10000, "step": 50, "group": "Core", "tab": "Facebook"},
+    {"key": "facebook_form_fill_attempts", "label": "Description fill attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "Facebook"},
+    {"key": "facebook_click_timeout_ms", "label": "Default click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Facebook"},
+    {"key": "facebook_upload_start_timeout_ms", "label": "Upload start timeout", "min": 1000, "max": 240000, "step": 500, "group": "Upload Readiness", "tab": "Facebook"},
+    {"key": "facebook_upload_start_poll_ms", "label": "Upload start poll interval", "min": 100, "max": 10000, "step": 50, "group": "Upload Readiness", "tab": "Facebook"},
+    {"key": "facebook_upload_ready_timeout_ms", "label": "Upload ready timeout", "min": 1000, "max": 300000, "step": 500, "group": "Upload Readiness", "tab": "Facebook"},
+    {"key": "facebook_upload_ready_poll_ms", "label": "Upload ready poll interval", "min": 100, "max": 10000, "step": 50, "group": "Upload Readiness", "tab": "Facebook"},
+    {"key": "facebook_composer_wait_timeout_ms", "label": "Composer wait timeout", "min": 1000, "max": 180000, "step": 500, "group": "Composer", "tab": "Facebook"},
+    {"key": "facebook_composer_wait_poll_ms", "label": "Composer wait poll interval", "min": 100, "max": 10000, "step": 50, "group": "Composer", "tab": "Facebook"},
+    {"key": "facebook_dom_type_timeout_ms", "label": "DOM type timeout", "min": 1000, "max": 60000, "step": 500, "group": "Composer", "tab": "Facebook"},
+ )
+
+AUTOMATION_TIMING_TAB_DESCRIPTIONS: dict[str, str] = {
+    "General": "General automation settings including Grok/Sora core actions and manual submit behavior.",
+    "Grok Polling": "Grok polling/retry cadence for manual generation, multi-video, and continue flows.",
+    "X": "Affects X upload automation steps only (compose click and description retries).",
+    "TikTok": "Affects TikTok upload automation waits, click/editor timeouts, and submit behavior.",
+    "Instagram": "Affects Instagram upload automation click and Next-step timing behavior.",
+    "YouTube": "Affects YouTube upload automation delays, retries, and publish step timing.",
+    "Facebook": "Affects Facebook upload readiness polling, composer waits, and fallback fill timing.",
+}
 
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
@@ -2863,6 +2919,7 @@ class UdpWorkflowWorker(QThread):
         executor_mode: str = "udp",
         local_command_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
         tiktok_options: dict[str, Any] | None = None,
+        upload_timing_values: dict[str, int] | None = None,
     ):
         super().__init__()
         self.platform_name = platform_name
@@ -2875,6 +2932,7 @@ class UdpWorkflowWorker(QThread):
         self.executor_mode = str(executor_mode or "udp").lower()
         self.local_command_handler = local_command_handler
         self.tiktok_options = dict(tiktok_options or {})
+        self.upload_timing_values = dict(upload_timing_values or {})
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -2904,20 +2962,40 @@ class UdpWorkflowWorker(QThread):
             platform = self.platform_name.lower()
 
             if platform == "youtube":
-                result = udp_youtube_workflow.run(executor, self.video_path, self.title, self.caption)
+                result = udp_youtube_workflow.run(
+                    executor,
+                    self.video_path,
+                    self.title,
+                    self.caption,
+                    options=self.upload_timing_values,
+                )
             elif platform == "tiktok":
                 result = udp_tiktok_workflow.run(
                     executor,
                     self.video_path,
                     self.caption,
-                    {**self.tiktok_options, "_log_callback": _log_step},
+                    {**self.tiktok_options, **self.upload_timing_values, "_log_callback": _log_step},
                 )
             elif platform == "facebook":
-                result = udp_facebook_workflow.run(executor, self.video_path, self.caption, self.title, self.platform_url, _log_step)
+                result = udp_facebook_workflow.run(
+                    executor,
+                    self.video_path,
+                    self.caption,
+                    self.title,
+                    self.platform_url,
+                    _log_step,
+                    options=self.upload_timing_values,
+                )
             elif platform == "instagram":
-                result = udp_instagram_workflow.run(executor, self.video_path, self.caption, self.platform_url)
+                result = udp_instagram_workflow.run(
+                    executor,
+                    self.video_path,
+                    self.caption,
+                    self.platform_url,
+                    options=self.upload_timing_values,
+                )
             elif platform == "x":
-                result = udp_x_workflow.run(executor, self.video_path, self.caption)
+                result = udp_x_workflow.run(executor, self.video_path, self.caption, options=self.upload_timing_values)
             else:
                 raise RuntimeError(f"UDP workflow not implemented for {self.platform_name}")
             self.finished_with_result.emit(json.dumps(result, ensure_ascii=False))
@@ -4714,18 +4792,34 @@ class MainWindow(QMainWindow):
         settings_layout = QVBoxLayout(settings_container)
 
         ai_group = QGroupBox("AI Generation")
-        ai_layout = QFormLayout(ai_group)
+        ai_columns_layout = QHBoxLayout(ai_group)
+        ai_columns_layout.setContentsMargins(10, 8, 10, 8)
+        ai_columns_layout.setSpacing(14)
+        ai_left_form = QFormLayout()
+        ai_right_form = QFormLayout()
+        ai_left_form.setSpacing(6)
+        ai_right_form.setSpacing(6)
+        ai_columns_layout.addLayout(ai_left_form, 1)
+        ai_columns_layout.addLayout(ai_right_form, 1)
+        ai_column_loads = [0, 0]
+
+        def ai_add_row(label: str, widget: QWidget | QLayout, *, weight: int = 1) -> None:
+            column_index = 0 if ai_column_loads[0] <= ai_column_loads[1] else 1
+            target_layout = ai_left_form if column_index == 0 else ai_right_form
+            target_layout.addRow(label, widget)
+            ai_column_loads[column_index] += max(1, int(weight))
 
         self.api_key = QLineEdit()
         self.api_key.setEchoMode(QLineEdit.Password)
         self.api_key.setText(os.getenv("GROK_API_KEY", ""))
-        ai_layout.addRow("Grok API Key", self.api_key)
+        self.api_key.setMaximumWidth(420)
+        ai_add_row("Grok API Key", self.api_key)
 
         self.chat_model = QLineEdit(os.getenv("GROK_CHAT_MODEL", "grok-3-mini"))
-        ai_layout.addRow("Chat Model", self.chat_model)
+        ai_add_row("Chat Model", self.chat_model)
 
         self.image_model = QLineEdit(os.getenv("GROK_VIDEO_MODEL", "grok-video-latest"))
-        ai_layout.addRow("Video Model", self.image_model)
+        ai_add_row("Video Model", self.image_model)
 
         self.prompt_source = QComboBox()
         self.prompt_source.addItem("Manual prompt (no API)", "manual")
@@ -4733,53 +4827,55 @@ class MainWindow(QMainWindow):
         self.prompt_source.addItem("OpenAI API", "openai")
         self.prompt_source.addItem("Ollama (local)", "ollama")
         self.prompt_source.currentIndexChanged.connect(self._toggle_prompt_source_fields)
-        ai_layout.addRow("Prompt Source", self.prompt_source)
+        ai_add_row("Prompt Source", self.prompt_source)
 
         self.video_provider = QComboBox()
         self.video_provider.addItem("Grok Imagine API", "grok")
         self.video_provider.addItem("OpenAI Sora 2 API", "openai")
         self.video_provider.addItem("Seedance 2.0 API", "seedance")
         self.video_provider.currentIndexChanged.connect(self._toggle_prompt_source_fields)
-        ai_layout.addRow("Video Provider", self.video_provider)
+        ai_add_row("Video Provider", self.video_provider)
 
         self.openai_api_key = QLineEdit()
         self.openai_api_key.setEchoMode(QLineEdit.Password)
         self.openai_api_key.setPlaceholderText("Optional OpenAI API key (preferred when available)")
         self.openai_api_key.setText(os.getenv("OPENAI_API_KEY", ""))
-        ai_layout.addRow("OpenAI API Key", self.openai_api_key)
+        self.openai_api_key.setMaximumWidth(420)
+        ai_add_row("OpenAI API Key", self.openai_api_key)
 
         self.openai_access_token = QLineEdit()
         self.openai_access_token.setEchoMode(QLineEdit.Password)
         self.openai_access_token.setPlaceholderText("Optional bearer token from OAuth/browser sign-in flow")
         self.openai_access_token.setText(os.getenv("OPENAI_ACCESS_TOKEN", ""))
-        ai_layout.addRow("OpenAI Access Token", self.openai_access_token)
+        self.openai_access_token.setMaximumWidth(420)
+        ai_add_row("OpenAI Access Token", self.openai_access_token)
 
         self.openai_chat_model = QLineEdit(os.getenv("OPENAI_CHAT_MODEL", "gpt-5.1-codex"))
-        ai_layout.addRow("OpenAI Chat Model", self.openai_chat_model)
+        ai_add_row("OpenAI Chat Model", self.openai_chat_model)
 
         self.ai_timeout_seconds = QSpinBox()
         self.ai_timeout_seconds.setRange(5, 3600)
         self.ai_timeout_seconds.setValue(int(AI_TEXT_TIMEOUT_SECONDS))
         self.ai_timeout_seconds.setSuffix(" s")
         self.ai_timeout_seconds.setToolTip("Timeout used for AI text requests (Grok/OpenAI/Ollama prompt calls).")
-        ai_layout.addRow("AI Text Timeout", self.ai_timeout_seconds)
+        ai_add_row("AI Text Timeout", self.ai_timeout_seconds)
 
         self.ai_max_output_tokens = QSpinBox()
         self.ai_max_output_tokens.setRange(128, 65536)
         self.ai_max_output_tokens.setValue(int(AI_MAX_OUTPUT_TOKENS))
         self.ai_max_output_tokens.setToolTip("Max tokens for Grok/OpenAI text responses.")
-        ai_layout.addRow("AI Max Output Tokens", self.ai_max_output_tokens)
+        ai_add_row("AI Max Output Tokens", self.ai_max_output_tokens)
 
         self.ai_max_output_tokens_local = QSpinBox()
         self.ai_max_output_tokens_local.setRange(64, 65536)
         self.ai_max_output_tokens_local.setValue(int(AI_MAX_OUTPUT_TOKENS_LOCAL))
         self.ai_max_output_tokens_local.setToolTip("Max tokens for Ollama local responses.")
-        ai_layout.addRow("AI Max Output Tokens (Ollama)", self.ai_max_output_tokens_local)
+        ai_add_row("AI Max Output Tokens (Ollama)", self.ai_max_output_tokens_local)
 
         self.ollama_api_base = QLineEdit(os.getenv("OLLAMA_API_BASE", OLLAMA_API_BASE))
         self.ollama_api_base.setPlaceholderText("http://127.0.0.1:11434/v1")
         self.ollama_api_base.editingFinished.connect(self._refresh_ollama_chat_models)
-        ai_layout.addRow("Ollama API Base", self.ollama_api_base)
+        ai_add_row("Ollama API Base", self.ollama_api_base)
 
         self.ollama_chat_model = QComboBox()
         self.ollama_chat_model.setEditable(True)
@@ -4790,32 +4886,67 @@ class MainWindow(QMainWindow):
         ollama_model_row = QHBoxLayout()
         ollama_model_row.addWidget(self.ollama_chat_model, 1)
         ollama_model_row.addWidget(self.refresh_ollama_models_btn)
-        ai_layout.addRow("Ollama Chat Model", ollama_model_row)
+        ai_add_row("Ollama Chat Model", ollama_model_row)
         self._refresh_ollama_chat_models(initial=True)
 
         self.seedance_api_key = QLineEdit()
         self.seedance_api_key.setEchoMode(QLineEdit.Password)
         self.seedance_api_key.setPlaceholderText("Seedance API key")
         self.seedance_api_key.setText(os.getenv("SEEDANCE_API_KEY", ""))
-        ai_layout.addRow("Seedance API Key", self.seedance_api_key)
+        self.seedance_api_key.setMaximumWidth(420)
+        ai_add_row("Seedance API Key", self.seedance_api_key)
 
         self.seedance_oauth_token = QLineEdit()
         self.seedance_oauth_token.setEchoMode(QLineEdit.Password)
         self.seedance_oauth_token.setPlaceholderText("Optional OAuth bearer token (if provided by Seedance)")
         self.seedance_oauth_token.setText(os.getenv("SEEDANCE_OAUTH_TOKEN", ""))
-        ai_layout.addRow("Seedance OAuth Token", self.seedance_oauth_token)
+        self.seedance_oauth_token.setMaximumWidth(420)
+        ai_add_row("Seedance OAuth Token", self.seedance_oauth_token)
 
         self.ai_auth_method = QComboBox()
         self.ai_auth_method.addItem("API key", "api_key")
         self.ai_auth_method.addItem("Browser sign-in (preferred)", "browser")
-        ai_layout.addRow("AI Authorization", self.ai_auth_method)
+        ai_add_row("AI Authorization", self.ai_auth_method)
 
         self.browser_auth_btn = QPushButton("Open Provider Login in Browser")
         self.browser_auth_btn.clicked.connect(self.open_ai_provider_login)
-        ai_layout.addRow("Browser Authorization", self.browser_auth_btn)
+        ai_add_row("Browser Authorization", self.browser_auth_btn)
 
         app_group = QGroupBox("App Preferences")
-        app_layout = QFormLayout(app_group)
+        app_columns_layout = QHBoxLayout(app_group)
+        app_columns_layout.setContentsMargins(10, 8, 10, 8)
+        app_columns_layout.setSpacing(14)
+        app_left_form = QFormLayout()
+        app_right_form = QFormLayout()
+        app_left_form.setSpacing(6)
+        app_right_form.setSpacing(6)
+        app_columns_layout.addLayout(app_left_form, 1)
+        app_columns_layout.addLayout(app_right_form, 1)
+        app_column_loads = [0, 0]
+
+        def app_add_row(label: str, widget: QWidget | QLayout, *, weight: int = 1) -> None:
+            column_index = 0 if app_column_loads[0] <= app_column_loads[1] else 1
+            target_layout = app_left_form if column_index == 0 else app_right_form
+            target_layout.addRow(label, widget)
+            app_column_loads[column_index] += max(1, int(weight))
+
+        def _set_max_width_recursive(widget_or_layout: QWidget | QLayout | None, max_width: int) -> None:
+            if widget_or_layout is None:
+                return
+            if isinstance(widget_or_layout, QWidget):
+                widget_or_layout.setMaximumWidth(max_width)
+                return
+            if isinstance(widget_or_layout, QLayout):
+                for index in range(widget_or_layout.count()):
+                    item = widget_or_layout.itemAt(index)
+                    if item is None:
+                        continue
+                    child_widget = item.widget()
+                    child_layout = item.layout()
+                    if child_widget is not None:
+                        child_widget.setMaximumWidth(max_width)
+                    if child_layout is not None:
+                        _set_max_width_recursive(child_layout, max_width)
 
         self.download_path_input = QLineEdit(str(self.download_dir))
         self.download_path_input.setReadOnly(True)
@@ -4824,7 +4955,7 @@ class MainWindow(QMainWindow):
         download_path_row = QHBoxLayout()
         download_path_row.addWidget(self.download_path_input)
         download_path_row.addWidget(choose_download_path_btn)
-        app_layout.addRow("Download Folder", download_path_row)
+        app_add_row("Download Folder", download_path_row)
 
         self.crossfade_duration = QDoubleSpinBox()
         self.crossfade_duration.setRange(0.1, 3.0)
@@ -4833,65 +4964,73 @@ class MainWindow(QMainWindow):
         self.crossfade_duration.setValue(0.5)
         self.crossfade_duration.setSuffix(" s")
         self.crossfade_duration.valueChanged.connect(self._sync_video_options_label)
-        app_layout.addRow("Crossfade Duration", self.crossfade_duration)
+        app_add_row("Crossfade Duration", self.crossfade_duration)
 
         self.manual_prompt_default_input = QPlainTextEdit()
         self.manual_prompt_default_input.setMaximumHeight(90)
         self.manual_prompt_default_input.setPlaceholderText("Default text used to prefill Manual Prompt.")
         self.manual_prompt_default_input.setPlainText(DEFAULT_MANUAL_PROMPT_TEXT)
-        app_layout.addRow("Default Manual Prompt", self.manual_prompt_default_input)
+        app_add_row("Default Manual Prompt", self.manual_prompt_default_input, weight=3)
 
         self.ai_concept_instruction_template_input = QPlainTextEdit()
         self.ai_concept_instruction_template_input.setMaximumHeight(70)
         self.ai_concept_instruction_template_input.setPlaceholderText("Template for concept-to-instruction text. Use {concept} placeholder.")
         self.ai_concept_instruction_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE)
-        app_layout.addRow("AI Concept Instruction Template", self.ai_concept_instruction_template_input)
+        app_add_row("AI Concept Instruction Template", self.ai_concept_instruction_template_input, weight=2)
 
         self.ai_concept_system_prompt_input = QPlainTextEdit()
         self.ai_concept_system_prompt_input.setMaximumHeight(80)
         self.ai_concept_system_prompt_input.setPlaceholderText("System prompt used for AI concept prompt generation.")
         self.ai_concept_system_prompt_input.setPlainText(DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT)
-        app_layout.addRow("AI Concept System Prompt", self.ai_concept_system_prompt_input)
+        app_add_row("AI Concept System Prompt", self.ai_concept_system_prompt_input, weight=3)
 
         self.ai_concept_user_prompt_template_input = QPlainTextEdit()
         self.ai_concept_user_prompt_template_input.setMaximumHeight(140)
         self.ai_concept_user_prompt_template_input.setPlaceholderText("User prompt template used for AI concept prompt generation. Use {instruction} placeholder.")
         self.ai_concept_user_prompt_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE)
-        app_layout.addRow("AI Concept User Prompt Template", self.ai_concept_user_prompt_template_input)
+        app_add_row("AI Concept User Prompt Template", self.ai_concept_user_prompt_template_input, weight=4)
 
         self.reset_ai_concept_templates_btn = QPushButton("Reset AI Concept Templates")
         self.reset_ai_concept_templates_btn.setToolTip("Restore recommended concept/system/user templates for the selected Prompt Source.")
         self.reset_ai_concept_templates_btn.clicked.connect(self.reset_ai_concept_templates)
-        app_layout.addRow("AI Concept Defaults", self.reset_ai_concept_templates_btn)
+        app_add_row("AI Concept Defaults", self.reset_ai_concept_templates_btn)
 
         self.custom_ai_hashtags_input = QLineEdit()
         self.custom_ai_hashtags_input.setPlaceholderText("Optional custom hashtags to append (comma or space separated)")
-        app_layout.addRow("Append Custom AI Hashtags", self.custom_ai_hashtags_input)
+        app_add_row("Append Custom AI Hashtags", self.custom_ai_hashtags_input)
 
         self.qtwebengine_remote_debug_enabled = QCheckBox("Enable QtWebEngine CDP remote debugging")
         self.qtwebengine_remote_debug_enabled.setChecked(_env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 0) > 0)
-        app_layout.addRow("CDP Remote Debugging", self.qtwebengine_remote_debug_enabled)
+        app_add_row("CDP Remote Debugging", self.qtwebengine_remote_debug_enabled)
 
         self.qtwebengine_remote_debug_port = QSpinBox()
         self.qtwebengine_remote_debug_port.setRange(1, 65535)
         self.qtwebengine_remote_debug_port.setValue(max(1, _env_int("GROK_QTWEBENGINE_REMOTE_DEBUG_PORT", 9222)))
         self.qtwebengine_remote_debug_port.setToolTip("Port used for QTWEBENGINE_REMOTE_DEBUGGING when enabled.")
-        app_layout.addRow("CDP Debug Port", self.qtwebengine_remote_debug_port)
+        app_add_row("CDP Debug Port", self.qtwebengine_remote_debug_port)
 
         remote_debug_note = QLabel("Applies on next app launch. Save settings, then restart the app.")
         remote_debug_note.setWordWrap(True)
-        app_layout.addRow("CDP Note", remote_debug_note)
+        app_add_row("CDP Note", remote_debug_note, weight=2)
 
         self.cdp_social_upload_relay_enabled = QCheckBox("Use CDP relay for social browser automation")
         self.cdp_social_upload_relay_enabled.setChecked(False)
-        app_layout.addRow("CDP Relay Mode", self.cdp_social_upload_relay_enabled)
+        app_add_row("CDP Relay Mode", self.cdp_social_upload_relay_enabled)
 
         self.cdp_social_upload_relay_url = QLineEdit(CDP_RELAY_SOCIAL_UPLOAD_URL)
         self.cdp_social_upload_relay_url.setPlaceholderText("http://127.0.0.1:8765/social-upload-step")
         self.cdp_social_upload_relay_url.setToolTip("Optional HTTP relay endpoint that performs CDP-backed social upload actions.")
         self.cdp_social_upload_relay_enabled.toggled.connect(lambda _: self._reset_cdp_relay_session_state())
         self.cdp_social_upload_relay_url.editingFinished.connect(self._reset_cdp_relay_session_state)
-        app_layout.addRow("CDP Relay URL", self.cdp_social_upload_relay_url)
+        app_add_row("CDP Relay URL", self.cdp_social_upload_relay_url)
+
+        left_column_max_width = 560
+        for form_layout in (ai_left_form, app_left_form):
+            for row_index in range(form_layout.rowCount()):
+                field_item = form_layout.itemAt(row_index, QFormLayout.ItemRole.FieldRole)
+                if field_item is None:
+                    continue
+                _set_max_width_recursive(field_item.widget() or field_item.layout(), left_column_max_width)
 
         settings_layout.addWidget(ai_group)
         settings_layout.addWidget(app_group)
@@ -5207,30 +5346,89 @@ class MainWindow(QMainWindow):
         self._apply_automation_timing_values(dict(AUTOMATION_TIMING_DEFAULTS), schedule_autosave=True)
         self._append_automation_log("Automation timings reset to defaults.")
 
+    def _automation_timing_tooltip(self, field: dict[str, Any]) -> str:
+        key = str(field.get("key") or "")
+        label = str(field.get("label") or key)
+        tab_name = str(field.get("tab") or "General")
+        group_name = str(field.get("group") or "General")
+        minimum = int(field.get("min", 0))
+        maximum = int(field.get("max", 60000))
+        step = int(field.get("step", 1))
+        suffix = str(field.get("suffix") or " ms")
+        default_value = int(AUTOMATION_TIMING_DEFAULTS.get(key, minimum))
+        scope_text = AUTOMATION_TIMING_TAB_DESCRIPTIONS.get(tab_name, "Affects automation behavior for this tab.")
+        return (
+            f"{label}: controls '{key}'.\n"
+            f"Scope: {scope_text}\n"
+            f"Group: {group_name}. Default: {default_value}{suffix}. Range: {minimum} to {maximum}{suffix}. Step: {step}{suffix}."
+        )
+
     def _open_automation_timings_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Automation Timings")
-        dialog.setMinimumWidth(560)
+        dialog.setMinimumWidth(980)
 
         layout = QVBoxLayout(dialog)
-        scroll = QScrollArea(dialog)
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
+        tabs = QTabWidget(dialog)
+        layout.addWidget(tabs)
 
         spinboxes: dict[str, QSpinBox] = {}
-        groups: dict[str, QFormLayout] = {}
-        group_boxes: dict[str, QGroupBox] = {}
+        tab_layouts: dict[str, QVBoxLayout] = {}
+        tab_columns: dict[str, tuple[QVBoxLayout, QVBoxLayout]] = {}
+        tab_column_loads: dict[str, list[int]] = {}
+        tab_groups: dict[tuple[str, str], QFormLayout] = {}
+        group_columns: dict[tuple[str, str], int] = {}
         for field in AUTOMATION_TIMING_FIELDS:
+            tab_name = str(field.get("tab") or "General")
             group_name = str(field.get("group") or "General")
-            if group_name not in groups:
+
+            if tab_name not in tab_layouts:
+                tab_widget = QWidget()
+                tab_layout = QVBoxLayout(tab_widget)
+                tab_layout.setContentsMargins(8, 8, 8, 8)
+                tab_layout.setSpacing(8)
+                tab_layouts[tab_name] = tab_layout
+
+                columns_layout = QHBoxLayout()
+                columns_layout.setSpacing(12)
+                left_column = QVBoxLayout()
+                right_column = QVBoxLayout()
+                left_column.setSpacing(8)
+                right_column.setSpacing(8)
+                columns_layout.addLayout(left_column, 1)
+                columns_layout.addLayout(right_column, 1)
+                tab_layout.addLayout(columns_layout)
+                tab_columns[tab_name] = (left_column, right_column)
+                tab_column_loads[tab_name] = [0, 0]
+
+                tab_index = tabs.addTab(tab_widget, tab_name)
+                tabs.setTabToolTip(tab_index, AUTOMATION_TIMING_TAB_DESCRIPTIONS.get(tab_name, "Settings for this automation scope."))
+
+            group_key = (tab_name, group_name)
+            if group_key not in tab_groups:
                 group_box = QGroupBox(group_name)
-                form_layout = QFormLayout(group_box)
-                form_layout.setContentsMargins(10, 8, 10, 8)
-                form_layout.setSpacing(6)
-                groups[group_name] = form_layout
-                group_boxes[group_name] = group_box
-                container_layout.addWidget(group_box)
+                if tab_name == "Grok Polling" and group_name == "Grok Polling":
+                    group_outer_layout = QHBoxLayout(group_box)
+                    group_outer_layout.setContentsMargins(10, 8, 10, 8)
+                    group_outer_layout.setSpacing(10)
+                    left_form = QFormLayout()
+                    right_form = QFormLayout()
+                    left_form.setSpacing(6)
+                    right_form.setSpacing(6)
+                    group_outer_layout.addLayout(left_form, 1)
+                    group_outer_layout.addLayout(right_form, 1)
+                    tab_groups[group_key] = {"forms": (left_form, right_form), "count": 0}
+                else:
+                    form_layout = QFormLayout(group_box)
+                    form_layout.setContentsMargins(10, 8, 10, 8)
+                    form_layout.setSpacing(6)
+                    tab_groups[group_key] = form_layout
+
+                left_load, right_load = tab_column_loads[tab_name]
+                column_index = 0 if left_load <= right_load else 1
+                group_columns[group_key] = column_index
+                tab_columns[tab_name][column_index].addWidget(group_box)
+
             spin = QSpinBox()
             spin.setRange(int(field.get("min", 0)), int(field.get("max", 60000)))
             spin.setSingleStep(int(field.get("step", 1)))
@@ -5240,12 +5438,30 @@ class MainWindow(QMainWindow):
                 spin.setSuffix(" ms")
             key = str(field["key"])
             spin.setValue(self._automation_timing(key))
-            groups[group_name].addRow(str(field.get("label") or key), spin)
+            tooltip_text = self._automation_timing_tooltip(field)
+            label_widget = QLabel(str(field.get("label") or key))
+            label_widget.setToolTip(tooltip_text)
+            label_widget.setStatusTip(tooltip_text)
+            spin.setToolTip(tooltip_text)
+            spin.setStatusTip(tooltip_text)
+            group_layout = tab_groups[group_key]
+            if isinstance(group_layout, dict):
+                left_form, right_form = group_layout["forms"]
+                target_form = left_form if int(group_layout["count"]) % 2 == 0 else right_form
+                target_form.addRow(label_widget, spin)
+                group_layout["count"] = int(group_layout["count"]) + 1
+            else:
+                group_layout.addRow(label_widget, spin)
             spinboxes[key] = spin
 
-        container_layout.addStretch(1)
-        scroll.setWidget(container)
-        layout.addWidget(scroll)
+            column_index = group_columns[group_key]
+            tab_column_loads[tab_name][column_index] += 1
+
+        for tab_name, tab_layout in tab_layouts.items():
+            left_column, right_column = tab_columns[tab_name]
+            left_column.addStretch(1)
+            right_column.addStretch(1)
+            tab_layout.addStretch(1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.RestoreDefaults)
 
@@ -5581,16 +5797,11 @@ class MainWindow(QMainWindow):
         automation_layout.setContentsMargins(8, 4, 8, 4)
         automation_layout.addWidget(QLabel("Counter"))
         automation_layout.addWidget(self.count)
-        automation_layout.addSpacing(8)
-        automation_layout.addWidget(QLabel("Delay"))
-        automation_layout.addWidget(self.automation_action_delay_ms)
-        automation_layout.addSpacing(8)
-        automation_layout.addWidget(QLabel("Retries"))
-        automation_layout.addWidget(self.automation_retry_attempts)
-        automation_layout.addSpacing(8)
-        automation_layout.addWidget(QLabel("Download Poll"))
-        automation_layout.addWidget(self.manual_download_poll_interval_ms)
         automation_layout.addStretch(1)
+
+        counter_hint = QLabel("Adjust Delay/Retry/Poll in Automation → Timings…")
+        counter_hint.setStyleSheet("color: palette(mid);")
+        automation_layout.addWidget(counter_hint)
         self._add_widget_to_menu(self.automation_menu, automation_widget)
 
     def show_app_info(self) -> None:
@@ -6794,6 +7005,45 @@ class MainWindow(QMainWindow):
         runtime = self._ensure_automation_runtime()
         runtime.ensure_udp_service()
 
+    def _upload_timing_options(self, platform_name: str) -> dict[str, int]:
+        platform = str(platform_name or "").strip().lower()
+        keys_by_platform: dict[str, tuple[str, ...]] = {
+            "x": (
+                "x_compose_click_timeout_ms",
+                "x_description_fill_attempts",
+                "x_description_fill_retry_delay_ms",
+            ),
+            "tiktok": (
+                "tiktok_action_delay_ms",
+                "tiktok_click_timeout_ms",
+                "tiktok_editor_timeout_ms",
+                "tiktok_submit_timeout_ms",
+            ),
+            "instagram": (
+                "instagram_click_timeout_ms",
+                "instagram_next_timeout_ms",
+            ),
+            "youtube": (
+                "youtube_step_delay_ms",
+                "youtube_form_fill_attempts",
+                "youtube_publish_attempts",
+                "youtube_click_timeout_ms",
+            ),
+            "facebook": (
+                "facebook_step_delay_ms",
+                "facebook_form_fill_attempts",
+                "facebook_click_timeout_ms",
+                "facebook_upload_start_timeout_ms",
+                "facebook_upload_start_poll_ms",
+                "facebook_upload_ready_timeout_ms",
+                "facebook_upload_ready_poll_ms",
+                "facebook_composer_wait_timeout_ms",
+                "facebook_composer_wait_poll_ms",
+                "facebook_dom_type_timeout_ms",
+            ),
+        }
+        return {key: self._automation_timing(key) for key in keys_by_platform.get(platform, ())}
+
     def _run_social_upload_via_mode(self, platform_name: str, video_path: str, caption: str, title: str) -> None:
         mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded")
         target_url = self._social_upload_url_for_platform(platform_name, self._default_social_upload_url_for_platform(platform_name))
@@ -6848,6 +7098,8 @@ class MainWindow(QMainWindow):
                     self._append_automation_log(f"WARNING: Failed to stop previous workflow cleanly: {exc}")
 
             action_delay_ms = self._automation_timing("automation_action_delay_ms")
+            if str(platform_name).strip().lower() == "tiktok":
+                action_delay_ms = self._automation_timing("tiktok_action_delay_ms")
             worker = UdpWorkflowWorker(
                 platform_name=platform_name,
                 video_path=video_path,
@@ -6858,6 +7110,7 @@ class MainWindow(QMainWindow):
                 executor_mode="local",
                 local_command_handler=runtime.execute_local_automation_command,
                 tiktok_options=dict(self.tiktok_upload_automation_options),
+                upload_timing_values=self._upload_timing_options(platform_name),
             )
             worker.progress.connect(lambda message: self._append_automation_log(f"{platform_name} external automation step: {message}"))
             worker.finished_with_result.connect(
