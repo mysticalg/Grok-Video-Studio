@@ -1035,19 +1035,41 @@ class UdpAutomationService:
 
                     await _prime_upload_surface()
                     probe_rounds = 8 if platform == "tiktok" else 24
+                    # Keep upload.select_file responsive: some upload pages keep many hidden
+                    # file inputs mounted, and probing each with large per-input timeouts can
+                    # stall this step for several minutes before fallback logic runs.
+                    probe_budget_seconds_by_platform = {
+                        "youtube": 25.0,
+                        "tiktok": 12.0,
+                        "facebook": 35.0,
+                        "instagram": 30.0,
+                        "x": 20.0,
+                    }
+                    probe_deadline = time.monotonic() + float(probe_budget_seconds_by_platform.get(platform, 30.0))
                     if not skip_direct_upload_probe:
                         for _ in range(probe_rounds):
+                            if time.monotonic() >= probe_deadline:
+                                last_err = (
+                                    f"timed out probing file inputs after "
+                                    f"{int(probe_budget_seconds_by_platform.get(platform, 30.0))}s"
+                                )
+                                break
                             for locator in input_locators:
+                                if time.monotonic() >= probe_deadline:
+                                    break
                                 try:
                                     count = await locator.count()
                                 except Exception:
                                     count = 0
                                 if count <= 0:
                                     continue
-                                for idx in range(count):
+                                max_targets = 3 if platform == "youtube" else count
+                                for idx in range(min(count, max_targets)):
+                                    if time.monotonic() >= probe_deadline:
+                                        break
                                     target = locator.nth(idx)
                                     try:
-                                        timeout_ms = 5000 if platform == "tiktok" else 30000
+                                        timeout_ms = 3500 if platform == "youtube" else (5000 if platform == "tiktok" else 30000)
                                         await target.set_input_files(str(staged_file_path), timeout=timeout_ms)
                                         mode = "cdp_set_input_files_filename_override" if file_name_override else "cdp_set_input_files"
                                         break
@@ -1056,6 +1078,8 @@ class UdpAutomationService:
                                         continue
                                 if mode:
                                     break
+                            if time.monotonic() >= probe_deadline:
+                                break
                             if mode:
                                 break
                             try:
