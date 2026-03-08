@@ -4930,6 +4930,24 @@ class MainWindow(QMainWindow):
             target_layout.addRow(label, widget)
             app_column_loads[column_index] += max(1, int(weight))
 
+        def _set_max_width_recursive(widget_or_layout: QWidget | QLayout | None, max_width: int) -> None:
+            if widget_or_layout is None:
+                return
+            if isinstance(widget_or_layout, QWidget):
+                widget_or_layout.setMaximumWidth(max_width)
+                return
+            if isinstance(widget_or_layout, QLayout):
+                for index in range(widget_or_layout.count()):
+                    item = widget_or_layout.itemAt(index)
+                    if item is None:
+                        continue
+                    child_widget = item.widget()
+                    child_layout = item.layout()
+                    if child_widget is not None:
+                        child_widget.setMaximumWidth(max_width)
+                    if child_layout is not None:
+                        _set_max_width_recursive(child_layout, max_width)
+
         self.download_path_input = QLineEdit(str(self.download_dir))
         self.download_path_input.setReadOnly(True)
         choose_download_path_btn = QPushButton("Browse...")
@@ -5005,6 +5023,14 @@ class MainWindow(QMainWindow):
         self.cdp_social_upload_relay_enabled.toggled.connect(lambda _: self._reset_cdp_relay_session_state())
         self.cdp_social_upload_relay_url.editingFinished.connect(self._reset_cdp_relay_session_state)
         app_add_row("CDP Relay URL", self.cdp_social_upload_relay_url)
+
+        left_column_max_width = 560
+        for form_layout in (ai_left_form, app_left_form):
+            for row_index in range(form_layout.rowCount()):
+                field_item = form_layout.itemAt(row_index, QFormLayout.ItemRole.FieldRole)
+                if field_item is None:
+                    continue
+                _set_max_width_recursive(field_item.widget() or field_item.layout(), left_column_max_width)
 
         settings_layout.addWidget(ai_group)
         settings_layout.addWidget(app_group)
