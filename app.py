@@ -11025,7 +11025,9 @@ class MainWindow(QMainWindow):
                     return
 
                 if status in ("video-submit-clicked", "video-submit-enter-dispatched", "video-submit-already-clicked"):
-                    if status in ("video-submit-clicked", "video-submit-enter-dispatched"):
+                    if status == "video-submit-enter-dispatched":
+                        message = "video prompt submitted via trailing Enter"
+                    elif status == "video-submit-clicked":
                         message = "video prompt submitted via Make video button click"
                     else:
                         message = "submit was already clicked earlier; waiting for video render/download"
@@ -12850,10 +12852,13 @@ class MainWindow(QMainWindow):
                             return
 
                         self._append_log(
-                            f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; falling back to button submit script. result={enter_result!r}"
+                            f"WARNING: Variant {variant}: trailing Enter submit did not confirm success; continuing with download polling without button-submit fallback. result={enter_result!r}"
                         )
                         self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
+                        QTimer.singleShot(
+                            self._automation_timing(submit_delay_key),
+                            lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
+                        )
 
                     self._run_active_browser_javascript(enter_script, _after_enter_press)
                     return
