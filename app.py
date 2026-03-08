@@ -236,6 +236,8 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     # Delay before starting continue-mode frame upload to let the composer settle.
     # Tunable to keep the UI responsive while remaining robust on slower systems.
     "continue_upload_start_delay_ms": 1200,
+    "continue_submit_ready_timeout_ms": 12000,
+    "continue_submit_ready_poll_ms": 250,
     "continue_reload_timeout_ms": 10000,
     "multi_video_download_wait_active_ms": 1000,
     "multi_video_download_wait_future_ms": 800,
@@ -301,6 +303,8 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "continue_upload_start_delay_ms", "label": "Continue flow upload-start delay", "min": 0, "max": 15000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
+    {"key": "continue_submit_ready_timeout_ms", "label": "Continue flow submit-ready timeout", "min": 1000, "max": 60000, "step": 500, "group": "Continue Video", "tab": "Grok Polling"},
+    {"key": "continue_submit_ready_poll_ms", "label": "Continue flow submit-ready poll interval", "min": 50, "max": 5000, "step": 50, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
@@ -12683,6 +12687,11 @@ class MainWindow(QMainWindow):
                     # We intentionally avoid button-submit fallback in this mode to prevent
                     # accidental second renders caused by duplicate synthetic clicks.
                     submit_guard_token = json.dumps(f"continue-last-video-enter-variant-{variant}")
+                    submit_ready_timeout_ms = max(500, self._automation_timing("continue_submit_ready_timeout_ms"))
+                    submit_ready_poll_ms = max(50, self._automation_timing("continue_submit_ready_poll_ms"))
+                    submit_ready_started_at = time.time()
+                    submit_ready_probe_count = 0
+
                     enter_script = r"""
                         (() => {
                             try {
@@ -12729,55 +12738,116 @@ class MainWindow(QMainWindow):
                             }
                         })()
                     """
+                    submit_ready_script = r"""
+                        (() => {
+                            try {
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const submitButton = [...document.querySelectorAll("button[type='submit']")].find((el) => {
+                                    if (!isVisible(el)) return false;
+                                    if (el.disabled) return false;
+                                    const ariaDisabled = String(el.getAttribute("aria-disabled") || "").toLowerCase();
+                                    if (ariaDisabled === "true") return false;
+                                    return true;
+                                }) || null;
 
-                    def _after_continue_enter_press(enter_result):
-                        if isinstance(enter_result, dict) and enter_result.get("ok"):
-                            if enter_result.get("guarded"):
-                                self._append_log(
-                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate trailing Enter; proceeding with download polling."
-                                )
-                            else:
-                                self._append_log(
-                                    f"Variant {variant}: prompt populated; submitted continue-last-video flow with trailing Enter (no submit button click)."
-                                )
-                            self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(
-                                self._automation_timing(submit_delay_key),
-                                lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
-                            )
-                            return
+                                const disabledIcon = [...document.querySelectorAll("div.h-10.relative.aspect-square.flex.flex-col.items-center.justify-center.rounded-full")]
+                                    .find((el) => isVisible(el) && !el.closest("button[type='submit']")) || null;
 
-                        self._append_log(
-                            f"WARNING: Variant {variant}: trailing Enter submit did not confirm success in continue-last-video mode. result={enter_result!r}; retrying trailing Enter once."
-                        )
+                                return {
+                                    ok: true,
+                                    ready: !!submitButton,
+                                    submitButtonVisible: !!submitButton,
+                                    disabledIconVisible: !!disabledIcon,
+                                };
+                            } catch (err) {
+                                return { ok: false, ready: false, error: String(err && err.stack ? err.stack : err) };
+                            }
+                        })()
+                    """
 
-                        def _after_continue_enter_retry(retry_result):
-                            if isinstance(retry_result, dict) and retry_result.get("ok"):
-                                self._append_log(
-                                    f"Variant {variant}: trailing Enter retry succeeded for continue-last-video mode; moving to download polling."
-                                )
-                            else:
-                                self._append_log(
-                                    f"WARNING: Variant {variant}: trailing Enter retry still not confirmed in continue-last-video mode. result={retry_result!r}; continuing with polling without button-submit fallback."
-                                )
-                            self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(
-                                self._automation_timing(submit_delay_key),
-                                lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
-                            )
-
+                    def _finalize_continue_submit_flow() -> None:
+                        self.manual_continue_setup_in_progress = False
                         QTimer.singleShot(
-                            max(80, self._automation_timing("continue_submit_after_prompt_delay_ms") // 2),
-                            lambda: self._run_active_browser_javascript(
-                                enter_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token),
-                                _after_continue_enter_retry,
-                            ),
+                            self._automation_timing(submit_delay_key),
+                            lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
                         )
 
-                    self._run_active_browser_javascript(
-                        enter_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token),
-                        _after_continue_enter_press,
-                    )
+                    def _attempt_continue_enter_with_retry() -> None:
+                        def _after_continue_enter_press(enter_result):
+                            if isinstance(enter_result, dict) and enter_result.get("ok"):
+                                if enter_result.get("guarded"):
+                                    self._append_log(
+                                        f"Variant {variant}: continue-last-video submit guard prevented duplicate trailing Enter; proceeding with download polling."
+                                    )
+                                else:
+                                    self._append_log(
+                                        f"Variant {variant}: prompt populated; submitted continue-last-video flow with trailing Enter (no submit button click)."
+                                    )
+                                _finalize_continue_submit_flow()
+                                return
+
+                            self._append_log(
+                                f"WARNING: Variant {variant}: trailing Enter submit did not confirm success in continue-last-video mode. result={enter_result!r}; retrying trailing Enter once."
+                            )
+
+                            def _after_continue_enter_retry(retry_result):
+                                if isinstance(retry_result, dict) and retry_result.get("ok"):
+                                    self._append_log(
+                                        f"Variant {variant}: trailing Enter retry succeeded for continue-last-video mode; moving to download polling."
+                                    )
+                                else:
+                                    self._append_log(
+                                        f"WARNING: Variant {variant}: trailing Enter retry still not confirmed in continue-last-video mode. result={retry_result!r}; continuing with polling without button-submit fallback."
+                                    )
+                                _finalize_continue_submit_flow()
+
+                            QTimer.singleShot(
+                                max(80, self._automation_timing("continue_submit_after_prompt_delay_ms") // 2),
+                                lambda: self._run_active_browser_javascript(
+                                    enter_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token),
+                                    _after_continue_enter_retry,
+                                ),
+                            )
+
+                        self._run_active_browser_javascript(
+                            enter_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token),
+                            _after_continue_enter_press,
+                        )
+
+                    # Wait for Grok's submit control to become enabled before dispatching Enter.
+                    # This avoids a race where Enter is sent while upload processing still keeps submit disabled.
+                    def _wait_for_continue_submit_ready() -> None:
+                        nonlocal submit_ready_probe_count
+                        submit_ready_probe_count += 1
+
+                        def _after_submit_ready_probe(probe_result):
+                            elapsed_ms = int((time.time() - submit_ready_started_at) * 1000)
+                            is_ready = bool(isinstance(probe_result, dict) and probe_result.get("ready"))
+                            if is_ready:
+                                if submit_ready_probe_count > 1:
+                                    self._append_log(
+                                        f"Variant {variant}: submit became ready after {elapsed_ms} ms; sending trailing Enter now."
+                                    )
+                                _attempt_continue_enter_with_retry()
+                                return
+
+                            if elapsed_ms >= submit_ready_timeout_ms:
+                                self._append_log(
+                                    f"WARNING: Variant {variant}: submit button did not become ready within {submit_ready_timeout_ms} ms; attempting trailing Enter anyway. probe={probe_result!r}"
+                                )
+                                _attempt_continue_enter_with_retry()
+                                return
+
+                            if submit_ready_probe_count == 1 or (submit_ready_probe_count % 8) == 0:
+                                self._append_log(
+                                    f"Variant {variant}: waiting for submit button to enable before trailing Enter ({elapsed_ms} ms elapsed)."
+                                )
+
+                            QTimer.singleShot(submit_ready_poll_ms, _wait_for_continue_submit_ready)
+
+                        self._run_active_browser_javascript(submit_ready_script, _after_submit_ready_probe)
+
+                    _wait_for_continue_submit_ready()
                     return
 
                 use_enter_submit = True
