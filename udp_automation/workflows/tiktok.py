@@ -179,6 +179,22 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         raise RuntimeError(f"TikTok upload needs manual file selection ({reason}): {detail}")
     _pause(action_delay_s, step="wait_after_upload_select", log_fn=log_fn)
 
+    caption_text = str(caption or "").strip()
+    if caption_text:
+        _log(log_fn, f"caption.fill: start chars={len(caption_text)}")
+        caption_fill_result = executor.run(
+            "form.fill",
+            {
+                "platform": "tiktok",
+                "fields": {"description": caption_text},
+            },
+        )
+        caption_fill_payload = caption_fill_result.get("payload") or {}
+        if caption_fill_payload.get("description") is False:
+            raise RuntimeError("TikTok caption fill failed for description field")
+        _log(log_fn, f"caption.fill: ok payload={caption_fill_payload}")
+        _pause(action_delay_s, step="wait_after_caption_fill", log_fn=log_fn)
+
     if add_text or add_music:
         _must_click(
             executor,

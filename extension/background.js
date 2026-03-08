@@ -540,7 +540,8 @@ async function handleCmd(msg) {
           return true;
         };
 
-        const clickHashtagSuggestion = async () => {
+        const clickHashtagSuggestion = async (expectedTag = "") => {
+          const normalizedExpected = String(expectedTag || "").replace(/^#/, "").trim().toLowerCase();
           const selectors = [
             "[data-e2e*='hashtag'] li",
             "[data-e2e*='hashtag'] button",
@@ -549,17 +550,58 @@ async function handleCmd(msg) {
             "div[class*='hashtag'] [role='option']"
           ];
           for (const sel of selectors) {
-            const candidate = document.querySelector(sel);
-            if (candidate) {
-              candidate.scrollIntoView({ block: "center", inline: "center" });
-              candidate.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
-              candidate.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
-              candidate.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+            const candidates = Array.from(document.querySelectorAll(sel));
+            const preferred = candidates.find((node) => {
+              if (!normalizedExpected) return true;
+              const txt = String(node.textContent || "").replace(/^#/, "").trim().toLowerCase();
+              return txt.includes(normalizedExpected) || normalizedExpected.includes(txt);
+            }) || candidates[0];
+            if (preferred) {
+              preferred.scrollIntoView({ block: "center", inline: "center" });
+              preferred.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
+              preferred.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true }));
+              preferred.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
               await wait(120);
               return true;
             }
           }
           return false;
+        };
+
+        const pressTab = async (target) => {
+          if (!target) return false;
+          const keyboardInit = {
+            key: "Tab",
+            code: "Tab",
+            keyCode: 9,
+            which: 9,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          };
+          try { target.dispatchEvent(new KeyboardEvent("keydown", keyboardInit)); } catch (_) {}
+          try { target.dispatchEvent(new KeyboardEvent("keyup", keyboardInit)); } catch (_) {}
+          await wait(80);
+          return true;
+        };
+
+        const activateTikTokHashtags = async (editor, text) => {
+          if (!editor) return 0;
+          const hashtags = Array.from(new Set((String(text || "").match(/#[A-Za-z0-9_]+/g) || []).map((token) => token.trim()).filter(Boolean)));
+          if (!hashtags.length) return 0;
+
+          let activated = 0;
+          for (const tag of hashtags) {
+            try { editor.focus(); } catch (_) {}
+            const label = String(tag || "").replace(/^#/, "");
+            if (!label) continue;
+            const found = clickHashtagSuggestion(label);
+            const tabbed = pressTab(editor);
+            const [clicked] = await Promise.all([found, tabbed]);
+            if (clicked) activated += 1;
+            await wait(120);
+          }
+          return activated;
         };
 
         if (name === "dom.type") {
@@ -766,7 +808,10 @@ async function handleCmd(msg) {
             const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
             const pasteOk = setValue(tiktokEl, text);
             const matches = getEditableText(tiktokEl).includes(text.trim());
-            out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
+            const textFilled = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
+            const activatedHashtags = textFilled ? await activateTikTokHashtags(tiktokEl, text) : 0;
+            out[rawKey] = Boolean(textFilled);
+            out[`${rawKey}_hashtags_activated`] = activatedHashtags;
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
             const normalizeForCompare = (value) => String(value || "")
