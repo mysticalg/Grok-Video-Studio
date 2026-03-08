@@ -1,18 +1,18 @@
 # Grok Video Studio
 
-[Join our Discord community](https://discord.gg/HRzMnuFB)
+[💬 Join our Discord community](https://discord.gg/HRzMnuFB)
 
 Desktop PySide6 app for generating AI videos, managing clips, previewing/stitching outputs, and publishing to social platforms with API + browser automation workflows.
 
 
 
-## Full documentation
+## 📚 Full documentation
 
-- **User guide (Markdown):** [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
-- **Printable PDF manual (generated locally):** run `python docs/generate_user_manual.py` to create `docs/out/Grok-Video-Studio-User-Manual.pdf`
-- **Workflow screenshots (generated locally):** created under `docs/out/assets/` by the same script
+- 📖 **User guide (Markdown):** [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
+- 🧾 **Printable PDF manual (generated locally):** run `python docs/generate_user_manual.py` to create `docs/out/Grok-Video-Studio-User-Manual.pdf`
+- 🖼️ **Workflow screenshots (generated locally):** created under `docs/out/assets/` by the same script
 
-## Latest feature highlights
+## ✨ Latest feature highlights
 
 - YouTube upload workflow includes browser automation for Studio metadata, audience/visibility, optional scheduling, and publish.
 - Automation Chrome + CDP path supports extension relay messaging and DOM command execution.
@@ -20,7 +20,7 @@ Desktop PySide6 app for generating AI videos, managing clips, previewing/stitchi
 - Stitch pipeline includes crossfade, interpolation, upscale presets, GPU encode options, and music mixing.
 - AI Flow Trainer is available for recording/replaying browser workflows.
 
-## Features
+## 🛠️ Features
 
 - **Video generation**
   - Manual prompt workflow in embedded `grok.com/imagine` browser
