@@ -22,7 +22,7 @@ from urllib.parse import unquote, urlencode, urlparse, urlsplit
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -3252,6 +3252,8 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path: Path | None = None
         self.continue_from_frame_waiting_for_reload = False
+        # Guard used to prevent duplicate prompt submissions in continue mode.
+        self.continue_from_frame_submission_started = False
         self.continue_from_frame_reload_timeout_timer = QTimer(self)
         self.continue_from_frame_reload_timeout_timer.setSingleShot(True)
         self.continue_from_frame_reload_timeout_timer.timeout.connect(self._on_continue_reload_timeout)
@@ -7975,6 +7977,11 @@ class MainWindow(QMainWindow):
     def _after_continue_reload_location_check(self, location_result) -> None:
         if not self.continue_from_frame_waiting_for_reload or not self.continue_from_frame_active:
             return
+        if self.continue_from_frame_submission_started:
+            self._append_log(
+                "Continue-from-last-frame: prompt submission already started for this iteration; ignoring duplicate reload signal."
+            )
+            return
 
         current_url = ""
         if isinstance(location_result, dict):
@@ -7983,6 +7990,7 @@ class MainWindow(QMainWindow):
         if re.search(r"https?://(?:www\.)?grok\.com/imagine/post/[^/?#]+", current_url, re.IGNORECASE):
             self.continue_from_frame_waiting_for_reload = False
             self.continue_from_frame_reload_timeout_timer.stop()
+            self.continue_from_frame_submission_started = True
             self._append_log(
                 "Continue-from-last-frame: detected post page reload after image upload. "
                 "Applying video options, then entering continuation prompt."
@@ -11637,6 +11645,8 @@ class MainWindow(QMainWindow):
             return
 
         frame_path: Path | None = None
+        self.continue_from_frame_submission_started = False
+
         if self.continue_from_frame_seed_image_path is not None:
             frame_path = self.continue_from_frame_seed_image_path
             self._append_log(f"Continue-from-image: using selected image: {frame_path}")
@@ -11657,11 +11667,6 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_current_source_video = ""
                 return
             self._append_log(f"Continue-from-last-frame: extracted last frame to {frame_path}")
-            if not self._copy_image_to_clipboard(frame_path):
-                self._append_log("ERROR: Continue-from-last-frame stopped because clipboard image copy failed.")
-                self.continue_from_frame_active = False
-                self.continue_from_frame_current_source_video = ""
-                return
 
         self.last_extracted_frame_path = frame_path
         iteration = self.continue_from_frame_completed + 1
@@ -11670,14 +11675,14 @@ class MainWindow(QMainWindow):
         )
         browser_page_pause_ms = 200
         self._append_log(
-            "Continue mode: starting image paste into the current Grok prompt area without forcing page navigation..."
+            "Continue mode: starting image upload into the current Grok prompt area via file input first (paste fallback only if required)..."
         )
         QTimer.singleShot(
             9000 + browser_page_pause_ms,
             lambda: self._upload_frame_into_grok(frame_path, on_uploaded=self._wait_for_continue_upload_reload),
         )
         self._append_log(
-            "Continue mode: image paste scheduled; waiting for upload/reload before prompt submission."
+            "Continue mode: image upload scheduled; waiting for upload/reload before prompt submission."
         )
 
     def _resolve_latest_video_for_continuation(self) -> str | None:
@@ -12589,9 +12594,10 @@ class MainWindow(QMainWindow):
                 f"Submitted manual variant {variant} after configured options flow; polling for download readiness and will trigger manual download when available."
             )
             self.manual_continue_setup_in_progress = False
-            # Avoid duplicate submit clicks: if button-submit succeeded, polling should only wait for
-            # progress/download controls and must not click Make/Create video again.
-            self._trigger_browser_video_download(variant, allow_make_video_click=not submit_ok)
+            # Continue-last-video can still return callback-empty even when the site accepted submit.
+            # Keep Make/Create click disabled for polling in this mode so we never trigger a second render.
+            allow_make_video_click = (not submit_ok) and (not continue_last_video_mode)
+            self._trigger_browser_video_download(variant, allow_make_video_click=allow_make_video_click)
 
         def _click_make_video_after_prompt() -> None:
             step_script = click_option_script_template.replace('"{target_label}"', json.dumps("Make Video"))
@@ -12626,103 +12632,105 @@ class MainWindow(QMainWindow):
                             f"WARNING: Prompt populate reported an issue for variant {variant}: {error_detail!r}. Continuing flow."
                         )
                 if continue_last_video_mode:
-                    submit_guard_token = json.dumps(f"continue-last-video-submit-variant-{variant}")
-                    make_video_click_script = r"""
+                    # Continue-last-video should submit with a trailing Enter only.
+                    # We intentionally avoid button-submit fallback in this mode to prevent
+                    # accidental second renders caused by duplicate synthetic clicks.
+                    submit_guard_token = json.dumps(f"continue-last-video-enter-variant-{variant}")
+                    enter_script = r"""
                         (() => {
                             try {
-                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                                const clean = (v) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
                                 const submitGuardToken = __SUBMIT_GUARD_TOKEN__;
-                                const now = Date.now();
-                                const lastClickedAt = Number(window.__grokContinueSubmitClickedAt || 0);
-                                if (lastClickedAt > 0 && (now - lastClickedAt) < 4000) {
-                                    return { ok: true, guarded: true, status: "cooldown-active", cooldownMsRemaining: Math.max(0, 4000 - (now - lastClickedAt)) };
-                                }
+                                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                                const selectors = [
+                                    "textarea[placeholder*='Type to imagine' i]",
+                                    "input[placeholder*='Type to imagine' i]",
+                                    "textarea[placeholder*='Type to customize this video' i]",
+                                    "input[placeholder*='Type to customize this video' i]",
+                                    "textarea[placeholder*='Type to customize video' i]",
+                                    "input[placeholder*='Type to customize video' i]",
+                                    "textarea[placeholder*='Customize video' i]",
+                                    "input[placeholder*='Customize video' i]",
+                                    "div.tiptap.ProseMirror[contenteditable='true']",
+                                    "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                                    "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                                ];
+                                const promptInput = selectors
+                                    .flatMap((selector) => [...document.querySelectorAll(selector)])
+                                    .find((el) => isVisible(el));
+                                if (!promptInput) return { ok: false, error: "prompt-input-not-found-for-enter" };
+
                                 if (window.__grokContinueSubmitGuardToken === submitGuardToken) {
-                                    return { ok: true, guarded: true, status: "already-clicked" };
-                                }
-                                // Continue-last-video changed on the live site in some sessions: the old
-                                // "Make Video" submit button may be absent and only a "Video" radio is present.
-                                // We handle both patterns explicitly so the flow remains stable.
-                                const candidates = [...document.querySelectorAll("button, [role='radio']")]
-                                    .filter((btn) => isVisible(btn) && !btn.disabled);
-                                const submitTarget = candidates.find((btn) => {
-                                    const aria = clean(btn.getAttribute("aria-label"));
-                                    const text = clean(btn.textContent);
-                                    const sr = clean(btn.querySelector("span.sr-only")?.textContent || "");
-                                    if (/create\s+share\s+link|share\s+link|copy\s+link/.test(`${aria} ${text} ${sr}`)) return false;
-                                    return /^make\s+video$/.test(aria) || /^make\s+video$/.test(text) || /create\s+video/.test(sr);
-                                }) || null;
-                                const videoToggleTarget = submitTarget ? null : (candidates.find((btn) => {
-                                    const aria = clean(btn.getAttribute("aria-label"));
-                                    const text = clean(btn.textContent);
-                                    const role = clean(btn.getAttribute("role"));
-                                    return role === "radio" && (/^video$/.test(aria) || /^video$/.test(text));
-                                }) || null);
-                                const target = submitTarget || videoToggleTarget;
-                                if (!target) return { ok: false, error: "make-video-button-not-found" };
-
-                                // If this UI variant only exposes a mode radio, only click it when we can
-                                // confirm it's the Video control and it is not already selected.
-                                const role = clean(target.getAttribute("role"));
-                                const checked = clean(target.getAttribute("aria-checked"));
-                                const isVideoRadio = !submitTarget && role === "radio";
-                                const alreadyVideoSelected = isVideoRadio && checked === "true";
-
-                                if (!alreadyVideoSelected) {
-                                    try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
-                                    try { target.focus({ preventScroll: true }); } catch (_) {}
-                                    try { target.click(); } catch (_) { return { ok: false, error: submitTarget ? "make-video-click-failed" : "video-toggle-click-failed" }; }
+                                    return { ok: true, guarded: true, enterDispatched: false, status: "already-submitted" };
                                 }
 
-                                window.__grokContinueSubmitGuardToken = submitGuardToken;
-                                window.__grokContinueSubmitClickedAt = now;
-                                if (!submitTarget) {
-                                    return {
-                                        ok: true,
-                                        guarded: false,
-                                        status: alreadyVideoSelected ? "video-toggle-already-selected" : "video-toggle-clicked",
-                                        requiresSubmit: true,
-                                        label: (target.getAttribute("aria-label") || target.textContent || "").trim()
-                                    };
+                                try { promptInput.focus({ preventScroll: true }); } catch (_) {}
+                                const common = { bubbles: true, cancelable: true, composed: true };
+                                let keydownSent = false;
+                                let keyupSent = false;
+                                let keypressSent = false;
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ...common })); keydownSent = true; } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", ...common })); keypressSent = true; } catch (_) {}
+                                try { promptInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", ...common })); keyupSent = true; } catch (_) {}
+
+                                if (keydownSent || keypressSent || keyupSent) {
+                                    window.__grokContinueSubmitGuardToken = submitGuardToken;
+                                    return { ok: true, guarded: false, enterDispatched: true, keydownSent, keypressSent, keyupSent };
                                 }
-                                return { ok: true, guarded: false, status: "clicked", requiresSubmit: false, label: (target.getAttribute("aria-label") || target.textContent || "").trim() };
+                                return { ok: false, error: "enter-dispatch-failed" };
                             } catch (err) {
                                 return { ok: false, error: String(err && err.stack ? err.stack : err) };
                             }
                         })()
                     """
 
-                    def _after_make_video_click(click_result):
-                        if isinstance(click_result, dict) and click_result.get("ok"):
-                            if click_result.get("guarded"):
+                    def _after_continue_enter_press(enter_result):
+                        if isinstance(enter_result, dict) and enter_result.get("ok"):
+                            if enter_result.get("guarded"):
                                 self._append_log(
-                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate Make Video click; proceeding with download polling."
+                                    f"Variant {variant}: continue-last-video submit guard prevented duplicate trailing Enter; proceeding with download polling."
                                 )
-                            elif click_result.get("requiresSubmit"):
-                                detail = click_result.get("label") or "Video"
-                                self._append_log(
-                                    f"Variant {variant}: prompt populated; toggled '{detail}' mode and now submitting for continue-last-video flow."
-                                )
-                                self.manual_continue_setup_in_progress = False
-                                QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
-                                return
                             else:
-                                detail = click_result.get("label") or "Make video"
                                 self._append_log(
-                                    f"Variant {variant}: prompt populated; clicked '{detail}' once for continue-last-video submit mode."
+                                    f"Variant {variant}: prompt populated; submitted continue-last-video flow with trailing Enter (no submit button click)."
                                 )
                             self.manual_continue_setup_in_progress = False
-                            QTimer.singleShot(self._automation_timing(submit_delay_key), lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False))
+                            QTimer.singleShot(
+                                self._automation_timing(submit_delay_key),
+                                lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
+                            )
                             return
 
                         self._append_log(
-                            f"WARNING: Variant {variant}: could not click Make Video after prompt entry in continue-last-video mode. result={click_result!r}; falling back to button submit script."
+                            f"WARNING: Variant {variant}: trailing Enter submit did not confirm success in continue-last-video mode. result={enter_result!r}; retrying trailing Enter once."
                         )
-                        self.manual_continue_setup_in_progress = False
-                        QTimer.singleShot(self._automation_timing(submit_delay_key), _run_flow_submit)
 
-                    self._run_active_browser_javascript(make_video_click_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token), _after_make_video_click)
+                        def _after_continue_enter_retry(retry_result):
+                            if isinstance(retry_result, dict) and retry_result.get("ok"):
+                                self._append_log(
+                                    f"Variant {variant}: trailing Enter retry succeeded for continue-last-video mode; moving to download polling."
+                                )
+                            else:
+                                self._append_log(
+                                    f"WARNING: Variant {variant}: trailing Enter retry still not confirmed in continue-last-video mode. result={retry_result!r}; continuing with polling without button-submit fallback."
+                                )
+                            self.manual_continue_setup_in_progress = False
+                            QTimer.singleShot(
+                                self._automation_timing(submit_delay_key),
+                                lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
+                            )
+
+                        QTimer.singleShot(
+                            max(80, self._automation_timing("continue_submit_after_prompt_delay_ms") // 2),
+                            lambda: self._run_active_browser_javascript(
+                                enter_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token),
+                                _after_continue_enter_retry,
+                            ),
+                        )
+
+                    self._run_active_browser_javascript(
+                        enter_script.replace("__SUBMIT_GUARD_TOKEN__", submit_guard_token),
+                        _after_continue_enter_press,
+                    )
                     return
 
                 use_enter_submit = True
@@ -12940,6 +12948,10 @@ class MainWindow(QMainWindow):
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
+        if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
+            # Continue-last-video should never auto-click Make/Create during polling because the
+            # submit step is already handled in setup and duplicate clicks can start a second video.
+            self.manual_video_allow_make_click = False
         self._append_log(
             f"Variant {variant}: manual download attempts are rate-limited to every {self._manual_download_poll_interval_ms() // 1000} seconds."
         )
@@ -14057,6 +14069,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = False
         self._reset_automation_counter_tracking()
         QMessageBox.warning(
             self,
@@ -14764,6 +14777,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = False
 
         if self.worker and self.worker.isRunning():
             self.worker.request_stop()
@@ -15721,25 +15735,10 @@ class MainWindow(QMainWindow):
         )
         return None
 
-    def _copy_image_to_clipboard(self, frame_path: Path) -> bool:
-        self._append_log(f"Copying extracted frame to clipboard: {frame_path}")
-
-        image = QImage(str(frame_path))
-        if image.isNull():
-            QMessageBox.critical(self, "Frame Extraction Failed", "Frame image could not be loaded.")
-            return False
-
-        mime = QMimeData()
-        mime.setImageData(image)
-        mime.setText(str(frame_path))
-        QGuiApplication.clipboard().setMimeData(mime)
-        self._append_log("Clipboard image copy completed.")
-        return True
-
     def _upload_frame_into_grok(self, frame_path: Path, on_uploaded=None) -> None:
         import base64
 
-        self._append_log(f"Starting browser-side image paste for frame: {frame_path.name}")
+        self._append_log(f"Starting browser-side frame upload for file input: {frame_path.name}")
 
         upload_file_path = frame_path
         upload_file_name = frame_path.name
@@ -15874,7 +15873,7 @@ class MainWindow(QMainWindow):
                         };
                     }
                 }
-                return { ok: false, error: 'Prompt input not found for paste' };
+                return { ok: false, error: 'Prompt input not found for file upload/paste' };
             })()
         """
 
@@ -15894,14 +15893,21 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_waiting_for_reload = True
         self.continue_from_frame_reload_timeout_timer.start(self._automation_timing("continue_reload_timeout_ms"))
         self._append_log(
-            "Continue-from-last-frame: image pasted. Grok should auto-reload after upload; "
+            "Continue-from-last-frame: image upload triggered. Grok should auto-reload after upload; "
             "waiting for the new page before entering the continuation prompt..."
         )
 
     def _on_continue_reload_timeout(self) -> None:
         if not self.continue_from_frame_waiting_for_reload or not self.continue_from_frame_active:
             return
+        if self.continue_from_frame_submission_started:
+            self.continue_from_frame_waiting_for_reload = False
+            self._append_log(
+                "Continue-from-last-frame: reload timeout ignored because this iteration already started prompt submission."
+            )
+            return
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = True
         self._append_log(
             "Timed out waiting for upload-triggered reload; continuing with prompt submission."
         )
@@ -15920,6 +15926,7 @@ class MainWindow(QMainWindow):
 
         self.continue_from_frame_active = True
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = False
         self.continue_from_frame_reload_timeout_timer.stop()
         self.continue_from_frame_target_count = self.count.value()
         self._start_automation_counter_tracking(self.continue_from_frame_target_count)
@@ -15951,6 +15958,7 @@ class MainWindow(QMainWindow):
 
         self.continue_from_frame_active = True
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = False
         self.continue_from_frame_reload_timeout_timer.stop()
         self.continue_from_frame_target_count = self.count.value()
         self._start_automation_counter_tracking(self.continue_from_frame_target_count)
