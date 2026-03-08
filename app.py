@@ -15975,7 +15975,7 @@ class MainWindow(QMainWindow):
         self._run_social_upload_via_mode(
             platform_name="TikTok",
             video_path=video_path,
-            caption=self._compose_social_text(caption, hashtags),
+            caption=self._compose_tiktok_text(caption, hashtags),
             title=title,
         )
 
@@ -16177,7 +16177,7 @@ class MainWindow(QMainWindow):
             payload = {
                 "source_info": source_info,
                 "post_info": {
-                    "title": self._compose_social_text(caption, hashtags),
+                    "title": self._compose_tiktok_text(caption, hashtags),
                     "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
                     "disable_comment": False,
                     "disable_duet": False,
@@ -18401,6 +18401,14 @@ class MainWindow(QMainWindow):
             return base_text.strip()
         combined = f"{base_text.strip()}\n\n{tag_text}" if base_text.strip() else tag_text
         return combined.strip()
+
+    def _compose_tiktok_text(self, base_text: str, hashtags: list[str]) -> str:
+        """Compose TikTok captions with inline hashtags and no line breaks."""
+        normalized_base = " ".join(str(base_text or "").split())
+        tag_text = " ".join(self._normalize_hashtag_tokens(hashtags))
+        if normalized_base and tag_text:
+            return f"{normalized_base} {tag_text}".strip()
+        return (normalized_base or tag_text).strip()
 
     def _compose_x_post_text(self, base_text: str, hashtags: list[str], max_chars: int = 275) -> str:
         text = " ".join(str(base_text or "").split())
