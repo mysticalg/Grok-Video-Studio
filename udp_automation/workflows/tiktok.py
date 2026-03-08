@@ -114,6 +114,34 @@ def _must_type_any(
     raise RuntimeError(f"TikTok {step or 'type'} failed for all selectors: {' | '.join(errors)}")
 
 
+
+def _must_focus_any(
+    executor: BaseExecutor,
+    selectors: list[str],
+    *,
+    step: str = "",
+    log_fn: LogFn | None = None,
+    delay_s: float = 0.0,
+    timeout_ms: int = 60000,
+) -> None:
+    errors: list[str] = []
+    for selector in selectors:
+        try:
+            _must_click(
+                executor,
+                selector,
+                timeout_ms=timeout_ms,
+                step=step,
+                log_fn=log_fn,
+                delay_s=delay_s,
+                single_click=True,
+            )
+            return
+        except RuntimeError as exc:
+            errors.append(str(exc))
+            _log(log_fn, f"{step or 'focus'}: selector failed ({selector}) err={exc}")
+    raise RuntimeError(f"TikTok {step or 'focus'} failed for all selectors: {' | '.join(errors)}")
+
 def _overlay_text(opts: dict[str, Any], caption: str) -> str:
     configured = str(opts.get("text_overlay") or "").strip()
     raw = configured or str(caption or "").strip()
@@ -304,12 +332,20 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
                 )
 
         if music_fade_in_enabled:
+            fade_in_input_selectors = [
+                "div.PropSettingFadeInBase__wrap input.PropSettingInput__input",
+                "div.PropSettingFadeInBase__fieldWrap input.PropSettingInput__input",
+            ]
+            _must_focus_any(
+                executor,
+                fade_in_input_selectors,
+                step="music_focus_fade_in_input",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
             _must_type_any(
                 executor,
-                [
-                    "div.PropSettingFadeInBase__wrap input.PropSettingInput__input",
-                    "div.PropSettingFadeInBase__fieldWrap input.PropSettingInput__input",
-                ],
+                fade_in_input_selectors,
                 f"{music_fade_in_seconds:.1f}",
                 step="music_set_fade_in_seconds",
                 log_fn=log_fn,
@@ -317,24 +353,40 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             )
 
         if music_fade_out_enabled:
+            fade_out_input_selectors = [
+                "div.PropSettingFadeOutBase__wrap input.PropSettingInput__input",
+                "div.PropSettingFadeOutBase__fieldWrap input.PropSettingInput__input",
+            ]
+            _must_focus_any(
+                executor,
+                fade_out_input_selectors,
+                step="music_focus_fade_out_input",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
             _must_type_any(
                 executor,
-                [
-                    "div.PropSettingFadeOutBase__wrap input.PropSettingInput__input",
-                    "div.PropSettingFadeOutBase__fieldWrap input.PropSettingInput__input",
-                ],
+                fade_out_input_selectors,
                 f"{music_fade_out_seconds:.1f}",
                 step="music_set_fade_out_seconds",
                 log_fn=log_fn,
                 delay_s=action_delay_s,
             )
 
+        volume_input_selectors = [
+            "div.PropSettingAudioVolume__wrap label.PropSettingInput__wrap input.PropSettingInput__input",
+            "div.PropSettingAudioVolume__wrap input.PropSettingInput__input",
+        ]
+        _must_focus_any(
+            executor,
+            volume_input_selectors,
+            step="music_focus_volume_input",
+            log_fn=log_fn,
+            delay_s=action_delay_s,
+        )
         _must_type_any(
             executor,
-            [
-                "div.PropSettingAudioVolume__wrap label.PropSettingInput__wrap input.PropSettingInput__input",
-                "div.PropSettingAudioVolume__wrap input.PropSettingInput__input",
-            ],
+            volume_input_selectors,
             str(music_volume_db),
             step="music_set_volume_db",
             log_fn=log_fn,
