@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import re
 import shutil
 import tempfile
@@ -123,22 +124,27 @@ def _overlay_text(opts: dict[str, Any], caption: str) -> str:
     return " ".join(without_tags.split()).strip()
 
 
-def _sanitize_filename(name: str) -> str:
+def _sanitize_filename_stem(name: str) -> str:
+    # Keep filename safe across platforms and strip all dots from the stem.
     cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", str(name or ""))
-    collapsed = " ".join(cleaned.split()).strip().strip(".")
+    cleaned = cleaned.replace(".", " ")
+    collapsed = " ".join(cleaned.split()).strip(" .")
     return collapsed or "tiktok_upload"
 
 
 def _stage_upload_file(video_path: str, caption: str, *, max_caption_chars: int = 3000) -> tuple[str, str | None]:
     source = Path(video_path)
     extension = source.suffix or ".mp4"
-    desired = _sanitize_filename(str(caption or "").strip()[:max_caption_chars])
+    caption_source = str(caption or "").strip()[:max_caption_chars]
+    safe_stem = _sanitize_filename_stem(caption_source)
+    caption_hash = hashlib.sha1(caption_source.encode("utf-8")).hexdigest()[:10] if caption_source else str(int(time.time()))
+    compact_stem = safe_stem[:120].rstrip(" _-") or "tiktok_upload"
     temp_dir = tempfile.mkdtemp(prefix="tiktok_upload_")
 
-    filename_attempts: list[str] = [f"{desired}{extension}"]
-    if desired != "tiktok_upload":
-        filename_attempts.append(f"{desired[:180].rstrip()}_{abs(hash(desired)) % (10**8):08d}{extension}")
-    filename_attempts.append(f"tiktok_upload_{int(time.time())}{extension}")
+    filename_attempts: list[str] = [f"{compact_stem}_{caption_hash}{extension}"]
+    if compact_stem != "tiktok_upload":
+        filename_attempts.append(f"{compact_stem[:80].rstrip(' _-')}_{caption_hash}{extension}")
+    filename_attempts.append(f"tiktok_upload_{caption_hash}{extension}")
 
     last_error: Exception | None = None
     for candidate in filename_attempts:
@@ -182,7 +188,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     staged_temp_dir: str | None = None
     if str(caption or "").strip():
         staged_video_path, staged_temp_dir = _stage_upload_file(video_path, caption, max_caption_chars=3000)
-        _log(log_fn, f"upload.staged_file: source={video_path} staged={staged_video_path}")
+        _log(log_fn, f"upload.staged_file: source={video_path} staged={staged_video_path} caption_chars={len(str(caption or '').strip())}")
 
     try:
         upload_result = executor.run("upload.select_file", {"platform": "tiktok", "filePath": staged_video_path})
