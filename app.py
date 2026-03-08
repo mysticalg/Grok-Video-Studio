@@ -17826,18 +17826,32 @@ class MainWindow(QMainWindow):
                                 return current === norm(nextText);
                             };
 
-                            const currentDraftText = draftEditable ? normalizedNodeText(draftEditable) : "";
+                            const readTikTokDraftRawText = (node) => {
+                                if (!node) return "";
+                                try {
+                                    return String(node.innerText || node.textContent || "").trim();
+                                } catch (_) {
+                                    return "";
+                                }
+                            };
+                            const hasWrappingQuotes = (value) => {
+                                const text = String(value || "").trim();
+                                if (!text || text.length < 2) return false;
+                                const pairs = [["\"", "\""], ["'", "'"], ["“", "”"], ["‘", "’"]];
+                                return pairs.some(([open, close]) => text.startsWith(open) && text.endsWith(close));
+                            };
+
+                            const currentDraftRawText = readTikTokDraftRawText(draftEditable);
+                            const currentDraftText = norm(currentDraftRawText);
                             const normalizedCaption = norm(captionText);
                             const captionAlreadyPresent = Boolean(
                                 currentDraftText
-                                && (
-                                    currentDraftText === normalizedCaption
-                                    || currentDraftText.includes(normalizedCaption)
-                                    || normalizedCaption.includes(currentDraftText)
-                                )
+                                && normalizedCaption
+                                && currentDraftText === normalizedCaption
+                                && !hasWrappingQuotes(currentDraftRawText)
                             );
-                            const captionNonEmpty = Boolean(currentDraftText && currentDraftText.length > 0);
-                            if (captionAlreadyPresent || captionNonEmpty) {
+
+                            if (captionAlreadyPresent) {
                                 textFilled = true;
                             } else if (actionSpacingElapsed && (draftEditable || draftSpan)) {
                                 try {
