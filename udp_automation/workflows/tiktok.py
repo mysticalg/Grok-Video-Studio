@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from udp_automation.executors import BaseExecutor
@@ -119,6 +120,29 @@ def _overlay_text(opts: dict[str, Any], caption: str) -> str:
     return " ".join(without_tags.split()).strip()
 
 
+def _sanitize_filename_stem(name: str) -> str:
+    # Keep filename safe across platforms and strip all dots from the stem.
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", str(name or ""))
+    cleaned = cleaned.replace(".", " ")
+    collapsed = " ".join(cleaned.split()).strip(" .")
+    return collapsed or "tiktok_upload"
+
+
+def _build_upload_filename(
+    video_path: str,
+    caption: str,
+    *,
+    max_caption_chars: int = 3000,
+    max_filename_chars: int = 1000,
+) -> str:
+    extension = Path(video_path).suffix or ".mp4"
+    caption_source = str(caption or "").strip()[:max_caption_chars]
+    safe_stem = _sanitize_filename_stem(caption_source)
+    stem_limit = max(1, max_filename_chars - len(extension))
+    stem = (safe_stem[:stem_limit].rstrip(" _-") or "tiktok_upload")
+    return f"{stem}{extension}"
+
+
 def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
     opts = options or {}
     log_fn = opts.get("_log_callback") if callable(opts.get("_log_callback")) else None
@@ -140,7 +164,13 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     _log(log_fn, "platform.ensure_logged_in: ok")
     _pause(action_delay_s, step="startup_wait_after_login_check", log_fn=log_fn)
 
-    upload_result = executor.run("upload.select_file", {"platform": "tiktok", "filePath": video_path})
+    upload_payload_request: dict[str, Any] = {"platform": "tiktok", "filePath": video_path}
+    if str(caption or "").strip():
+        upload_file_name = _build_upload_filename(video_path, caption, max_caption_chars=3000)
+        upload_payload_request["fileName"] = upload_file_name
+        _log(log_fn, f"upload.filename_override: fileName={upload_file_name} caption_chars={len(str(caption or '').strip())}")
+
+    upload_result = executor.run("upload.select_file", upload_payload_request)
     upload_payload = upload_result.get("payload") or {}
     _log(log_fn, f"upload.select_file: payload={upload_payload}")
     if upload_payload.get("requiresUserAction"):
@@ -148,11 +178,6 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         detail = upload_payload.get("message") or "automatic file input was not found"
         raise RuntimeError(f"TikTok upload needs manual file selection ({reason}): {detail}")
     _pause(action_delay_s, step="wait_after_upload_select", log_fn=log_fn)
-
-    _log(log_fn, "form.fill(description): start")
-    executor.run("form.fill", {"platform": "tiktok", "fields": {"description": caption}})
-    _log(log_fn, "form.fill(description): ok")
-    _pause(action_delay_s, step="wait_after_description_fill", log_fn=log_fn)
 
     if add_text or add_music:
         _must_click(

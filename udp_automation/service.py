@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import os
 import time
 import urllib.request
@@ -817,6 +818,9 @@ class UdpAutomationService:
             if name == "upload.select_file":
                 file_path = str(payload.get("filePath") or "")
                 platform = str(payload.get("platform") or "").lower()
+                file_name_override = str(payload.get("fileName") or "").strip()
+                if file_name_override:
+                    file_name_override = Path(file_name_override).name
                 if not file_path:
                     raise RuntimeError("filePath is required")
                 if self.cdp is None:
@@ -848,6 +852,14 @@ class UdpAutomationService:
 
                 file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
                 skip_direct_upload_probe = platform == "x" and file_size_mb > REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB
+                upload_file_payload: dict[str, Any] | None = None
+                if file_name_override:
+                    mime_type = str(mimetypes.guess_type(file_name_override)[0] or "application/octet-stream")
+                    upload_file_payload = {
+                        "name": file_name_override,
+                        "mimeType": mime_type,
+                        "buffer": Path(file_path).read_bytes(),
+                    }
                 extension_clients_connected = bool(self.bus.clients)
                 if skip_direct_upload_probe and not extension_clients_connected:
                     raise RuntimeError(
@@ -903,7 +915,7 @@ class UdpAutomationService:
                 # TikTok and X often trigger native choosers from upload controls.
                 # In external automation, prefer the extension debugger path first so the
                 # local machine file path can be set directly without remote CDP transfer.
-                if platform in {"tiktok", "x"}:
+                if platform in {"tiktok", "x"} and not file_name_override:
                     try:
                         ack = await self._send_extension_cmd("upload.select_file", payload)
                         ack_payload = _ack_from_extension(ack)
@@ -937,8 +949,12 @@ class UdpAutomationService:
                                 target = locator.nth(idx)
                                 try:
                                     timeout_ms = 5000 if platform == "tiktok" else 30000
-                                    await target.set_input_files(file_path, timeout=timeout_ms)
-                                    mode = "cdp_set_input_files"
+                                    if upload_file_payload is not None:
+                                        await target.set_input_files(upload_file_payload, timeout=timeout_ms)
+                                        mode = "cdp_set_input_files_filename_override"
+                                    else:
+                                        await target.set_input_files(file_path, timeout=timeout_ms)
+                                        mode = "cdp_set_input_files"
                                     break
                                 except Exception as exc:
                                     last_err = str(exc)
