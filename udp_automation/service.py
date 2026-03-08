@@ -933,7 +933,11 @@ class UdpAutomationService:
                     # TikTok and X often trigger native choosers from upload controls.
                     # In external automation, prefer the extension debugger path first so the
                     # local machine file path can be set directly without remote CDP transfer.
-                    if platform in {"tiktok", "x"} and not file_name_override:
+                    #
+                    # For TikTok, keep extension-first even when fileName override is enabled:
+                    # the renamed/staged temp file path is already in staged_payload["filePath"],
+                    # and using extension-first avoids brittle CDP probing on large uploads.
+                    if platform == "tiktok" or (platform == "x" and not file_name_override):
                         try:
                             ack = await self._send_extension_cmd("upload.select_file", staged_payload)
                             ack_payload = _ack_from_extension(ack)
