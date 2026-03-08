@@ -37,7 +37,7 @@ EXTENSION_CMD_TIMEOUTS = {
 }
 
 
-def _sanitize_upload_filename(name: str, fallback: str = "upload.mp4", *, max_chars: int = 120) -> str:
+def _sanitize_upload_filename(name: str, fallback: str = "upload.mp4", *, max_chars: int = 254) -> str:
     """Return a filesystem-safe filename for staging uploads."""
     raw_name = str(name or "").strip()
     if not raw_name:
@@ -860,7 +860,7 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 file_name_override = str(payload.get("fileName") or "").strip()
                 if file_name_override:
-                    file_name_override = _sanitize_upload_filename(file_name_override, fallback=Path(file_path).name or "upload.mp4")
+                    file_name_override = _sanitize_upload_filename(file_name_override, fallback=Path(file_path).name or "upload.mp4", max_chars=254)
                 if not file_path:
                     raise RuntimeError("filePath (or video_path/videoPath) is required")
                 if self.cdp is None:
@@ -881,9 +881,9 @@ class UdpAutomationService:
                         staging_dir = source_file_path.parent
                     else:
                         staging_dir = Path(tempfile.mkdtemp(prefix="grok_video_studio_uploads_"))
-                    # Keep full staged path <= 254 chars for Windows compatibility.
+                    # Keep staged filename <= 254 chars as requested.
                     max_path_chars = 254
-                    available_name_chars = max(16, max_path_chars - len(str(staging_dir)) - 1)
+                    available_name_chars = max(16, max_path_chars)
                     safe_file_name = _sanitize_upload_filename(
                         file_name_override,
                         fallback=source_file_path.name or "upload.mp4",
