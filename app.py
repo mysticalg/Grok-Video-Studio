@@ -22,7 +22,7 @@ from urllib.parse import unquote, urlencode, urlparse, urlsplit
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -3252,6 +3252,8 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path: Path | None = None
         self.continue_from_frame_waiting_for_reload = False
+        # Guard used to prevent duplicate prompt submissions in continue mode.
+        self.continue_from_frame_submission_started = False
         self.continue_from_frame_reload_timeout_timer = QTimer(self)
         self.continue_from_frame_reload_timeout_timer.setSingleShot(True)
         self.continue_from_frame_reload_timeout_timer.timeout.connect(self._on_continue_reload_timeout)
@@ -7975,6 +7977,11 @@ class MainWindow(QMainWindow):
     def _after_continue_reload_location_check(self, location_result) -> None:
         if not self.continue_from_frame_waiting_for_reload or not self.continue_from_frame_active:
             return
+        if self.continue_from_frame_submission_started:
+            self._append_log(
+                "Continue-from-last-frame: prompt submission already started for this iteration; ignoring duplicate reload signal."
+            )
+            return
 
         current_url = ""
         if isinstance(location_result, dict):
@@ -7983,6 +7990,7 @@ class MainWindow(QMainWindow):
         if re.search(r"https?://(?:www\.)?grok\.com/imagine/post/[^/?#]+", current_url, re.IGNORECASE):
             self.continue_from_frame_waiting_for_reload = False
             self.continue_from_frame_reload_timeout_timer.stop()
+            self.continue_from_frame_submission_started = True
             self._append_log(
                 "Continue-from-last-frame: detected post page reload after image upload. "
                 "Applying video options, then entering continuation prompt."
@@ -11637,6 +11645,8 @@ class MainWindow(QMainWindow):
             return
 
         frame_path: Path | None = None
+        self.continue_from_frame_submission_started = False
+
         if self.continue_from_frame_seed_image_path is not None:
             frame_path = self.continue_from_frame_seed_image_path
             self._append_log(f"Continue-from-image: using selected image: {frame_path}")
@@ -11657,11 +11667,6 @@ class MainWindow(QMainWindow):
                 self.continue_from_frame_current_source_video = ""
                 return
             self._append_log(f"Continue-from-last-frame: extracted last frame to {frame_path}")
-            if not self._copy_image_to_clipboard(frame_path):
-                self._append_log("ERROR: Continue-from-last-frame stopped because clipboard image copy failed.")
-                self.continue_from_frame_active = False
-                self.continue_from_frame_current_source_video = ""
-                return
 
         self.last_extracted_frame_path = frame_path
         iteration = self.continue_from_frame_completed + 1
@@ -11670,7 +11675,7 @@ class MainWindow(QMainWindow):
         )
         browser_page_pause_ms = 200
         self._append_log(
-            "Continue mode: starting image paste into the current Grok prompt area without forcing page navigation..."
+            "Continue mode: starting image upload into the current Grok prompt area via file input first (paste fallback only if required)..."
         )
         QTimer.singleShot(
             9000 + browser_page_pause_ms,
@@ -14057,6 +14062,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = False
         self._reset_automation_counter_tracking()
         QMessageBox.warning(
             self,
@@ -14764,6 +14770,7 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_current_source_video = ""
         self.continue_from_frame_seed_image_path = None
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = False
 
         if self.worker and self.worker.isRunning():
             self.worker.request_stop()
@@ -15721,25 +15728,10 @@ class MainWindow(QMainWindow):
         )
         return None
 
-    def _copy_image_to_clipboard(self, frame_path: Path) -> bool:
-        self._append_log(f"Copying extracted frame to clipboard: {frame_path}")
-
-        image = QImage(str(frame_path))
-        if image.isNull():
-            QMessageBox.critical(self, "Frame Extraction Failed", "Frame image could not be loaded.")
-            return False
-
-        mime = QMimeData()
-        mime.setImageData(image)
-        mime.setText(str(frame_path))
-        QGuiApplication.clipboard().setMimeData(mime)
-        self._append_log("Clipboard image copy completed.")
-        return True
-
     def _upload_frame_into_grok(self, frame_path: Path, on_uploaded=None) -> None:
         import base64
 
-        self._append_log(f"Starting browser-side image paste for frame: {frame_path.name}")
+        self._append_log(f"Starting browser-side frame upload for file input: {frame_path.name}")
 
         upload_file_path = frame_path
         upload_file_name = frame_path.name
@@ -15874,7 +15866,7 @@ class MainWindow(QMainWindow):
                         };
                     }
                 }
-                return { ok: false, error: 'Prompt input not found for paste' };
+                return { ok: false, error: 'Prompt input not found for file upload/paste' };
             })()
         """
 
@@ -15894,14 +15886,21 @@ class MainWindow(QMainWindow):
         self.continue_from_frame_waiting_for_reload = True
         self.continue_from_frame_reload_timeout_timer.start(self._automation_timing("continue_reload_timeout_ms"))
         self._append_log(
-            "Continue-from-last-frame: image pasted. Grok should auto-reload after upload; "
+            "Continue-from-last-frame: image upload triggered. Grok should auto-reload after upload; "
             "waiting for the new page before entering the continuation prompt..."
         )
 
     def _on_continue_reload_timeout(self) -> None:
         if not self.continue_from_frame_waiting_for_reload or not self.continue_from_frame_active:
             return
+        if self.continue_from_frame_submission_started:
+            self.continue_from_frame_waiting_for_reload = False
+            self._append_log(
+                "Continue-from-last-frame: reload timeout ignored because this iteration already started prompt submission."
+            )
+            return
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = True
         self._append_log(
             "Timed out waiting for upload-triggered reload; continuing with prompt submission."
         )
@@ -15920,6 +15919,7 @@ class MainWindow(QMainWindow):
 
         self.continue_from_frame_active = True
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = False
         self.continue_from_frame_reload_timeout_timer.stop()
         self.continue_from_frame_target_count = self.count.value()
         self._start_automation_counter_tracking(self.continue_from_frame_target_count)
@@ -15951,6 +15951,7 @@ class MainWindow(QMainWindow):
 
         self.continue_from_frame_active = True
         self.continue_from_frame_waiting_for_reload = False
+        self.continue_from_frame_submission_started = False
         self.continue_from_frame_reload_timeout_timer.stop()
         self.continue_from_frame_target_count = self.count.value()
         self._start_automation_counter_tracking(self.continue_from_frame_target_count)
