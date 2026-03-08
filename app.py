@@ -3317,9 +3317,6 @@ class MainWindow(QMainWindow):
                 self._position_preview_fullscreen_overlay()
                 self._position_preview_fullscreen_progress_bar()
 
-        if watched is getattr(self, "automation_group", None) and event.type() == QEvent.Type.Resize:
-            self._layout_automation_controls()
-
         video_grid = getattr(self, "video_grid", None)
         if video_grid is not None and watched is video_grid.viewport():
             if event.type() == QEvent.Type.Resize:
@@ -3333,35 +3330,6 @@ class MainWindow(QMainWindow):
         ):
             self._clear_stop_all_flag(watched.text())
         return super().eventFilter(watched, event)
-
-    def _layout_automation_controls(self) -> None:
-        if not hasattr(self, "automation_buttons_layout") or not hasattr(self, "_automation_controls"):
-            return
-        controls = [control for control in self._automation_controls if control is not None]
-        if not controls:
-            return
-
-        group_width = self.automation_group.contentsRect().width() if hasattr(self, "automation_group") else 0
-        if group_width >= 980:
-            column_count = 4
-        elif group_width >= 540:
-            column_count = 2
-        else:
-            column_count = 1
-
-        while self.automation_buttons_layout.count():
-            item = self.automation_buttons_layout.takeAt(0)
-            widget = item.widget() if item is not None else None
-            if widget is not None:
-                self.automation_buttons_layout.removeWidget(widget)
-
-        for index, control in enumerate(controls):
-            row = index // column_count
-            column = index % column_count
-            self.automation_buttons_layout.addWidget(control, row, column)
-
-        for column in range(column_count):
-            self.automation_buttons_layout.setColumnStretch(column, 1)
 
     def _clear_stop_all_flag(self, button_label: str) -> None:
         if not self.stop_all_requested:
@@ -3416,30 +3384,11 @@ class MainWindow(QMainWindow):
         self._build_social_networking_settings_dialog()
         self._build_menu_bar()
 
-        self.automation_group = QGroupBox("🤖 Automation Chrome + CDP")
-        self.automation_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
-        automation_layout = QVBoxLayout(self.automation_group)
-        self.automation_buttons_layout = QGridLayout()
-        self.automation_buttons_layout.setHorizontalSpacing(8)
-        self.automation_buttons_layout.setVerticalSpacing(8)
-        self.automation_group.installEventFilter(self)
-
         self.automation_mode = QComboBox()
         self.automation_mode.addItem("Embedded", "embedded")
         self.automation_mode.addItem("External Browser", "external")
         self.automation_mode.setCurrentIndex(0)
-        self.automation_mode.setToolTip(
-            "Embedded: run DOM automation in the in-app upload tab. External Browser: run automation only in Automation Chrome (external window)."
-        )
         self.automation_mode.currentIndexChanged.connect(self._on_automation_mode_changed)
-        self._automation_controls = [
-            self.automation_mode,
-        ]
-        self._layout_automation_controls()
-
-        automation_layout.addLayout(self.automation_buttons_layout)
-        left_layout.addWidget(self.automation_group)
-
         prompt_group = QGroupBox("✨ Prompt Inputs")
         prompt_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
         prompt_group_layout = QVBoxLayout(prompt_group)
@@ -6270,8 +6219,6 @@ class MainWindow(QMainWindow):
 
     def _set_cdp_enabled(self, enabled: bool) -> None:
         self.cdp_enabled = bool(enabled)
-        if hasattr(self, "automation_group"):
-            self.automation_group.setVisible(self.cdp_enabled)
         if hasattr(self, "cdp_menu_actions"):
             self.cdp_menu_actions[True].setEnabled(not self.cdp_enabled)
             self.cdp_menu_actions[False].setEnabled(self.cdp_enabled)
@@ -6279,6 +6226,11 @@ class MainWindow(QMainWindow):
 
     def _set_cdp_external_browser_enabled(self, enabled: bool) -> None:
         self.cdp_use_external_browser = bool(enabled)
+        if hasattr(self, "automation_mode"):
+            target_mode = "external" if self.cdp_use_external_browser else "embedded"
+            target_index = self.automation_mode.findData(target_mode)
+            if target_index >= 0 and self.automation_mode.currentIndex() != target_index:
+                self.automation_mode.setCurrentIndex(target_index)
         self._refresh_ai_browser_mode()
 
     def _is_external_ai_browser_mode_active(self) -> bool:
@@ -7877,6 +7829,10 @@ class MainWindow(QMainWindow):
             self._stats_increment("unexpected_exit_total", 1)
 
     def _on_automation_mode_changed(self, _index: int) -> None:
+        mode = str(self.automation_mode.currentData() if hasattr(self, "automation_mode") else "embedded").strip().lower()
+        should_use_external_browser = mode == "external"
+        if hasattr(self, "cdp_external_browser_action") and self.cdp_external_browser_action.isChecked() != should_use_external_browser:
+            self.cdp_external_browser_action.setChecked(should_use_external_browser)
         self._sync_social_embedded_browser_state_for_automation_mode(log_change=True)
         self._sync_embedded_browser_container_visibility()
         self._refresh_bottom_panel_layout(force=True)
