@@ -642,12 +642,65 @@ class UdpAutomationService:
         except Exception as exc:
             return {"description": False, "mode": "cdp_fill", "reason": "target_click_failed", "error": str(exc), "selector": target_selector}
 
+        set_lexical_script = '''(sel, expectedRaw) => {
+  const normalize = (value) => String(value || '').replace(/\u200B/g, '').replace(/\u00a0/g, ' ').replace(/\\s+/g, ' ').trim();
+  const value = String(expectedRaw || '');
+  const nodes = Array.from(document.querySelectorAll(sel || ''));
+  const root = nodes.find((el) => el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)) || nodes[0] || null;
+  if (!root) return { description: false, reason: 'target_not_found' };
+
+  let paragraph = root.querySelector('p');
+  if (!paragraph) {
+    paragraph = document.createElement('p');
+    paragraph.setAttribute('dir', 'auto');
+    root.replaceChildren(paragraph);
+  }
+
+  const span = document.createElement('span');
+  span.setAttribute('data-lexical-text', 'true');
+  span.textContent = value;
+  paragraph.replaceChildren(span);
+
+  try { root.focus(); } catch (_) {}
+  try {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  } catch (_) {}
+
+  for (const eventName of ['beforeinput', 'input', 'change']) {
+    try {
+      root.dispatchEvent(new InputEvent(eventName, {
+        bubbles: true,
+        cancelable: eventName === 'beforeinput',
+        data: value,
+        inputType: eventName === 'change' ? '' : 'insertText',
+      }));
+    } catch (_) {
+      try {
+        root.dispatchEvent(new Event(eventName, { bubbles: true, cancelable: eventName === 'beforeinput' }));
+      } catch (_) {}
+    }
+  }
+
+  const lexicalNodes = Array.from(root.querySelectorAll('[data-lexical-text="true"]'));
+  const lexical = lexicalNodes.map((n) => String(n.textContent || '')).join('');
+  const current = normalize(lexical || root.innerText || root.textContent || root.value || '');
+  const expected = normalize(value);
+  const ok = current === expected || current.includes(expected) || expected.includes(current);
+  return { description: ok, reason: ok ? 'ok' : 'value_mismatch', current, structure: paragraph.outerHTML };
+}'''
         try:
-            await page.keyboard.press("ControlOrMeta+A")
-            await page.keyboard.press("Backspace")
-            await page.keyboard.type(value, delay=10)
+            set_result = await asyncio.wait_for(page.evaluate(set_lexical_script, target_selector, value), timeout=8.0)
+            if isinstance(set_result, dict) and bool(set_result.get("description")):
+                set_result["mode"] = "cdp_fill"
+                set_result["selector"] = target_selector
+                return set_result
         except Exception as exc:
-            return {"description": False, "mode": "cdp_fill", "reason": "keyboard_type_failed", "error": str(exc), "selector": target_selector}
+            return {"description": False, "mode": "cdp_fill", "reason": "set_lexical_failed", "error": str(exc), "selector": target_selector}
 
         verify_script = '(sel, expectedRaw) => {\n  const normalize = (value) => String(value || \'\').replace(/\\u200B/g, \'\').replace(/\\u00a0/g, \' \').replace(/\\s+/g, \' \').trim();\n  const expected = normalize(expectedRaw);\n  const nodes = Array.from(document.querySelectorAll(sel || \'\'));\n  const node = nodes.find((el) => el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)) || nodes[0] || null;\n  if (!node) return { description: false, reason: \'verify_target_missing\', current: \'\' };\n\n  let lexical = \'\';\n  try {\n    const lexicalNodes = Array.from(node.querySelectorAll(\'[data-lexical-text="true"]\'));\n    lexical = lexicalNodes.map((n) => String(n.textContent || \'\')).join(\'\');\n  } catch (_) {}\n  const current = normalize(lexical || node.innerText || node.textContent || node.value || \'\');\n  const ok = current === expected || current.includes(expected) || expected.includes(current);\n  return { description: ok, reason: ok ? \'ok\' : \'value_mismatch\', current };\n}'
         try:
