@@ -3338,7 +3338,9 @@ class MainWindow(QMainWindow):
         prompt_group_layout = QVBoxLayout(prompt_group)
         prompt_group_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
-        prompt_group_layout.addWidget(QLabel("Concept"))
+        concept_label = QLabel("Concept")
+        concept_label.setToolTip("Concept is your high-level idea. The app uses it to generate the manual video prompt and social metadata.")
+        prompt_group_layout.addWidget(concept_label)
         self.concept_history_combo = QComboBox()
         self.concept_history_combo.setToolTip("Recall a recently used concept prompt.")
         self.concept_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("concept", idx))
@@ -3348,7 +3350,9 @@ class MainWindow(QMainWindow):
         self.concept.setMaximumHeight(90)
         prompt_group_layout.addWidget(self.concept)
 
-        prompt_group_layout.addWidget(QLabel("Styling"))
+        styling_label = QLabel("Styling")
+        styling_label.setToolTip("Styling is optional guidance (tone/look/camera words) that gets prepended to your manual prompt when building final prompts.")
+        prompt_group_layout.addWidget(styling_label)
         self.styling_history_combo = QComboBox()
         self.styling_history_combo.setToolTip("Recall recently used styling guidance.")
         self.styling_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("styling", idx))
@@ -3358,7 +3362,9 @@ class MainWindow(QMainWindow):
         self.styling_prompt.setMaximumHeight(70)
         prompt_group_layout.addWidget(self.styling_prompt)
 
-        prompt_group_layout.addWidget(QLabel("Manual Prompt (used only when source is Manual)"))
+        manual_prompt_label = QLabel("Manual Prompt (used only when source is Manual)")
+        manual_prompt_label.setToolTip("Manual Prompt is the exact text sent when Prompt Source is Manual. AI generation can update this unless 'Keep Manual Prompt unchanged' is enabled.")
+        prompt_group_layout.addWidget(manual_prompt_label)
         self.manual_prompt_history_combo = QComboBox()
         self.manual_prompt_history_combo.setToolTip("Recall a recently used manual prompt.")
         self.manual_prompt_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("manual", idx))
@@ -5642,43 +5648,54 @@ class MainWindow(QMainWindow):
         action.setDefaultWidget(widget)
         menu.addAction(action)
 
-    def _icon_for_button_text(self, label_text: str) -> QIcon:
-        text = str(label_text or "").lower()
-        style = self.style()
-        keyword_map: tuple[tuple[tuple[str, ...], QStyle.StandardPixmap], ...] = (
-            (("play", "start", "generate", "create"), QStyle.StandardPixmap.SP_MediaPlay),
-            (("pause",), QStyle.StandardPixmap.SP_MediaPause),
-            (("stop",), QStyle.StandardPixmap.SP_MediaStop),
-            (("open", "folder", "browse"), QStyle.StandardPixmap.SP_DirOpenIcon),
-            (("save", "download", "export"), QStyle.StandardPixmap.SP_DialogSaveButton),
-            (("upload",), QStyle.StandardPixmap.SP_ArrowUp),
-            (("clear", "remove", "delete"), QStyle.StandardPixmap.SP_TrashIcon),
-            (("settings", "config", "preferences"), QStyle.StandardPixmap.SP_FileDialogDetailedView),
-            (("home",), QStyle.StandardPixmap.SP_DirHomeIcon),
-            (("refresh", "reload"), QStyle.StandardPixmap.SP_BrowserReload),
-            (("next", "continue"), QStyle.StandardPixmap.SP_ArrowForward),
-            (("back", "previous"), QStyle.StandardPixmap.SP_ArrowBack),
-            (("fullscreen", "zoom"), QStyle.StandardPixmap.SP_TitleBarMaxButton),
+    def _emoji_for_button_text(self, label_text: str) -> str:
+        text = str(label_text or "").strip().lower()
+        keyword_map: tuple[tuple[tuple[str, ...], str], ...] = (
+            (("play", "start", "generate", "create"), "▶️"),
+            (("pause",), "⏸️"),
+            (("stop",), "⏹️"),
+            (("open", "folder", "browse"), "📂"),
+            (("save", "download", "export"), "💾"),
+            (("upload",), "📤"),
+            (("clear", "remove", "delete"), "🗑️"),
+            (("settings", "config", "preferences"), "⚙️"),
+            (("home",), "🏠"),
+            (("refresh", "reload"), "🔄"),
+            (("next", "continue"), "⏭️"),
+            (("back", "previous"), "⏮️"),
+            (("fullscreen", "zoom"), "🔍"),
+            (("view",), "🗂️"),
+            (("size",), "📐"),
+            (("title",), "🏷️"),
+            (("mute",), "🔇"),
+            (("loop",), "🔁"),
+            (("devtools",), "🛠️"),
         )
-        for keys, icon_kind in keyword_map:
+        for keys, emoji in keyword_map:
             if any(k in text for k in keys):
-                return style.standardIcon(icon_kind)
-        return QIcon()
+                return emoji
+        return "🔹"
+
+    @staticmethod
+    def _text_has_emoji_prefix(text: str) -> bool:
+        stripped = str(text or "").strip()
+        if not stripped:
+            return False
+        first = stripped[0]
+        return ord(first) > 127
 
     def _apply_icons_to_all_buttons(self) -> None:
-        for button in self.findChildren(QPushButton):
-            if button.icon().isNull():
-                icon = self._icon_for_button_text(button.text())
-                if not icon.isNull():
-                    button.setIcon(icon)
-
-        for button in self.findChildren(QToolButton):
-            if button.icon().isNull():
-                icon = self._icon_for_button_text(button.text() or button.toolTip())
-                if not icon.isNull():
-                    button.setIcon(icon)
-            if button.toolButtonStyle() == Qt.ToolButtonIconOnly:
-                button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        for button in [*self.findChildren(QPushButton), *self.findChildren(QToolButton)]:
+            text = str(button.text() or "").strip()
+            if not text:
+                tooltip_text = str(button.toolTip() or "").strip()
+                if tooltip_text:
+                    text = tooltip_text
+            if text and not self._text_has_emoji_prefix(text):
+                button.setText(f"{self._emoji_for_button_text(text)} {text}")
+            button.setIcon(QIcon())
+            if isinstance(button, QToolButton):
+                button.setToolButtonStyle(Qt.ToolButtonTextOnly)
 
     def _populate_top_settings_menus(self) -> None:
         self.video_settings_menu.clear()
