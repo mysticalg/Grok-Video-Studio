@@ -233,6 +233,9 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "manual_poll_pause_cap_ms": 1500,
     "continue_post_reload_generation_delay_ms": 700,
     "continue_next_iteration_delay_ms": 800,
+    # Delay before starting continue-mode frame upload to let the composer settle.
+    # Tunable to keep the UI responsive while remaining robust on slower systems.
+    "continue_upload_start_delay_ms": 1200,
     "continue_reload_timeout_ms": 10000,
     "multi_video_download_wait_active_ms": 1000,
     "multi_video_download_wait_future_ms": 800,
@@ -297,6 +300,7 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
     {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
+    {"key": "continue_upload_start_delay_ms", "label": "Continue flow upload-start delay", "min": 0, "max": 15000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
@@ -11714,16 +11718,18 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"Continue iteration {iteration}/{self.continue_from_frame_target_count}: using seed image {frame_path}"
         )
-        browser_page_pause_ms = 200
+        # Short, configurable settle period before touching Grok's file input.
+        # This replaces the old fixed ~9s wait that made continue mode feel sluggish.
+        upload_start_delay_ms = self._automation_timing("continue_upload_start_delay_ms")
         self._append_log(
             "Continue mode: starting image upload into the current Grok prompt area via file input first (paste fallback only if required)..."
         )
         QTimer.singleShot(
-            9000 + browser_page_pause_ms,
+            upload_start_delay_ms,
             lambda: self._upload_frame_into_grok(frame_path, on_uploaded=self._wait_for_continue_upload_reload),
         )
         self._append_log(
-            "Continue mode: image upload scheduled; waiting for upload/reload before prompt submission."
+            f"Continue mode: image upload scheduled in {upload_start_delay_ms} ms; waiting for upload/reload before prompt submission."
         )
 
     def _resolve_latest_video_for_continuation(self) -> str | None:
