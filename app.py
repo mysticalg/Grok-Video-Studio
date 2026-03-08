@@ -3028,6 +3028,8 @@ class MainWindow(QMainWindow):
             "publish_mode": "draft",
             "add_text_overlay": False,
             "add_music": False,
+            "music_add_count": 2,
+            "music_unique_per_add": False,
             "music_query": "",
             "text_overlay": "",
             "track_name_candidates_text": "",
@@ -3035,6 +3037,7 @@ class MainWindow(QMainWindow):
             "rotate_track_names": False,
             "track_name_rotation_index": 0,
             "music_query_effective": "",
+            "music_queries_effective": [],
         }
         self._cdp_relay_temporarily_disabled = False
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
@@ -6028,7 +6031,11 @@ class MainWindow(QMainWindow):
             "automation_timing_values": dict(self.automation_timing_values),
             "multi_video_manual_pick": self.multi_video_manual_pick_checkbox.isChecked(),
             "manual_pick_after_prompt": self.manual_pick_after_prompt_checkbox.isChecked(),
-            "tiktok_upload_automation_options": {k: v for k, v in self.tiktok_upload_automation_options.items() if k != "music_query_effective"},
+            "tiktok_upload_automation_options": {
+                k: v
+                for k, v in self.tiktok_upload_automation_options.items()
+                if k not in {"music_query_effective", "music_queries_effective"}
+            },
             "video_resolution": str(self.video_resolution.currentData()),
             "video_duration_seconds": int(self.video_duration.currentData()),
             "video_aspect_ratio": str(self.video_aspect_ratio.currentData()),
@@ -6295,6 +6302,8 @@ class MainWindow(QMainWindow):
                 "publish_mode": publish_mode,
                 "add_text_overlay": bool(loaded_tiktok_options.get("add_text_overlay")),
                 "add_music": bool(loaded_tiktok_options.get("add_music")),
+                "music_add_count": min(10, max(1, int(loaded_tiktok_options.get("music_add_count") or 2))),
+                "music_unique_per_add": bool(loaded_tiktok_options.get("music_unique_per_add")),
                 "music_query": str(loaded_tiktok_options.get("music_query") or "").strip(),
                 "text_overlay": str(loaded_tiktok_options.get("text_overlay") or "").strip(),
                 "track_name_candidates_text": str(loaded_tiktok_options.get("track_name_candidates_text") or "").strip(),
@@ -6302,6 +6311,7 @@ class MainWindow(QMainWindow):
                 "rotate_track_names": bool(loaded_tiktok_options.get("rotate_track_names")),
                 "track_name_rotation_index": max(0, int(loaded_tiktok_options.get("track_name_rotation_index") or 0)),
                 "music_query_effective": "",
+                "music_queries_effective": [],
             }
         self.tiktok_track_candidates_file.setText(str(self.tiktok_upload_automation_options.get("track_name_candidates_file") or ""))
         self.tiktok_track_candidates_text.setPlainText(str(self.tiktok_upload_automation_options.get("track_name_candidates_text") or ""))
@@ -6670,16 +6680,47 @@ class MainWindow(QMainWindow):
         return merged
 
     def _resolve_tiktok_music_query_for_upload(self) -> str:
+        queries = self._resolve_tiktok_music_queries_for_upload()
+        return queries[0] if queries else ""
+
+    def _resolve_tiktok_music_queries_for_upload(self) -> list[str]:
         base_query = str(self.tiktok_upload_automation_options.get("music_query") or "").strip()
         if not base_query:
-            return ""
+            return []
 
         track_candidates = self._collect_tiktok_track_candidates()
         if not track_candidates:
-            return base_query
+            return [base_query]
+
+        add_count = min(10, max(1, int(self.tiktok_upload_automation_options.get("music_add_count") or 2)))
+        unique_per_add = bool(self.tiktok_upload_automation_options.get("music_unique_per_add")) and add_count > 1
 
         rotate_tracks = bool(self.tiktok_upload_automation_options.get("rotate_track_names"))
         rotation_index = int(self.tiktok_upload_automation_options.get("track_name_rotation_index") or 0)
+
+        if unique_per_add:
+            composed_queries: list[str] = []
+            for add_offset in range(add_count):
+                if rotate_tracks:
+                    track_index = (rotation_index + add_offset) % len(track_candidates)
+                else:
+                    track_index = add_offset % len(track_candidates)
+                track_name = track_candidates[track_index]
+                composed_queries.append(f"{base_query} {track_name}".strip())
+
+            if rotate_tracks:
+                self.tiktok_upload_automation_options["track_name_rotation_index"] = rotation_index + add_count
+                self._autosave_preferences_to_default_file()
+
+            preview = ", ".join(f"'{query}'" for query in composed_queries[:3])
+            if len(composed_queries) > 3:
+                preview = f"{preview}, ..."
+            self._append_log(
+                "TikTok music queries composed for unique-per-add mode: "
+                f"{preview} (count={len(composed_queries)}; rotate={'on' if rotate_tracks else 'off'})."
+            )
+            return composed_queries
+
         if rotate_tracks:
             chosen_index = rotation_index % len(track_candidates)
             self.tiktok_upload_automation_options["track_name_rotation_index"] = rotation_index + 1
@@ -6692,7 +6733,7 @@ class MainWindow(QMainWindow):
             f"TikTok music query composed from artist/term + track: '{composed_query}'"
             f" (track {chosen_index + 1}/{len(track_candidates)}; rotate={'on' if rotate_tracks else 'off'})."
         )
-        return composed_query
+        return [composed_query]
 
     def _ensure_automation_runtime(self) -> AutomationRuntimeWorker:
         if self.automation_runtime is None:
@@ -15970,7 +16011,9 @@ class MainWindow(QMainWindow):
             return
 
         self.tiktok_upload_automation_options["text_overlay"] = self._tiktok_overlay_text()
-        self.tiktok_upload_automation_options["music_query_effective"] = self._resolve_tiktok_music_query_for_upload()
+        resolved_music_queries = self._resolve_tiktok_music_queries_for_upload()
+        self.tiktok_upload_automation_options["music_queries_effective"] = resolved_music_queries
+        self.tiktok_upload_automation_options["music_query_effective"] = resolved_music_queries[0] if resolved_music_queries else ""
 
         self._run_social_upload_via_mode(
             platform_name="TikTok",
@@ -18482,11 +18525,14 @@ class MainWindow(QMainWindow):
         tiktok_add_text_input = None
         tiktok_add_music_input = None
         tiktok_music_query_input = None
+        tiktok_music_add_count_input = None
+        tiktok_music_unique_per_add_input = None
         if platform_name == "TikTok":
             tiktok_options = dict(self.tiktok_upload_automation_options)
             saved_publish_mode = str(tiktok_options.get("publish_mode") or "draft").strip().lower()
             if saved_publish_mode not in {"draft", "post"}:
                 saved_publish_mode = "draft"
+            saved_music_add_count = min(10, max(1, int(tiktok_options.get("music_add_count") or 2)))
 
             dialog_layout.addWidget(QLabel("TikTok Automation: Publish Mode"))
             tiktok_publish_mode_input = QComboBox()
@@ -18504,6 +18550,18 @@ class MainWindow(QMainWindow):
             tiktok_add_music_input.setChecked(bool(tiktok_options.get("add_music")))
             dialog_layout.addWidget(tiktok_add_music_input)
 
+            dialog_layout.addWidget(QLabel("How many times to add the selected sound"))
+            tiktok_music_add_count_input = QSpinBox()
+            tiktok_music_add_count_input.setRange(1, 10)
+            tiktok_music_add_count_input.setValue(saved_music_add_count)
+            tiktok_music_add_count_input.setToolTip("Repeatedly clicks Add sound in the editor (1-10).")
+            dialog_layout.addWidget(tiktok_music_add_count_input)
+
+            tiktok_music_unique_per_add_input = QCheckBox("Use different sound search for each add (uses track list)")
+            tiktok_music_unique_per_add_input.setChecked(bool(tiktok_options.get("music_unique_per_add")))
+            tiktok_music_unique_per_add_input.setToolTip("When enabled, each add uses the next track from your TikTok track list as 'artist track'.")
+            dialog_layout.addWidget(tiktok_music_unique_per_add_input)
+
             dialog_layout.addWidget(QLabel("Preferred music artist/term"))
             tiktok_music_query_input = QLineEdit(str(tiktok_options.get("music_query") or "").strip())
             tiktok_music_query_input.setPlaceholderText("Search sounds")
@@ -18520,6 +18578,8 @@ class MainWindow(QMainWindow):
                 "publish_mode": str(tiktok_publish_mode_input.currentData() or "draft"),
                 "add_text_overlay": bool(tiktok_add_text_input.isChecked()) if tiktok_add_text_input is not None else False,
                 "add_music": bool(tiktok_add_music_input.isChecked()) if tiktok_add_music_input is not None else False,
+                "music_add_count": min(10, max(1, int(tiktok_music_add_count_input.value()))) if tiktok_music_add_count_input is not None else 2,
+                "music_unique_per_add": bool(tiktok_music_unique_per_add_input.isChecked()) if tiktok_music_unique_per_add_input is not None else False,
                 "music_query": tiktok_music_query_input.text().strip() if tiktok_music_query_input is not None else "",
                 "text_overlay": str(self.tiktok_upload_automation_options.get("text_overlay") or "").strip(),
                 "track_name_candidates_text": str(self.tiktok_upload_automation_options.get("track_name_candidates_text") or "").strip(),
@@ -18527,6 +18587,7 @@ class MainWindow(QMainWindow):
                 "rotate_track_names": bool(self.tiktok_upload_automation_options.get("rotate_track_names")),
                 "track_name_rotation_index": max(0, int(self.tiktok_upload_automation_options.get("track_name_rotation_index") or 0)),
                 "music_query_effective": str(self.tiktok_upload_automation_options.get("music_query_effective") or "").strip(),
+                "music_queries_effective": list(self.tiktok_upload_automation_options.get("music_queries_effective") or []),
             }
         hashtags = [tag.strip().lstrip("#") for tag in hashtags_input.text().split(",") if tag.strip()]
         category_value = category_input.text().strip() if platform_name == "YouTube" else self.ai_social_metadata.category

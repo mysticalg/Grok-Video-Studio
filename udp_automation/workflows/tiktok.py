@@ -36,18 +36,19 @@ def _must_click(
     text_contains: str = "",
     delay_s: float = 0.0,
     single_click: bool = False,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _log(log_fn, f"{step or 'click'}: selector={selector} timeout_ms={timeout_ms}")
-    result = executor.run(
-        "dom.click",
-        {
-            "platform": "tiktok",
-            "selector": selector,
-            "timeoutMs": timeout_ms,
-            "textContains": text_contains,
-            "singleClick": single_click,
-        },
-    )
+    click_payload: dict[str, Any] = {
+        "platform": "tiktok",
+        "selector": selector,
+        "timeoutMs": timeout_ms,
+        "textContains": text_contains,
+        "singleClick": single_click,
+    }
+    if isinstance(extra_payload, dict) and extra_payload:
+        click_payload.update(extra_payload)
+    result = executor.run("dom.click", click_payload)
     payload = result.get("payload") or {}
     if payload.get("clicked") is False:
         reason = payload.get("reason") or "unknown"
@@ -151,12 +152,26 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         publish_mode = "draft"
     add_text = bool(opts.get("add_text_overlay"))
     add_music = bool(opts.get("add_music"))
-    music_query = str(opts.get("music_query_effective") or opts.get("music_query") or "").strip()
+    music_add_count = max(1, min(10, int(opts.get("music_add_count") or 2)))
+    raw_music_queries = opts.get("music_queries_effective")
+    music_queries: list[str] = []
+    if isinstance(raw_music_queries, list):
+        music_queries = [str(item).strip() for item in raw_music_queries if str(item or "").strip()]
+    fallback_query = str(opts.get("music_query_effective") or opts.get("music_query") or "").strip()
+    if not music_queries and fallback_query:
+        music_queries = [fallback_query]
+
+    if music_queries:
+        if len(music_queries) < music_add_count:
+            last_query = music_queries[-1]
+            music_queries.extend([last_query] * (music_add_count - len(music_queries)))
+        elif len(music_queries) > music_add_count:
+            music_queries = music_queries[:music_add_count]
     text_overlay = _overlay_text(opts, caption)
     action_delay_s = float(opts.get("action_delay_s") or 2.0)
     startup_delay_s = float(opts.get("startup_delay_s") or action_delay_s)
 
-    _log(log_fn, f"start: mode={publish_mode} add_text={add_text} add_music={add_music} music_query_set={bool(music_query)} text_overlay_len={len(text_overlay)}")
+    _log(log_fn, f"start: mode={publish_mode} add_text={add_text} add_music={add_music} music_add_count={music_add_count} music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}")
     executor.run("platform.open", {"platform": "tiktok", "reuseTab": True})
     _log(log_fn, "platform.open: ok")
     _pause(startup_delay_s, step="startup_wait_after_open", log_fn=log_fn)
@@ -209,27 +224,36 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             delay_s=action_delay_s,
         )
 
-    if add_music and music_query:
+    if add_music and music_queries:
         _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=60000, step="open_music_tab", log_fn=log_fn, delay_s=action_delay_s)
+        if len(music_queries) > 1 and music_add_count > 1:
+            _log(
+                log_fn,
+                "music_add_burst: multiple queries were provided, but multi-add now uses the first query and bursts Add on one selected sound",
+            )
         _must_type(
             executor,
             "input[placeholder='Search sounds']",
-            music_query,
-            step="music_search_text",
+            music_queries[0],
+            step="music_search_text_1",
             log_fn=log_fn,
             submit=True,
             delay_s=action_delay_s,
         )
+        burst_clicks = music_add_count if music_add_count > 1 else 1
+        _log(log_fn, f"music_add_burst: triggering add button {burst_clicks} time(s) in one action")
         _must_click(
             executor,
             "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
             timeout_ms=60000,
-            step="music_add_first_track",
+            step="music_add_track_burst",
             log_fn=log_fn,
             delay_s=action_delay_s,
+            single_click=True,
+            extra_payload={"burstClicks": burst_clicks},
         )
 
-    if add_text or (add_music and music_query):
+    if add_text or (add_music and music_queries):
         _must_click(
             executor,
             "button.button.Button__root--type-primary .Button__content, button.button.Button__root--type-primary, button.Button__root--type-primary",

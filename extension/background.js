@@ -254,17 +254,20 @@ async function handleCmd(msg) {
               return { clicked: false, reason: "blacklisted_discard", selector: found.selector };
             }
             clickTarget.scrollIntoView({ block: "center", inline: "center" });
-            if (opts.singleClick) {
-              try { clickTarget.click?.(); } catch (_) {
-                clickTarget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+            const burstClicks = Math.max(1, Number(opts.burstClicks || 1));
+            for (let clickIndex = 0; clickIndex < burstClicks; clickIndex += 1) {
+              if (opts.singleClick) {
+                try { clickTarget.click?.(); } catch (_) {
+                  clickTarget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+                }
+              } else {
+                ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
+                  clickTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
+                });
+                try { clickTarget.click?.(); } catch (_) {}
               }
-            } else {
-              ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((evt) => {
-                clickTarget.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, composed: true }));
-              });
-              try { clickTarget.click?.(); } catch (_) {}
             }
-            return { clicked: true, selector: found.selector, waitedMs: Date.now() - started, randomIndex: found.randomIndex, randomPoolSize: found.randomPoolSize };
+            return { clicked: true, selector: found.selector, waitedMs: Date.now() - started, randomIndex: found.randomIndex, randomPoolSize: found.randomPoolSize, burstClicks };
           }
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
@@ -291,6 +294,7 @@ async function handleCmd(msg) {
           useRandomMatch,
           textContains: String(payload.textContains || "").trim().toLowerCase(),
           singleClick: Boolean(payload.singleClick),
+          burstClicks: Math.max(1, Number(payload.burstClicks || 1)),
         };
       })()], platform);
       if (msg.name === "post.submit") {
