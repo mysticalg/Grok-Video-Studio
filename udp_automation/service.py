@@ -851,22 +851,15 @@ class UdpAutomationService:
                 source_file_path = Path(file_path)
                 staged_file_path = source_file_path
                 staged_payload = dict(payload)
+                cleanup_staged_file = False
 
                 if file_name_override:
                     staging_dir = Path(tempfile.gettempdir()) / "grok_video_studio_uploads"
                     staging_dir.mkdir(parents=True, exist_ok=True)
-                    staged_file_path = staging_dir / file_name_override
-                    if staged_file_path.exists():
-                        stem = staged_file_path.stem
-                        suffix = staged_file_path.suffix
-                        duplicate_index = 1
-                        while staged_file_path.exists():
-                            staged_file_path = staging_dir / f"{stem}_{duplicate_index}{suffix}"
-                            duplicate_index += 1
+                    staged_file_path = staging_dir / f"{int(time.time() * 1000)}_{file_name_override}"
                     shutil.copy2(source_file_path, staged_file_path)
+                    cleanup_staged_file = True
                     staged_payload["filePath"] = str(staged_file_path)
-                    self._track_staged_upload_file(staged_file_path)
-                    self._cleanup_tracked_staged_upload_files()
 
                 try:
                     async def _pick_target_page() -> Any:
@@ -1104,7 +1097,12 @@ class UdpAutomationService:
                     return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
 
                 finally:
-                    pass
+                    if cleanup_staged_file:
+                        try:
+                            staged_file_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
 
             if name == "platform.ensure_logged_in":
                 platform = str(payload.get("platform") or "")
