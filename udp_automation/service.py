@@ -29,6 +29,8 @@ REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB = 50.0
 
 EXTENSION_CMD_TIMEOUTS = {
     "form.fill": 90.0,
+    "dom.click": 150.0,
+    "dom.type": 90.0,
     "post.submit": 150.0,
 }
 
