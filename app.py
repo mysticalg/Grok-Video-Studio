@@ -9,6 +9,7 @@ import secrets
 import shutil
 import subprocess
 import string
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -22,7 +23,7 @@ from typing import Any, Callable, Iterable
 
 import requests
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -93,6 +94,13 @@ DOWNLOAD_DIR = BASE_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 THUMBNAILS_DIR = DOWNLOAD_DIR / ".thumbnails"
 THUMBNAILS_DIR.mkdir(exist_ok=True)
+LOGS_DIR = BASE_DIR / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+VIDEO_METADATA_CACHE_FILE = LOGS_DIR / "video_metadata_cache.json"
+UPLOAD_SUCCESS_LOG_FILE = LOGS_DIR / "upload_success.log"
+UPLOAD_FAILURE_LOG_FILE = LOGS_DIR / "upload_failure.log"
+UPLOAD_UNEXPECTED_EXIT_LOG_FILE = LOGS_DIR / "upload_unexpected_exit.log"
+USAGE_STATS_DB_FILE = LOGS_DIR / "usage_stats.db"
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
@@ -3266,6 +3274,17 @@ class MainWindow(QMainWindow):
         }
         self.browser_zoom_factor = self.DEFAULT_BROWSER_ZOOM_FACTOR
         self._pending_log_messages: list[str] = []
+        self.session_started_at = time.time()
+        self._last_usage_stats_flush_at = self.session_started_at
+        self._video_metadata_cache: dict[str, dict[str, Any]] = {}
+        self._active_upload_context: dict[str, Any] = {}
+        self.video_grid_size_mode = 0
+        self.video_grid_titles_visible = True
+        self.preview_zoom_percent = 100
+        self._init_stats_database()
+        self._load_video_metadata_cache()
+        self._stats_increment("app_launch_count", 1)
+        self._stats_increment("session_count", 1)
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
             medium_title="AI Generated Video Clip",
@@ -3276,6 +3295,10 @@ class MainWindow(QMainWindow):
             category="22",
         )
         self._build_ui()
+        self.usage_stats_timer = QTimer(self)
+        self.usage_stats_timer.setInterval(60_000)
+        self.usage_stats_timer.timeout.connect(self._flush_usage_stats)
+        self.usage_stats_timer.start()
         self._applying_preferences = False
         self._last_saved_preferences_signature: str | None = None
         self._startup_cdp_bootstrap_attempted = False
@@ -3293,6 +3316,11 @@ class MainWindow(QMainWindow):
             if self.preview.isFullScreen():
                 self._position_preview_fullscreen_overlay()
                 self._position_preview_fullscreen_progress_bar()
+
+        video_grid = getattr(self, "video_grid", None)
+        if video_grid is not None and watched is video_grid.viewport():
+            if event.type() == QEvent.Type.Resize:
+                QTimer.singleShot(0, self._apply_video_grid_layout)
 
         if (
             self.stop_all_requested
@@ -3381,10 +3409,6 @@ class MainWindow(QMainWindow):
         automation_buttons.addWidget(self.automation_mode)
 
         automation_layout.addLayout(automation_buttons)
-        self.automation_log = QTextEdit()
-        self.automation_log.setReadOnly(True)
-        self.automation_log.setMinimumHeight(100)
-        automation_layout.addWidget(self.automation_log)
         left_layout.addWidget(self.automation_group)
 
         prompt_group = QGroupBox("✨ Prompt Inputs")
@@ -3392,19 +3416,37 @@ class MainWindow(QMainWindow):
         prompt_group_layout = QVBoxLayout(prompt_group)
         prompt_group_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
-        prompt_group_layout.addWidget(QLabel("Concept"))
+        concept_label = QLabel("Concept")
+        concept_label.setToolTip("Concept is your high-level idea. The app uses it to generate the manual video prompt and social metadata.")
+        prompt_group_layout.addWidget(concept_label)
+        self.concept_history_combo = QComboBox()
+        self.concept_history_combo.setToolTip("Recall a recently used concept prompt.")
+        self.concept_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("concept", idx))
+        prompt_group_layout.addWidget(self.concept_history_combo)
         self.concept = QPlainTextEdit()
         self.concept.setPlaceholderText("Describe the video idea...")
         self.concept.setMaximumHeight(90)
         prompt_group_layout.addWidget(self.concept)
 
-        prompt_group_layout.addWidget(QLabel("Styling"))
+        styling_label = QLabel("Styling")
+        styling_label.setToolTip("Styling is optional guidance (tone/look/camera words) that gets prepended to your manual prompt when building final prompts.")
+        prompt_group_layout.addWidget(styling_label)
+        self.styling_history_combo = QComboBox()
+        self.styling_history_combo.setToolTip("Recall recently used styling guidance.")
+        self.styling_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("styling", idx))
+        prompt_group_layout.addWidget(self.styling_history_combo)
         self.styling_prompt = QPlainTextEdit()
         self.styling_prompt.setPlaceholderText("Optional style guidance prepended to generated/manual prompt...")
         self.styling_prompt.setMaximumHeight(70)
         prompt_group_layout.addWidget(self.styling_prompt)
 
-        prompt_group_layout.addWidget(QLabel("Manual Prompt (used only when source is Manual)"))
+        manual_prompt_label = QLabel("Manual Prompt (used only when source is Manual)")
+        manual_prompt_label.setToolTip("Manual Prompt is the exact text sent when Prompt Source is Manual. AI generation can update this unless 'Keep Manual Prompt unchanged' is enabled.")
+        prompt_group_layout.addWidget(manual_prompt_label)
+        self.manual_prompt_history_combo = QComboBox()
+        self.manual_prompt_history_combo.setToolTip("Recall a recently used manual prompt.")
+        self.manual_prompt_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("manual", idx))
+        prompt_group_layout.addWidget(self.manual_prompt_history_combo)
         self.manual_prompt = QPlainTextEdit()
         self.manual_prompt.setPlaceholderText("Paste or write an exact prompt to skip prompt APIs...")
         self.manual_prompt.setPlainText(self.manual_prompt_default_input.toPlainText().strip() or DEFAULT_MANUAL_PROMPT_TEXT)
@@ -3417,6 +3459,13 @@ class MainWindow(QMainWindow):
         )
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
+
+        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Manual Prompt unchanged (update social metadata only)")
+        self.keep_manual_prompt_on_social_generate.setToolTip(
+            "If enabled, Generate Prompt + Social Metadata updates social title/description/hashtags/category but leaves Manual Prompt as-is."
+        )
+        self.keep_manual_prompt_on_social_generate.setChecked(False)
+        prompt_group_layout.addWidget(self.keep_manual_prompt_on_social_generate)
 
         self.count = QSpinBox()
         self.count.setRange(1, 10)
@@ -3629,17 +3678,13 @@ class MainWindow(QMainWindow):
         self.music_file_label.setStyleSheet("color: #9fb3c8;")
         self.music_file_label.setWordWrap(True)
 
-        music_actions_layout = QHBoxLayout()
         self.choose_music_btn = QPushButton("🎵 Choose Music (wav/mp3)")
         self.choose_music_btn.setToolTip("Select a local WAV or MP3 file to mix under the stitched video.")
         self.choose_music_btn.clicked.connect(self._choose_custom_music_file)
-        music_actions_layout.addWidget(self.choose_music_btn)
 
         self.clear_music_btn = QPushButton("Clear Music")
         self.clear_music_btn.setToolTip("Remove any selected custom background music file.")
         self.clear_music_btn.clicked.connect(self._clear_custom_music_file)
-        music_actions_layout.addWidget(self.clear_music_btn)
-        self.music_actions_row = music_actions_layout
 
         self.stitch_mute_original_checkbox = QCheckBox("Mute original video audio when music is used")
         self.stitch_mute_original_checkbox.setToolTip("If enabled, only the selected music is audible in the stitched output.")
@@ -3677,23 +3722,64 @@ class MainWindow(QMainWindow):
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
+        log_group = QGroupBox("📡 Activity Log")
+        log_layout = QVBoxLayout(log_group)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(120)
+        log_layout.addWidget(self.log)
+        if self._pending_log_messages:
+            for pending_entry in self._pending_log_messages:
+                self.log.appendPlainText(pending_entry)
+            self._pending_log_messages.clear()
+
+        log_actions_layout = QHBoxLayout()
+        log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
+
+        self.clear_log_btn = QPushButton("🧹 Clear Log")
+        self.clear_log_btn.setToolTip("Clear all activity log entries.")
+        self.clear_log_btn.clicked.connect(self.clear_activity_log)
+        log_actions_layout.addWidget(self.clear_log_btn, alignment=Qt.AlignLeft)
+
+        self.jump_to_bottom_btn = QPushButton("⤓ Jump to Bottom")
+        self.jump_to_bottom_btn.setToolTip("Jump to the latest activity log entry.")
+        self.jump_to_bottom_btn.clicked.connect(self.jump_activity_log_to_bottom)
+        log_actions_layout.addWidget(self.jump_to_bottom_btn, alignment=Qt.AlignLeft)
+
+        log_actions_layout.addStretch(1)
+        log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
+        log_layout.addLayout(log_actions_layout)
+        left_layout.addWidget(log_group)
+
         generated_videos_group = QGroupBox("🎬 Generated Videos")
         generated_videos_layout = QVBoxLayout(generated_videos_group)
         generated_videos_layout.setContentsMargins(8, 8, 8, 8)
         generated_videos_layout.setSpacing(6)
 
-        generated_videos_layout.addWidget(self.stitch_btn)
-        generated_videos_layout.addWidget(self.music_file_label)
-        generated_videos_layout.addLayout(self.music_actions_row)
-
         view_toggle_row = QHBoxLayout()
-        view_toggle_row.addStretch(1)
         self.video_view_toggle_btn = QToolButton()
-        self.video_view_toggle_btn.setText("☷")
+        self.video_view_toggle_btn.setText("View")
         self.video_view_toggle_btn.setCheckable(True)
         self.video_view_toggle_btn.setToolTip("Toggle between thumbnail grid and details list view.")
+        self.video_view_toggle_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.video_view_toggle_btn.toggled.connect(self._toggle_video_view_mode)
         view_toggle_row.addWidget(self.video_view_toggle_btn)
+
+        self.video_thumb_size_toggle_btn = QToolButton()
+        self.video_thumb_size_toggle_btn.setText("Size")
+        self.video_thumb_size_toggle_btn.setToolTip("Cycle thumbnail size: large → small → extra small.")
+        self.video_thumb_size_toggle_btn.clicked.connect(self._cycle_video_thumbnail_size)
+        view_toggle_row.addWidget(self.video_thumb_size_toggle_btn)
+
+        self.video_thumb_titles_toggle_btn = QToolButton()
+        self.video_thumb_titles_toggle_btn.setText("Titles")
+        self.video_thumb_titles_toggle_btn.setCheckable(True)
+        self.video_thumb_titles_toggle_btn.setChecked(True)
+        self.video_thumb_titles_toggle_btn.setToolTip("Toggle thumbnail titles.")
+        self.video_thumb_titles_toggle_btn.toggled.connect(self._toggle_video_thumbnail_titles)
+        view_toggle_row.addWidget(self.video_thumb_titles_toggle_btn)
+
+        view_toggle_row.addStretch(1)
         generated_videos_layout.addLayout(view_toggle_row)
 
         self.video_view_stack = QStackedWidget()
@@ -3703,57 +3789,67 @@ class MainWindow(QMainWindow):
         self.video_grid.setMovement(QListWidget.Static)
         self.video_grid.setWrapping(True)
         self.video_grid.setUniformItemSizes(True)
-        self.video_grid.setSpacing(10)
-        self.video_grid.setIconSize(QPixmap(180, 102).size())
-        self.video_grid.setGridSize(QPixmap(220, 138).size())
+        self.video_grid.setSpacing(8)
+        self.video_grid.setIconSize(QPixmap(160, 160).size())
+        self.video_grid.setGridSize(QPixmap(180, 200).size())
+        self.video_grid.viewport().installEventFilter(self)
         self.video_grid.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.video_grid.setMinimumHeight(354)
+        self.video_grid.setMouseTracking(True)
+        self.video_grid.setMinimumHeight(260)
         self.video_grid.currentRowChanged.connect(self.show_selected_video)
 
         self.video_details = QTreeWidget()
-        self.video_details.setColumnCount(3)
-        self.video_details.setHeaderLabels(["Date", "Filename", "Resolution"])
+        self.video_details.setColumnCount(4)
+        self.video_details.setHeaderLabels(["Date", "Filename", "Resolution", "Filesize"])
         self.video_details.setRootIsDecorated(False)
         self.video_details.setSelectionMode(QAbstractItemView.SingleSelection)
         self.video_details.setAlternatingRowColors(True)
         self.video_details.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.video_details.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.video_details.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.video_details.setMinimumHeight(354)
+        self.video_details.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.video_details.setMinimumHeight(260)
         self.video_details.currentItemChanged.connect(self._on_video_details_selection_changed)
 
         self.video_view_stack.addWidget(self.video_grid)
         self.video_view_stack.addWidget(self.video_details)
         generated_videos_layout.addWidget(self.video_view_stack)
 
-        video_list_controls = QHBoxLayout()
+        video_controls_grid = QGridLayout()
+        video_controls_grid.setHorizontalSpacing(8)
+        video_controls_grid.setVerticalSpacing(4)
+
         self.open_video_btn = QPushButton("📂 Open Video(s)")
         self.open_video_btn.setToolTip("Open one or more local video files and add them to Generated Videos.")
         self.open_video_btn.clicked.connect(self.open_local_video)
-        video_list_controls.addWidget(self.open_video_btn)
+        video_controls_grid.addWidget(self.open_video_btn, 0, 0)
 
         self.video_move_up_btn = QPushButton("⬆ Move Up")
         self.video_move_up_btn.setToolTip("Move selected video earlier in the Generated Videos order.")
         self.video_move_up_btn.clicked.connect(lambda: self.move_selected_video(-1))
-        video_list_controls.addWidget(self.video_move_up_btn)
+        video_controls_grid.addWidget(self.video_move_up_btn, 0, 1)
 
         self.video_move_down_btn = QPushButton("⬇ Move Down")
         self.video_move_down_btn.setToolTip("Move selected video later in the Generated Videos order.")
         self.video_move_down_btn.clicked.connect(lambda: self.move_selected_video(1))
-        video_list_controls.addWidget(self.video_move_down_btn)
+        video_controls_grid.addWidget(self.video_move_down_btn, 0, 2)
 
         self.video_remove_btn = QPushButton("🗑 Remove")
         self.video_remove_btn.setToolTip("Remove selected video from Generated Videos list.")
         self.video_remove_btn.clicked.connect(self.remove_selected_video)
-        video_list_controls.addWidget(self.video_remove_btn)
+        video_controls_grid.addWidget(self.video_remove_btn, 1, 0)
 
         self.video_overlay_btn = QPushButton("📝 Overlay Text")
         self.video_overlay_btn.setToolTip("Create subtitle-style text overlays on the selected video.")
         self.video_overlay_btn.clicked.connect(lambda: self._run_with_button_feedback(self.video_overlay_btn, self.add_overlay_to_selected_video))
-        video_list_controls.addWidget(self.video_overlay_btn)
+        video_controls_grid.addWidget(self.video_overlay_btn, 1, 1)
 
-        generated_videos_layout.addLayout(video_list_controls)
-        left_layout.addWidget(generated_videos_group)
+        video_controls_grid.addWidget(self.stitch_btn, 1, 2)
+        video_controls_grid.addWidget(self.choose_music_btn, 2, 0, 1, 2)
+        video_controls_grid.addWidget(self.clear_music_btn, 2, 2)
+
+        generated_videos_layout.addLayout(video_controls_grid)
+        generated_videos_layout.addWidget(self.music_file_label)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -3843,34 +3939,6 @@ class MainWindow(QMainWindow):
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
         self._sync_embedded_browser_download_path()
 
-        log_group = QGroupBox("📡 Activity Log")
-        log_layout = QVBoxLayout(log_group)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMinimumHeight(120)
-        log_layout.addWidget(self.log)
-        if self._pending_log_messages:
-            for pending_entry in self._pending_log_messages:
-                self.log.appendPlainText(pending_entry)
-            self._pending_log_messages.clear()
-
-        log_actions_layout = QHBoxLayout()
-        log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
-
-        self.clear_log_btn = QPushButton("🧹 Clear Log")
-        self.clear_log_btn.setToolTip("Clear all activity log entries.")
-        self.clear_log_btn.clicked.connect(self.clear_activity_log)
-        log_actions_layout.addWidget(self.clear_log_btn, alignment=Qt.AlignLeft)
-
-        self.jump_to_bottom_btn = QPushButton("⤓ Jump to Bottom")
-        self.jump_to_bottom_btn.setToolTip("Jump to the latest activity log entry.")
-        self.jump_to_bottom_btn.clicked.connect(self.jump_activity_log_to_bottom)
-        log_actions_layout.addWidget(self.jump_to_bottom_btn, alignment=Qt.AlignLeft)
-
-        log_actions_layout.addStretch(1)
-        log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
-        log_layout.addLayout(log_actions_layout)
-
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
             self._append_log(f"Browser profile storage path: {CACHE_DIR / 'profile'}")
@@ -3882,22 +3950,59 @@ class MainWindow(QMainWindow):
 
         preview_group = QGroupBox("🎞️ Preview")
         preview_layout = QVBoxLayout(preview_group)
+        self.preview.setMinimumHeight(120)
+        self.preview.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.preview.customContextMenuRequested.connect(self._show_preview_context_menu)
         preview_layout.addWidget(self.preview)
 
         preview_controls = QHBoxLayout()
-        self.preview_play_btn = QPushButton("▶️")
+        preview_controls.setSpacing(4)
+
+        self.preview_play_btn = QToolButton()
+        self.preview_play_btn.setAutoRaise(True)
+        self.preview_play_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.preview_play_btn.setText("Play")
+        self.preview_play_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.preview_play_btn.setToolTip("Play the selected video in the preview pane.")
         self.preview_play_btn.clicked.connect(self.play_preview)
         preview_controls.addWidget(self.preview_play_btn)
-        self.preview_stop_btn = QPushButton("⏹️")
+
+        self.preview_pause_btn = QToolButton()
+        self.preview_pause_btn.setAutoRaise(True)
+        self.preview_pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.preview_pause_btn.setText("Pause")
+        self.preview_pause_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.preview_pause_btn.setToolTip("Pause playback in the preview pane.")
+        self.preview_pause_btn.clicked.connect(self.pause_preview)
+        preview_controls.addWidget(self.preview_pause_btn)
+
+        self.preview_stop_btn = QToolButton()
+        self.preview_stop_btn.setAutoRaise(True)
+        self.preview_stop_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+        self.preview_stop_btn.setText("Stop")
+        self.preview_stop_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.preview_stop_btn.setToolTip("Stop playback in the preview pane.")
         self.preview_stop_btn.clicked.connect(self.stop_preview)
         preview_controls.addWidget(self.preview_stop_btn)
 
-        self.preview_mute_checkbox = QCheckBox("🔇")
+        self.preview_mute_checkbox = QToolButton()
+        self.preview_mute_checkbox.setAutoRaise(True)
+        self.preview_mute_checkbox.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.preview_mute_checkbox.setCheckable(True)
+        self.preview_mute_checkbox.setText("Mute")
         self.preview_mute_checkbox.setToolTip("Mute/unmute preview audio.")
         self.preview_mute_checkbox.toggled.connect(self._set_preview_muted)
         preview_controls.addWidget(self.preview_mute_checkbox)
+
+        self.preview_loop_checkbox = QToolButton()
+        self.preview_loop_checkbox.setAutoRaise(True)
+        self.preview_loop_checkbox.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.preview_loop_checkbox.setCheckable(True)
+        self.preview_loop_checkbox.setText("Loop")
+        self.preview_loop_checkbox.setToolTip("Loop the preview video when playback reaches the end.")
+        self.preview_loop_checkbox.setChecked(self.preview_loop_enabled)
+        self.preview_loop_checkbox.toggled.connect(self._set_preview_loop_enabled)
+        preview_controls.addWidget(self.preview_loop_checkbox)
 
         self.preview_volume_label = QLabel("🔊")
         preview_controls.addWidget(self.preview_volume_label)
@@ -3907,22 +4012,21 @@ class MainWindow(QMainWindow):
         self.preview_volume_slider.setValue(self.preview_volume)
         self.preview_volume_slider.setSuffix("%")
         self.preview_volume_slider.setButtonSymbols(QSpinBox.NoButtons)
-        self.preview_volume_slider.setFixedWidth(58)
+        self.preview_volume_slider.setFixedWidth(56)
         self.preview_volume_slider.setStyleSheet("font-size: 11px;")
         self.preview_volume_slider.valueChanged.connect(self._set_preview_volume)
         preview_controls.addWidget(self.preview_volume_slider)
 
-        self.preview_fullscreen_btn = QPushButton("⛶")
+        self.preview_fullscreen_btn = QToolButton()
+        self.preview_fullscreen_btn.setAutoRaise(True)
+        self.preview_fullscreen_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.preview_fullscreen_btn.setText("Fullscreen")
         self.preview_fullscreen_btn.setToolTip("Toggle fullscreen preview.")
         self.preview_fullscreen_btn.clicked.connect(self.toggle_preview_fullscreen)
         self.preview.fullScreenChanged.connect(self._on_preview_fullscreen_changed)
         preview_controls.addWidget(self.preview_fullscreen_btn)
 
-        self.preview_loop_checkbox = QCheckBox("🔁")
-        self.preview_loop_checkbox.setToolTip("Loop the preview video when playback reaches the end.")
-        self.preview_loop_checkbox.setChecked(self.preview_loop_enabled)
-        self.preview_loop_checkbox.toggled.connect(self._set_preview_loop_enabled)
-        preview_controls.addWidget(self.preview_loop_checkbox)
+        preview_controls.addStretch(1)
         preview_layout.addLayout(preview_controls)
 
         timeline_layout = QHBoxLayout()
@@ -3945,7 +4049,7 @@ class MainWindow(QMainWindow):
         bottom_splitter.setOpaqueResize(True)
         bottom_splitter.setChildrenCollapsible(False)
         bottom_splitter.addWidget(preview_group)
-        bottom_splitter.addWidget(log_group)
+        bottom_splitter.addWidget(generated_videos_group)
         bottom_splitter.setSizes([500, 800])
 
         self.grok_browser_tab = QWidget()
@@ -4132,8 +4236,10 @@ class MainWindow(QMainWindow):
         self._toggle_prompt_source_fields()
         self._sync_video_options_label()
         self._reset_cdp_relay_session_state()
+        self._refresh_prompt_history_combos()
         self._refresh_status_bar_visibility()
         self._refresh_bottom_panel_layout(force=True)
+        self._apply_icons_to_all_buttons()
 
     def _build_social_upload_tab(self, platform_name: str, upload_url: str) -> QWidget:
         tab = QWidget()
@@ -5634,6 +5740,10 @@ class MainWindow(QMainWindow):
         downloads_dir_action.triggered.connect(self.open_downloads_folder)
         help_menu.addAction(downloads_dir_action)
 
+        user_stats_action = QAction("User Stats", self)
+        user_stats_action.triggered.connect(self.show_user_stats_dialog)
+        help_menu.addAction(user_stats_action)
+
         self.quick_actions_toolbar = QToolBar("Quick Actions", self)
         self.quick_actions_toolbar.setMovable(False)
         self.quick_actions_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -5727,15 +5837,81 @@ class MainWindow(QMainWindow):
         self._set_quick_actions_toolbar_visible(self.quick_actions_toolbar_toggle_action.isChecked())
 
     def _run_with_button_feedback(self, button: QPushButton, callback: Callable[[], None]) -> None:
+        button_label = str(button.text() if button is not None else getattr(callback, "__name__", "action")).strip() or "action"
+        self._record_prompt_inputs_for_history()
+        started_at = time.time()
         if button is not None and button.isCheckable():
             button.setChecked(True)
             QTimer.singleShot(220, lambda: button.setChecked(False))
-        callback()
+        try:
+            callback()
+            duration_ms = int((time.time() - started_at) * 1000)
+            self._record_button_usage(button_label, duration_ms=duration_ms)
+            self._log_event(event_type="button_click", button_name=button_label, duration_ms=duration_ms)
+        except Exception as exc:
+            duration_ms = int((time.time() - started_at) * 1000)
+            self._record_button_usage(button_label, duration_ms=duration_ms)
+            self._log_event(
+                event_type="button_error",
+                button_name=button_label,
+                duration_ms=duration_ms,
+                details={"error": str(exc)},
+            )
+            raise
 
     def _add_widget_to_menu(self, menu: QMenu, widget: QWidget) -> None:
         action = QWidgetAction(menu)
         action.setDefaultWidget(widget)
         menu.addAction(action)
+
+    def _emoji_for_button_text(self, label_text: str) -> str:
+        text = str(label_text or "").strip().lower()
+        keyword_map: tuple[tuple[tuple[str, ...], str], ...] = (
+            (("play", "start", "generate", "create"), "▶️"),
+            (("pause",), "⏸️"),
+            (("stop",), "⏹️"),
+            (("open", "folder", "browse"), "📂"),
+            (("save", "download", "export"), "💾"),
+            (("upload",), "📤"),
+            (("clear", "remove", "delete"), "🗑️"),
+            (("settings", "config", "preferences"), "⚙️"),
+            (("home",), "🏠"),
+            (("refresh", "reload"), "🔄"),
+            (("next", "continue"), "⏭️"),
+            (("back", "previous"), "⏮️"),
+            (("fullscreen", "zoom"), "🔍"),
+            (("view",), "🗂️"),
+            (("size",), "📐"),
+            (("title",), "🏷️"),
+            (("mute",), "🔇"),
+            (("loop",), "🔁"),
+            (("devtools",), "🛠️"),
+        )
+        for keys, emoji in keyword_map:
+            if any(k in text for k in keys):
+                return emoji
+        return "🔹"
+
+    @staticmethod
+    def _text_has_emoji_prefix(text: str) -> bool:
+        stripped = str(text or "").strip()
+        if not stripped:
+            return False
+        first = stripped[0]
+        return ord(first) > 127
+
+    def _apply_icons_to_all_buttons(self) -> None:
+        for button in [*self.findChildren(QPushButton), *self.findChildren(QToolButton)]:
+            text = str(button.text() or "").strip()
+            if not text:
+                tooltip_text = str(button.toolTip() or "").strip()
+                if tooltip_text:
+                    text = tooltip_text
+            if text and not self._text_has_emoji_prefix(text):
+                button.setText(f"{self._emoji_for_button_text(text)} {text}")
+            button.setIcon(QIcon())
+            if isinstance(button, QToolButton):
+                button.setToolButtonStyle(Qt.ToolButtonTextOnly)
 
     def _populate_top_settings_menus(self) -> None:
         self.video_settings_menu.clear()
@@ -6230,6 +6406,7 @@ class MainWindow(QMainWindow):
             "concept": self.concept.toPlainText(),
             "styling_prompt": self.styling_prompt.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
+            "keep_manual_prompt_on_social_generate": bool(self.keep_manual_prompt_on_social_generate.isChecked()),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
             "word_tool_count": int(self.word_tool_count.value()) if hasattr(self, "word_tool_count") else 100,
             "word_tool_prompt_template": self.word_tool_prompt_template.toPlainText() if hasattr(self, "word_tool_prompt_template") else "",
@@ -6421,6 +6598,8 @@ class MainWindow(QMainWindow):
             self.styling_prompt.setPlainText(str(preferences["styling_prompt"]))
         if "manual_prompt" in preferences:
             self.manual_prompt.setPlainText(str(preferences["manual_prompt"]))
+        if "keep_manual_prompt_on_social_generate" in preferences:
+            self.keep_manual_prompt_on_social_generate.setChecked(bool(preferences["keep_manual_prompt_on_social_generate"]))
         if "manual_prompt_default" in preferences:
             default_prompt = str(preferences["manual_prompt_default"])
             self.manual_prompt_default_input.setPlainText(default_prompt)
@@ -6863,9 +7042,6 @@ class MainWindow(QMainWindow):
         self._sync_tiktok_track_settings_from_inputs()
 
     def _append_automation_log(self, text: str) -> None:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        if hasattr(self, "automation_log") and self.automation_log is not None:
-            self.automation_log.append(f"[{timestamp}] {text}")
         self._append_log(f"Automation: {text}")
 
     def _sync_tiktok_track_settings_from_inputs(self) -> None:
@@ -7136,6 +7312,518 @@ class MainWindow(QMainWindow):
             self.log.appendPlainText(entry)
             return
         self._pending_log_messages.append(entry)
+
+    def _append_line_to_file(self, file_path: Path, line: str) -> None:
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with file_path.open("a", encoding="utf-8") as handle:
+                handle.write(line.rstrip() + "\n")
+        except Exception as exc:
+            self._append_log(f"WARNING: Could not write log file {file_path.name}: {exc}")
+
+    def _init_stats_database(self) -> None:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS event_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    tab_name TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    button_name TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    details_json TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS prompt_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    prompt_kind TEXT NOT NULL,
+                    prompt_text TEXT NOT NULL,
+                    first_used_at TEXT NOT NULL,
+                    last_used_at TEXT NOT NULL,
+                    tab_name TEXT NOT NULL,
+                    file_path TEXT NOT NULL DEFAULT '',
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    use_count INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(prompt_kind, prompt_text)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS button_usage (
+                    button_name TEXT PRIMARY KEY,
+                    use_count INTEGER NOT NULL,
+                    total_duration_ms INTEGER NOT NULL,
+                    last_used_at TEXT NOT NULL,
+                    last_tab_name TEXT NOT NULL
+                )
+                """
+            )
+
+            for ddl in (
+                "ALTER TABLE prompt_history ADD COLUMN file_path TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE prompt_history ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
+            ):
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass
+
+    def _stats_get(self, key: str, default: int = 0) -> int:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            row = conn.execute("SELECT value FROM stats WHERE key = ?", (key,)).fetchone()
+        if not row:
+            return int(default)
+        try:
+            return int(float(str(row[0] or default)))
+        except Exception:
+            return int(default)
+
+    def _stats_set(self, key: str, value: int | float | str) -> None:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            conn.execute(
+                "INSERT INTO stats(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, str(value)),
+            )
+
+    def _stats_increment(self, key: str, amount: int = 1) -> None:
+        next_value = self._stats_get(key, 0) + int(amount)
+        self._stats_set(key, next_value)
+
+    def _current_reporting_tab(self) -> str:
+        if hasattr(self, "browser_tabs") and self.browser_tabs is not None:
+            idx = self.browser_tabs.currentIndex()
+            if idx >= 0:
+                label = str(self.browser_tabs.tabText(idx) or "").strip()
+                if label:
+                    return label
+        return "Main"
+
+    def _log_event(
+        self,
+        *,
+        event_type: str,
+        button_name: str = "",
+        file_path: str = "",
+        duration_ms: int = 0,
+        details: dict[str, Any] | None = None,
+        tab_name: str | None = None,
+    ) -> None:
+        event_time = datetime.now().isoformat(timespec="seconds")
+        tab_value = str(tab_name or self._current_reporting_tab())
+        payload = json.dumps(details or {}, ensure_ascii=False)
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            conn.execute(
+                """
+                INSERT INTO event_log(created_at, tab_name, event_type, button_name, file_path, duration_ms, details_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_time,
+                    tab_value,
+                    str(event_type or "event"),
+                    str(button_name or ""),
+                    str(file_path or ""),
+                    max(0, int(duration_ms or 0)),
+                    payload,
+                ),
+            )
+
+    def _record_button_usage(self, button_name: str, duration_ms: int = 0) -> None:
+        if not button_name:
+            return
+        event_time = datetime.now().isoformat(timespec="seconds")
+        tab_name = self._current_reporting_tab()
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            conn.execute(
+                """
+                INSERT INTO button_usage(button_name, use_count, total_duration_ms, last_used_at, last_tab_name)
+                VALUES (?, 1, ?, ?, ?)
+                ON CONFLICT(button_name) DO UPDATE SET
+                    use_count = button_usage.use_count + 1,
+                    total_duration_ms = button_usage.total_duration_ms + excluded.total_duration_ms,
+                    last_used_at = excluded.last_used_at,
+                    last_tab_name = excluded.last_tab_name
+                """,
+                (
+                    str(button_name),
+                    max(0, int(duration_ms or 0)),
+                    event_time,
+                    tab_name,
+                ),
+            )
+
+    def _upsert_prompt_history(self, prompt_kind: str, prompt_text: str, tab_name: str) -> None:
+        cleaned = str(prompt_text or "").strip()
+        if not cleaned:
+            return
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            conn.execute(
+                """
+                INSERT INTO prompt_history(prompt_kind, prompt_text, first_used_at, last_used_at, tab_name, file_path, duration_ms, use_count)
+                VALUES (?, ?, ?, ?, ?, '', 0, 1)
+                ON CONFLICT(prompt_kind, prompt_text) DO UPDATE SET
+                    last_used_at = excluded.last_used_at,
+                    tab_name = excluded.tab_name,
+                    duration_ms = excluded.duration_ms,
+                    use_count = prompt_history.use_count + 1
+                """,
+                (prompt_kind, cleaned, now_iso, now_iso, tab_name),
+            )
+            conn.execute(
+                """
+                DELETE FROM prompt_history
+                WHERE prompt_kind = ?
+                  AND id NOT IN (
+                    SELECT id FROM prompt_history
+                    WHERE prompt_kind = ?
+                    ORDER BY datetime(last_used_at) DESC, id DESC
+                    LIMIT 50
+                  )
+                """,
+                (prompt_kind, prompt_kind),
+            )
+
+    def _record_prompt_inputs_for_history(self) -> None:
+        tab_name = self._current_reporting_tab()
+        concept_text = self.concept.toPlainText()
+        styling_text = self.styling_prompt.toPlainText()
+        manual_text = self.manual_prompt.toPlainText()
+        self._upsert_prompt_history("concept", concept_text, tab_name)
+        self._upsert_prompt_history("styling", styling_text, tab_name)
+        self._upsert_prompt_history("manual", manual_text, tab_name)
+        self._log_event(
+            event_type="prompt_capture",
+            duration_ms=0,
+            details={
+                "concept_chars": len(concept_text.strip()),
+                "styling_chars": len(styling_text.strip()),
+                "manual_chars": len(manual_text.strip()),
+            },
+            tab_name=tab_name,
+        )
+        self._refresh_prompt_history_combos()
+
+    def _read_prompt_history(self, prompt_kind: str, limit: int = 50) -> list[dict[str, str]]:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            rows = conn.execute(
+                """
+                SELECT prompt_text, last_used_at, use_count
+                FROM prompt_history
+                WHERE prompt_kind = ?
+                ORDER BY datetime(last_used_at) DESC, id DESC
+                LIMIT ?
+                """,
+                (prompt_kind, max(1, int(limit))),
+            ).fetchall()
+        return [
+            {
+                "text": str(row[0] or ""),
+                "last_used_at": str(row[1] or ""),
+                "use_count": str(row[2] or "1"),
+            }
+            for row in rows
+        ]
+
+    def _read_prompt_usage_summary(self, prompt_kind: str, limit: int = 10) -> list[tuple[str, int, str]]:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            rows = conn.execute(
+                """
+                SELECT prompt_text, use_count, last_used_at
+                FROM prompt_history
+                WHERE prompt_kind = ?
+                ORDER BY use_count DESC, datetime(last_used_at) DESC
+                LIMIT ?
+                """,
+                (prompt_kind, max(1, int(limit))),
+            ).fetchall()
+        return [(str(row[0] or ""), int(row[1] or 0), str(row[2] or "")) for row in rows]
+
+    def _refresh_prompt_history_combos(self) -> None:
+        combo_map = {
+            "concept": getattr(self, "concept_history_combo", None),
+            "styling": getattr(self, "styling_history_combo", None),
+            "manual": getattr(self, "manual_prompt_history_combo", None),
+        }
+        for kind, combo in combo_map.items():
+            if combo is None:
+                continue
+            entries = self._read_prompt_history(kind, limit=50)
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("Recent history…", "")
+            for entry in entries:
+                text_value = str(entry.get("text") or "")
+                last_used_at = str(entry.get("last_used_at") or "")
+                use_count = str(entry.get("use_count") or "1")
+                preview = " ".join(text_value.split())
+                if len(preview) > 60:
+                    preview = preview[:57] + "…"
+                combo.addItem(f"{last_used_at} · used {use_count}x · {preview}", text_value)
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+
+    def _apply_prompt_history_selection(self, prompt_kind: str, index: int) -> None:
+        if index <= 0:
+            return
+        combo = {
+            "concept": getattr(self, "concept_history_combo", None),
+            "styling": getattr(self, "styling_history_combo", None),
+            "manual": getattr(self, "manual_prompt_history_combo", None),
+        }.get(prompt_kind)
+        if combo is None:
+            return
+        selected_text = str(combo.currentData() or "")
+        if not selected_text:
+            return
+        if prompt_kind == "concept":
+            self.concept.setPlainText(selected_text)
+        elif prompt_kind == "styling":
+            self.styling_prompt.setPlainText(selected_text)
+        elif prompt_kind == "manual":
+            self.manual_prompt.setPlainText(selected_text)
+
+    def _flush_usage_stats(self) -> None:
+        now = time.time()
+        elapsed = max(0, int(now - self._last_usage_stats_flush_at))
+        self._last_usage_stats_flush_at = now
+        if elapsed <= 0:
+            return
+        self._stats_increment("total_usage_seconds", elapsed)
+        self._stats_set("last_seen_at_epoch", int(now))
+
+    def _read_stats_snapshot(self) -> dict[str, int]:
+        keys = (
+            "app_launch_count",
+            "session_count",
+            "total_usage_seconds",
+            "videos_generated_total",
+            "uploads_success_total",
+            "uploads_failed_total",
+            "unexpected_exit_total",
+        )
+        return {key: self._stats_get(key, 0) for key in keys}
+
+    def _read_button_usage_summary(self, limit: int = 15) -> list[tuple[str, int, int, str]]:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            rows = conn.execute(
+                """
+                SELECT button_name, use_count, total_duration_ms, last_used_at
+                FROM button_usage
+                ORDER BY use_count DESC, datetime(last_used_at) DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [
+            (str(row[0] or ""), int(row[1] or 0), int(row[2] or 0), str(row[3] or ""))
+            for row in rows
+        ]
+
+    def show_user_stats_dialog(self) -> None:
+        self._flush_usage_stats()
+        snapshot = self._read_stats_snapshot()
+        session_seconds = max(0, int(time.time() - self.session_started_at))
+        button_rows = self._read_button_usage_summary(limit=12)
+        button_lines = [
+            f"- {name}: {count} clicks, {max(0, duration_ms)//1000}s total, last {last_used}"
+            for name, count, duration_ms, last_used in button_rows
+        ]
+
+        concept_count = len(self._read_prompt_history("concept", limit=50))
+        styling_count = len(self._read_prompt_history("styling", limit=50))
+        manual_count = len(self._read_prompt_history("manual", limit=50))
+
+        top_concepts = self._read_prompt_usage_summary("concept", limit=3)
+        top_manual = self._read_prompt_usage_summary("manual", limit=3)
+        top_concept_lines = [f"- ({count}x) {text[:60]}" for text, count, _ in top_concepts]
+        top_manual_lines = [f"- ({count}x) {text[:60]}" for text, count, _ in top_manual]
+
+        message = (
+            f"Session uptime: {self._format_duration_seconds(session_seconds)}\n"
+            f"Total usage: {self._format_duration_seconds(snapshot['total_usage_seconds'])}\n"
+            f"App launches: {snapshot['app_launch_count']}\n"
+            f"Sessions: {snapshot['session_count']}\n"
+            f"Videos generated: {snapshot['videos_generated_total']}\n"
+            f"Successful uploads: {snapshot['uploads_success_total']}\n"
+            f"Failed uploads: {snapshot['uploads_failed_total']}\n"
+            f"Unexpected upload exits: {snapshot['unexpected_exit_total']}\n"
+            f"\nPrompt history counts (last 50 each):\n"
+            f"- Concept: {concept_count}\n"
+            f"- Styling: {styling_count}\n"
+            f"- Manual: {manual_count}\n"
+            f"\nTop concept prompts:\n"
+            + ("\n".join(top_concept_lines) if top_concept_lines else "- No concept history yet.")
+            + "\n\nTop manual prompts:\n"
+            + ("\n".join(top_manual_lines) if top_manual_lines else "- No manual history yet.")
+            + "\n\nTop button usage:\n"
+            + ("\n".join(button_lines) if button_lines else "- No button interactions recorded yet.")
+        )
+        QMessageBox.information(self, "User Stats", message)
+
+    def _append_line_to_file(self, file_path: Path, line: str) -> None:
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with file_path.open("a", encoding="utf-8") as handle:
+                handle.write(line.rstrip() + "\n")
+        except Exception as exc:
+            self._append_log(f"WARNING: Could not write log file {file_path.name}: {exc}")
+
+    def _load_video_metadata_cache(self) -> None:
+        if not VIDEO_METADATA_CACHE_FILE.exists():
+            self._video_metadata_cache = {}
+            return
+        try:
+            payload = json.loads(VIDEO_METADATA_CACHE_FILE.read_text(encoding="utf-8"))
+            self._video_metadata_cache = payload if isinstance(payload, dict) else {}
+        except Exception:
+            self._video_metadata_cache = {}
+
+    def _save_video_metadata_cache(self) -> None:
+        try:
+            VIDEO_METADATA_CACHE_FILE.write_text(
+                json.dumps(self._video_metadata_cache, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            self._append_log(f"WARNING: Could not save video metadata cache: {exc}")
+
+    def _video_cache_key(self, video_path: str | Path) -> str:
+        return Path(video_path).name.casefold()
+
+    def _resolve_video_metadata(self, video_path: str | Path) -> dict[str, Any]:
+        path = Path(video_path)
+        if not path.exists():
+            return {}
+        try:
+            stat = path.stat()
+        except Exception:
+            return {}
+        cache_key = self._video_cache_key(path)
+        fingerprint = f"{stat.st_size}:{stat.st_mtime_ns}"
+        cached = self._video_metadata_cache.get(cache_key)
+        if isinstance(cached, dict) and cached.get("fingerprint") == fingerprint:
+            return dict(cached)
+
+        metadata: dict[str, Any] = {
+            "fingerprint": fingerprint,
+            "path": str(path),
+            "filename": path.name,
+            "size_bytes": int(stat.st_size),
+        }
+        try:
+            info = self._probe_video_stream_info(path)
+            width = int(info.get("width") or 0)
+            height = int(info.get("height") or 0)
+            if width > 0 and height > 0:
+                metadata["resolution"] = f"{width}x{height}"
+            duration_value = float(info.get("duration") or 0.0)
+            if duration_value <= 0:
+                duration_value = float(self._probe_video_duration(path))
+            metadata["duration_seconds"] = max(0.0, duration_value)
+        except Exception:
+            pass
+
+        self._video_metadata_cache[cache_key] = metadata
+        self._save_video_metadata_cache()
+        return dict(metadata)
+
+    def _looks_like_placeholder_resolution(self, resolution: str) -> bool:
+        normalized = str(resolution or "").strip().lower()
+        if not normalized:
+            return True
+        placeholders = {"web", "local", "unknown", "same", "mixed", "auto", "preferences"}
+        if normalized in placeholders:
+            return True
+        return "web" in normalized
+
+    def _resolve_video_resolution(self, video: dict[str, Any]) -> str:
+        current_resolution = str(video.get("resolution") or "").strip()
+        video_path = str(video.get("video_file_path") or "").strip()
+        if not video_path:
+            return current_resolution or "unknown"
+        metadata = self._resolve_video_metadata(video_path)
+        resolved = str(metadata.get("resolution") or "").strip()
+        if resolved and (self._looks_like_placeholder_resolution(current_resolution) or current_resolution != resolved):
+            video["resolution"] = resolved
+            return resolved
+        return current_resolution or resolved or "unknown"
+
+    def _format_duration_seconds(self, seconds: float) -> str:
+        total = max(0, int(seconds))
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h:d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+
+    def _record_upload_success(self, platform_name: str, video_path: str, upload_id: str, method: str) -> None:
+        metadata = self._resolve_video_metadata(video_path) if video_path else {}
+        size_bytes = int(metadata.get("size_bytes") or 0)
+        duration_seconds = float(metadata.get("duration_seconds") or 0.0)
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        tab_name = str(self._active_upload_context.get("tab") or self._current_reporting_tab())
+        duration_ms = int(self._active_upload_context.get("duration_ms") or 0)
+        event = {
+            "ts": now_iso,
+            "tab": tab_name,
+            "platform": platform_name,
+            "method": method,
+            "video_path": video_path,
+            "size_bytes": size_bytes,
+            "duration_seconds": round(duration_seconds, 3),
+            "upload_time_ms": duration_ms,
+            "upload_id": upload_id,
+        }
+        self._append_line_to_file(UPLOAD_SUCCESS_LOG_FILE, json.dumps(event, ensure_ascii=False))
+        self._log_event(
+            event_type="upload_success",
+            button_name=platform_name,
+            file_path=video_path,
+            duration_ms=duration_ms,
+            details=event,
+            tab_name=tab_name,
+        )
+        self._stats_increment("uploads_success_total", 1)
+
+    def _record_upload_failure(self, platform_name: str, video_path: str, reason: str, *, unexpected_exit: bool = False) -> None:
+        metadata = self._resolve_video_metadata(video_path) if video_path else {}
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        tab_name = str(self._active_upload_context.get("tab") or self._current_reporting_tab())
+        duration_ms = int(self._active_upload_context.get("duration_ms") or 0)
+        event = {
+            "ts": now_iso,
+            "tab": tab_name,
+            "platform": platform_name,
+            "video_path": video_path,
+            "size_bytes": int(metadata.get("size_bytes") or 0),
+            "duration_seconds": round(float(metadata.get("duration_seconds") or 0.0), 3),
+            "upload_time_ms": duration_ms,
+            "reason": str(reason or "unknown"),
+            "unexpected_exit": bool(unexpected_exit),
+        }
+        self._append_line_to_file(UPLOAD_FAILURE_LOG_FILE, json.dumps(event, ensure_ascii=False))
+        self._log_event(
+            event_type="upload_failure",
+            button_name=platform_name,
+            file_path=video_path,
+            duration_ms=duration_ms,
+            details=event,
+            tab_name=tab_name,
+        )
+        self._stats_increment("uploads_failed_total", 1)
+        if unexpected_exit:
+            self._append_line_to_file(UPLOAD_UNEXPECTED_EXIT_LOG_FILE, json.dumps(event, ensure_ascii=False))
+            self._stats_increment("unexpected_exit_total", 1)
 
     def _on_automation_mode_changed(self, _index: int) -> None:
         self._sync_social_embedded_browser_state_for_automation_mode(log_change=True)
@@ -8118,13 +8806,25 @@ class MainWindow(QMainWindow):
                 hashtags=merged_hashtags,
                 category=str(parsed.get("category", "22")),
             )
-            self.manual_prompt.setPlainText(manual_prompt)
-            appended_note = f" (+{len(custom_hashtags)} custom)" if custom_hashtags else ""
-            self._append_log(
-                "AI updated Manual Prompt and social metadata defaults "
-                f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
-                f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
+            preserve_manual_prompt = bool(
+                hasattr(self, "keep_manual_prompt_on_social_generate")
+                and self.keep_manual_prompt_on_social_generate.isChecked()
             )
+            if not preserve_manual_prompt:
+                self.manual_prompt.setPlainText(manual_prompt)
+            appended_note = f" (+{len(custom_hashtags)} custom)" if custom_hashtags else ""
+            if preserve_manual_prompt:
+                self._append_log(
+                    "AI updated social metadata defaults only (Manual Prompt preserved) "
+                    f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
+                    f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
+                )
+            else:
+                self._append_log(
+                    "AI updated Manual Prompt and social metadata defaults "
+                    f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
+                    f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
+                )
         except Exception as exc:
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
 
@@ -13953,11 +14653,31 @@ class MainWindow(QMainWindow):
             worker.requestInterruption()
             if not worker.wait(5000):
                 self._append_log(f"WARNING: Timed out while waiting for {worker_name} worker thread to stop.")
+
+        if self.upload_worker is not None and self.upload_worker.isRunning():
+            active_platform = str(self._active_upload_context.get("platform") or "unknown")
+            active_video_path = str(self._active_upload_context.get("video_path") or "")
+            self._record_upload_failure(active_platform, active_video_path, "application closed during upload", unexpected_exit=True)
+
+        if self.social_upload_pending:
+            for platform_name, pending in list(self.social_upload_pending.items()):
+                pending_video_path = str((pending or {}).get("video_path") or "")
+                pending_started_at = float((pending or {}).get("started_at") or time.time())
+                self._active_upload_context = {
+                    "platform": platform_name,
+                    "video_path": pending_video_path,
+                    "tab": str((pending or {}).get("tab") or self._current_reporting_tab()),
+                    "duration_ms": max(0, int((time.time() - pending_started_at) * 1000)),
+                }
+                self._record_upload_failure(platform_name, pending_video_path, "application closed during browser upload", unexpected_exit=True)
+
+        self._flush_usage_stats()
+        self._save_video_metadata_cache()
         super().closeEvent(event)
 
     def _build_video_label(self, video: dict) -> str:
         title = str(video.get("title") or "Video")
-        resolution = str(video.get("resolution") or "unknown")
+        resolution = self._resolve_video_resolution(video)
         return f"{title} ({resolution})"
 
     def _serialize_video_list_for_preferences(self) -> list[dict[str, str]]:
@@ -14079,7 +14799,7 @@ class MainWindow(QMainWindow):
                         "-frames:v",
                         "1",
                         "-vf",
-                        "scale=144:-2",
+                        "scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
                         str(thumb_path),
                     ],
                     check=True,
@@ -14095,7 +14815,17 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(str(thumb_path))
         if pixmap.isNull():
             return QIcon()
-        return QIcon(pixmap)
+
+        rounded = QPixmap(pixmap.size())
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        clip_path = QPainterPath()
+        clip_path.addRoundedRect(rounded.rect(), 16, 16)
+        painter.setClipPath(clip_path)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+        return QIcon(rounded)
 
     def _format_video_date(self, video_path: str) -> str:
         try:
@@ -14103,6 +14833,21 @@ class MainWindow(QMainWindow):
             return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
         except Exception:
             return "unknown"
+
+    def _format_video_filesize(self, video_path: str) -> str:
+        try:
+            size_bytes = Path(video_path).stat().st_size
+        except Exception:
+            return "unknown"
+
+        units = ("B", "KB", "MB", "GB", "TB")
+        size_value = float(size_bytes)
+        for unit in units:
+            if size_value < 1024.0 or unit == units[-1]:
+                precision = 0 if unit == "B" else 1
+                return f"{size_value:.{precision}f} {unit}"
+            size_value /= 1024.0
+        return "unknown"
 
     def _selected_video_index(self) -> int:
         if hasattr(self, "video_view_stack") and self.video_view_stack.currentWidget() is self.video_details:
@@ -14143,13 +14888,67 @@ class MainWindow(QMainWindow):
     def _toggle_video_view_mode(self, details_mode: bool) -> None:
         selected_index = self._selected_video_index()
         self.video_view_stack.setCurrentWidget(self.video_details if details_mode else self.video_grid)
-        self.video_view_toggle_btn.setText("☰" if details_mode else "☷")
+        self.video_view_toggle_btn.setText("View: List" if details_mode else "View: Grid")
         self.video_view_toggle_btn.setToolTip(
             "Switch to thumbnail grid view." if details_mode else "Switch to details list view."
         )
         self._set_selected_video_index(selected_index)
 
+    def _video_thumb_mode_config(self, mode: int) -> dict[str, Any]:
+        clamped = max(0, min(2, int(mode)))
+        if clamped == 2:
+            return {"icon": 72, "cell": 86, "text": "▪", "tooltip": "Cycle thumbnail size: large → small → extra small."}
+        if clamped == 1:
+            return {"icon": 108, "cell": 126, "text": "▫", "tooltip": "Cycle thumbnail size: large → small → extra small."}
+        return {"icon": 160, "cell": 182, "text": "◻", "tooltip": "Cycle thumbnail size: large → small → extra small."}
+
+    def _apply_video_grid_layout(self) -> None:
+        if not hasattr(self, "video_grid"):
+            return
+        cfg = self._video_thumb_mode_config(self.video_grid_size_mode)
+        icon_px = int(cfg["icon"])
+        base_cell = int(cfg["cell"])
+        text_rows = 0 if not self.video_grid_titles_visible else 2
+        text_pad = 10 if not self.video_grid_titles_visible else (24 if text_rows > 1 else 18)
+        viewport_width = max(120, self.video_grid.viewport().width())
+
+        ideal_cols = max(1, round(viewport_width / max(1, base_cell)))
+        cols = max(1, ideal_cols)
+        min_gap = 6
+        max_icon_for_mode = icon_px
+        while cols > 1:
+            candidate_cell = (viewport_width - ((cols + 1) * min_gap)) // cols
+            if candidate_cell >= (max_icon_for_mode + 14):
+                break
+            cols -= 1
+        cell_w = max(86, (viewport_width - ((cols + 1) * min_gap)) // cols)
+        icon_actual = max(60, min(max_icon_for_mode, cell_w - 14))
+        gap = max(4, (viewport_width - (cols * cell_w)) // (cols + 1))
+        cell_h = icon_actual + text_pad
+
+        self.video_grid.setSpacing(gap)
+        self.video_grid.setIconSize(QPixmap(icon_actual, icon_actual).size())
+        self.video_grid.setGridSize(QPixmap(cell_w, cell_h).size())
+
+        self.video_thumb_size_toggle_btn.setText(f"Size {cfg['text']}")
+        self.video_thumb_size_toggle_btn.setToolTip(str(cfg["tooltip"]))
+
+    def _cycle_video_thumbnail_size(self) -> None:
+        self.video_grid_size_mode = (int(self.video_grid_size_mode) + 1) % 3
+        self._apply_video_grid_layout()
+        self._refresh_video_picker(selected_index=self._selected_video_index())
+
+    def _toggle_video_thumbnail_titles(self, show_titles: bool) -> None:
+        self.video_grid_titles_visible = bool(show_titles)
+        self.video_thumb_titles_toggle_btn.setText("Titles On" if show_titles else "Titles Off")
+        self.video_thumb_titles_toggle_btn.setToolTip(
+            "Hide thumbnail titles." if show_titles else "Show thumbnail titles."
+        )
+        self._apply_video_grid_layout()
+        self._refresh_video_picker(selected_index=self._selected_video_index())
+
     def _refresh_video_picker(self, selected_index: int = -1) -> None:
+        self._apply_video_grid_layout()
         self.video_grid.blockSignals(True)
         self.video_details.blockSignals(True)
         self.video_grid.clear()
@@ -14160,7 +14959,7 @@ class MainWindow(QMainWindow):
             video_path = str(video.get("video_file_path") or "")
             icon = self._thumbnail_for_video(video_path)
 
-            grid_item = QListWidgetItem(icon, label)
+            grid_item = QListWidgetItem(icon, label if self.video_grid_titles_visible else "")
             grid_item.setToolTip(video_path)
             self.video_grid.addItem(grid_item)
 
@@ -14168,7 +14967,8 @@ class MainWindow(QMainWindow):
             detail_item = QTreeWidgetItem([
                 self._format_video_date(video_path),
                 filename,
-                str(video.get("resolution") or "unknown"),
+                self._resolve_video_resolution(video),
+                self._format_video_filesize(video_path),
             ])
             detail_item.setData(0, Qt.UserRole, index)
             detail_item.setToolTip(1, video_path)
@@ -14188,6 +14988,12 @@ class MainWindow(QMainWindow):
     def on_video_finished(self, video: dict) -> None:
         video_path_raw = str(video.get("video_file_path") or "").strip()
         if video_path_raw:
+            metadata = self._resolve_video_metadata(video_path_raw)
+            resolved_resolution = str(metadata.get("resolution") or "").strip()
+            current_resolution = str(video.get("resolution") or "").strip()
+            if resolved_resolution and (self._looks_like_placeholder_resolution(current_resolution) or current_resolution != resolved_resolution):
+                video["resolution"] = resolved_resolution
+
             candidate_key = str(Path(video_path_raw).expanduser())
             for index, existing in enumerate(self.videos):
                 existing_path_raw = str(existing.get("video_file_path") or "").strip()
@@ -14203,6 +15009,9 @@ class MainWindow(QMainWindow):
                 return
 
         self.videos.append(video)
+        source_url = str(video.get("source_url") or "").strip().lower()
+        if source_url and source_url not in {"local-open", "preferences", ""}:
+            self._stats_increment("videos_generated_total", 1)
         self._refresh_video_picker(selected_index=len(self.videos) - 1)
         self._append_log(f"Saved: {video['video_file_path']}")
 
@@ -14489,7 +15298,7 @@ class MainWindow(QMainWindow):
         self.preview_fullscreen_progress_bar.setValue(int(ratio * 1000))
 
     def _on_preview_fullscreen_changed(self, fullscreen: bool) -> None:
-        self.preview_fullscreen_btn.setText("🗗" if fullscreen else "⛶")
+        self.preview_fullscreen_btn.setText("Window" if fullscreen else "Fullscreen")
 
         if fullscreen:
             self._ensure_preview_fullscreen_overlay()
@@ -14541,6 +15350,53 @@ class MainWindow(QMainWindow):
     def stop_preview(self) -> None:
         self.player.stop()
         self._append_log("Preview playback stopped.")
+
+    def pause_preview(self) -> None:
+        if self.player.source().isEmpty():
+            return
+        self.player.pause()
+        self._append_log("Preview playback paused.")
+
+    def _set_preview_zoom_percent(self, percent: int) -> None:
+        self.preview_zoom_percent = max(50, min(200, int(percent)))
+        self._append_log(f"Preview zoom set to {self.preview_zoom_percent}%.")
+
+    def _copy_preview_frame_to_clipboard(self) -> None:
+        frame_pixmap = self.preview.grab()
+        if frame_pixmap.isNull():
+            self._append_log("Preview frame copy skipped: no frame available.")
+            return
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setPixmap(frame_pixmap)
+        self._append_log("Copied preview frame to clipboard.")
+
+    def _show_preview_context_menu(self, pos: QPoint) -> None:
+        menu = QMenu(self)
+
+        zoom_menu = menu.addMenu("Zoom")
+        for zoom_value in (50, 75, 100, 125, 150, 200):
+            action = zoom_menu.addAction(f"{zoom_value}%")
+            action.setCheckable(True)
+            action.setChecked(self.preview_zoom_percent == zoom_value)
+            action.triggered.connect(lambda checked=False, z=zoom_value: self._set_preview_zoom_percent(z))
+
+        pause_action = menu.addAction("Pause")
+        pause_action.triggered.connect(self.pause_preview)
+
+        mute_action = menu.addAction("Mute")
+        mute_action.setCheckable(True)
+        mute_action.setChecked(bool(self.preview_mute_checkbox.isChecked()))
+        mute_action.triggered.connect(lambda checked: self.preview_mute_checkbox.setChecked(bool(checked)))
+
+        loop_action = menu.addAction("Loop")
+        loop_action.setCheckable(True)
+        loop_action.setChecked(bool(self.preview_loop_checkbox.isChecked()))
+        loop_action.triggered.connect(lambda checked: self.preview_loop_checkbox.setChecked(bool(checked)))
+
+        copy_frame_action = menu.addAction("Copy Frame")
+        copy_frame_action.triggered.connect(self._copy_preview_frame_to_clipboard)
+
+        menu.exec(self.preview.mapToGlobal(pos))
 
     def _set_preview_muted(self, muted: bool) -> None:
         self.preview_muted = bool(muted)
@@ -16686,6 +17542,8 @@ class MainWindow(QMainWindow):
         self.social_upload_pending[platform_name] = {
             "platform": platform_name,
             "video_path": str(video_path),
+            "tab": self._current_reporting_tab(),
+            "started_at": time.time(),
             "caption": str(caption or ""),
             "title": str(title or ""),
             "attempts": 0,
@@ -18620,6 +19478,15 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram or is_youtube or is_x) else 'staged successfully'} in its tab."
                 )
+                completed_video_path = str(pending.get("video_path") or "").strip()
+                started_at = float(pending.get("started_at") or time.time())
+                self._active_upload_context = {
+                    "platform": platform_name,
+                    "video_path": completed_video_path,
+                    "tab": str(pending.get("tab") or self._current_reporting_tab()),
+                    "duration_ms": max(0, int((time.time() - started_at) * 1000)),
+                }
+                self._record_upload_success(platform_name, completed_video_path, upload_id="browser-automation", method="browser")
                 self.social_upload_pending.pop(platform_name, None)
                 return
 
@@ -18647,6 +19514,17 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setVisible(True)
         self._refresh_status_bar_visibility()
         self._append_log(f"Starting {platform_name} upload...")
+        active_video_path = str(upload_kwargs.get("video_path") or "").strip()
+        if not active_video_path:
+            active_video_path = self._selected_video_path_for_upload()
+        self._active_upload_context = {
+            "platform": platform_name,
+            "video_path": active_video_path,
+            "method": "api",
+            "tab": self._current_reporting_tab(),
+            "started_at": time.time(),
+            "duration_ms": 0,
+        }
 
         self.upload_worker = UploadWorker(platform_name=platform_name, upload_fn=upload_fn, upload_kwargs=upload_kwargs)
         self.upload_worker.progress.connect(self._on_upload_progress)
@@ -18680,6 +19558,10 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setVisible(False)
         self._refresh_status_bar_visibility()
         self._append_log(f"{platform_name} upload complete. ID: {upload_id}")
+        started_at = float(self._active_upload_context.get("started_at") or time.time())
+        self._active_upload_context["duration_ms"] = max(0, int((time.time() - started_at) * 1000))
+        video_path = str(self._active_upload_context.get("video_path") or "").strip()
+        self._record_upload_success(platform_name, video_path, upload_id, method="api")
         QMessageBox.information(self, dialog_title, f"{success_prefix} {upload_id}")
 
     def _on_upload_failed(self, platform_name: str, error_message: str) -> None:
@@ -18688,11 +19570,16 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setVisible(False)
         self._refresh_status_bar_visibility()
         self._append_log(f"ERROR: {platform_name} upload failed: {error_message}")
+        started_at = float(self._active_upload_context.get("started_at") or time.time())
+        self._active_upload_context["duration_ms"] = max(0, int((time.time() - started_at) * 1000))
+        video_path = str(self._active_upload_context.get("video_path") or "").strip()
+        self._record_upload_failure(platform_name, video_path, error_message)
         QMessageBox.critical(self, f"{platform_name} Upload Failed", error_message)
 
     def _cleanup_upload_worker(self) -> None:
         self.upload_youtube_btn.setEnabled(True)
         self.upload_worker = None
+        self._active_upload_context = {}
 
     def _normalize_hashtag_tokens(self, hashtags: list[str]) -> list[str]:
         normalized: list[str] = []
