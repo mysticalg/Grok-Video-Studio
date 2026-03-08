@@ -5926,6 +5926,20 @@ class MainWindow(QMainWindow):
         automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
         automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
         self.automation_menu.addAction(automation_reset_timings_action)
+
+        cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
+        if hasattr(self, "cdp_menu_actions"):
+            cdp_settings_menu.addAction(self.cdp_menu_actions[True])
+            cdp_settings_menu.addAction(self.cdp_menu_actions[False])
+        if hasattr(self, "cdp_external_browser_action"):
+            cdp_settings_menu.addSeparator()
+            cdp_settings_menu.addAction(self.cdp_external_browser_action)
+        if hasattr(self, "start_automation_chrome_action"):
+            cdp_settings_menu.addAction(self.start_automation_chrome_action)
+        if hasattr(self, "connect_cdp_action"):
+            cdp_settings_menu.addAction(self.connect_cdp_action)
+        if hasattr(self, "extension_dom_ping_action"):
+            cdp_settings_menu.addAction(self.extension_dom_ping_action)
         self.automation_menu.addSeparator()
 
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
@@ -5968,17 +5982,6 @@ class MainWindow(QMainWindow):
         self._add_widget_to_menu(self.audio_settings_menu, self.stitch_audio_fade_duration)
         self._add_widget_to_menu(self.audio_settings_menu, self.stitch_audio_fade_label)
 
-        automation_widget = QWidget(self)
-        automation_layout = QHBoxLayout(automation_widget)
-        automation_layout.setContentsMargins(8, 4, 8, 4)
-        automation_layout.addWidget(QLabel("Counter"))
-        automation_layout.addWidget(self.count)
-        automation_layout.addStretch(1)
-
-        counter_hint = QLabel("Adjust Delay/Retry/Poll in Automation → Timings…")
-        counter_hint.setStyleSheet("color: palette(mid);")
-        automation_layout.addWidget(counter_hint)
-        self._add_widget_to_menu(self.automation_menu, automation_widget)
 
     def show_app_info(self) -> None:
         dialog = QDialog(self)
