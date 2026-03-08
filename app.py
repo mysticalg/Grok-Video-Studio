@@ -5607,8 +5607,8 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        settings_menu = menu_bar.addMenu("Model/API Settings")
-        open_settings_action = QAction("Open Model/API Settings", self)
+        settings_menu = menu_bar.addMenu("Settings")
+        open_settings_action = QAction("AI Settings", self)
         open_settings_action.triggered.connect(self.show_model_api_settings)
         settings_menu.addAction(open_settings_action)
 
@@ -5620,8 +5620,10 @@ class MainWindow(QMainWindow):
         self.video_settings_menu = video_menu.addMenu("Settings")
         self.video_grok_settings_menu = video_menu.addMenu("Grok Settings")
 
-        audio_menu = menu_bar.addMenu("Audio")
-        self.audio_settings_menu = audio_menu.addMenu("Settings")
+        self.audio_menu = menu_bar.addMenu("Audio")
+        # Keep audio controls at the Audio menu root (no nested Settings submenu)
+        # so common toggles are one click away.
+        self.audio_settings_menu = self.audio_menu
 
         self.automation_menu = menu_bar.addMenu("Automation")
         automation_timings_action = QAction("Timings…", self)
