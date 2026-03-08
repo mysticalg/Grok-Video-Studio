@@ -875,8 +875,12 @@ class UdpAutomationService:
 
                 if file_name_override:
                     # Stage a physical copy that uses the requested upload filename.
-                    # Put it in a unique temp directory to avoid collisions across runs.
-                    staging_dir = Path(tempfile.mkdtemp(prefix="grok_video_studio_uploads_"))
+                    # For TikTok, stage in the source (downloads) folder and keep the file
+                    # on disk after selection so uploads can continue reading it.
+                    if platform == "tiktok":
+                        staging_dir = source_file_path.parent
+                    else:
+                        staging_dir = Path(tempfile.mkdtemp(prefix="grok_video_studio_uploads_"))
                     # Keep full staged path <= 254 chars for Windows compatibility.
                     max_path_chars = 254
                     available_name_chars = max(16, max_path_chars - len(str(staging_dir)) - 1)
@@ -886,9 +890,20 @@ class UdpAutomationService:
                         max_chars=available_name_chars,
                     )
                     staged_file_path = staging_dir / safe_file_name
+                    if platform == "tiktok" and staged_file_path.exists():
+                        stem = staged_file_path.stem
+                        suffix = staged_file_path.suffix
+                        for idx in range(1, 1000):
+                            suffix_token = f"_{idx}"
+                            stem_limit = max(1, available_name_chars - len(suffix) - len(suffix_token))
+                            candidate_stem = stem[:stem_limit].rstrip(" .") or "upload"
+                            candidate = staging_dir / f"{candidate_stem}{suffix_token}{suffix}"
+                            if not candidate.exists():
+                                staged_file_path = candidate
+                                break
                     shutil.copy2(source_file_path, staged_file_path)
-                    cleanup_staged_file = True
-                    cleanup_staged_dir = staging_dir
+                    cleanup_staged_file = platform != "tiktok"
+                    cleanup_staged_dir = staging_dir if platform != "tiktok" else None
                     staged_payload["filePath"] = str(staged_file_path)
 
                 try:
