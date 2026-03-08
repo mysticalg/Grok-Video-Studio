@@ -4801,13 +4801,13 @@ class MainWindow(QMainWindow):
         ai_right_form.setSpacing(6)
         ai_columns_layout.addLayout(ai_left_form, 1)
         ai_columns_layout.addLayout(ai_right_form, 1)
-        ai_row_count = 0
+        ai_column_loads = [0, 0]
 
-        def ai_add_row(label: str, widget: QWidget | QLayout) -> None:
-            nonlocal ai_row_count
-            target_layout = ai_left_form if ai_row_count % 2 == 0 else ai_right_form
+        def ai_add_row(label: str, widget: QWidget | QLayout, *, weight: int = 1) -> None:
+            column_index = 0 if ai_column_loads[0] <= ai_column_loads[1] else 1
+            target_layout = ai_left_form if column_index == 0 else ai_right_form
             target_layout.addRow(label, widget)
-            ai_row_count += 1
+            ai_column_loads[column_index] += max(1, int(weight))
 
         self.api_key = QLineEdit()
         self.api_key.setEchoMode(QLineEdit.Password)
@@ -4922,13 +4922,13 @@ class MainWindow(QMainWindow):
         app_right_form.setSpacing(6)
         app_columns_layout.addLayout(app_left_form, 1)
         app_columns_layout.addLayout(app_right_form, 1)
-        app_row_count = 0
+        app_column_loads = [0, 0]
 
-        def app_add_row(label: str, widget: QWidget | QLayout) -> None:
-            nonlocal app_row_count
-            target_layout = app_left_form if app_row_count % 2 == 0 else app_right_form
+        def app_add_row(label: str, widget: QWidget | QLayout, *, weight: int = 1) -> None:
+            column_index = 0 if app_column_loads[0] <= app_column_loads[1] else 1
+            target_layout = app_left_form if column_index == 0 else app_right_form
             target_layout.addRow(label, widget)
-            app_row_count += 1
+            app_column_loads[column_index] += max(1, int(weight))
 
         self.download_path_input = QLineEdit(str(self.download_dir))
         self.download_path_input.setReadOnly(True)
@@ -4952,25 +4952,25 @@ class MainWindow(QMainWindow):
         self.manual_prompt_default_input.setMaximumHeight(90)
         self.manual_prompt_default_input.setPlaceholderText("Default text used to prefill Manual Prompt.")
         self.manual_prompt_default_input.setPlainText(DEFAULT_MANUAL_PROMPT_TEXT)
-        app_add_row("Default Manual Prompt", self.manual_prompt_default_input)
+        app_add_row("Default Manual Prompt", self.manual_prompt_default_input, weight=3)
 
         self.ai_concept_instruction_template_input = QPlainTextEdit()
         self.ai_concept_instruction_template_input.setMaximumHeight(70)
         self.ai_concept_instruction_template_input.setPlaceholderText("Template for concept-to-instruction text. Use {concept} placeholder.")
         self.ai_concept_instruction_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_INSTRUCTION_TEMPLATE)
-        app_add_row("AI Concept Instruction Template", self.ai_concept_instruction_template_input)
+        app_add_row("AI Concept Instruction Template", self.ai_concept_instruction_template_input, weight=2)
 
         self.ai_concept_system_prompt_input = QPlainTextEdit()
         self.ai_concept_system_prompt_input.setMaximumHeight(80)
         self.ai_concept_system_prompt_input.setPlaceholderText("System prompt used for AI concept prompt generation.")
         self.ai_concept_system_prompt_input.setPlainText(DEFAULT_CONCEPT_PROMPT_SYSTEM_TEXT)
-        app_add_row("AI Concept System Prompt", self.ai_concept_system_prompt_input)
+        app_add_row("AI Concept System Prompt", self.ai_concept_system_prompt_input, weight=3)
 
         self.ai_concept_user_prompt_template_input = QPlainTextEdit()
         self.ai_concept_user_prompt_template_input.setMaximumHeight(140)
         self.ai_concept_user_prompt_template_input.setPlaceholderText("User prompt template used for AI concept prompt generation. Use {instruction} placeholder.")
         self.ai_concept_user_prompt_template_input.setPlainText(DEFAULT_CONCEPT_PROMPT_USER_TEMPLATE)
-        app_add_row("AI Concept User Prompt Template", self.ai_concept_user_prompt_template_input)
+        app_add_row("AI Concept User Prompt Template", self.ai_concept_user_prompt_template_input, weight=4)
 
         self.reset_ai_concept_templates_btn = QPushButton("Reset AI Concept Templates")
         self.reset_ai_concept_templates_btn.setToolTip("Restore recommended concept/system/user templates for the selected Prompt Source.")
@@ -4993,7 +4993,7 @@ class MainWindow(QMainWindow):
 
         remote_debug_note = QLabel("Applies on next app launch. Save settings, then restart the app.")
         remote_debug_note.setWordWrap(True)
-        app_add_row("CDP Note", remote_debug_note)
+        app_add_row("CDP Note", remote_debug_note, weight=2)
 
         self.cdp_social_upload_relay_enabled = QCheckBox("Use CDP relay for social browser automation")
         self.cdp_social_upload_relay_enabled.setChecked(False)
