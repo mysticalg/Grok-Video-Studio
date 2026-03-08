@@ -509,9 +509,12 @@ async function handleCmd(msg) {
           if (!el) return false;
           const text = String(value || "");
           const root = el.closest(".DraftEditor-root") || el;
-          const editable = root.querySelector(".public-DraftEditor-content[contenteditable='true']") || el;
+          const editable = ((el.matches && el.matches("[contenteditable='true']")) ? el : null)
+            || root.querySelector(".public-DraftEditor-content[contenteditable='true']")
+            || el;
           const textSpan = editable.querySelector("span[data-text='true']")
-            || editable.querySelector("span[data-offset-key]");
+            || editable.querySelector("span[data-offset-key]")
+            || editable.closest("span[data-text='true'], span[data-offset-key]");
           if (!textSpan) return false;
 
           try { editable.focus(); } catch (_) {}
@@ -524,8 +527,14 @@ async function handleCmd(msg) {
             sel?.addRange(range);
           } catch (_) {}
 
-          try { document.execCommand("selectAll", false, null); } catch (_) {}
-          try { document.execCommand("delete", false, null); } catch (_) {}
+          try {
+            const clearRange = document.createRange();
+            clearRange.selectNodeContents(textSpan);
+            clearRange.deleteContents();
+            const sel = window.getSelection?.();
+            sel?.removeAllRanges();
+            sel?.addRange(clearRange);
+          } catch (_) {}
           try { editable.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" })); } catch (_) {}
 
           for (const ch of text) {
@@ -851,10 +860,12 @@ async function handleCmd(msg) {
             };
 
             // Avoid paste/DOM mutation paths on TikTok because they can trigger bot heuristics.
-            const typed = await typeIntoDraftEditorSpan(tiktokEl, tiktokText);
+            const typed = await typeIntoDraftEditorSpan(tiktokEl, tiktokText)
+              || await typeTextIntoEditable(tiktokEl, tiktokText);
             if (!tiktokTextMatches()) {
               await wait(120);
-              await typeIntoDraftEditorSpan(tiktokEl, tiktokText);
+              await (typeIntoDraftEditorSpan(tiktokEl, tiktokText)
+                || typeTextIntoEditable(tiktokEl, tiktokText));
             }
             out[rawKey] = Boolean(typed) && tiktokTextMatches();
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {

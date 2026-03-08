@@ -17774,8 +17774,11 @@ class MainWindow(QMainWindow):
                                 const eventOptions = { bubbles: true, composed: true };
                                 const targetSpan = spanNode
                                     || editableNode.querySelector('span[data-text="true"]')
-                                    || editableNode.querySelector('span[data-offset-key]');
-                                if (!targetSpan) return false;
+                                    || editableNode.querySelector('span[data-offset-key]')
+                                    || editableNode.closest('span[data-text="true"], span[data-offset-key]');
+                                if (!targetSpan) {
+                                    return emulateTypingIntoEditor(editableNode, nextText);
+                                }
 
                                 const moveCaretToSpanEnd = () => {
                                     try {
@@ -17791,8 +17794,16 @@ class MainWindow(QMainWindow):
 
                                 try { editableNode.focus(); } catch (_) {}
                                 moveCaretToSpanEnd();
-                                try { document.execCommand("selectAll", false, null); } catch (_) {}
-                                try { document.execCommand("delete", false, null); } catch (_) {}
+                                try {
+                                    const clearRange = document.createRange();
+                                    clearRange.selectNodeContents(targetSpan);
+                                    clearRange.deleteContents();
+                                    const selection = window.getSelection();
+                                    if (selection && typeof selection.removeAllRanges === "function") {
+                                        selection.removeAllRanges();
+                                        selection.addRange(clearRange);
+                                    }
+                                } catch (_) {}
                                 try {
                                     editableNode.dispatchEvent(new InputEvent("input", { ...eventOptions, data: "", inputType: "deleteContentBackward" }));
                                 } catch (_) {
