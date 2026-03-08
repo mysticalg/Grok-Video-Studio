@@ -121,27 +121,19 @@ def _overlay_text(opts: dict[str, Any], caption: str) -> str:
     return " ".join(without_tags.split()).strip()
 
 
-def _sanitize_filename_stem(name: str) -> str:
-    # Keep filename safe across platforms and strip all dots from the stem.
-    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", str(name or ""))
-    cleaned = cleaned.replace(".", " ")
-    collapsed = " ".join(cleaned.split()).strip(" .")
-    return collapsed or "tiktok_upload"
-
-
-def _build_upload_filename(
+def _build_upload_filename_override(
     video_path: str,
     caption: str,
     *,
-    max_caption_chars: int = 3000,
-    max_filename_chars: int = 1000,
+    max_chars: int = 3000,
 ) -> str:
     extension = Path(video_path).suffix or ".mp4"
-    caption_source = str(caption or "").strip()[:max_caption_chars]
-    safe_stem = _sanitize_filename_stem(caption_source)
-    stem_limit = max(1, max_filename_chars - len(extension))
-    stem = (safe_stem[:stem_limit].rstrip(" _-") or "tiktok_upload")
-    return f"{stem}{extension}"
+    caption_source = " ".join(str(caption or "").split()).strip()
+    if not caption_source:
+        caption_source = Path(video_path).stem
+    if extension and not caption_source.lower().endswith(extension.lower()):
+        caption_source = f"{caption_source}{extension}"
+    return caption_source[:max(1, int(max_chars))]
 
 
 def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -152,6 +144,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         publish_mode = "draft"
     add_text = bool(opts.get("add_text_overlay"))
     add_music = bool(opts.get("add_music"))
+    rename_upload_filename = bool(opts.get("rename_upload_filename", True))
     music_unique_per_add = bool(opts.get("music_unique_per_add"))
     music_add_count = max(1, min(10, int(opts.get("music_add_count") or 2)))
     raw_music_queries = opts.get("music_queries_effective")
@@ -176,6 +169,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         log_fn,
         "start: "
         f"mode={publish_mode} add_text={add_text} add_music={add_music} "
+        f"rename_upload_filename={rename_upload_filename} "
         f"music_add_count={music_add_count} music_unique_per_add={music_unique_per_add} "
         f"music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}",
     )
@@ -187,10 +181,16 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     _pause(action_delay_s, step="startup_wait_after_login_check", log_fn=log_fn)
 
     upload_payload_request: dict[str, Any] = {"platform": "tiktok", "filePath": video_path}
-    if str(caption or "").strip():
-        upload_file_name = _build_upload_filename(video_path, caption, max_caption_chars=3000)
+    if rename_upload_filename and str(caption or "").strip():
+        upload_file_name = _build_upload_filename_override(video_path, caption, max_chars=3000)
         upload_payload_request["fileName"] = upload_file_name
-        _log(log_fn, f"upload.filename_override: fileName={upload_file_name} caption_chars={len(str(caption or '').strip())}")
+        _log(
+            log_fn,
+            f"upload.filename_override: chars={len(upload_file_name)} "
+            "(using staged disk copy rename)",
+        )
+    else:
+        _log(log_fn, "upload.filename_override: disabled (using original source filename)")
 
     upload_result = executor.run("upload.select_file", upload_payload_request)
     upload_payload = upload_result.get("payload") or {}

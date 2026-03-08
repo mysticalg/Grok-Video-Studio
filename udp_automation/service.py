@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -31,7 +32,36 @@ REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB = 50.0
 EXTENSION_CMD_TIMEOUTS = {
     "form.fill": 90.0,
     "post.submit": 150.0,
+    "dom.click": 45.0,
+    "dom.type": 45.0,
 }
+
+
+def _sanitize_upload_filename(name: str, fallback: str = "upload.mp4", *, max_chars: int = 167) -> str:
+    """Return a filesystem-safe filename for staging uploads."""
+    raw_name = str(name or "").strip()
+    if not raw_name:
+        raw_name = fallback
+
+    candidate = Path(raw_name).name
+    suffix = Path(candidate).suffix
+    stem = Path(candidate).stem
+
+    stem = re.sub(r"[\x00-\x1f]", " ", stem)
+    stem = re.sub(r"[\\/:*?\"<>|]", " ", stem)
+    stem = " ".join(stem.split()).strip(" .")
+    if not stem:
+        stem = Path(fallback).stem or "upload"
+
+    ext = suffix if suffix else (Path(fallback).suffix or ".mp4")
+    ext = re.sub(r"[\x00-\x1f\\/:*?\"<>|]", "", ext)
+    if not ext.startswith("."):
+        ext = f".{ext}" if ext else ".mp4"
+
+    max_chars = max(16, int(max_chars))
+    stem_limit = max(1, max_chars - len(ext))
+    safe_stem = stem[:stem_limit].rstrip(" .") or (Path(fallback).stem or "upload")
+    return f"{safe_stem}{ext}"
 
 
 class UdpAutomationService:
@@ -817,27 +847,62 @@ class UdpAutomationService:
                 return {"ok": True, "payload": {"url": page.url}}
 
             if name == "upload.select_file":
-                file_path = str(payload.get("filePath") or "")
+                # Keep backward/forward compatibility across caller payload renames.
+                # Historically this command used filePath; some newer call sites may send
+                # video_path/videoPath. Always normalize to filePath internally.
+                file_path = str(
+                    payload.get("filePath")
+                    or payload.get("video_path")
+                    or payload.get("videoPath")
+                    or ""
+                )
                 platform = str(payload.get("platform") or "").lower()
                 file_name_override = str(payload.get("fileName") or "").strip()
                 if file_name_override:
-                    file_name_override = Path(file_name_override).name
+                    file_name_override = _sanitize_upload_filename(file_name_override, fallback=Path(file_path).name or "upload.mp4", max_chars=167)
                 if not file_path:
-                    raise RuntimeError("filePath is required")
+                    raise RuntimeError("filePath (or video_path/videoPath) is required")
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
 
                 source_file_path = Path(file_path)
                 staged_file_path = source_file_path
                 staged_payload = dict(payload)
+                staged_payload["filePath"] = file_path
                 cleanup_staged_file = False
+                cleanup_staged_dir: Path | None = None
 
                 if file_name_override:
-                    staging_dir = Path(tempfile.gettempdir()) / "grok_video_studio_uploads"
-                    staging_dir.mkdir(parents=True, exist_ok=True)
-                    staged_file_path = staging_dir / f"{int(time.time() * 1000)}_{file_name_override}"
+                    # Stage a physical copy that uses the requested upload filename.
+                    # For TikTok, stage in the source (downloads) folder and keep the file
+                    # on disk after selection so uploads can continue reading it.
+                    if platform == "tiktok":
+                        staging_dir = source_file_path.parent
+                    else:
+                        staging_dir = Path(tempfile.mkdtemp(prefix="grok_video_studio_uploads_"))
+                    # Keep staged filename <= 167 chars to reduce upload/path failures on Windows.
+                    max_path_chars = 167
+                    available_name_chars = max(16, max_path_chars)
+                    safe_file_name = _sanitize_upload_filename(
+                        file_name_override,
+                        fallback=source_file_path.name or "upload.mp4",
+                        max_chars=available_name_chars,
+                    )
+                    staged_file_path = staging_dir / safe_file_name
+                    if platform == "tiktok" and staged_file_path.exists():
+                        stem = staged_file_path.stem
+                        suffix = staged_file_path.suffix
+                        for idx in range(1, 1000):
+                            suffix_token = f"_{idx}"
+                            stem_limit = max(1, available_name_chars - len(suffix) - len(suffix_token))
+                            candidate_stem = stem[:stem_limit].rstrip(" .") or "upload"
+                            candidate = staging_dir / f"{candidate_stem}{suffix_token}{suffix}"
+                            if not candidate.exists():
+                                staged_file_path = candidate
+                                break
                     shutil.copy2(source_file_path, staged_file_path)
-                    cleanup_staged_file = True
+                    cleanup_staged_file = platform != "tiktok"
+                    cleanup_staged_dir = staging_dir if platform != "tiktok" else None
                     staged_payload["filePath"] = str(staged_file_path)
 
                 try:
@@ -866,6 +931,8 @@ class UdpAutomationService:
                         raise RuntimeError("No browser page available for upload")
 
                     file_size_mb = source_file_path.stat().st_size / (1024 * 1024)
+                    effective_file_path = str(staged_file_path)
+                    requested_file_path = str(source_file_path)
                     skip_direct_upload_probe = platform == "x" and file_size_mb > REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB
                     extension_clients_connected = bool(self.bus.clients)
                     if skip_direct_upload_probe and not extension_clients_connected:
@@ -922,14 +989,34 @@ class UdpAutomationService:
                     # TikTok and X often trigger native choosers from upload controls.
                     # In external automation, prefer the extension debugger path first so the
                     # local machine file path can be set directly without remote CDP transfer.
-                    if platform in {"tiktok", "x"} and not file_name_override:
+                    #
+                    # For TikTok, keep extension-first even when fileName override is enabled,
+                    # because extension path selection is more reliable than CDP probing on larger uploads.
+                    if platform == "tiktok" or (platform == "x" and not file_name_override):
                         try:
                             ack = await self._send_extension_cmd("upload.select_file", staged_payload)
                             ack_payload = _ack_from_extension(ack)
                             if bool(ack_payload.get("ok")):
                                 mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
-                                await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
-                                return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                                await self._emit(
+                                    "state",
+                                    {
+                                        "state": "upload_selected",
+                                        "platform": platform,
+                                        "filePath": effective_file_path,
+                                        "requestedFilePath": requested_file_path,
+                                        "mode": mode,
+                                    },
+                                )
+                                return {
+                                    "ok": True,
+                                    "payload": {
+                                        "mode": mode,
+                                        "fileSizeMb": round(file_size_mb, 2),
+                                        "filePath": effective_file_path,
+                                        "requestedFilePath": requested_file_path,
+                                    },
+                                }
                             last_err = str(ack_payload.get("error") or "")
                         except Exception as exc:
                             last_err = str(exc)
@@ -1042,12 +1129,22 @@ class UdpAutomationService:
                                 {
                                     "state": "upload_selected",
                                     "platform": platform,
-                                    "filePath": str(source_file_path),
+                                    "filePath": effective_file_path,
+                                    "requestedFilePath": requested_file_path,
                                     "mode": mode,
                                     "detected": tiktok_upload_state,
                                 },
                             )
-                            return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2), "detected": tiktok_upload_state}}
+                            return {
+                                "ok": True,
+                                "payload": {
+                                    "mode": mode,
+                                    "fileSizeMb": round(file_size_mb, 2),
+                                    "filePath": effective_file_path,
+                                    "requestedFilePath": requested_file_path,
+                                    "detected": tiktok_upload_state,
+                                },
+                            }
 
                     if not mode:
                         # CDP file-input access is brittle across upload UIs; always try extension debugger fallback.
@@ -1057,8 +1154,25 @@ class UdpAutomationService:
                             ack_payload = _ack_from_extension(ack)
                             if bool(ack_payload.get("ok")):
                                 mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
-                                await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": str(source_file_path), "mode": mode})
-                                return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                                await self._emit(
+                                    "state",
+                                    {
+                                        "state": "upload_selected",
+                                        "platform": platform,
+                                        "filePath": effective_file_path,
+                                        "requestedFilePath": requested_file_path,
+                                        "mode": mode,
+                                    },
+                                )
+                                return {
+                                    "ok": True,
+                                    "payload": {
+                                        "mode": mode,
+                                        "fileSizeMb": round(file_size_mb, 2),
+                                        "filePath": effective_file_path,
+                                        "requestedFilePath": requested_file_path,
+                                    },
+                                }
                             extension_err = str(ack_payload.get("error") or "")
                         except Exception as exc:
                             extension_err = str(exc)
@@ -1072,8 +1186,25 @@ class UdpAutomationService:
                             f" (sizeMb={round(file_size_mb, 2)}): {reason}"
                         )
 
-                    await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": str(source_file_path), "mode": mode})
-                    return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                    await self._emit(
+                        "state",
+                        {
+                            "state": "upload_selected",
+                            "platform": platform,
+                            "filePath": effective_file_path,
+                            "requestedFilePath": requested_file_path,
+                            "mode": mode,
+                        },
+                    )
+                    return {
+                        "ok": True,
+                        "payload": {
+                            "mode": mode,
+                            "fileSizeMb": round(file_size_mb, 2),
+                            "filePath": effective_file_path,
+                            "requestedFilePath": requested_file_path,
+                        },
+                    }
 
                 finally:
                     if cleanup_staged_file:
@@ -1081,6 +1212,11 @@ class UdpAutomationService:
                             staged_file_path.unlink(missing_ok=True)
                         except Exception:
                             pass
+                        if cleanup_staged_dir is not None:
+                            try:
+                                cleanup_staged_dir.rmdir()
+                            except Exception:
+                                pass
 
 
             if name == "platform.ensure_logged_in":
@@ -1240,6 +1376,16 @@ class UdpAutomationService:
             raise RuntimeError("No extension client connected")
 
         timeout_s = float(EXTENSION_CMD_TIMEOUTS.get(name, 15.0))
+        try:
+            requested_timeout_ms = int(payload.get("timeoutMs") or 0)
+        except Exception:
+            requested_timeout_ms = 0
+        if requested_timeout_ms > 0:
+            # The extension can intentionally poll/retry in-tab until timeoutMs. Keep
+            # control-bus ack timeout above that window so long-running commands do not
+            # fail early with a transport timeout.
+            timeout_s = max(timeout_s, min(600.0, (requested_timeout_ms / 1000.0) + 10.0))
+
         last_error: Exception | None = None
         for client_id in clients:
             try:
