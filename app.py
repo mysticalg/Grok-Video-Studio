@@ -134,6 +134,17 @@ class PublicVideoNotReadyError(RuntimeError):
 
 class PublicVideoModeratedError(RuntimeError):
     """Raised when a public media URL resolves to a moderation/policy-block response."""
+
+
+class ResizablePlainTextEdit(QPlainTextEdit):
+    """Prompt editor with sensible min/max bounds so users can resize vertically without layout fights."""
+
+    def __init__(self, min_height: int = 64, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setMinimumHeight(max(40, int(min_height)))
+        self.setMaximumHeight(10_000)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
 FACEBOOK_OAUTH_AUTHORIZE_URL = f"https://www.facebook.com/{FACEBOOK_GRAPH_VERSION}/dialog/oauth"
 FACEBOOK_OAUTH_TOKEN_URL = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/oauth/access_token"
 FACEBOOK_OAUTH_CALLBACK_PORT = int(os.getenv("FACEBOOK_OAUTH_CALLBACK_PORT", "1456"))
@@ -2125,6 +2136,7 @@ class StitchWorker(QThread):
         original_audio_volume: float,
         music_volume: float,
         audio_fade_duration: float,
+        transition_plan: list[bool] | None = None,
     ):
         super().__init__()
         self.window = window
@@ -2143,6 +2155,7 @@ class StitchWorker(QThread):
         self.original_audio_volume = original_audio_volume
         self.music_volume = music_volume
         self.audio_fade_duration = audio_fade_duration
+        self.transition_plan = transition_plan
 
     def request_stop(self) -> None:
         self.requestInterruption()
@@ -2152,12 +2165,21 @@ class StitchWorker(QThread):
         try:
             stitch_target = self.stitched_base_file if enhancement_enabled else self.output_file
 
-            if self.crossfade_enabled:
+            if self.crossfade_enabled and self.transition_plan is not None and not any(self.transition_plan):
+                self.status.emit("Crossfade enabled, but selective plan produced no create-video boundaries; using hard cuts.")
+                self.window._stitch_videos_concat(
+                    self.video_paths,
+                    stitch_target,
+                    progress_callback=lambda p: self.progress.emit(max(5, int(5 + (p * 0.70))), "Stitching clips with hard cuts..."),
+                    use_gpu_encoding=self.use_gpu_encoding,
+                )
+            elif self.crossfade_enabled:
                 self.status.emit(f"Stitching videos with {self.crossfade_duration:.1f}s crossfade transitions enabled.")
                 self.window._stitch_videos_with_crossfade(
                     self.video_paths,
                     stitch_target,
                     crossfade_duration=self.crossfade_duration,
+                    transition_plan=self.transition_plan,
                     progress_callback=lambda p: self.progress.emit(max(5, int(5 + (p * 0.70))), "Stitching clips with crossfade..."),
                     use_gpu_encoding=self.use_gpu_encoding,
                 )
@@ -2214,6 +2236,7 @@ class StitchWorker(QThread):
                     "resolution": "mixed",
                     "video_file_path": str(self.output_file),
                     "source_url": "local-stitch",
+                    "generation_mode": "stitched",
                 }
             )
         except FileNotFoundError:
@@ -3399,7 +3422,7 @@ class MainWindow(QMainWindow):
         self.automation_mode.setCurrentIndex(0)
         self.automation_mode.currentIndexChanged.connect(self._on_automation_mode_changed)
         prompt_group = QGroupBox("✨ Prompt Inputs")
-        prompt_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
+        prompt_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         prompt_group_layout = QVBoxLayout(prompt_group)
         prompt_group_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
@@ -3410,9 +3433,8 @@ class MainWindow(QMainWindow):
         self.concept_history_combo.setToolTip("Recall a recently used concept prompt.")
         self.concept_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("concept", idx))
         prompt_group_layout.addWidget(self.concept_history_combo)
-        self.concept = QPlainTextEdit()
+        self.concept = ResizablePlainTextEdit(min_height=78)
         self.concept.setPlaceholderText("Describe the video idea...")
-        self.concept.setMaximumHeight(90)
         prompt_group_layout.addWidget(self.concept)
 
         styling_label = QLabel("Styling")
@@ -3422,9 +3444,8 @@ class MainWindow(QMainWindow):
         self.styling_history_combo.setToolTip("Recall recently used styling guidance.")
         self.styling_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("styling", idx))
         prompt_group_layout.addWidget(self.styling_history_combo)
-        self.styling_prompt = QPlainTextEdit()
+        self.styling_prompt = ResizablePlainTextEdit(min_height=64)
         self.styling_prompt.setPlaceholderText("Optional style guidance prepended to generated/manual prompt...")
-        self.styling_prompt.setMaximumHeight(70)
         prompt_group_layout.addWidget(self.styling_prompt)
 
         manual_prompt_label = QLabel("Main Prompt")
@@ -3435,13 +3456,12 @@ class MainWindow(QMainWindow):
         self.manual_prompt_history_combo.setToolTip("Recall a recently used manual prompt.")
         self.manual_prompt_history_combo.currentIndexChanged.connect(lambda idx: self._apply_prompt_history_selection("manual", idx))
         prompt_group_layout.addWidget(self.manual_prompt_history_combo)
-        self.manual_prompt = QPlainTextEdit()
+        self.manual_prompt = ResizablePlainTextEdit(min_height=92)
         self.manual_prompt.setPlaceholderText("Paste or write an exact prompt to skip prompt APIs...")
         self.manual_prompt.setPlainText(self.manual_prompt_default_input.toPlainText().strip() or DEFAULT_MANUAL_PROMPT_TEXT)
-        self.manual_prompt.setMaximumHeight(110)
         prompt_group_layout.addWidget(self.manual_prompt)
 
-        self.generate_prompt_btn = QPushButton("✨ Generate Prompt +\nSocial Metadata from Concept")
+        self.generate_prompt_btn = QPushButton("✨ Generate AI Metadata")
         self.generate_prompt_btn.setToolTip(
             "Uses Prompt Source (Grok/OpenAI/Ollama) to convert Concept into a 10-second video prompt and social metadata."
         )
@@ -3449,9 +3469,9 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
 
-        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Main Prompt unchanged\n(update social metadata only)")
+        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Main Prompt unchanged")
         self.keep_manual_prompt_on_social_generate.setToolTip(
-            "If enabled, Generate Prompt + Social Metadata updates social title/description/hashtags/category but leaves Main Prompt as-is."
+            "If enabled, AI metadata generation updates social title/description/hashtags/category but leaves Main Prompt as-is."
         )
         self.keep_manual_prompt_on_social_generate.setChecked(False)
         prompt_group_layout.addWidget(self.keep_manual_prompt_on_social_generate)
@@ -3477,7 +3497,6 @@ class MainWindow(QMainWindow):
         self.manual_download_poll_interval_ms.setSuffix(" ms")
         self.manual_download_poll_interval_ms.setValue(AUTOMATION_TIMING_DEFAULTS["manual_download_poll_interval_ms"])
 
-        left_layout.addWidget(prompt_group)
 
         self.generate_image_btn = QPushButton("🎬 Create New Video")
         self.generate_image_btn.setToolTip("Build and paste a video prompt into the Grok browser tab.")
@@ -3506,8 +3525,7 @@ class MainWindow(QMainWindow):
         self.stop_all_btn.setToolTip("Stop active generation jobs after current requests complete.")
         self.stop_all_btn.setCheckable(True)
         self.stop_all_btn.clicked.connect(lambda: self._run_with_button_feedback(self.stop_all_btn, self.stop_all_jobs))
-        self.stop_all_btn.setMaximumWidth(140)
-
+        
         self.continue_frame_btn = QPushButton("🟨 Continue Last Video")
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
         self.continue_frame_btn.setCheckable(True)
@@ -3622,6 +3640,13 @@ class MainWindow(QMainWindow):
 
         self.stitch_crossfade_checkbox = QCheckBox("Enable 0.5s crossfade between clips")
         self.stitch_crossfade_checkbox.setToolTip("Blend each clip transition using a 0.5 second crossfade.")
+
+        # Optional behavior: only blend transitions where the next clip came from a Create Video run.
+        self.stitch_crossfade_hard_cuts_only_checkbox = QCheckBox("Crossfade only hard cuts (Create Video transitions)")
+        self.stitch_crossfade_hard_cuts_only_checkbox.setToolTip(
+            "When enabled, stitching crossfades only when the incoming clip was created with Create Video. "
+            "Continue Last Video clip boundaries remain hard cuts."
+        )
 
         self.stitch_interpolation_checkbox = QCheckBox("Enable frame interpolation")
         self.stitch_interpolation_checkbox.setToolTip(
@@ -3745,7 +3770,17 @@ class MainWindow(QMainWindow):
         log_actions_layout.setColumnStretch(0, 1)
         log_actions_layout.setColumnStretch(1, 1)
         log_layout.addLayout(log_actions_layout)
-        left_layout.addWidget(log_group)
+        # Keep left-column groups vertically resizable for faster prompt/log workflow tuning.
+        self.left_column_splitter = QSplitter(Qt.Vertical)
+        self.left_column_splitter.setOpaqueResize(True)
+        self.left_column_splitter.setChildrenCollapsible(False)
+        self.left_column_splitter.addWidget(prompt_group)
+        self.left_column_splitter.addWidget(log_group)
+        self.left_column_splitter.setStretchFactor(0, 3)
+        self.left_column_splitter.setStretchFactor(1, 2)
+        self.left_column_splitter.setSizes([520, 320])
+        left_layout.addWidget(self.left_column_splitter)
+
 
         generated_videos_group = QGroupBox("🎬 Generated Videos")
         generated_videos_layout = QVBoxLayout(generated_videos_group)
@@ -5997,6 +6032,7 @@ class MainWindow(QMainWindow):
         self._add_widget_to_menu(self.automation_menu, counter_widget)
 
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
+        self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_hard_cuts_only_checkbox)
         self._add_widget_to_menu(self.video_settings_menu, self.video_options_dropdown)
         self.video_settings_menu.addSeparator()
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_interpolation_checkbox)
@@ -6519,6 +6555,7 @@ class MainWindow(QMainWindow):
             "seedance_watermark": self.seedance_watermark.isChecked(),
             "seedance_extra_body": self.seedance_extra_body.toPlainText(),
             "stitch_crossfade_enabled": self.stitch_crossfade_checkbox.isChecked(),
+            "stitch_crossfade_create_only": self.stitch_crossfade_hard_cuts_only_checkbox.isChecked(),
             "stitch_interpolation_enabled": self.stitch_interpolation_checkbox.isChecked(),
             "stitch_interpolation_fps": int(self.stitch_interpolation_fps.currentData()),
             "stitch_upscale_enabled": self.stitch_upscale_checkbox.isChecked(),
@@ -6867,6 +6904,8 @@ class MainWindow(QMainWindow):
             self.seedance_extra_body.setPlainText(str(preferences["seedance_extra_body"]))
         if "stitch_crossfade_enabled" in preferences:
             self.stitch_crossfade_checkbox.setChecked(bool(preferences["stitch_crossfade_enabled"]))
+        if "stitch_crossfade_create_only" in preferences:
+            self.stitch_crossfade_hard_cuts_only_checkbox.setChecked(bool(preferences["stitch_crossfade_create_only"]))
         if "stitch_interpolation_enabled" in preferences:
             self.stitch_interpolation_checkbox.setChecked(bool(preferences["stitch_interpolation_enabled"]))
         if "stitch_interpolation_fps" in preferences:
@@ -8910,7 +8949,7 @@ class MainWindow(QMainWindow):
     def _on_prompt_generation_finished(self) -> None:
         self._set_prompt_thinking_indicator(False)
         self.generate_prompt_btn.setEnabled(True)
-        self.generate_prompt_btn.setText("✨ Generate Prompt + Social Metadata from Concept")
+        self.generate_prompt_btn.setText("✨ Generate AI Metadata")
         self.prompt_generation_worker = None
 
     def populate_video_prompt(self) -> None:
@@ -13960,6 +13999,7 @@ class MainWindow(QMainWindow):
                         "resolution": "web",
                         "video_file_path": str(path),
                         "source_url": "browser-session-multi",
+                        "generation_mode": "create_video",
                     }
                 )
                 self._append_log(
@@ -14481,6 +14521,7 @@ class MainWindow(QMainWindow):
                 "resolution": "web",
                 "video_file_path": str(video_path),
                 "source_url": "browser-session",
+                "generation_mode": "continue_last_video" if self.continue_from_frame_active else "create_video",
             }
         )
         self._return_embedded_browser_after_download()
@@ -14874,6 +14915,7 @@ class MainWindow(QMainWindow):
                     "resolution": str(video.get("resolution") or "unknown"),
                     "video_file_path": video_path,
                     "source_url": str(video.get("source_url") or ""),
+                    "generation_mode": str(video.get("generation_mode") or ""),
                 }
             )
         return serialized
@@ -14904,6 +14946,7 @@ class MainWindow(QMainWindow):
                         "resolution": str(item.get("resolution") or "unknown"),
                         "video_file_path": str(video_path),
                         "source_url": str(item.get("source_url") or "preferences"),
+                        "generation_mode": str(item.get("generation_mode") or ""),
                     }
                 )
 
@@ -15165,6 +15208,8 @@ class MainWindow(QMainWindow):
         self.show_selected_video(selected_index)
 
     def on_video_finished(self, video: dict) -> None:
+        # Keep generation origin for smarter stitching choices (create vs continue boundaries).
+        video.setdefault("generation_mode", "unknown")
         video_path_raw = str(video.get("video_file_path") or "").strip()
         if video_path_raw:
             metadata = self._resolve_video_metadata(video_path_raw)
@@ -15218,6 +15263,7 @@ class MainWindow(QMainWindow):
                 "resolution": resolution,
                 "video_file_path": video_path,
                 "source_url": "local-open",
+                "generation_mode": "local",
             }
             self.on_video_finished(loaded_video)
 
@@ -16634,6 +16680,33 @@ class MainWindow(QMainWindow):
         self.sora_browser.setUrl(QUrl(SORA_DRAFTS_URL))
         self._append_log("Navigated embedded browser to sora.chatgpt.com/drafts.")
 
+    def _normalized_generation_mode(self, video: dict) -> str:
+        """Normalize stored generation mode so stitching rules are resilient across old/new saved data."""
+        mode = str((video or {}).get("generation_mode") or "").strip().lower()
+        if mode in {"create_video", "continue_last_video", "local", "stitched", "api_generated", "unknown"}:
+            return mode
+        if not mode:
+            return "unknown"
+        if "continue" in mode:
+            return "continue_last_video"
+        if "create" in mode:
+            return "create_video"
+        return "unknown"
+
+    def _build_crossfade_transition_plan(self, enabled: bool) -> list[bool] | None:
+        """Build transition plan where each bool controls boundary i->i+1 crossfade usage."""
+        if len(self.videos) < 2:
+            return None
+        default_plan = [True] * (len(self.videos) - 1)
+        if not enabled:
+            return default_plan
+
+        plan: list[bool] = []
+        for index in range(1, len(self.videos)):
+            next_mode = self._normalized_generation_mode(self.videos[index])
+            plan.append(next_mode == "create_video")
+        return plan
+
     def stitch_all_videos(self) -> None:
         if self.stitch_worker and self.stitch_worker.isRunning():
             QMessageBox.information(self, "Stitch In Progress", "A stitch operation is already running.")
@@ -16652,6 +16725,9 @@ class MainWindow(QMainWindow):
         upscale_enabled = self.stitch_upscale_checkbox.isChecked()
         upscale_target = str(self.stitch_upscale_target.currentData())
         crossfade_enabled = self.stitch_crossfade_checkbox.isChecked()
+        transition_plan = self._build_crossfade_transition_plan(
+            crossfade_enabled and self.stitch_crossfade_hard_cuts_only_checkbox.isChecked()
+        )
         gpu_requested = self.stitch_gpu_checkbox.isChecked()
         gpu_enabled = gpu_requested and self._ffmpeg_supports_nvenc()
         custom_music_file = self.custom_music_file
@@ -16661,10 +16737,16 @@ class MainWindow(QMainWindow):
         audio_fade_duration = self.stitch_audio_fade_duration.value()
         if gpu_requested and not gpu_enabled:
             self._append_log("GPU encoding requested, but ffmpeg NVENC is unavailable. Falling back to CPU encoding.")
+        if crossfade_enabled and self.stitch_crossfade_hard_cuts_only_checkbox.isChecked() and transition_plan is not None:
+            crossfade_count = sum(1 for enabled in transition_plan if enabled)
+            self._append_log(
+                f"Selective crossfade plan active: {crossfade_count}/{len(transition_plan)} transitions will blend (Create Video boundaries only)."
+            )
 
         settings_summary = (
             f"Crossfade: {'on' if crossfade_enabled else 'off'}"
             + (f" ({self.crossfade_duration.value():.1f}s)" if crossfade_enabled else "")
+            + (" [Create-only]" if (crossfade_enabled and self.stitch_crossfade_hard_cuts_only_checkbox.isChecked()) else "")
             + f" | Interpolation: {f'{interpolation_fps} fps' if interpolate_enabled else 'off'}"
             + f" | Upscaling: {upscale_target if upscale_enabled else 'off'}"
             + f" | Encode: {'GPU' if gpu_enabled else 'CPU'}"
@@ -16730,6 +16812,7 @@ class MainWindow(QMainWindow):
             original_audio_volume=original_audio_volume,
             music_volume=music_volume,
             audio_fade_duration=audio_fade_duration,
+            transition_plan=transition_plan,
         )
         self.stitch_worker.progress.connect(update_progress)
         self.stitch_worker.status.connect(self._append_log)
@@ -16953,16 +17036,25 @@ class MainWindow(QMainWindow):
         video_paths: list[Path],
         output_file: Path,
         crossfade_duration: float,
+        transition_plan: list[bool] | None = None,
         progress_callback: Callable[[float], None] | None = None,
         use_gpu_encoding: bool = False,
     ) -> None:
         stream_infos = [self._probe_video_stream_info(path) for path in video_paths]
         durations = [info["duration"] for info in stream_infos]
         has_audio = all(self._video_has_audio_stream(path) for path in video_paths)
-        for path, duration in zip(video_paths, durations):
+
+        if transition_plan is None or len(transition_plan) != (len(video_paths) - 1):
+            transition_plan = [True] * (len(video_paths) - 1)
+
+        for idx, use_crossfade in enumerate(transition_plan, start=1):
+            if not use_crossfade:
+                continue
+            duration = durations[idx]
+            path = video_paths[idx]
             if duration <= crossfade_duration + 0.05:
                 raise RuntimeError(
-                    f"Clip '{path.name}' is too short ({duration:.2f}s). Each clip must be longer than {crossfade_duration:.1f}s for crossfade stitching."
+                    f"Clip '{path.name}' is too short ({duration:.2f}s). Each crossfaded clip must be longer than {crossfade_duration:.1f}s."
                 )
 
         target_width = stream_infos[0]["width"]
@@ -16988,21 +17080,35 @@ class MainWindow(QMainWindow):
         audio_prev = "asrc0"
 
         for idx in range(1, len(video_paths)):
-            offset = cumulative_duration - crossfade_duration
+            use_crossfade = bool(transition_plan[idx - 1])
             next_video = f"v{idx}"
-            filter_parts.append(
-                f"[{video_prev}][vsrc{idx}]xfade=transition=fade:duration={crossfade_duration:.3f}:offset={max(0.0, offset):.3f}[{next_video}]"
-            )
-            video_prev = next_video
 
-            if has_audio:
-                next_audio = f"a{idx}"
+            if use_crossfade:
+                offset = cumulative_duration - crossfade_duration
                 filter_parts.append(
-                    f"[{audio_prev}][asrc{idx}]acrossfade=d={crossfade_duration:.3f}:c1=tri:c2=tri[{next_audio}]"
+                    f"[{video_prev}][vsrc{idx}]xfade=transition=fade:duration={crossfade_duration:.3f}:offset={max(0.0, offset):.3f}[{next_video}]"
                 )
-                audio_prev = next_audio
+                if has_audio:
+                    next_audio = f"a{idx}"
+                    filter_parts.append(
+                        f"[{audio_prev}][asrc{idx}]acrossfade=d={crossfade_duration:.3f}:c1=tri:c2=tri[{next_audio}]"
+                    )
+                    audio_prev = next_audio
+                cumulative_duration += durations[idx] - crossfade_duration
+            else:
+                if has_audio:
+                    next_audio = f"a{idx}"
+                    filter_parts.append(
+                        f"[{video_prev}][{audio_prev}][vsrc{idx}][asrc{idx}]concat=n=2:v=1:a=1[{next_video}][{next_audio}]"
+                    )
+                    audio_prev = next_audio
+                else:
+                    filter_parts.append(
+                        f"[{video_prev}][vsrc{idx}]concat=n=2:v=1:a=0[{next_video}]"
+                    )
+                cumulative_duration += durations[idx]
 
-            cumulative_duration += durations[idx] - crossfade_duration
+            video_prev = next_video
 
         filter_complex = ";".join(filter_parts)
         ffmpeg_cmd.extend(
