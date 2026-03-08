@@ -164,7 +164,6 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             music_queries = music_queries[:music_add_count]
     text_overlay = _overlay_text(opts, caption)
     action_delay_s = float(opts.get("action_delay_s") or 2.0)
-    startup_delay_s = float(opts.get("startup_delay_s") or action_delay_s)
 
     _log(
         log_fn,
@@ -177,10 +176,8 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     )
     executor.run("platform.open", {"platform": "tiktok", "reuseTab": True})
     _log(log_fn, "platform.open: ok")
-    _pause(startup_delay_s, step="startup_wait_after_open", log_fn=log_fn)
     executor.run("platform.ensure_logged_in", {"platform": "tiktok"})
     _log(log_fn, "platform.ensure_logged_in: ok")
-    _pause(action_delay_s, step="startup_wait_after_login_check", log_fn=log_fn)
 
     upload_payload_request: dict[str, Any] = {"platform": "tiktok", "filePath": video_path}
     if rename_upload_filename and str(caption or "").strip():
