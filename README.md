@@ -1,5 +1,7 @@
 # Grok Video Studio
 
+[Join our Discord community](https://discord.gg/HRzMnuFB)
+
 Desktop PySide6 app for generating AI videos, managing clips, previewing/stitching outputs, and publishing to social platforms with API + browser automation workflows.
 
 
