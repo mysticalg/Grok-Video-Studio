@@ -3376,6 +3376,13 @@ class MainWindow(QMainWindow):
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
 
+        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Manual Prompt unchanged (update social metadata only)")
+        self.keep_manual_prompt_on_social_generate.setToolTip(
+            "If enabled, Generate Prompt + Social Metadata updates social title/description/hashtags/category but leaves Manual Prompt as-is."
+        )
+        self.keep_manual_prompt_on_social_generate.setChecked(False)
+        prompt_group_layout.addWidget(self.keep_manual_prompt_on_social_generate)
+
         self.count = QSpinBox()
         self.count.setRange(1, 10)
         self.count.setValue(1)
@@ -6171,6 +6178,7 @@ class MainWindow(QMainWindow):
             "concept": self.concept.toPlainText(),
             "styling_prompt": self.styling_prompt.toPlainText(),
             "manual_prompt": self.manual_prompt.toPlainText(),
+            "keep_manual_prompt_on_social_generate": bool(self.keep_manual_prompt_on_social_generate.isChecked()),
             "manual_prompt_default": self.manual_prompt_default_input.toPlainText(),
             "word_tool_count": int(self.word_tool_count.value()) if hasattr(self, "word_tool_count") else 100,
             "word_tool_prompt_template": self.word_tool_prompt_template.toPlainText() if hasattr(self, "word_tool_prompt_template") else "",
@@ -6362,6 +6370,8 @@ class MainWindow(QMainWindow):
             self.styling_prompt.setPlainText(str(preferences["styling_prompt"]))
         if "manual_prompt" in preferences:
             self.manual_prompt.setPlainText(str(preferences["manual_prompt"]))
+        if "keep_manual_prompt_on_social_generate" in preferences:
+            self.keep_manual_prompt_on_social_generate.setChecked(bool(preferences["keep_manual_prompt_on_social_generate"]))
         if "manual_prompt_default" in preferences:
             default_prompt = str(preferences["manual_prompt_default"])
             self.manual_prompt_default_input.setPlainText(default_prompt)
@@ -8526,13 +8536,25 @@ class MainWindow(QMainWindow):
                 hashtags=merged_hashtags,
                 category=str(parsed.get("category", "22")),
             )
-            self.manual_prompt.setPlainText(manual_prompt)
-            appended_note = f" (+{len(custom_hashtags)} custom)" if custom_hashtags else ""
-            self._append_log(
-                "AI updated Manual Prompt and social metadata defaults "
-                f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
-                f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
+            preserve_manual_prompt = bool(
+                hasattr(self, "keep_manual_prompt_on_social_generate")
+                and self.keep_manual_prompt_on_social_generate.isChecked()
             )
+            if not preserve_manual_prompt:
+                self.manual_prompt.setPlainText(manual_prompt)
+            appended_note = f" (+{len(custom_hashtags)} custom)" if custom_hashtags else ""
+            if preserve_manual_prompt:
+                self._append_log(
+                    "AI updated social metadata defaults only (Manual Prompt preserved) "
+                    f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
+                    f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
+                )
+            else:
+                self._append_log(
+                    "AI updated Manual Prompt and social metadata defaults "
+                    f"(title/category/hashtags: {self.ai_social_metadata.title}/{self.ai_social_metadata.category}/"
+                    f"{', '.join(self.ai_social_metadata.hashtags)}{appended_note})."
+                )
         except Exception as exc:
             QMessageBox.critical(self, "Prompt Generation Failed", str(exc))
 
