@@ -894,8 +894,17 @@ class UdpAutomationService:
                         max_chars=available_name_chars,
                     )
                     staged_file_path = staging_dir / safe_file_name
-                    # For TikTok, intentionally overwrite any existing staged file with the same
-                    # sanitized name so we keep a stable filename (no _1, _2 suffix churn).
+                    if platform == "tiktok" and staged_file_path.exists():
+                        stem = staged_file_path.stem
+                        suffix = staged_file_path.suffix
+                        for idx in range(1, 1000):
+                            suffix_token = f"_{idx}"
+                            stem_limit = max(1, available_name_chars - len(suffix) - len(suffix_token))
+                            candidate_stem = stem[:stem_limit].rstrip(" .") or "upload"
+                            candidate = staging_dir / f"{candidate_stem}{suffix_token}{suffix}"
+                            if not candidate.exists():
+                                staged_file_path = candidate
+                                break
                     shutil.copy2(source_file_path, staged_file_path)
                     cleanup_staged_file = platform != "tiktok"
                     cleanup_staged_dir = staging_dir if platform != "tiktok" else None
