@@ -3407,6 +3407,8 @@ class MainWindow(QMainWindow):
         splitter = QSplitter()
 
         left = QWidget()
+        left.setMinimumWidth(0)
+        left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         left_layout = QVBoxLayout(left)
         left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -3415,6 +3417,7 @@ class MainWindow(QMainWindow):
         self._build_menu_bar()
 
         self.automation_group = QGroupBox("🤖 Automation Chrome + CDP")
+        self.automation_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
         automation_layout = QVBoxLayout(self.automation_group)
         self.automation_buttons_layout = QGridLayout()
         self.automation_buttons_layout.setHorizontalSpacing(8)
@@ -3450,7 +3453,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.automation_group)
 
         prompt_group = QGroupBox("✨ Prompt Inputs")
-        prompt_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        prompt_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
         prompt_group_layout = QVBoxLayout(prompt_group)
         prompt_group_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
@@ -3479,6 +3482,7 @@ class MainWindow(QMainWindow):
         prompt_group_layout.addWidget(self.styling_prompt)
 
         manual_prompt_label = QLabel("Manual Prompt (used only when source is Manual)")
+        manual_prompt_label.setWordWrap(True)
         manual_prompt_label.setToolTip("Manual Prompt is the exact text sent when Prompt Source is Manual. AI generation can update this unless 'Keep Manual Prompt unchanged' is enabled.")
         prompt_group_layout.addWidget(manual_prompt_label)
         self.manual_prompt_history_combo = QComboBox()
@@ -3491,14 +3495,15 @@ class MainWindow(QMainWindow):
         self.manual_prompt.setMaximumHeight(110)
         prompt_group_layout.addWidget(self.manual_prompt)
 
-        self.generate_prompt_btn = QPushButton("✨ Generate Prompt + Social Metadata from Concept")
+        self.generate_prompt_btn = QPushButton("✨ Generate Prompt +\nSocial Metadata from Concept")
         self.generate_prompt_btn.setToolTip(
             "Uses Prompt Source (Grok/OpenAI/Ollama) to convert Concept into a 10-second video prompt and social metadata."
         )
+        self.generate_prompt_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.generate_prompt_btn.clicked.connect(self.generate_prompt_from_concept)
         prompt_group_layout.addWidget(self.generate_prompt_btn)
 
-        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Manual Prompt unchanged (update social metadata only)")
+        self.keep_manual_prompt_on_social_generate = QCheckBox("Keep Manual Prompt unchanged\n(update social metadata only)")
         self.keep_manual_prompt_on_social_generate.setToolTip(
             "If enabled, Generate Prompt + Social Metadata updates social title/description/hashtags/category but leaves Manual Prompt as-is."
         )
@@ -3761,6 +3766,7 @@ class MainWindow(QMainWindow):
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
         log_group = QGroupBox("📡 Activity Log")
+        log_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         log_layout = QVBoxLayout(log_group)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -3771,21 +3777,26 @@ class MainWindow(QMainWindow):
                 self.log.appendPlainText(pending_entry)
             self._pending_log_messages.clear()
 
-        log_actions_layout = QHBoxLayout()
-        log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
+        log_actions_layout = QGridLayout()
+        log_actions_layout.setHorizontalSpacing(8)
+        log_actions_layout.setVerticalSpacing(8)
 
         self.clear_log_btn = QPushButton("🧹 Clear Log")
         self.clear_log_btn.setToolTip("Clear all activity log entries.")
         self.clear_log_btn.clicked.connect(self.clear_activity_log)
-        log_actions_layout.addWidget(self.clear_log_btn, alignment=Qt.AlignLeft)
 
         self.jump_to_bottom_btn = QPushButton("⤓ Jump to Bottom")
         self.jump_to_bottom_btn.setToolTip("Jump to the latest activity log entry.")
         self.jump_to_bottom_btn.clicked.connect(self.jump_activity_log_to_bottom)
-        log_actions_layout.addWidget(self.jump_to_bottom_btn, alignment=Qt.AlignLeft)
+        for action_btn in (self.stop_all_btn, self.clear_log_btn, self.jump_to_bottom_btn, self.buy_coffee_btn):
+            action_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-        log_actions_layout.addStretch(1)
-        log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
+        log_actions_layout.addWidget(self.stop_all_btn, 0, 0)
+        log_actions_layout.addWidget(self.clear_log_btn, 0, 1)
+        log_actions_layout.addWidget(self.jump_to_bottom_btn, 1, 0)
+        log_actions_layout.addWidget(self.buy_coffee_btn, 1, 1)
+        log_actions_layout.setColumnStretch(0, 1)
+        log_actions_layout.setColumnStretch(1, 1)
         log_layout.addLayout(log_actions_layout)
         left_layout.addWidget(log_group)
 
@@ -4215,6 +4226,8 @@ class MainWindow(QMainWindow):
 
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
+        left_scroll.setMinimumWidth(260)
+        left_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         left_scroll.setWidget(left)
 
