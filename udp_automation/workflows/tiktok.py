@@ -266,14 +266,14 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             for replace_index in range(replacements):
                 _must_click(
                     executor,
-                    "div.BaseClip__root--isSelected-false[data-mov-timeline-el-type='clip'], "
-                    "div[data-mov-timeline-el-type='clip'].BaseClip__root--isSelected-false, "
-                    "div[data-mov-timeline-el-type='clip'].BaseClip__root",
+                    "div[data-mov-timeline-el-type='clip'].BaseClip__root, "
+                    "div.BaseClip__root[data-mov-timeline-el-type='clip']",
                     timeout_ms=60000,
                     step=f"music_select_clip_{replace_index + 1}",
                     log_fn=log_fn,
                     single_click=True,
                     delay_s=action_delay_s,
+                    extra_payload={"matchIndex": replace_index},
                 )
                 _must_type(
                     executor,
