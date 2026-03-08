@@ -5771,16 +5771,11 @@ class MainWindow(QMainWindow):
         automation_layout.setContentsMargins(8, 4, 8, 4)
         automation_layout.addWidget(QLabel("Counter"))
         automation_layout.addWidget(self.count)
-        automation_layout.addSpacing(8)
-        automation_layout.addWidget(QLabel("Delay"))
-        automation_layout.addWidget(self.automation_action_delay_ms)
-        automation_layout.addSpacing(8)
-        automation_layout.addWidget(QLabel("Retries"))
-        automation_layout.addWidget(self.automation_retry_attempts)
-        automation_layout.addSpacing(8)
-        automation_layout.addWidget(QLabel("Download Poll"))
-        automation_layout.addWidget(self.manual_download_poll_interval_ms)
         automation_layout.addStretch(1)
+
+        counter_hint = QLabel("Adjust Delay/Retry/Poll in Automation → Timings…")
+        counter_hint.setStyleSheet("color: palette(mid);")
+        automation_layout.addWidget(counter_hint)
         self._add_widget_to_menu(self.automation_menu, automation_widget)
 
     def show_app_info(self) -> None:
