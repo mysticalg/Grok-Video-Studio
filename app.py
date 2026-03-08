@@ -247,42 +247,42 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
 }
 
 AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
-    {"key": "automation_action_delay_ms", "label": "Automation action delay", "min": 100, "max": 10000, "step": 10, "group": "General"},
+    {"key": "automation_action_delay_ms", "label": "Automation action delay", "min": 100, "max": 10000, "step": 10, "group": "General", "tab": "General"},
     {"key": "automation_retry_attempts", "label": "Retry attempts", "min": 1, "max": 20, "step": 1, "group": "General", "suffix": " attempts"},
-    {"key": "manual_download_poll_interval_ms", "label": "Manual download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General"},
-    {"key": "continue_download_poll_interval_ms", "label": "Continue download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General"},
-    {"key": "manual_submit_handoff_timeout_ms", "label": "Manual submit handoff timeout", "min": 5000, "max": 120000, "step": 500, "group": "Grok Manual Submit"},
-    {"key": "manual_submit_handoff_poll_ms", "label": "Manual submit handoff poll interval", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
-    {"key": "manual_submit_retry_delay_ms", "label": "Manual submit retry delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
-    {"key": "manual_post_submit_idle_ms", "label": "Post-submit idle window", "min": 0, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
-    {"key": "manual_submit_poll_delay_ms", "label": "Submit poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_post_submit_success_delay_ms", "label": "Post-submit success poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_pick_detected_poll_delay_ms", "label": "Manual-pick detected poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling"},
-    {"key": "manual_pick_wait_poll_delay_ms", "label": "Manual-pick wait poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_fast_ms", "label": "Phase poll (fast)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_medium_ms", "label": "Phase poll (medium)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_slow_ms", "label": "Phase poll (slow)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_recovery_ms", "label": "Phase poll (recovery)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_backoff_ms", "label": "Phase poll (backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_phase_poll_hard_backoff_ms", "label": "Phase poll (hard backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling"},
-    {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora"},
-    {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora"},
-    {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit"},
-    {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling"},
-    {"key": "multi_video_download_finish_poll_ms", "label": "Multi-video finish poll delay", "min": 0, "max": 5000, "step": 50, "group": "Grok Polling"},
+    {"key": "manual_download_poll_interval_ms", "label": "Manual download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General", "tab": "General"},
+    {"key": "continue_download_poll_interval_ms", "label": "Continue download poll interval", "min": 1000, "max": 60000, "step": 250, "group": "General", "tab": "General"},
+    {"key": "manual_submit_handoff_timeout_ms", "label": "Manual submit handoff timeout", "min": 5000, "max": 120000, "step": 500, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_submit_handoff_poll_ms", "label": "Manual submit handoff poll interval", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_submit_retry_delay_ms", "label": "Manual submit retry delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_post_submit_idle_ms", "label": "Post-submit idle window", "min": 0, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_submit_poll_delay_ms", "label": "Submit poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_post_submit_success_delay_ms", "label": "Post-submit success poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_pick_detected_poll_delay_ms", "label": "Manual-pick detected poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_pick_wait_poll_delay_ms", "label": "Manual-pick wait poll delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_fast_ms", "label": "Phase poll (fast)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_medium_ms", "label": "Phase poll (medium)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_slow_ms", "label": "Phase poll (slow)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_recovery_ms", "label": "Phase poll (recovery)", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_backoff_ms", "label": "Phase poll (backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_phase_poll_hard_backoff_ms", "label": "Phase poll (hard backoff)", "min": 100, "max": 15000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
+    {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
+    {"key": "manual_submit_result_poll_delay_ms", "label": "Manual submit result poll delay", "min": 100, "max": 5000, "step": 50, "group": "Grok Manual Submit", "tab": "General"},
+    {"key": "manual_poll_pause_cap_ms", "label": "Manual pause cap", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "continue_post_reload_generation_delay_ms", "label": "Continue flow post-reload generation delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "continue_next_iteration_delay_ms", "label": "Continue flow next-iteration delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "multi_video_download_wait_active_ms", "label": "Multi-video active download wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "multi_video_download_wait_future_ms", "label": "Multi-video future-check wait", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "multi_video_download_retry_ms", "label": "Multi-video retry delay", "min": 100, "max": 10000, "step": 100, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "multi_video_download_finish_poll_ms", "label": "Multi-video finish poll delay", "min": 0, "max": 5000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
     {"key": "multi_video_status_log_every_attempts", "label": "Multi-video status log every N attempts", "min": 1, "max": 20, "step": 1, "group": "Grok Polling", "suffix": " attempts"},
-    {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Grok Polling"},
-    {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
-    {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling"},
-    {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling"},
-    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling", "tab": "Grok"},
+    {"key": "continue_reload_timeout_ms", "label": "Continue flow reload timeout", "min": 1000, "max": 60000, "step": 500, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_menu_settle_extra_ms", "label": "Manual menu settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_video_mode_settle_extra_ms", "label": "Manual video-mode settle extra delay", "min": 0, "max": 5000, "step": 10, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_form_option_step_delay_ms", "label": "Manual form option-step delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
+    {"key": "manual_form_submit_delay_ms", "label": "Manual form submit delay", "min": 100, "max": 10000, "step": 50, "group": "Grok Polling", "tab": "Grok Polling"},
     {"key": "x_compose_click_timeout_ms", "label": "Compose button click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Composer", "tab": "X"},
     {"key": "x_description_fill_attempts", "label": "Description fill attempts", "min": 1, "max": 20, "step": 1, "group": "Composer", "suffix": " attempts", "tab": "X"},
     {"key": "x_description_fill_retry_delay_ms", "label": "Description fill retry delay", "min": 0, "max": 10000, "step": 50, "group": "Composer", "tab": "X"},
@@ -309,7 +309,8 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
  )
 
 AUTOMATION_TIMING_TAB_DESCRIPTIONS: dict[str, str] = {
-    "Grok": "Affects Grok/Sora generation, polling, retries, and manual submission flows.",
+    "General": "General automation settings including Grok/Sora core actions and manual submit behavior.",
+    "Grok Polling": "Grok polling/retry cadence for manual generation, multi-video, and continue flows.",
     "X": "Affects X upload automation steps only (compose click and description retries).",
     "TikTok": "Affects TikTok upload automation waits, click/editor timeouts, and submit behavior.",
     "Instagram": "Affects Instagram upload automation click and Next-step timing behavior.",
@@ -5287,7 +5288,7 @@ class MainWindow(QMainWindow):
     def _automation_timing_tooltip(self, field: dict[str, Any]) -> str:
         key = str(field.get("key") or "")
         label = str(field.get("label") or key)
-        tab_name = str(field.get("tab") or "Grok")
+        tab_name = str(field.get("tab") or "General")
         group_name = str(field.get("group") or "General")
         minimum = int(field.get("min", 0))
         maximum = int(field.get("max", 60000))
@@ -5317,7 +5318,7 @@ class MainWindow(QMainWindow):
         tab_groups: dict[tuple[str, str], QFormLayout] = {}
         group_columns: dict[tuple[str, str], int] = {}
         for field in AUTOMATION_TIMING_FIELDS:
-            tab_name = str(field.get("tab") or "Grok")
+            tab_name = str(field.get("tab") or "General")
             group_name = str(field.get("group") or "General")
 
             if tab_name not in tab_layouts:
@@ -5345,10 +5346,22 @@ class MainWindow(QMainWindow):
             group_key = (tab_name, group_name)
             if group_key not in tab_groups:
                 group_box = QGroupBox(group_name)
-                form_layout = QFormLayout(group_box)
-                form_layout.setContentsMargins(10, 8, 10, 8)
-                form_layout.setSpacing(6)
-                tab_groups[group_key] = form_layout
+                if tab_name == "Grok Polling" and group_name == "Grok Polling":
+                    group_outer_layout = QHBoxLayout(group_box)
+                    group_outer_layout.setContentsMargins(10, 8, 10, 8)
+                    group_outer_layout.setSpacing(10)
+                    left_form = QFormLayout()
+                    right_form = QFormLayout()
+                    left_form.setSpacing(6)
+                    right_form.setSpacing(6)
+                    group_outer_layout.addLayout(left_form, 1)
+                    group_outer_layout.addLayout(right_form, 1)
+                    tab_groups[group_key] = {"forms": (left_form, right_form), "count": 0}
+                else:
+                    form_layout = QFormLayout(group_box)
+                    form_layout.setContentsMargins(10, 8, 10, 8)
+                    form_layout.setSpacing(6)
+                    tab_groups[group_key] = form_layout
 
                 left_load, right_load = tab_column_loads[tab_name]
                 column_index = 0 if left_load <= right_load else 1
@@ -5370,7 +5383,14 @@ class MainWindow(QMainWindow):
             label_widget.setStatusTip(tooltip_text)
             spin.setToolTip(tooltip_text)
             spin.setStatusTip(tooltip_text)
-            tab_groups[group_key].addRow(label_widget, spin)
+            group_layout = tab_groups[group_key]
+            if isinstance(group_layout, dict):
+                left_form, right_form = group_layout["forms"]
+                target_form = left_form if int(group_layout["count"]) % 2 == 0 else right_form
+                target_form.addRow(label_widget, spin)
+                group_layout["count"] = int(group_layout["count"]) + 1
+            else:
+                group_layout.addRow(label_widget, spin)
             spinboxes[key] = spin
 
             column_index = group_columns[group_key]
