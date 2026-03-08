@@ -148,6 +148,11 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     upload_filename_char_limit = min(3000, max(16, int(opts.get("upload_filename_char_limit") or 167)))
     music_unique_per_add = bool(opts.get("music_unique_per_add"))
     music_add_count = max(1, min(100, int(opts.get("music_add_count") or 2)))
+    music_fade_in_enabled = bool(opts.get("music_fade_in_enabled"))
+    music_fade_in_seconds = min(10.0, max(0.0, round(float(opts.get("music_fade_in_seconds") or 0.0), 1)))
+    music_fade_out_enabled = bool(opts.get("music_fade_out_enabled"))
+    music_fade_out_seconds = min(10.0, max(0.0, round(float(opts.get("music_fade_out_seconds") or 0.0), 1)))
+    music_volume_db = min(20, max(-59, int(opts.get("music_volume_db") if opts.get("music_volume_db") is not None else 0)))
     raw_music_queries = opts.get("music_queries_effective")
     music_queries: list[str] = []
     if isinstance(raw_music_queries, list):
@@ -172,6 +177,9 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         f"rename_upload_filename={rename_upload_filename} "
         f"upload_filename_char_limit={upload_filename_char_limit} "
         f"music_add_count={music_add_count} music_unique_per_add={music_unique_per_add} "
+        f"music_fade_in_enabled={music_fade_in_enabled} music_fade_in_seconds={music_fade_in_seconds:.1f} "
+        f"music_fade_out_enabled={music_fade_out_enabled} music_fade_out_seconds={music_fade_out_seconds:.1f} "
+        f"music_volume_db={music_volume_db} "
         f"music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}",
     )
     executor.run("platform.open", {"platform": "tiktok", "reuseTab": True})
@@ -294,6 +302,44 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
                     single_click=True,
                     delay_s=action_delay_s,
                 )
+
+        if music_fade_in_enabled:
+            _must_type_any(
+                executor,
+                [
+                    "div.PropSettingFadeInBase__wrap input.PropSettingInput__input",
+                    "div.PropSettingFadeInBase__fieldWrap input.PropSettingInput__input",
+                ],
+                f"{music_fade_in_seconds:.1f}",
+                step="music_set_fade_in_seconds",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
+
+        if music_fade_out_enabled:
+            _must_type_any(
+                executor,
+                [
+                    "div.PropSettingFadeOutBase__wrap input.PropSettingInput__input",
+                    "div.PropSettingFadeOutBase__fieldWrap input.PropSettingInput__input",
+                ],
+                f"{music_fade_out_seconds:.1f}",
+                step="music_set_fade_out_seconds",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
+
+        _must_type_any(
+            executor,
+            [
+                "div.PropSettingAudioVolume__wrap label.PropSettingInput__wrap input.PropSettingInput__input",
+                "div.PropSettingAudioVolume__wrap input.PropSettingInput__input",
+            ],
+            str(music_volume_db),
+            step="music_set_volume_db",
+            log_fn=log_fn,
+            delay_s=action_delay_s,
+        )
 
     if add_text or (add_music and music_queries):
         _must_click(
