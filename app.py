@@ -9,6 +9,7 @@ import secrets
 import shutil
 import subprocess
 import string
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -93,6 +94,13 @@ DOWNLOAD_DIR = BASE_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 THUMBNAILS_DIR = DOWNLOAD_DIR / ".thumbnails"
 THUMBNAILS_DIR.mkdir(exist_ok=True)
+LOGS_DIR = BASE_DIR / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+VIDEO_METADATA_CACHE_FILE = LOGS_DIR / "video_metadata_cache.json"
+UPLOAD_SUCCESS_LOG_FILE = LOGS_DIR / "upload_success.log"
+UPLOAD_FAILURE_LOG_FILE = LOGS_DIR / "upload_failure.log"
+UPLOAD_UNEXPECTED_EXIT_LOG_FILE = LOGS_DIR / "upload_unexpected_exit.log"
+USAGE_STATS_DB_FILE = LOGS_DIR / "usage_stats.db"
 CACHE_DIR = BASE_DIR / ".qtwebengine"
 QTWEBENGINE_USE_DISK_CACHE = True
 MIN_VALID_VIDEO_BYTES = 1 * 1024 * 1024
@@ -3188,6 +3196,14 @@ class MainWindow(QMainWindow):
         }
         self.browser_zoom_factor = self.DEFAULT_BROWSER_ZOOM_FACTOR
         self._pending_log_messages: list[str] = []
+        self.session_started_at = time.time()
+        self._last_usage_stats_flush_at = self.session_started_at
+        self._video_metadata_cache: dict[str, dict[str, Any]] = {}
+        self._active_upload_context: dict[str, Any] = {}
+        self._init_stats_database()
+        self._load_video_metadata_cache()
+        self._stats_increment("app_launch_count", 1)
+        self._stats_increment("session_count", 1)
         self.ai_social_metadata = AISocialMetadata(
             title="AI Generated Video",
             medium_title="AI Generated Video Clip",
@@ -3198,6 +3214,10 @@ class MainWindow(QMainWindow):
             category="22",
         )
         self._build_ui()
+        self.usage_stats_timer = QTimer(self)
+        self.usage_stats_timer.setInterval(60_000)
+        self.usage_stats_timer.timeout.connect(self._flush_usage_stats)
+        self.usage_stats_timer.start()
         self._applying_preferences = False
         self._last_saved_preferences_signature: str | None = None
         self._startup_cdp_bootstrap_attempted = False
@@ -3303,10 +3323,6 @@ class MainWindow(QMainWindow):
         automation_buttons.addWidget(self.automation_mode)
 
         automation_layout.addLayout(automation_buttons)
-        self.automation_log = QTextEdit()
-        self.automation_log.setReadOnly(True)
-        self.automation_log.setMinimumHeight(100)
-        automation_layout.addWidget(self.automation_log)
         left_layout.addWidget(self.automation_group)
 
         prompt_group = QGroupBox("✨ Prompt Inputs")
@@ -5419,6 +5435,10 @@ class MainWindow(QMainWindow):
         downloads_dir_action.triggered.connect(self.open_downloads_folder)
         help_menu.addAction(downloads_dir_action)
 
+        user_stats_action = QAction("User Stats", self)
+        user_stats_action.triggered.connect(self.show_user_stats_dialog)
+        help_menu.addAction(user_stats_action)
+
         self.quick_actions_toolbar = QToolBar("Quick Actions", self)
         self.quick_actions_toolbar.setMovable(False)
         self.quick_actions_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -6653,9 +6673,6 @@ class MainWindow(QMainWindow):
         self._sync_tiktok_track_settings_from_inputs()
 
     def _append_automation_log(self, text: str) -> None:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        if hasattr(self, "automation_log") and self.automation_log is not None:
-            self.automation_log.append(f"[{timestamp}] {text}")
         self._append_log(f"Automation: {text}")
 
     def _sync_tiktok_track_settings_from_inputs(self) -> None:
@@ -6884,6 +6901,199 @@ class MainWindow(QMainWindow):
             self.log.appendPlainText(entry)
             return
         self._pending_log_messages.append(entry)
+
+    def _append_line_to_file(self, file_path: Path, line: str) -> None:
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with file_path.open("a", encoding="utf-8") as handle:
+                handle.write(line.rstrip() + "\n")
+        except Exception as exc:
+            self._append_log(f"WARNING: Could not write log file {file_path.name}: {exc}")
+
+    def _init_stats_database(self) -> None:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+
+    def _stats_get(self, key: str, default: int = 0) -> int:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            row = conn.execute("SELECT value FROM stats WHERE key = ?", (key,)).fetchone()
+        if not row:
+            return int(default)
+        try:
+            return int(float(str(row[0] or default)))
+        except Exception:
+            return int(default)
+
+    def _stats_set(self, key: str, value: int | float | str) -> None:
+        with sqlite3.connect(USAGE_STATS_DB_FILE) as conn:
+            conn.execute(
+                "INSERT INTO stats(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, str(value)),
+            )
+
+    def _stats_increment(self, key: str, amount: int = 1) -> None:
+        next_value = self._stats_get(key, 0) + int(amount)
+        self._stats_set(key, next_value)
+
+    def _flush_usage_stats(self) -> None:
+        now = time.time()
+        elapsed = max(0, int(now - self._last_usage_stats_flush_at))
+        self._last_usage_stats_flush_at = now
+        if elapsed <= 0:
+            return
+        self._stats_increment("total_usage_seconds", elapsed)
+        self._stats_set("last_seen_at_epoch", int(now))
+
+    def _read_stats_snapshot(self) -> dict[str, int]:
+        keys = (
+            "app_launch_count",
+            "session_count",
+            "total_usage_seconds",
+            "videos_generated_total",
+            "uploads_success_total",
+            "uploads_failed_total",
+            "unexpected_exit_total",
+        )
+        return {key: self._stats_get(key, 0) for key in keys}
+
+    def show_user_stats_dialog(self) -> None:
+        self._flush_usage_stats()
+        snapshot = self._read_stats_snapshot()
+        session_seconds = max(0, int(time.time() - self.session_started_at))
+        message = (
+            f"Session uptime: {self._format_duration_seconds(session_seconds)}\n"
+            f"Total usage: {self._format_duration_seconds(snapshot['total_usage_seconds'])}\n"
+            f"App launches: {snapshot['app_launch_count']}\n"
+            f"Sessions: {snapshot['session_count']}\n"
+            f"Videos generated: {snapshot['videos_generated_total']}\n"
+            f"Successful uploads: {snapshot['uploads_success_total']}\n"
+            f"Failed uploads: {snapshot['uploads_failed_total']}\n"
+            f"Unexpected upload exits: {snapshot['unexpected_exit_total']}"
+        )
+        QMessageBox.information(self, "User Stats", message)
+
+    def _load_video_metadata_cache(self) -> None:
+        if not VIDEO_METADATA_CACHE_FILE.exists():
+            self._video_metadata_cache = {}
+            return
+        try:
+            payload = json.loads(VIDEO_METADATA_CACHE_FILE.read_text(encoding="utf-8"))
+            self._video_metadata_cache = payload if isinstance(payload, dict) else {}
+        except Exception:
+            self._video_metadata_cache = {}
+
+    def _save_video_metadata_cache(self) -> None:
+        try:
+            VIDEO_METADATA_CACHE_FILE.write_text(
+                json.dumps(self._video_metadata_cache, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            self._append_log(f"WARNING: Could not save video metadata cache: {exc}")
+
+    def _video_cache_key(self, video_path: str | Path) -> str:
+        return Path(video_path).name.casefold()
+
+    def _resolve_video_metadata(self, video_path: str | Path) -> dict[str, Any]:
+        path = Path(video_path)
+        if not path.exists():
+            return {}
+        try:
+            stat = path.stat()
+        except Exception:
+            return {}
+        cache_key = self._video_cache_key(path)
+        fingerprint = f"{stat.st_size}:{stat.st_mtime_ns}"
+        cached = self._video_metadata_cache.get(cache_key)
+        if isinstance(cached, dict) and cached.get("fingerprint") == fingerprint:
+            return dict(cached)
+
+        metadata: dict[str, Any] = {
+            "fingerprint": fingerprint,
+            "path": str(path),
+            "filename": path.name,
+            "size_bytes": int(stat.st_size),
+        }
+        try:
+            info = self._probe_video_stream_info(path)
+            width = int(info.get("width") or 0)
+            height = int(info.get("height") or 0)
+            if width > 0 and height > 0:
+                metadata["resolution"] = f"{width}x{height}"
+            duration_value = float(info.get("duration") or 0.0)
+            if duration_value <= 0:
+                duration_value = float(self._probe_video_duration(path))
+            metadata["duration_seconds"] = max(0.0, duration_value)
+        except Exception:
+            pass
+
+        self._video_metadata_cache[cache_key] = metadata
+        self._save_video_metadata_cache()
+        return dict(metadata)
+
+    def _looks_like_placeholder_resolution(self, resolution: str) -> bool:
+        normalized = str(resolution or "").strip().lower()
+        if not normalized:
+            return True
+        placeholders = {"web", "local", "unknown", "same", "mixed", "auto", "preferences"}
+        if normalized in placeholders:
+            return True
+        return "web" in normalized
+
+    def _resolve_video_resolution(self, video: dict[str, Any]) -> str:
+        current_resolution = str(video.get("resolution") or "").strip()
+        video_path = str(video.get("video_file_path") or "").strip()
+        if not video_path:
+            return current_resolution or "unknown"
+        metadata = self._resolve_video_metadata(video_path)
+        resolved = str(metadata.get("resolution") or "").strip()
+        if resolved and (self._looks_like_placeholder_resolution(current_resolution) or current_resolution != resolved):
+            video["resolution"] = resolved
+            return resolved
+        return current_resolution or resolved or "unknown"
+
+    def _format_duration_seconds(self, seconds: float) -> str:
+        total = max(0, int(seconds))
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h:d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+
+    def _record_upload_success(self, platform_name: str, video_path: str, upload_id: str, method: str) -> None:
+        metadata = self._resolve_video_metadata(video_path) if video_path else {}
+        size_bytes = int(metadata.get("size_bytes") or 0)
+        duration_seconds = float(metadata.get("duration_seconds") or 0.0)
+        event = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "platform": platform_name,
+            "method": method,
+            "video_path": video_path,
+            "size_bytes": size_bytes,
+            "duration_seconds": round(duration_seconds, 3),
+            "upload_id": upload_id,
+        }
+        self._append_line_to_file(UPLOAD_SUCCESS_LOG_FILE, json.dumps(event, ensure_ascii=False))
+        self._stats_increment("uploads_success_total", 1)
+
+    def _record_upload_failure(self, platform_name: str, video_path: str, reason: str, *, unexpected_exit: bool = False) -> None:
+        metadata = self._resolve_video_metadata(video_path) if video_path else {}
+        event = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "platform": platform_name,
+            "video_path": video_path,
+            "size_bytes": int(metadata.get("size_bytes") or 0),
+            "duration_seconds": round(float(metadata.get("duration_seconds") or 0.0), 3),
+            "reason": str(reason or "unknown"),
+            "unexpected_exit": bool(unexpected_exit),
+        }
+        self._append_line_to_file(UPLOAD_FAILURE_LOG_FILE, json.dumps(event, ensure_ascii=False))
+        self._stats_increment("uploads_failed_total", 1)
+        if unexpected_exit:
+            self._append_line_to_file(UPLOAD_UNEXPECTED_EXIT_LOG_FILE, json.dumps(event, ensure_ascii=False))
+            self._stats_increment("unexpected_exit_total", 1)
 
     def _on_automation_mode_changed(self, _index: int) -> None:
         self._sync_social_embedded_browser_state_for_automation_mode(log_change=True)
@@ -13701,11 +13911,24 @@ class MainWindow(QMainWindow):
             worker.requestInterruption()
             if not worker.wait(5000):
                 self._append_log(f"WARNING: Timed out while waiting for {worker_name} worker thread to stop.")
+
+        if self.upload_worker is not None and self.upload_worker.isRunning():
+            active_platform = str(self._active_upload_context.get("platform") or "unknown")
+            active_video_path = str(self._active_upload_context.get("video_path") or "")
+            self._record_upload_failure(active_platform, active_video_path, "application closed during upload", unexpected_exit=True)
+
+        if self.social_upload_pending:
+            for platform_name, pending in list(self.social_upload_pending.items()):
+                pending_video_path = str((pending or {}).get("video_path") or "")
+                self._record_upload_failure(platform_name, pending_video_path, "application closed during browser upload", unexpected_exit=True)
+
+        self._flush_usage_stats()
+        self._save_video_metadata_cache()
         super().closeEvent(event)
 
     def _build_video_label(self, video: dict) -> str:
         title = str(video.get("title") or "Video")
-        resolution = str(video.get("resolution") or "unknown")
+        resolution = self._resolve_video_resolution(video)
         return f"{title} ({resolution})"
 
     def _serialize_video_list_for_preferences(self) -> list[dict[str, str]]:
@@ -13931,7 +14154,7 @@ class MainWindow(QMainWindow):
             detail_item = QTreeWidgetItem([
                 self._format_video_date(video_path),
                 filename,
-                str(video.get("resolution") or "unknown"),
+                self._resolve_video_resolution(video),
                 self._format_video_filesize(video_path),
             ])
             detail_item.setData(0, Qt.UserRole, index)
@@ -13952,6 +14175,12 @@ class MainWindow(QMainWindow):
     def on_video_finished(self, video: dict) -> None:
         video_path_raw = str(video.get("video_file_path") or "").strip()
         if video_path_raw:
+            metadata = self._resolve_video_metadata(video_path_raw)
+            resolved_resolution = str(metadata.get("resolution") or "").strip()
+            current_resolution = str(video.get("resolution") or "").strip()
+            if resolved_resolution and (self._looks_like_placeholder_resolution(current_resolution) or current_resolution != resolved_resolution):
+                video["resolution"] = resolved_resolution
+
             candidate_key = str(Path(video_path_raw).expanduser())
             for index, existing in enumerate(self.videos):
                 existing_path_raw = str(existing.get("video_file_path") or "").strip()
@@ -13967,6 +14196,9 @@ class MainWindow(QMainWindow):
                 return
 
         self.videos.append(video)
+        source_url = str(video.get("source_url") or "").strip().lower()
+        if source_url and source_url not in {"local-open", "preferences", ""}:
+            self._stats_increment("videos_generated_total", 1)
         self._refresh_video_picker(selected_index=len(self.videos) - 1)
         self._append_log(f"Saved: {video['video_file_path']}")
 
@@ -18384,6 +18616,8 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"{platform_name} browser automation {'submitted post' if (is_facebook or is_instagram or is_youtube or is_x) else 'staged successfully'} in its tab."
                 )
+                completed_video_path = str(pending.get("video_path") or "").strip()
+                self._record_upload_success(platform_name, completed_video_path, upload_id="browser-automation", method="browser")
                 self.social_upload_pending.pop(platform_name, None)
                 return
 
@@ -18411,6 +18645,14 @@ class MainWindow(QMainWindow):
         self.upload_progress_bar.setVisible(True)
         self._refresh_status_bar_visibility()
         self._append_log(f"Starting {platform_name} upload...")
+        active_video_path = str(upload_kwargs.get("video_path") or "").strip()
+        if not active_video_path:
+            active_video_path = self._selected_video_path_for_upload()
+        self._active_upload_context = {
+            "platform": platform_name,
+            "video_path": active_video_path,
+            "method": "api",
+        }
 
         self.upload_worker = UploadWorker(platform_name=platform_name, upload_fn=upload_fn, upload_kwargs=upload_kwargs)
         self.upload_worker.progress.connect(self._on_upload_progress)
@@ -18444,6 +18686,8 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setVisible(False)
         self._refresh_status_bar_visibility()
         self._append_log(f"{platform_name} upload complete. ID: {upload_id}")
+        video_path = str(self._active_upload_context.get("video_path") or "").strip()
+        self._record_upload_success(platform_name, video_path, upload_id, method="api")
         QMessageBox.information(self, dialog_title, f"{success_prefix} {upload_id}")
 
     def _on_upload_failed(self, platform_name: str, error_message: str) -> None:
@@ -18452,11 +18696,14 @@ class MainWindow(QMainWindow):
         self.upload_progress_label.setVisible(False)
         self._refresh_status_bar_visibility()
         self._append_log(f"ERROR: {platform_name} upload failed: {error_message}")
+        video_path = str(self._active_upload_context.get("video_path") or "").strip()
+        self._record_upload_failure(platform_name, video_path, error_message)
         QMessageBox.critical(self, f"{platform_name} Upload Failed", error_message)
 
     def _cleanup_upload_worker(self) -> None:
         self.upload_youtube_btn.setEnabled(True)
         self.upload_worker = None
+        self._active_upload_context = {}
 
     def _normalize_hashtag_tokens(self, hashtags: list[str]) -> list[str]:
         normalized: list[str] = []
