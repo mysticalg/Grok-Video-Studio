@@ -17740,15 +17740,33 @@ class MainWindow(QMainWindow):
                             || (nowMs - Number(tiktokState.lastActionAtMs)) >= minTikTokActionGapMs;
 
                         if (captionText) {
-                            const draftEditorContainer = bySelectors(['div.DraftEditor-editorContainer']);
+                            const findTikTokDraftEditable = () => {
+                                const placeholderNodes = collectDeep('.public-DraftEditorPlaceholder-inner');
+                                const preferredPlaceholder = placeholderNodes.find((node) => /share more about your video here/i.test(String(node.textContent || '').trim()))
+                                    || placeholderNodes[0]
+                                    || null;
+                                if (!preferredPlaceholder) return null;
+                                const placeholderId = String(preferredPlaceholder.id || '').trim();
+                                const draftRoot = preferredPlaceholder.closest('.DraftEditor-root') || document;
+                                const editableCandidates = Array.from(draftRoot.querySelectorAll('[contenteditable="true"]'));
+                                if (placeholderId) {
+                                    const describedBy = editableCandidates.find((node) => String(node.getAttribute('aria-describedby') || '').split(/\s+/).includes(placeholderId));
+                                    if (describedBy) return describedBy;
+                                }
+                                return editableCandidates.find((node) => String(node.className || '').includes('public-DraftEditor-content'))
+                                    || editableCandidates[0]
+                                    || null;
+                            };
+                            const draftEditable = findTikTokDraftEditable() || bySelectors([
+                                'div.public-DraftEditor-content[contenteditable="true"][aria-describedby^="placeholder-"]',
+                                'div.DraftEditor-editorContainer [contenteditable="true"]',
+                            ]);
+                            const draftEditorContainer = draftEditable
+                                ? (draftEditable.closest('div.DraftEditor-editorContainer') || draftEditable.closest('.DraftEditor-root'))
+                                : bySelectors(['div.DraftEditor-editorContainer']);
                             const draftSpan = draftEditorContainer
                                 ? draftEditorContainer.querySelector('span[data-text="true"]')
                                 : null;
-                            const draftEditable = draftSpan
-                                ? draftSpan.closest('[contenteditable="true"]')
-                                : (draftEditorContainer
-                                    ? draftEditorContainer.querySelector('[contenteditable="true"]')
-                                    : null);
 
                             const setTikTokCaption = (editableNode, spanNode, value) => {
                                 if (!editableNode) return false;
