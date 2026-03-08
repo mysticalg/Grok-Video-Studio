@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -34,6 +35,34 @@ EXTENSION_CMD_TIMEOUTS = {
     "dom.click": 45.0,
     "dom.type": 45.0,
 }
+
+
+def _sanitize_upload_filename(name: str, fallback: str = "upload.mp4", *, max_chars: int = 120) -> str:
+    """Return a filesystem-safe filename for staging uploads."""
+    raw_name = str(name or "").strip()
+    if not raw_name:
+        raw_name = fallback
+
+    candidate = Path(raw_name).name
+    suffix = Path(candidate).suffix
+    stem = Path(candidate).stem
+
+    stem = re.sub(r"[\x00-\x1f]", " ", stem)
+    stem = re.sub(r"[\\/:*?\"<>|]", " ", stem)
+    stem = stem.replace("#", " ")
+    stem = " ".join(stem.split()).strip(" .")
+    if not stem:
+        stem = Path(fallback).stem or "upload"
+
+    ext = suffix if suffix else (Path(fallback).suffix or ".mp4")
+    ext = re.sub(r"[\x00-\x1f\\/:*?\"<>|]", "", ext)
+    if not ext.startswith("."):
+        ext = f".{ext}" if ext else ".mp4"
+
+    max_chars = max(16, int(max_chars))
+    stem_limit = max(1, max_chars - len(ext))
+    safe_stem = stem[:stem_limit].rstrip(" .") or (Path(fallback).stem or "upload")
+    return f"{safe_stem}{ext}"
 
 
 class UdpAutomationService:
@@ -831,7 +860,7 @@ class UdpAutomationService:
                 platform = str(payload.get("platform") or "").lower()
                 file_name_override = str(payload.get("fileName") or "").strip()
                 if file_name_override:
-                    file_name_override = Path(file_name_override).name
+                    file_name_override = _sanitize_upload_filename(file_name_override, fallback=Path(file_path).name or "upload.mp4")
                 if not file_path:
                     raise RuntimeError("filePath (or video_path/videoPath) is required")
                 if self.cdp is None:

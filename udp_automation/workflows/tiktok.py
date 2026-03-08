@@ -134,7 +134,7 @@ def _build_upload_filename(
     caption: str,
     *,
     max_caption_chars: int = 3000,
-    max_filename_chars: int = 1000,
+    max_filename_chars: int = 120,
 ) -> str:
     extension = Path(video_path).suffix or ".mp4"
     caption_source = str(caption or "").strip()[:max_caption_chars]
