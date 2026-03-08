@@ -15975,7 +15975,7 @@ class MainWindow(QMainWindow):
         self._run_social_upload_via_mode(
             platform_name="TikTok",
             video_path=video_path,
-            caption=self._compose_social_text(caption, hashtags),
+            caption=self._compose_tiktok_text(caption, hashtags),
             title=title,
         )
 
@@ -16177,7 +16177,7 @@ class MainWindow(QMainWindow):
             payload = {
                 "source_info": source_info,
                 "post_info": {
-                    "title": self._compose_social_text(caption, hashtags),
+                    "title": self._compose_tiktok_text(caption, hashtags),
                     "privacy_level": str(self.tiktok_privacy_level.currentData() or "PUBLIC_TO_EVERYONE"),
                     "disable_comment": False,
                     "disable_duet": False,
@@ -16750,7 +16750,19 @@ class MainWindow(QMainWindow):
                     const videoMime = String(payload.video_mime || "video/mp4");
                     const allowFileDialog = Boolean(payload.allow_file_dialog);
                     const titleText = String(payload.title || "").trim();
-                    const captionText = String(payload.caption || "").trim();
+                    const stripWrappingQuotes = (value) => {
+                        const text = String(value || "").trim();
+                        if (!text) return "";
+                        const pairs = [["\"", "\""], ["'", "'"], ["“", "”"], ["‘", "’"]];
+                        for (const [open, close] of pairs) {
+                            if (text.startsWith(open) && text.endsWith(close) && text.length >= 2) {
+                                return text.slice(1, -1).trim();
+                            }
+                        }
+                        return text;
+                    };
+                    const captionRaw = String(payload.caption || "").trim();
+                    const captionText = platform === "tiktok" ? stripWrappingQuotes(captionRaw) : captionRaw;
                     const captionRequired = (platform === "facebook" || platform === "instagram" || platform === "x") && Boolean(captionText);
                     const uploadState = window.__codexSocialUploadState = window.__codexSocialUploadState || {};
                     const instagramState = uploadState.instagram = uploadState.instagram || {};
@@ -17728,15 +17740,33 @@ class MainWindow(QMainWindow):
                             || (nowMs - Number(tiktokState.lastActionAtMs)) >= minTikTokActionGapMs;
 
                         if (captionText) {
-                            const draftEditorContainer = bySelectors(['div.DraftEditor-editorContainer']);
+                            const findTikTokDraftEditable = () => {
+                                const placeholderNodes = collectDeep('.public-DraftEditorPlaceholder-inner');
+                                const preferredPlaceholder = placeholderNodes.find((node) => /share more about your video here/i.test(String(node.textContent || '').trim()))
+                                    || placeholderNodes[0]
+                                    || null;
+                                if (!preferredPlaceholder) return null;
+                                const placeholderId = String(preferredPlaceholder.id || '').trim();
+                                const draftRoot = preferredPlaceholder.closest('.DraftEditor-root') || document;
+                                const editableCandidates = Array.from(draftRoot.querySelectorAll('[contenteditable="true"]'));
+                                if (placeholderId) {
+                                    const describedBy = editableCandidates.find((node) => String(node.getAttribute('aria-describedby') || '').split(/\s+/).includes(placeholderId));
+                                    if (describedBy) return describedBy;
+                                }
+                                return editableCandidates.find((node) => String(node.className || '').includes('public-DraftEditor-content'))
+                                    || editableCandidates[0]
+                                    || null;
+                            };
+                            const draftEditable = findTikTokDraftEditable() || bySelectors([
+                                'div.public-DraftEditor-content[contenteditable="true"][aria-describedby^="placeholder-"]',
+                                'div.DraftEditor-editorContainer [contenteditable="true"]',
+                            ]);
+                            const draftEditorContainer = draftEditable
+                                ? (draftEditable.closest('div.DraftEditor-editorContainer') || draftEditable.closest('.DraftEditor-root'))
+                                : bySelectors(['div.DraftEditor-editorContainer']);
                             const draftSpan = draftEditorContainer
                                 ? draftEditorContainer.querySelector('span[data-text="true"]')
                                 : null;
-                            const draftEditable = draftSpan
-                                ? draftSpan.closest('[contenteditable="true"]')
-                                : (draftEditorContainer
-                                    ? draftEditorContainer.querySelector('[contenteditable="true"]')
-                                    : null);
 
                             const setTikTokCaption = (editableNode, spanNode, value) => {
                                 if (!editableNode) return false;
@@ -17814,18 +17844,32 @@ class MainWindow(QMainWindow):
                                 return current === norm(nextText);
                             };
 
-                            const currentDraftText = draftEditable ? normalizedNodeText(draftEditable) : "";
+                            const readTikTokDraftRawText = (node) => {
+                                if (!node) return "";
+                                try {
+                                    return String(node.innerText || node.textContent || "").trim();
+                                } catch (_) {
+                                    return "";
+                                }
+                            };
+                            const hasWrappingQuotes = (value) => {
+                                const text = String(value || "").trim();
+                                if (!text || text.length < 2) return false;
+                                const pairs = [["\"", "\""], ["'", "'"], ["“", "”"], ["‘", "’"]];
+                                return pairs.some(([open, close]) => text.startsWith(open) && text.endsWith(close));
+                            };
+
+                            const currentDraftRawText = readTikTokDraftRawText(draftEditable);
+                            const currentDraftText = norm(currentDraftRawText);
                             const normalizedCaption = norm(captionText);
                             const captionAlreadyPresent = Boolean(
                                 currentDraftText
-                                && (
-                                    currentDraftText === normalizedCaption
-                                    || currentDraftText.includes(normalizedCaption)
-                                    || normalizedCaption.includes(currentDraftText)
-                                )
+                                && normalizedCaption
+                                && currentDraftText === normalizedCaption
+                                && !hasWrappingQuotes(currentDraftRawText)
                             );
-                            const captionNonEmpty = Boolean(currentDraftText && currentDraftText.length > 0);
-                            if (captionAlreadyPresent || captionNonEmpty) {
+
+                            if (captionAlreadyPresent) {
                                 textFilled = true;
                             } else if (actionSpacingElapsed && (draftEditable || draftSpan)) {
                                 try {
@@ -18402,6 +18446,19 @@ class MainWindow(QMainWindow):
         combined = f"{base_text.strip()}\n\n{tag_text}" if base_text.strip() else tag_text
         return combined.strip()
 
+    def _compose_tiktok_text(self, base_text: str, hashtags: list[str]) -> str:
+        """Compose TikTok captions with inline hashtags and no line breaks."""
+        normalized_base = " ".join(str(base_text or "").split())
+        quote_pairs = [('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’")]
+        for open_quote, close_quote in quote_pairs:
+            if normalized_base.startswith(open_quote) and normalized_base.endswith(close_quote) and len(normalized_base) >= 2:
+                normalized_base = normalized_base[1:-1].strip()
+                break
+        tag_text = " ".join(self._normalize_hashtag_tokens(hashtags))
+        if normalized_base and tag_text:
+            return f"{normalized_base} {tag_text}".strip()
+        return (normalized_base or tag_text).strip()
+
     def _compose_x_post_text(self, base_text: str, hashtags: list[str], max_chars: int = 275) -> str:
         text = " ".join(str(base_text or "").split())
         existing_tag_keys = self._extract_hashtag_keys(text)
@@ -18482,6 +18539,7 @@ class MainWindow(QMainWindow):
         tiktok_add_text_input = None
         tiktok_add_music_input = None
         tiktok_music_query_input = None
+        tiktok_include_hashtags_input = None
         if platform_name == "TikTok":
             tiktok_options = dict(self.tiktok_upload_automation_options)
             saved_publish_mode = str(tiktok_options.get("publish_mode") or "draft").strip().lower()
@@ -18509,6 +18567,10 @@ class MainWindow(QMainWindow):
             tiktok_music_query_input.setPlaceholderText("Search sounds")
             dialog_layout.addWidget(tiktok_music_query_input)
 
+            tiktok_include_hashtags_input = QCheckBox("Include hashtags in TikTok caption")
+            tiktok_include_hashtags_input.setChecked(bool(tiktok_options.get("include_hashtags", True)))
+            dialog_layout.addWidget(tiktok_include_hashtags_input)
+
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
@@ -18527,8 +18589,11 @@ class MainWindow(QMainWindow):
                 "rotate_track_names": bool(self.tiktok_upload_automation_options.get("rotate_track_names")),
                 "track_name_rotation_index": max(0, int(self.tiktok_upload_automation_options.get("track_name_rotation_index") or 0)),
                 "music_query_effective": str(self.tiktok_upload_automation_options.get("music_query_effective") or "").strip(),
+                "include_hashtags": bool(tiktok_include_hashtags_input.isChecked()) if tiktok_include_hashtags_input is not None else True,
             }
         hashtags = [tag.strip().lstrip("#") for tag in hashtags_input.text().split(",") if tag.strip()]
+        if platform_name == "TikTok" and tiktok_include_hashtags_input is not None and not tiktok_include_hashtags_input.isChecked():
+            hashtags = []
         category_value = category_input.text().strip() if platform_name == "YouTube" else self.ai_social_metadata.category
         if platform_name == "YouTube":
             self.youtube_browser_upload_options = {

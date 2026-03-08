@@ -451,6 +451,18 @@ async function handleCmd(msg) {
         };
         const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
 
+        const stripWrappingQuotes = (value) => {
+          const text = String(value || "").trim();
+          if (!text) return "";
+          const pairs = [["\"", "\""], ["'", "'"], ["“", "”"], ["‘", "’"]];
+          for (const [open, close] of pairs) {
+            if (text.startsWith(open) && text.endsWith(close) && text.length >= 2) {
+              return text.slice(1, -1).trim();
+            }
+          }
+          return text;
+        };
+
         const getEditableText = (el) => {
           if (!el) return "";
           let lexicalText = "";
@@ -757,16 +769,48 @@ async function handleCmd(msg) {
 
           const text = String(value || "");
           if (currentPlatform === "tiktok" && canonicalKey === "description") {
+            const tiktokText = stripWrappingQuotes(text);
+            const findTikTokEditorFromPlaceholder = () => {
+              const placeholders = Array.from(document.querySelectorAll(".public-DraftEditorPlaceholder-inner"));
+              const targetPlaceholder = placeholders.find((node) => /share more about your video here/i.test(String(node.textContent || "").trim()))
+                || placeholders[0]
+                || null;
+              if (!targetPlaceholder) return null;
+              const placeholderId = String(targetPlaceholder.id || "").trim();
+              const draftRoot = targetPlaceholder.closest(".DraftEditor-root") || document;
+              const candidates = Array.from(draftRoot.querySelectorAll("[contenteditable='true']"));
+              if (placeholderId) {
+                const describedBy = candidates.find((node) => String(node.getAttribute("aria-describedby") || "").split(/\s+/).includes(placeholderId));
+                if (describedBy) return describedBy;
+              }
+              return candidates.find((node) => String(node.className || "").includes("public-DraftEditor-content")) || candidates[0] || null;
+            };
             const tiktokSelectors = [
               ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
               "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
+              "div[contenteditable='true'][aria-describedby^='placeholder-']",
               "div[contenteditable='true'][role='combobox']",
               "div[contenteditable='true']",
             ];
-            const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
-            const pasteOk = setValue(tiktokEl, text);
-            const matches = getEditableText(tiktokEl).includes(text.trim());
-            out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
+            const tiktokEl = findTikTokEditorFromPlaceholder() || tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
+            const normalizeForCompare = (value) => String(value || "")
+              .replace(/\u200B/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            const expected = normalizeForCompare(tiktokText);
+            const tiktokTextMatches = () => {
+              const current = normalizeForCompare(getEditableText(tiktokEl));
+              if (!expected) return current.length === 0;
+              return current === expected || current.includes(expected) || expected.includes(current);
+            };
+
+            // Avoid paste/DOM mutation paths on TikTok because they can trigger bot heuristics.
+            const typed = await typeTextIntoEditable(tiktokEl, tiktokText);
+            if (!tiktokTextMatches()) {
+              await wait(120);
+              await typeTextIntoEditable(tiktokEl, tiktokText);
+            }
+            out[rawKey] = Boolean(typed) && tiktokTextMatches();
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
             const normalizeForCompare = (value) => String(value || "")
