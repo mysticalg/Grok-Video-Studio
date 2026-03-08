@@ -230,14 +230,22 @@ async function handleCmd(msg) {
           for (const sel of selectors) {
             const visibleMatches = Array.from(document.querySelectorAll(sel)).filter((node) => isVisible(node) && textMatches(node, opts.textContains));
             if (visibleMatches.length > 0) {
+              if (Number.isInteger(opts.matchIndex) && opts.matchIndex >= 0) {
+                if (opts.matchIndex < visibleMatches.length) {
+                  return { el: visibleMatches[opts.matchIndex], selector: sel, randomIndex: opts.matchIndex, randomPoolSize: visibleMatches.length, matchIndex: opts.matchIndex };
+                }
+                continue;
+              }
               if (opts.useRandomMatch && visibleMatches.length > 1) {
                 const idx = Math.floor(Math.random() * visibleMatches.length);
                 return { el: visibleMatches[idx], selector: sel, randomIndex: idx, randomPoolSize: visibleMatches.length };
               }
               return { el: visibleMatches[0], selector: sel, randomIndex: 0, randomPoolSize: visibleMatches.length };
             }
-            const fallback = document.querySelector(sel);
-            if (fallback && textMatches(fallback, opts.textContains)) return { el: fallback, selector: sel, randomIndex: 0, randomPoolSize: 1 };
+            if (!(Number.isInteger(opts.matchIndex) && opts.matchIndex > 0)) {
+              const fallback = document.querySelector(sel);
+              if (fallback && textMatches(fallback, opts.textContains)) return { el: fallback, selector: sel, randomIndex: 0, randomPoolSize: 1 };
+            }
           }
           return null;
         };
@@ -295,6 +303,7 @@ async function handleCmd(msg) {
           textContains: String(payload.textContains || "").trim().toLowerCase(),
           singleClick: Boolean(payload.singleClick),
           burstClicks: Math.max(1, Number(payload.burstClicks || 1)),
+          matchIndex: Number.isInteger(Number(payload.matchIndex)) ? Math.max(0, Number(payload.matchIndex)) : null,
         };
       })()], platform);
       if (msg.name === "post.submit") {
