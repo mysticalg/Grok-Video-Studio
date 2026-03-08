@@ -4890,12 +4890,21 @@ class MainWindow(QMainWindow):
         ai_columns_layout = QHBoxLayout(ai_group)
         ai_columns_layout.setContentsMargins(10, 8, 10, 8)
         ai_columns_layout.setSpacing(14)
-        ai_left_form = QFormLayout()
-        ai_right_form = QFormLayout()
+        # Use a splitter so both columns stay visually balanced while still allowing
+        # users to tweak width if a specific control needs more room.
+        ai_columns_splitter = QSplitter(Qt.Orientation.Horizontal)
+        ai_columns_splitter.setChildrenCollapsible(False)
+        ai_left_column_widget = QWidget()
+        ai_right_column_widget = QWidget()
+        ai_left_form = QFormLayout(ai_left_column_widget)
+        ai_right_form = QFormLayout(ai_right_column_widget)
         ai_left_form.setSpacing(6)
         ai_right_form.setSpacing(6)
-        ai_columns_layout.addLayout(ai_left_form, 1)
-        ai_columns_layout.addLayout(ai_right_form, 1)
+        ai_columns_splitter.addWidget(ai_left_column_widget)
+        ai_columns_splitter.addWidget(ai_right_column_widget)
+        ai_columns_splitter.setStretchFactor(0, 1)
+        ai_columns_splitter.setStretchFactor(1, 1)
+        ai_columns_layout.addWidget(ai_columns_splitter)
         ai_column_loads = [0, 0]
 
         def ai_add_row(label: str, widget: QWidget | QLayout, *, weight: int = 1) -> None:
@@ -5011,12 +5020,19 @@ class MainWindow(QMainWindow):
         app_columns_layout = QHBoxLayout(app_group)
         app_columns_layout.setContentsMargins(10, 8, 10, 8)
         app_columns_layout.setSpacing(14)
-        app_left_form = QFormLayout()
-        app_right_form = QFormLayout()
+        app_columns_splitter = QSplitter(Qt.Orientation.Horizontal)
+        app_columns_splitter.setChildrenCollapsible(False)
+        app_left_column_widget = QWidget()
+        app_right_column_widget = QWidget()
+        app_left_form = QFormLayout(app_left_column_widget)
+        app_right_form = QFormLayout(app_right_column_widget)
         app_left_form.setSpacing(6)
         app_right_form.setSpacing(6)
-        app_columns_layout.addLayout(app_left_form, 1)
-        app_columns_layout.addLayout(app_right_form, 1)
+        app_columns_splitter.addWidget(app_left_column_widget)
+        app_columns_splitter.addWidget(app_right_column_widget)
+        app_columns_splitter.setStretchFactor(0, 1)
+        app_columns_splitter.setStretchFactor(1, 1)
+        app_columns_layout.addWidget(app_columns_splitter)
         app_column_loads = [0, 0]
 
         def app_add_row(label: str, widget: QWidget | QLayout, *, weight: int = 1) -> None:
@@ -5126,6 +5142,10 @@ class MainWindow(QMainWindow):
                 if field_item is None:
                     continue
                 _set_max_width_recursive(field_item.widget() or field_item.layout(), left_column_max_width)
+
+        # Start with an even split after all controls are created.
+        ai_columns_splitter.setSizes([1, 1])
+        app_columns_splitter.setSizes([1, 1])
 
         settings_layout.addWidget(ai_group)
         settings_layout.addWidget(app_group)
