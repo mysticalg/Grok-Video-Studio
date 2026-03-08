@@ -3551,17 +3551,13 @@ class MainWindow(QMainWindow):
         self.music_file_label.setStyleSheet("color: #9fb3c8;")
         self.music_file_label.setWordWrap(True)
 
-        music_actions_layout = QHBoxLayout()
         self.choose_music_btn = QPushButton("🎵 Choose Music (wav/mp3)")
         self.choose_music_btn.setToolTip("Select a local WAV or MP3 file to mix under the stitched video.")
         self.choose_music_btn.clicked.connect(self._choose_custom_music_file)
-        music_actions_layout.addWidget(self.choose_music_btn)
 
         self.clear_music_btn = QPushButton("Clear Music")
         self.clear_music_btn.setToolTip("Remove any selected custom background music file.")
         self.clear_music_btn.clicked.connect(self._clear_custom_music_file)
-        music_actions_layout.addWidget(self.clear_music_btn)
-        self.music_actions_row = music_actions_layout
 
         self.stitch_mute_original_checkbox = QCheckBox("Mute original video audio when music is used")
         self.stitch_mute_original_checkbox.setToolTip("If enabled, only the selected music is audible in the stitched output.")
@@ -3599,23 +3595,48 @@ class MainWindow(QMainWindow):
         self.buy_coffee_btn.setToolTip("If this saves you hours, grab me a ☕")
         self.buy_coffee_btn.clicked.connect(self.open_buy_me_a_coffee)
 
+        log_group = QGroupBox("📡 Activity Log")
+        log_layout = QVBoxLayout(log_group)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(120)
+        log_layout.addWidget(self.log)
+        if self._pending_log_messages:
+            for pending_entry in self._pending_log_messages:
+                self.log.appendPlainText(pending_entry)
+            self._pending_log_messages.clear()
+
+        log_actions_layout = QHBoxLayout()
+        log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
+
+        self.clear_log_btn = QPushButton("🧹 Clear Log")
+        self.clear_log_btn.setToolTip("Clear all activity log entries.")
+        self.clear_log_btn.clicked.connect(self.clear_activity_log)
+        log_actions_layout.addWidget(self.clear_log_btn, alignment=Qt.AlignLeft)
+
+        self.jump_to_bottom_btn = QPushButton("⤓ Jump to Bottom")
+        self.jump_to_bottom_btn.setToolTip("Jump to the latest activity log entry.")
+        self.jump_to_bottom_btn.clicked.connect(self.jump_activity_log_to_bottom)
+        log_actions_layout.addWidget(self.jump_to_bottom_btn, alignment=Qt.AlignLeft)
+
+        log_actions_layout.addStretch(1)
+        log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
+        log_layout.addLayout(log_actions_layout)
+        left_layout.addWidget(log_group)
+
         generated_videos_group = QGroupBox("🎬 Generated Videos")
         generated_videos_layout = QVBoxLayout(generated_videos_group)
         generated_videos_layout.setContentsMargins(8, 8, 8, 8)
         generated_videos_layout.setSpacing(6)
 
-        generated_videos_layout.addWidget(self.stitch_btn)
-        generated_videos_layout.addWidget(self.music_file_label)
-        generated_videos_layout.addLayout(self.music_actions_row)
-
         view_toggle_row = QHBoxLayout()
-        view_toggle_row.addStretch(1)
         self.video_view_toggle_btn = QToolButton()
         self.video_view_toggle_btn.setText("☷")
         self.video_view_toggle_btn.setCheckable(True)
         self.video_view_toggle_btn.setToolTip("Toggle between thumbnail grid and details list view.")
         self.video_view_toggle_btn.toggled.connect(self._toggle_video_view_mode)
         view_toggle_row.addWidget(self.video_view_toggle_btn)
+        view_toggle_row.addStretch(1)
         generated_videos_layout.addLayout(view_toggle_row)
 
         self.video_view_stack = QStackedWidget()
@@ -3633,14 +3654,15 @@ class MainWindow(QMainWindow):
         self.video_grid.currentRowChanged.connect(self.show_selected_video)
 
         self.video_details = QTreeWidget()
-        self.video_details.setColumnCount(3)
-        self.video_details.setHeaderLabels(["Date", "Filename", "Resolution"])
+        self.video_details.setColumnCount(4)
+        self.video_details.setHeaderLabels(["Date", "Filename", "Resolution", "Filesize"])
         self.video_details.setRootIsDecorated(False)
         self.video_details.setSelectionMode(QAbstractItemView.SingleSelection)
         self.video_details.setAlternatingRowColors(True)
         self.video_details.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.video_details.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.video_details.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.video_details.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.video_details.setMinimumHeight(354)
         self.video_details.currentItemChanged.connect(self._on_video_details_selection_changed)
 
@@ -3674,8 +3696,12 @@ class MainWindow(QMainWindow):
         self.video_overlay_btn.clicked.connect(lambda: self._run_with_button_feedback(self.video_overlay_btn, self.add_overlay_to_selected_video))
         video_list_controls.addWidget(self.video_overlay_btn)
 
+        video_list_controls.addWidget(self.stitch_btn)
+        video_list_controls.addWidget(self.choose_music_btn)
+        video_list_controls.addWidget(self.clear_music_btn)
+
         generated_videos_layout.addLayout(video_list_controls)
-        left_layout.addWidget(generated_videos_group)
+        generated_videos_layout.addWidget(self.music_file_label)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -3765,34 +3791,6 @@ class MainWindow(QMainWindow):
         self.browser_profile.downloadRequested.connect(self._on_browser_download_requested)
         self._sync_embedded_browser_download_path()
 
-        log_group = QGroupBox("📡 Activity Log")
-        log_layout = QVBoxLayout(log_group)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMinimumHeight(120)
-        log_layout.addWidget(self.log)
-        if self._pending_log_messages:
-            for pending_entry in self._pending_log_messages:
-                self.log.appendPlainText(pending_entry)
-            self._pending_log_messages.clear()
-
-        log_actions_layout = QHBoxLayout()
-        log_actions_layout.addWidget(self.stop_all_btn, alignment=Qt.AlignLeft)
-
-        self.clear_log_btn = QPushButton("🧹 Clear Log")
-        self.clear_log_btn.setToolTip("Clear all activity log entries.")
-        self.clear_log_btn.clicked.connect(self.clear_activity_log)
-        log_actions_layout.addWidget(self.clear_log_btn, alignment=Qt.AlignLeft)
-
-        self.jump_to_bottom_btn = QPushButton("⤓ Jump to Bottom")
-        self.jump_to_bottom_btn.setToolTip("Jump to the latest activity log entry.")
-        self.jump_to_bottom_btn.clicked.connect(self.jump_activity_log_to_bottom)
-        log_actions_layout.addWidget(self.jump_to_bottom_btn, alignment=Qt.AlignLeft)
-
-        log_actions_layout.addStretch(1)
-        log_actions_layout.addWidget(self.buy_coffee_btn, alignment=Qt.AlignRight)
-        log_layout.addLayout(log_actions_layout)
-
         if QTWEBENGINE_USE_DISK_CACHE:
             self._append_log(f"Browser cache path: {CACHE_DIR}")
             self._append_log(f"Browser profile storage path: {CACHE_DIR / 'profile'}")
@@ -3867,7 +3865,7 @@ class MainWindow(QMainWindow):
         bottom_splitter.setOpaqueResize(True)
         bottom_splitter.setChildrenCollapsible(False)
         bottom_splitter.addWidget(preview_group)
-        bottom_splitter.addWidget(log_group)
+        bottom_splitter.addWidget(generated_videos_group)
         bottom_splitter.setSizes([500, 800])
 
         self.grok_browser_tab = QWidget()
@@ -13851,6 +13849,21 @@ class MainWindow(QMainWindow):
         except Exception:
             return "unknown"
 
+    def _format_video_filesize(self, video_path: str) -> str:
+        try:
+            size_bytes = Path(video_path).stat().st_size
+        except Exception:
+            return "unknown"
+
+        units = ("B", "KB", "MB", "GB", "TB")
+        size_value = float(size_bytes)
+        for unit in units:
+            if size_value < 1024.0 or unit == units[-1]:
+                precision = 0 if unit == "B" else 1
+                return f"{size_value:.{precision}f} {unit}"
+            size_value /= 1024.0
+        return "unknown"
+
     def _selected_video_index(self) -> int:
         if hasattr(self, "video_view_stack") and self.video_view_stack.currentWidget() is self.video_details:
             item = self.video_details.currentItem()
@@ -13916,6 +13929,7 @@ class MainWindow(QMainWindow):
                 self._format_video_date(video_path),
                 filename,
                 str(video.get("resolution") or "unknown"),
+                self._format_video_filesize(video_path),
             ])
             detail_item.setData(0, Qt.UserRole, index)
             detail_item.setToolTip(1, video_path)
