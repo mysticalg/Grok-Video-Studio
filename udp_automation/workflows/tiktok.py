@@ -145,8 +145,9 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     add_text = bool(opts.get("add_text_overlay"))
     add_music = bool(opts.get("add_music"))
     rename_upload_filename = bool(opts.get("rename_upload_filename", True))
+    upload_filename_char_limit = min(3000, max(16, int(opts.get("upload_filename_char_limit") or 167)))
     music_unique_per_add = bool(opts.get("music_unique_per_add"))
-    music_add_count = max(1, min(10, int(opts.get("music_add_count") or 2)))
+    music_add_count = max(1, min(100, int(opts.get("music_add_count") or 2)))
     raw_music_queries = opts.get("music_queries_effective")
     music_queries: list[str] = []
     if isinstance(raw_music_queries, list):
@@ -170,6 +171,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         "start: "
         f"mode={publish_mode} add_text={add_text} add_music={add_music} "
         f"rename_upload_filename={rename_upload_filename} "
+        f"upload_filename_char_limit={upload_filename_char_limit} "
         f"music_add_count={music_add_count} music_unique_per_add={music_unique_per_add} "
         f"music_queries={len(music_queries)} text_overlay_len={len(text_overlay)}",
     )
@@ -184,6 +186,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     if rename_upload_filename and str(caption or "").strip():
         upload_file_name = _build_upload_filename_override(video_path, caption, max_chars=3000)
         upload_payload_request["fileName"] = upload_file_name
+        upload_payload_request["fileNameMaxChars"] = upload_filename_char_limit
         _log(
             log_fn,
             f"upload.filename_override: chars={len(upload_file_name)} "

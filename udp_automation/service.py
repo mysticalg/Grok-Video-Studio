@@ -858,8 +858,13 @@ class UdpAutomationService:
                 )
                 platform = str(payload.get("platform") or "").lower()
                 file_name_override = str(payload.get("fileName") or "").strip()
+                file_name_max_chars = min(3000, max(16, int(payload.get("fileNameMaxChars") or 167)))
                 if file_name_override:
-                    file_name_override = _sanitize_upload_filename(file_name_override, fallback=Path(file_path).name or "upload.mp4", max_chars=167)
+                    file_name_override = _sanitize_upload_filename(
+                        file_name_override,
+                        fallback=Path(file_path).name or "upload.mp4",
+                        max_chars=file_name_max_chars,
+                    )
                 if not file_path:
                     raise RuntimeError("filePath (or video_path/videoPath) is required")
                 if self.cdp is None:
@@ -880,8 +885,8 @@ class UdpAutomationService:
                         staging_dir = source_file_path.parent
                     else:
                         staging_dir = Path(tempfile.mkdtemp(prefix="grok_video_studio_uploads_"))
-                    # Keep staged filename <= 167 chars to reduce upload/path failures on Windows.
-                    max_path_chars = 167
+                    # Keep staged filename constrained to reduce upload/path failures on Windows.
+                    max_path_chars = file_name_max_chars
                     available_name_chars = max(16, max_path_chars)
                     safe_file_name = _sanitize_upload_filename(
                         file_name_override,
