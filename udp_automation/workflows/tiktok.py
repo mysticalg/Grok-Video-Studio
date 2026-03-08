@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -121,27 +120,19 @@ def _overlay_text(opts: dict[str, Any], caption: str) -> str:
     return " ".join(without_tags.split()).strip()
 
 
-def _sanitize_filename_stem(name: str) -> str:
-    # Keep filename safe across platforms and strip all dots from the stem.
-    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", str(name or ""))
-    cleaned = cleaned.replace(".", " ")
-    collapsed = " ".join(cleaned.split()).strip(" .")
-    return collapsed or "tiktok_upload"
-
-
-def _build_upload_filename(
+def _build_upload_filename_header(
     video_path: str,
     caption: str,
     *,
-    max_caption_chars: int = 3000,
-    max_filename_chars: int = 120,
+    max_chars: int = 3000,
 ) -> str:
     extension = Path(video_path).suffix or ".mp4"
-    caption_source = str(caption or "").strip()[:max_caption_chars]
-    safe_stem = _sanitize_filename_stem(caption_source)
-    stem_limit = max(1, max_filename_chars - len(extension))
-    stem = (safe_stem[:stem_limit].rstrip(" _-") or "tiktok_upload")
-    return f"{stem}{extension}"
+    caption_source = " ".join(str(caption or "").split()).strip()
+    if not caption_source:
+        caption_source = Path(video_path).stem
+    if extension and not caption_source.lower().endswith(extension.lower()):
+        caption_source = f"{caption_source}{extension}"
+    return caption_source[:max(1, int(max_chars))]
 
 
 def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -190,9 +181,13 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
 
     upload_payload_request: dict[str, Any] = {"platform": "tiktok", "filePath": video_path}
     if rename_upload_filename and str(caption or "").strip():
-        upload_file_name = _build_upload_filename(video_path, caption, max_caption_chars=3000)
-        upload_payload_request["fileName"] = upload_file_name
-        _log(log_fn, f"upload.filename_override: fileName={upload_file_name} caption_chars={len(str(caption or '').strip())}")
+        upload_file_name_header = _build_upload_filename_header(video_path, caption, max_chars=3000)
+        upload_payload_request["fileNameHeader"] = upload_file_name_header
+        _log(
+            log_fn,
+            f"upload.filename_header_override: chars={len(upload_file_name_header)} "
+            "(using custom header, no disk rename copy)",
+        )
     else:
         _log(log_fn, "upload.filename_override: disabled (using original source filename)")
 
