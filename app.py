@@ -17771,77 +17771,56 @@ class MainWindow(QMainWindow):
                             const setTikTokCaption = (editableNode, spanNode, value) => {
                                 if (!editableNode) return false;
                                 const nextText = String(value || "");
-
-                                const readCurrentText = () => {
-                                    try {
-                                        if (editableNode.isContentEditable || editableNode.getAttribute("contenteditable") === "true") {
-                                            return normalizedNodeText(editableNode);
-                                        }
-                                        if ("value" in editableNode) {
-                                            return norm(editableNode.value);
-                                        }
-                                    } catch (_) {}
-                                    return "";
-                                };
-
-                                const replaceEditorTextWithoutExec = (textValue) => {
-                                    try {
-                                        editableNode.focus();
-                                    } catch (_) {}
-
-                                    try {
-                                        if (editableNode.isContentEditable || editableNode.getAttribute("contenteditable") === "true") {
-                                            const selection = window.getSelection();
-                                            if (selection && typeof selection.removeAllRanges === "function") {
-                                                const range = document.createRange();
-                                                range.selectNodeContents(editableNode);
-                                                selection.removeAllRanges();
-                                                selection.addRange(range);
-                                                range.deleteContents();
-
-                                                if (textValue) {
-                                                    const textNode = document.createTextNode(textValue);
-                                                    range.insertNode(textNode);
-                                                    range.setStartAfter(textNode);
-                                                    range.collapse(true);
-                                                    selection.removeAllRanges();
-                                                    selection.addRange(range);
-                                                }
-                                                return true;
-                                            }
-                                        }
-                                    } catch (_) {}
-
-                                    try {
-                                        if ("value" in editableNode) {
-                                            editableNode.value = textValue;
-                                            return true;
-                                        }
-                                    } catch (_) {}
-                                    return false;
-                                };
-
                                 const eventOptions = { bubbles: true, composed: true };
+                                const targetSpan = spanNode
+                                    || editableNode.querySelector('span[data-text="true"]')
+                                    || editableNode.querySelector('span[data-offset-key]');
+                                if (!targetSpan) return false;
+
+                                const moveCaretToSpanEnd = () => {
+                                    try {
+                                        const selection = window.getSelection();
+                                        if (!selection || typeof selection.removeAllRanges !== "function") return;
+                                        const range = document.createRange();
+                                        range.selectNodeContents(targetSpan);
+                                        range.collapse(false);
+                                        selection.removeAllRanges();
+                                        selection.addRange(range);
+                                    } catch (_) {}
+                                };
+
+                                try { editableNode.focus(); } catch (_) {}
+                                moveCaretToSpanEnd();
+                                try { document.execCommand("selectAll", false, null); } catch (_) {}
+                                try { document.execCommand("delete", false, null); } catch (_) {}
                                 try {
-                                    editableNode.dispatchEvent(new InputEvent("beforeinput", { ...eventOptions, data: "", inputType: "deleteByCut" }));
-                                } catch (_) {}
-
-                                replaceEditorTextWithoutExec(nextText);
-
-                                if (spanNode) {
-                                    try { spanNode.textContent = nextText; } catch (_) {}
-                                }
-
-                                try {
-                                    editableNode.dispatchEvent(new InputEvent("input", { ...eventOptions, data: nextText, inputType: "insertReplacementText" }));
+                                    editableNode.dispatchEvent(new InputEvent("input", { ...eventOptions, data: "", inputType: "deleteContentBackward" }));
                                 } catch (_) {
                                     try { editableNode.dispatchEvent(new Event("input", eventOptions)); } catch (_) {}
                                 }
+
+                                let typedAny = false;
+                                for (const ch of nextText) {
+                                    moveCaretToSpanEnd();
+                                    try {
+                                        editableNode.dispatchEvent(new InputEvent("beforeinput", { ...eventOptions, data: ch, inputType: "insertText" }));
+                                    } catch (_) {}
+                                    let inserted = false;
+                                    try { inserted = Boolean(document.execCommand("insertText", false, ch)); } catch (_) { inserted = false; }
+                                    typedAny = typedAny || inserted;
+                                    try {
+                                        editableNode.dispatchEvent(new InputEvent("input", { ...eventOptions, data: ch, inputType: "insertText" }));
+                                    } catch (_) {
+                                        try { editableNode.dispatchEvent(new Event("input", eventOptions)); } catch (_) {}
+                                    }
+                                }
+
                                 try { editableNode.dispatchEvent(new Event("change", eventOptions)); } catch (_) {}
                                 try { editableNode.dispatchEvent(new Event("blur", eventOptions)); } catch (_) {}
 
-                                const current = readCurrentText();
-                                return current === norm(nextText);
+                                const current = norm(String(editableNode.innerText || editableNode.textContent || ""));
+                                const expected = norm(nextText);
+                                return Boolean(typedAny || expected.length === 0) && (current === expected || current.includes(expected));
                             };
 
                             const readTikTokDraftRawText = (node) => {

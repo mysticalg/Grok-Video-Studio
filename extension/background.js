@@ -505,6 +505,52 @@ async function handleCmd(msg) {
           return getEditableText(el).length > 0;
         };
 
+        const typeIntoDraftEditorSpan = async (el, value) => {
+          if (!el) return false;
+          const text = String(value || "");
+          const root = el.closest(".DraftEditor-root") || el;
+          const editable = root.querySelector(".public-DraftEditor-content[contenteditable='true']") || el;
+          const textSpan = editable.querySelector("span[data-text='true']")
+            || editable.querySelector("span[data-offset-key]");
+          if (!textSpan) return false;
+
+          try { editable.focus(); } catch (_) {}
+          try {
+            const range = document.createRange();
+            range.selectNodeContents(textSpan);
+            range.collapse(false);
+            const sel = window.getSelection?.();
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          } catch (_) {}
+
+          try { document.execCommand("selectAll", false, null); } catch (_) {}
+          try { document.execCommand("delete", false, null); } catch (_) {}
+          try { editable.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: "", inputType: "deleteContentBackward" })); } catch (_) {}
+
+          for (const ch of text) {
+            try { editable.focus(); } catch (_) {}
+            try {
+              const range = document.createRange();
+              range.selectNodeContents(textSpan);
+              range.collapse(false);
+              const sel = window.getSelection?.();
+              sel?.removeAllRanges();
+              sel?.addRange(range);
+            } catch (_) {}
+            try { editable.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, data: ch, inputType: "insertText" })); } catch (_) {}
+            try { document.execCommand("insertText", false, ch); } catch (_) {}
+            try { editable.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: ch, inputType: "insertText" })); } catch (_) {}
+            await wait(8);
+          }
+
+          try { editable.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+          try { editable.dispatchEvent(new Event("blur", { bubbles: true })); } catch (_) {}
+          const normalizedCurrent = getEditableText(editable).replace(/\s+/g, " ").trim();
+          const normalizedExpected = text.replace(/\s+/g, " ").trim();
+          return Boolean(normalizedCurrent) && (normalizedCurrent === normalizedExpected || normalizedCurrent.includes(normalizedExpected));
+        };
+
         const setYouTubeRichTextboxValue = (el, value) => {
           if (!el) return false;
           const text = String(value || "");
@@ -805,10 +851,10 @@ async function handleCmd(msg) {
             };
 
             // Avoid paste/DOM mutation paths on TikTok because they can trigger bot heuristics.
-            const typed = await typeTextIntoEditable(tiktokEl, tiktokText);
+            const typed = await typeIntoDraftEditorSpan(tiktokEl, tiktokText);
             if (!tiktokTextMatches()) {
               await wait(120);
-              await typeTextIntoEditable(tiktokEl, tiktokText);
+              await typeIntoDraftEditorSpan(tiktokEl, tiktokText);
             }
             out[rawKey] = Boolean(typed) && tiktokTextMatches();
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
