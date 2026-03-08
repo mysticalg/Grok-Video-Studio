@@ -46,7 +46,7 @@ jobs:
 
   build-windows:
     needs: detect-daily-changes
-    if: (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && (github.event_name != 'schedule' || needs.detect-daily-changes.outputs.has_changes == 'true')
+    if: always() && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && (github.event_name != 'schedule' || needs.detect-daily-changes.outputs.has_changes == 'true')
     runs-on: windows-latest
 
     steps:
