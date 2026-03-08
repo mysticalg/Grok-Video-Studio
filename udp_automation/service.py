@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import mimetypes
 import os
+import shutil
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -826,251 +827,261 @@ class UdpAutomationService:
                 if self.cdp is None:
                     raise RuntimeError("CDP is not connected")
 
-                async def _pick_target_page() -> Any:
-                    platform_needles = {
-                        "youtube": ["studio.youtube.com", "youtube.com/upload"],
-                        "tiktok": ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktokstudio"],
-                        "facebook": ["facebook.com/reels/create", "facebook.com"],
-                        "instagram": ["instagram.com"],
-                        "x": ["x.com/compose", "x.com"],
-                    }
-                    for needle in platform_needles.get(platform, []):
-                        page_candidate = await self.cdp.find_page_by_url_contains(needle)
+                source_file_path = Path(file_path)
+                staged_file_path = source_file_path
+                staged_payload = dict(payload)
+                cleanup_staged_file = False
+
+                if file_name_override:
+                    staging_dir = Path(tempfile.gettempdir()) / "grok_video_studio_uploads"
+                    staging_dir.mkdir(parents=True, exist_ok=True)
+                    staged_file_path = staging_dir / f"{int(time.time() * 1000)}_{file_name_override}"
+                    shutil.copy2(source_file_path, staged_file_path)
+                    cleanup_staged_file = True
+                    staged_payload["filePath"] = str(staged_file_path)
+
+                try:
+                    async def _pick_target_page() -> Any:
+                        platform_needles = {
+                            "youtube": ["studio.youtube.com", "youtube.com/upload"],
+                            "tiktok": ["tiktok.com/tiktokstudio/upload", "tiktok.com/upload", "tiktokstudio"],
+                            "facebook": ["facebook.com/reels/create", "facebook.com"],
+                            "instagram": ["instagram.com"],
+                            "x": ["x.com/compose", "x.com"],
+                        }
+                        for needle in platform_needles.get(platform, []):
+                            page_candidate = await self.cdp.find_page_by_url_contains(needle)
+                            if page_candidate is not None:
+                                return page_candidate
+                        page_candidate = await self.cdp.get_most_recent_page()
                         if page_candidate is not None:
                             return page_candidate
-                    page_candidate = await self.cdp.get_most_recent_page()
-                    if page_candidate is not None:
-                        return page_candidate
-                    return await self.cdp.get_or_create_page(
-                        PLATFORM_URLS.get(platform, "https://example.com"),
-                        reuse_tab=True,
-                    )
+                        return await self.cdp.get_or_create_page(
+                            PLATFORM_URLS.get(platform, "https://example.com"),
+                            reuse_tab=True,
+                        )
 
-                page = await _pick_target_page()
-                if page is None:
-                    raise RuntimeError("No browser page available for upload")
+                    page = await _pick_target_page()
+                    if page is None:
+                        raise RuntimeError("No browser page available for upload")
 
-                file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
-                skip_direct_upload_probe = platform == "x" and file_size_mb > REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB
-                upload_file_payload: dict[str, Any] | None = None
-                if file_name_override:
-                    mime_type = str(mimetypes.guess_type(file_name_override)[0] or "application/octet-stream")
-                    upload_file_payload = {
-                        "name": file_name_override,
-                        "mimeType": mime_type,
-                        "buffer": Path(file_path).read_bytes(),
-                    }
-                extension_clients_connected = bool(self.bus.clients)
-                if skip_direct_upload_probe and not extension_clients_connected:
-                    raise RuntimeError(
-                        "Large x.com uploads require an extension client connected to the browser host "
-                        f"(sizeMb={round(file_size_mb, 2)} > {REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB:.0f}Mb); "
-                        "remote CDP cannot transfer this file and no extension client is connected"
-                    )
-                input_locators = []
-                if platform == "facebook":
+                    file_size_mb = source_file_path.stat().st_size / (1024 * 1024)
+                    skip_direct_upload_probe = platform == "x" and file_size_mb > REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB
+                    extension_clients_connected = bool(self.bus.clients)
+                    if skip_direct_upload_probe and not extension_clients_connected:
+                        raise RuntimeError(
+                            "Large x.com uploads require an extension client connected to the browser host "
+                            f"(sizeMb={round(file_size_mb, 2)} > {REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB:.0f}Mb); "
+                            "remote CDP cannot transfer this file and no extension client is connected"
+                        )
+                    input_locators = []
+                    if platform == "facebook":
+                        input_locators.extend(
+                            [
+                                page.locator("input[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]"),
+                                page.locator("input.x1s85apg[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]"),
+                                page.locator("input[type='file'][accept*='video/x-matroska'][accept*='video/mp4'][accept*='image/heic'][multiple]"),
+                                page.locator("div[aria-label='Photo/video'] + input[type='file']"),
+                                page.locator("input[type='file']:has(+ div[aria-label='Photo/video'])"),
+                            ]
+                        )
+
                     input_locators.extend(
                         [
-                            page.locator("input[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]"),
-                            page.locator("input.x1s85apg[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]"),
-                            page.locator("input[type='file'][accept*='video/x-matroska'][accept*='video/mp4'][accept*='image/heic'][multiple]"),
-                            page.locator("div[aria-label='Photo/video'] + input[type='file']"),
-                            page.locator("input[type='file']:has(+ div[aria-label='Photo/video'])"),
+                            page.locator("input[type='file']"),
+                            page.locator("input[type='file'][accept*='video']"),
+                            page.locator("input[type='file'][accept*='mp4' i]"),
+                            page.locator("input[type='file'][accept*='quicktime' i]"),
+                            page.locator("ytcp-uploads-dialog input[type='file']"),
                         ]
                     )
 
-                input_locators.extend(
-                    [
-                        page.locator("input[type='file']"),
-                        page.locator("input[type='file'][accept*='video']"),
-                        page.locator("input[type='file'][accept*='mp4' i]"),
-                        page.locator("input[type='file'][accept*='quicktime' i]"),
-                        page.locator("ytcp-uploads-dialog input[type='file']"),
-                    ]
-                )
-
-                async def _prime_upload_surface() -> None:
-                    # Avoid clicking TikTok "Upload" buttons here: it opens a native file chooser,
-                    # which steals focus and can block automation before we programmatically set files.
-                    trigger_selectors = {
-                        "youtube": [
-                            'ytcp-button[id="create-icon"] button',
-                            'tp-yt-paper-item[test-id="upload"]',
-                            'tp-yt-paper-item#text-item-0[test-id="upload"]',
-                        ],
-                    }
-                    for selector in trigger_selectors.get(platform, []):
-                        try:
-                            loc = page.locator(selector).first
-                            if await loc.count() <= 0:
-                                continue
-                            await loc.click(timeout=1200)
-                            await page.wait_for_timeout(200)
-                        except Exception:
-                            continue
-
-                mode = None
-                last_err = ""
-
-                # TikTok and X often trigger native choosers from upload controls.
-                # In external automation, prefer the extension debugger path first so the
-                # local machine file path can be set directly without remote CDP transfer.
-                if platform in {"tiktok", "x"} and not file_name_override:
-                    try:
-                        ack = await self._send_extension_cmd("upload.select_file", payload)
-                        ack_payload = _ack_from_extension(ack)
-                        if bool(ack_payload.get("ok")):
-                            mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
-                            await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
-                            return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
-                        last_err = str(ack_payload.get("error") or "")
-                    except Exception as exc:
-                        last_err = str(exc)
-
-                if skip_direct_upload_probe:
-                    skip_reason = (
-                        "Locator.set_input_files skipped for x.com because remote CDP cannot transfer "
-                        f"files larger than {REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB:.0f}Mb"
-                    )
-                    last_err = f"{last_err}; {skip_reason}" if last_err else skip_reason
-
-                await _prime_upload_surface()
-                probe_rounds = 8 if platform == "tiktok" else 24
-                if not skip_direct_upload_probe:
-                    for _ in range(probe_rounds):
-                        for locator in input_locators:
+                    async def _prime_upload_surface() -> None:
+                        # Avoid clicking TikTok "Upload" buttons here: it opens a native file chooser,
+                        # which steals focus and can block automation before we programmatically set files.
+                        trigger_selectors = {
+                            "youtube": [
+                                'ytcp-button[id="create-icon"] button',
+                                'tp-yt-paper-item[test-id="upload"]',
+                                'tp-yt-paper-item#text-item-0[test-id="upload"]',
+                            ],
+                        }
+                        for selector in trigger_selectors.get(platform, []):
                             try:
-                                count = await locator.count()
-                            except Exception:
-                                count = 0
-                            if count <= 0:
-                                continue
-                            for idx in range(count):
-                                target = locator.nth(idx)
-                                try:
-                                    timeout_ms = 5000 if platform == "tiktok" else 30000
-                                    if upload_file_payload is not None:
-                                        await target.set_input_files(upload_file_payload, timeout=timeout_ms)
-                                        mode = "cdp_set_input_files_filename_override"
-                                    else:
-                                        await target.set_input_files(file_path, timeout=timeout_ms)
-                                        mode = "cdp_set_input_files"
-                                    break
-                                except Exception as exc:
-                                    last_err = str(exc)
+                                loc = page.locator(selector).first
+                                if await loc.count() <= 0:
                                     continue
+                                await loc.click(timeout=1200)
+                                await page.wait_for_timeout(200)
+                            except Exception:
+                                continue
+
+                    mode = None
+                    last_err = ""
+
+                    # TikTok and X often trigger native choosers from upload controls.
+                    # In external automation, prefer the extension debugger path first so the
+                    # local machine file path can be set directly without remote CDP transfer.
+                    if platform in {"tiktok", "x"} and not file_name_override:
+                        try:
+                            ack = await self._send_extension_cmd("upload.select_file", staged_payload)
+                            ack_payload = _ack_from_extension(ack)
+                            if bool(ack_payload.get("ok")):
+                                mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
+                                await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
+                                return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                            last_err = str(ack_payload.get("error") or "")
+                        except Exception as exc:
+                            last_err = str(exc)
+
+                    if skip_direct_upload_probe:
+                        skip_reason = (
+                            "Locator.set_input_files skipped for x.com because remote CDP cannot transfer "
+                            f"files larger than {REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB:.0f}Mb"
+                        )
+                        last_err = f"{last_err}; {skip_reason}" if last_err else skip_reason
+
+                    await _prime_upload_surface()
+                    probe_rounds = 8 if platform == "tiktok" else 24
+                    if not skip_direct_upload_probe:
+                        for _ in range(probe_rounds):
+                            for locator in input_locators:
+                                try:
+                                    count = await locator.count()
+                                except Exception:
+                                    count = 0
+                                if count <= 0:
+                                    continue
+                                for idx in range(count):
+                                    target = locator.nth(idx)
+                                    try:
+                                        timeout_ms = 5000 if platform == "tiktok" else 30000
+                                        await target.set_input_files(str(staged_file_path), timeout=timeout_ms)
+                                        mode = "cdp_set_input_files_filename_override" if file_name_override else "cdp_set_input_files"
+                                        break
+                                    except Exception as exc:
+                                        last_err = str(exc)
+                                        continue
+                                if mode:
+                                    break
                             if mode:
                                 break
-                        if mode:
-                            break
+                            try:
+                                await _prime_upload_surface()
+                                await page.wait_for_timeout(300)
+                            except Exception:
+                                pass
+
+                    if not mode:
+                        used_dom_fallback = False
+                        if self.cdp is not None:
+                            dom_fallback_selectors = [
+                                "ytcp-uploads-dialog input[type='file']",
+                                "input[type='file'][accept*='video']",
+                                "input[type='file'][accept*='mp4' i]",
+                                "input[type='file']",
+                            ]
+                            if platform == "facebook":
+                                dom_fallback_selectors = [
+                                    "input[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]",
+                                    "input.x1s85apg[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]",
+                                    "input[type='file'][accept*='video/x-matroska'][accept*='video/mp4'][accept*='image/heic'][multiple]",
+                                    "input[type='file']:has(+ div[aria-label='Photo/video'])",
+                                ] + dom_fallback_selectors
+
+                            for selector in dom_fallback_selectors:
+                                for _ in range(5):
+                                    used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, selector, str(staged_file_path))
+                                    if used_dom_fallback:
+                                        mode = "cdp_dom_set_file_input_files"
+                                        break
+                                    try:
+                                        await page.wait_for_timeout(250)
+                                    except Exception:
+                                        pass
+                                if used_dom_fallback:
+                                    break
+
+                    if not mode and platform == "tiktok":
+                        # TikTok can accept the file even when a follow-up set_input_files probe times out.
+                        # If upload UI already reflects a staged/uploaded video, treat this as success.
                         try:
-                            await _prime_upload_surface()
-                            await page.wait_for_timeout(300)
+                            tiktok_upload_state = await asyncio.wait_for(
+                                page.evaluate(
+                                    """
+    () => {
+      const text = (node) => String(node?.textContent || '').toLowerCase();
+      const hasReplace = !![...document.querySelectorAll('button, [role="button"]')]
+        .find((el) => text(el).includes('replace'));
+      const hasUploadedLabel = !![...document.querySelectorAll('div, span, p')]
+        .find((el) => {
+          const t = text(el);
+          return t.includes('uploaded') || t.includes('upload complete') || t.includes('processing');
+        });
+      const hasProgressBar = !!document.querySelector('div.info-status.success, [class*="progress" i], [class*="upload" i]');
+      const hasVideoPreview = !!document.querySelector('video, img[alt*="cover" i], canvas');
+      return {
+        ready: Boolean(hasReplace || hasUploadedLabel || (hasProgressBar && hasVideoPreview)),
+        hasReplace,
+        hasUploadedLabel,
+        hasProgressBar,
+        hasVideoPreview,
+      };
+    }
+                                    """
+                                ),
+                                timeout=3.0,
+                            )
+                        except Exception:
+                            tiktok_upload_state = None
+
+                        if isinstance(tiktok_upload_state, dict) and bool(tiktok_upload_state.get("ready")):
+                            mode = "tiktok_upload_already_present"
+                            await self._emit(
+                                "state",
+                                {
+                                    "state": "upload_selected",
+                                    "platform": platform,
+                                    "filePath": str(source_file_path),
+                                    "mode": mode,
+                                    "detected": tiktok_upload_state,
+                                },
+                            )
+                            return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2), "detected": tiktok_upload_state}}
+
+                    if not mode:
+                        # CDP file-input access is brittle across upload UIs; always try extension debugger fallback.
+                        extension_err = ""
+                        try:
+                            ack = await self._send_extension_cmd("upload.select_file", staged_payload)
+                            ack_payload = _ack_from_extension(ack)
+                            if bool(ack_payload.get("ok")):
+                                mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
+                                await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": str(source_file_path), "mode": mode})
+                                return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+                            extension_err = str(ack_payload.get("error") or "")
+                        except Exception as exc:
+                            extension_err = str(exc)
+
+                        reason_parts = [last_err or "file input not found"]
+                        if extension_err:
+                            reason_parts.append(f"extension fallback failed: {extension_err}")
+                        reason = "; ".join(part for part in reason_parts if part)
+                        raise RuntimeError(
+                            "Automatic upload over remote CDP failed to set the file input"
+                            f" (sizeMb={round(file_size_mb, 2)}): {reason}"
+                        )
+
+                    await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": str(source_file_path), "mode": mode})
+                    return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
+
+                finally:
+                    if cleanup_staged_file:
+                        try:
+                            staged_file_path.unlink(missing_ok=True)
                         except Exception:
                             pass
 
-                if not mode:
-                    used_dom_fallback = False
-                    if self.cdp is not None:
-                        dom_fallback_selectors = [
-                            "ytcp-uploads-dialog input[type='file']",
-                            "input[type='file'][accept*='video']",
-                            "input[type='file'][accept*='mp4' i]",
-                            "input[type='file']",
-                        ]
-                        if platform == "facebook":
-                            dom_fallback_selectors = [
-                                "input[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]",
-                                "input.x1s85apg[type='file'][accept='image/*,image/heif,image/heic,video/*,video/mp4,video/x-m4v,video/x-matroska,.mkv'][multiple]",
-                                "input[type='file'][accept*='video/x-matroska'][accept*='video/mp4'][accept*='image/heic'][multiple]",
-                                "input[type='file']:has(+ div[aria-label='Photo/video'])",
-                            ] + dom_fallback_selectors
-
-                        for selector in dom_fallback_selectors:
-                            for _ in range(5):
-                                used_dom_fallback = await self.cdp.set_file_input_files_via_dom(page, selector, file_path)
-                                if used_dom_fallback:
-                                    mode = "cdp_dom_set_file_input_files"
-                                    break
-                                try:
-                                    await page.wait_for_timeout(250)
-                                except Exception:
-                                    pass
-                            if used_dom_fallback:
-                                break
-
-                if not mode and platform == "tiktok":
-                    # TikTok can accept the file even when a follow-up set_input_files probe times out.
-                    # If upload UI already reflects a staged/uploaded video, treat this as success.
-                    try:
-                        tiktok_upload_state = await asyncio.wait_for(
-                            page.evaluate(
-                                """
-() => {
-  const text = (node) => String(node?.textContent || '').toLowerCase();
-  const hasReplace = !![...document.querySelectorAll('button, [role="button"]')]
-    .find((el) => text(el).includes('replace'));
-  const hasUploadedLabel = !![...document.querySelectorAll('div, span, p')]
-    .find((el) => {
-      const t = text(el);
-      return t.includes('uploaded') || t.includes('upload complete') || t.includes('processing');
-    });
-  const hasProgressBar = !!document.querySelector('div.info-status.success, [class*="progress" i], [class*="upload" i]');
-  const hasVideoPreview = !!document.querySelector('video, img[alt*="cover" i], canvas');
-  return {
-    ready: Boolean(hasReplace || hasUploadedLabel || (hasProgressBar && hasVideoPreview)),
-    hasReplace,
-    hasUploadedLabel,
-    hasProgressBar,
-    hasVideoPreview,
-  };
-}
-                                """
-                            ),
-                            timeout=3.0,
-                        )
-                    except Exception:
-                        tiktok_upload_state = None
-
-                    if isinstance(tiktok_upload_state, dict) and bool(tiktok_upload_state.get("ready")):
-                        mode = "tiktok_upload_already_present"
-                        await self._emit(
-                            "state",
-                            {
-                                "state": "upload_selected",
-                                "platform": platform,
-                                "filePath": file_path,
-                                "mode": mode,
-                                "detected": tiktok_upload_state,
-                            },
-                        )
-                        return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2), "detected": tiktok_upload_state}}
-
-                if not mode:
-                    # CDP file-input access is brittle across upload UIs; always try extension debugger fallback.
-                    extension_err = ""
-                    try:
-                        ack = await self._send_extension_cmd("upload.select_file", payload)
-                        ack_payload = _ack_from_extension(ack)
-                        if bool(ack_payload.get("ok")):
-                            mode = str((ack_payload.get("payload") or {}).get("mode") or "extension_debugger_set_file_input_files")
-                            await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
-                            return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
-                        extension_err = str(ack_payload.get("error") or "")
-                    except Exception as exc:
-                        extension_err = str(exc)
-
-                    reason_parts = [last_err or "file input not found"]
-                    if extension_err:
-                        reason_parts.append(f"extension fallback failed: {extension_err}")
-                    reason = "; ".join(part for part in reason_parts if part)
-                    raise RuntimeError(
-                        "Automatic upload over remote CDP failed to set the file input"
-                        f" (sizeMb={round(file_size_mb, 2)}): {reason}"
-                    )
-
-                await self._emit("state", {"state": "upload_selected", "platform": platform, "filePath": file_path, "mode": mode})
-                return {"ok": True, "payload": {"mode": mode, "fileSizeMb": round(file_size_mb, 2)}}
 
             if name == "platform.ensure_logged_in":
                 platform = str(payload.get("platform") or "")
