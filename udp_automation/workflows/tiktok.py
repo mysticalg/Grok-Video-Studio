@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import errno
 import re
+import shutil
+import tempfile
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from udp_automation.executors import BaseExecutor
@@ -119,6 +123,40 @@ def _overlay_text(opts: dict[str, Any], caption: str) -> str:
     return " ".join(without_tags.split()).strip()
 
 
+def _sanitize_filename(name: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", str(name or ""))
+    collapsed = " ".join(cleaned.split()).strip().strip(".")
+    return collapsed or "tiktok_upload"
+
+
+def _stage_upload_file(video_path: str, caption: str, *, max_caption_chars: int = 3000) -> tuple[str, str | None]:
+    source = Path(video_path)
+    extension = source.suffix or ".mp4"
+    desired = _sanitize_filename(str(caption or "").strip()[:max_caption_chars])
+    temp_dir = tempfile.mkdtemp(prefix="tiktok_upload_")
+
+    filename_attempts: list[str] = [f"{desired}{extension}"]
+    if desired != "tiktok_upload":
+        filename_attempts.append(f"{desired[:180].rstrip()}_{abs(hash(desired)) % (10**8):08d}{extension}")
+    filename_attempts.append(f"tiktok_upload_{int(time.time())}{extension}")
+
+    last_error: Exception | None = None
+    for candidate in filename_attempts:
+        target = Path(temp_dir) / candidate
+        try:
+            shutil.copy2(source, target)
+            return str(target), temp_dir
+        except OSError as exc:
+            last_error = exc
+            if exc.errno != errno.ENAMETOOLONG:
+                break
+
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    if last_error:
+        raise RuntimeError(f"TikTok staged upload copy failed: {last_error}") from last_error
+    raise RuntimeError("TikTok staged upload copy failed")
+
+
 def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
     opts = options or {}
     log_fn = opts.get("_log_callback") if callable(opts.get("_log_callback")) else None
@@ -140,99 +178,104 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
     _log(log_fn, "platform.ensure_logged_in: ok")
     _pause(action_delay_s, step="startup_wait_after_login_check", log_fn=log_fn)
 
-    upload_result = executor.run("upload.select_file", {"platform": "tiktok", "filePath": video_path})
-    upload_payload = upload_result.get("payload") or {}
-    _log(log_fn, f"upload.select_file: payload={upload_payload}")
-    if upload_payload.get("requiresUserAction"):
-        reason = upload_payload.get("reason") or "manual_file_selection_required"
-        detail = upload_payload.get("message") or "automatic file input was not found"
-        raise RuntimeError(f"TikTok upload needs manual file selection ({reason}): {detail}")
-    _pause(action_delay_s, step="wait_after_upload_select", log_fn=log_fn)
+    staged_video_path = video_path
+    staged_temp_dir: str | None = None
+    if str(caption or "").strip():
+        staged_video_path, staged_temp_dir = _stage_upload_file(video_path, caption, max_caption_chars=3000)
+        _log(log_fn, f"upload.staged_file: source={video_path} staged={staged_video_path}")
 
-    _log(log_fn, "form.fill(description): start")
-    executor.run("form.fill", {"platform": "tiktok", "fields": {"description": caption}})
-    _log(log_fn, "form.fill(description): ok")
-    _pause(action_delay_s, step="wait_after_description_fill", log_fn=log_fn)
+    try:
+        upload_result = executor.run("upload.select_file", {"platform": "tiktok", "filePath": staged_video_path})
+        upload_payload = upload_result.get("payload") or {}
+        _log(log_fn, f"upload.select_file: payload={upload_payload}")
+        if upload_payload.get("requiresUserAction"):
+            reason = upload_payload.get("reason") or "manual_file_selection_required"
+            detail = upload_payload.get("message") or "automatic file input was not found"
+            raise RuntimeError(f"TikTok upload needs manual file selection ({reason}): {detail}")
+        _pause(action_delay_s, step="wait_after_upload_select", log_fn=log_fn)
 
-    if add_text or add_music:
-        _must_click(
-            executor,
-            "button[data-button-name='edit'], button.editor-entrance",
-            timeout_ms=120000,
-            step="open_editor",
-            log_fn=log_fn,
-            delay_s=action_delay_s,
+        if add_text or add_music:
+            _must_click(
+                executor,
+                "button[data-button-name='edit'], button.editor-entrance",
+                timeout_ms=120000,
+                step="open_editor",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
+
+        if add_text and text_overlay:
+            _must_click(executor, "div[data-name='AddTextPresetPanel']", timeout_ms=60000, step="open_text_tab", log_fn=log_fn, delay_s=action_delay_s)
+            _must_click(
+                executor,
+                "button.AddTextPanel__addTextBasicButton",
+                timeout_ms=60000,
+                step="add_text_once",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+                single_click=True,
+            )
+            _must_type_any(
+                executor,
+                ["textarea[name='content']:focus", "textarea[name='content']"],
+                text_overlay,
+                step="set_overlay_text",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
+
+        if add_music and music_query:
+            _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=60000, step="open_music_tab", log_fn=log_fn, delay_s=action_delay_s)
+            _must_type(
+                executor,
+                "input[placeholder='Search sounds']",
+                music_query,
+                step="music_search_text",
+                log_fn=log_fn,
+                submit=True,
+                delay_s=action_delay_s,
+            )
+            _must_click(
+                executor,
+                "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
+                timeout_ms=60000,
+                step="music_add_first_track",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
+
+        if add_text or (add_music and music_query):
+            _must_click(
+                executor,
+                "button.button.Button__root--type-primary .Button__content, button.button.Button__root--type-primary, button.Button__root--type-primary",
+                timeout_ms=60000,
+                step="editor_save",
+                log_fn=log_fn,
+                text_contains="save",
+                delay_s=action_delay_s,
+            )
+
+        _log(log_fn, f"post.submit: start mode={publish_mode}")
+        submit_result = executor.run(
+            "post.submit",
+            {
+                "platform": "tiktok",
+                "mode": publish_mode,
+                "waitForUpload": True,
+                "timeoutMs": 120000,
+                "singleClick": True,
+            },
         )
+        submit_payload = submit_result.get("payload") or {}
+        if submit_payload and submit_payload.get("clicked") is False:
+            reason = submit_payload.get("reason") or "unknown"
+            raise RuntimeError(f"TikTok {publish_mode} submit failed (reason={reason})")
+        _log(log_fn, f"post.submit: ok payload={submit_payload}")
+        _pause(action_delay_s, step="wait_after_submit", log_fn=log_fn)
 
-    if add_text and text_overlay:
-        _must_click(executor, "div[data-name='AddTextPresetPanel']", timeout_ms=60000, step="open_text_tab", log_fn=log_fn, delay_s=action_delay_s)
-        _must_click(
-            executor,
-            "button.AddTextPanel__addTextBasicButton",
-            timeout_ms=60000,
-            step="add_text_once",
-            log_fn=log_fn,
-            delay_s=action_delay_s,
-            single_click=True,
-        )
-        _must_type_any(
-            executor,
-            ["textarea[name='content']:focus", "textarea[name='content']"],
-            text_overlay,
-            step="set_overlay_text",
-            log_fn=log_fn,
-            delay_s=action_delay_s,
-        )
-
-    if add_music and music_query:
-        _must_click(executor, "div[data-name='MusicPanel']", timeout_ms=60000, step="open_music_tab", log_fn=log_fn, delay_s=action_delay_s)
-        _must_type(
-            executor,
-            "input[placeholder='Search sounds']",
-            music_query,
-            step="music_search_text",
-            log_fn=log_fn,
-            submit=True,
-            delay_s=action_delay_s,
-        )
-        _must_click(
-            executor,
-            "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
-            timeout_ms=60000,
-            step="music_add_first_track",
-            log_fn=log_fn,
-            delay_s=action_delay_s,
-        )
-
-    if add_text or (add_music and music_query):
-        _must_click(
-            executor,
-            "button.button.Button__root--type-primary .Button__content, button.button.Button__root--type-primary, button.Button__root--type-primary",
-            timeout_ms=60000,
-            step="editor_save",
-            log_fn=log_fn,
-            text_contains="save",
-            delay_s=action_delay_s,
-        )
-
-    _log(log_fn, f"post.submit: start mode={publish_mode}")
-    submit_result = executor.run(
-        "post.submit",
-        {
-            "platform": "tiktok",
-            "mode": publish_mode,
-            "waitForUpload": True,
-            "timeoutMs": 120000,
-            "singleClick": True,
-        },
-    )
-    submit_payload = submit_result.get("payload") or {}
-    if submit_payload and submit_payload.get("clicked") is False:
-        reason = submit_payload.get("reason") or "unknown"
-        raise RuntimeError(f"TikTok {publish_mode} submit failed (reason={reason})")
-    _log(log_fn, f"post.submit: ok payload={submit_payload}")
-    _pause(action_delay_s, step="wait_after_submit", log_fn=log_fn)
-
-    status = executor.run("post.status", {"platform": "tiktok"})
-    _log(log_fn, f"post.status: {status.get('payload') or status}")
-    return status
+        status = executor.run("post.status", {"platform": "tiktok"})
+        _log(log_fn, f"post.status: {status.get('payload') or status}")
+        return status
+    finally:
+        if staged_temp_dir:
+            shutil.rmtree(staged_temp_dir, ignore_errors=True)
