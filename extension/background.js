@@ -324,11 +324,11 @@ async function handleCmd(msg) {
           const text = String(value || "");
           const root = el.closest(".DraftEditor-root") || el;
           const editable = root.querySelector(".public-DraftEditor-content[contenteditable='true']") || el;
-          const block = editable.querySelector("div.public-DraftStyleDefault-block[data-offset-key]")
-            || editable.querySelector("div[data-offset-key].public-DraftStyleDefault-block")
+          const block = editable.querySelector("div.public-DraftStyleDefault-ltr[data-offset-key]")
+            || editable.querySelector("div[data-offset-key].public-DraftStyleDefault-ltr")
             || editable.querySelector("div[data-offset-key]")
-            || editable.querySelector("div.public-DraftStyleDefault-block")
-            || editable.querySelector("[data-block='true'] .public-DraftStyleDefault-block")
+            || editable.querySelector("div.public-DraftStyleDefault-ltr")
+            || editable.querySelector("[data-block='true'] .public-DraftStyleDefault-ltr")
             || editable.querySelector("[data-block='true']");
           const textSpan = block
             ? (block.querySelector("span[data-offset-key]") || block.querySelector("span[data-text='true']"))
@@ -760,7 +760,7 @@ async function handleCmd(msg) {
 
           const text = String(value || "");
           if (currentPlatform === "tiktok" && canonicalKey === "description") {
-            const tiktokDraftBlock = document.querySelector("div.public-DraftStyleDefault-block[data-offset-key], div[data-offset-key].public-DraftStyleDefault-block");
+            const tiktokDraftBlock = document.querySelector("div.public-DraftStyleDefault-ltr[data-offset-key], div[data-offset-key].public-DraftStyleDefault-ltr");
             const tiktokDraftEditable = tiktokDraftBlock?.closest("div.public-DraftEditor-content[contenteditable='true']")
               || tiktokDraftBlock?.closest("[contenteditable='true']");
             const tiktokSelectors = [
