@@ -224,7 +224,7 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "x_compose_click_timeout_ms": 8000,
     "x_description_fill_attempts": 3,
     "x_description_fill_retry_delay_ms": 500,
-    "tiktok_action_delay_ms": 1000,
+    "tiktok_action_delay_ms": 870,
     "tiktok_click_timeout_ms": 60000,
     "tiktok_editor_timeout_ms": 120000,
     "tiktok_submit_timeout_ms": 120000,
@@ -6942,6 +6942,8 @@ class MainWindow(QMainWindow):
                     self._append_automation_log(f"WARNING: Failed to stop previous workflow cleanly: {exc}")
 
             action_delay_ms = self._automation_timing("automation_action_delay_ms")
+            if str(platform_name).strip().lower() == "tiktok":
+                action_delay_ms = self._automation_timing("tiktok_action_delay_ms")
             worker = UdpWorkflowWorker(
                 platform_name=platform_name,
                 video_path=video_path,
