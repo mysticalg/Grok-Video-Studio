@@ -3028,6 +3028,7 @@ class MainWindow(QMainWindow):
             "publish_mode": "draft",
             "add_text_overlay": False,
             "add_music": False,
+            "music_add_count": 2,
             "music_query": "",
             "text_overlay": "",
             "track_name_candidates_text": "",
@@ -6295,6 +6296,7 @@ class MainWindow(QMainWindow):
                 "publish_mode": publish_mode,
                 "add_text_overlay": bool(loaded_tiktok_options.get("add_text_overlay")),
                 "add_music": bool(loaded_tiktok_options.get("add_music")),
+                "music_add_count": min(10, max(1, int(loaded_tiktok_options.get("music_add_count") or 2))),
                 "music_query": str(loaded_tiktok_options.get("music_query") or "").strip(),
                 "text_overlay": str(loaded_tiktok_options.get("text_overlay") or "").strip(),
                 "track_name_candidates_text": str(loaded_tiktok_options.get("track_name_candidates_text") or "").strip(),
@@ -18482,11 +18484,13 @@ class MainWindow(QMainWindow):
         tiktok_add_text_input = None
         tiktok_add_music_input = None
         tiktok_music_query_input = None
+        tiktok_music_add_count_input = None
         if platform_name == "TikTok":
             tiktok_options = dict(self.tiktok_upload_automation_options)
             saved_publish_mode = str(tiktok_options.get("publish_mode") or "draft").strip().lower()
             if saved_publish_mode not in {"draft", "post"}:
                 saved_publish_mode = "draft"
+            saved_music_add_count = min(10, max(1, int(tiktok_options.get("music_add_count") or 2)))
 
             dialog_layout.addWidget(QLabel("TikTok Automation: Publish Mode"))
             tiktok_publish_mode_input = QComboBox()
@@ -18504,6 +18508,13 @@ class MainWindow(QMainWindow):
             tiktok_add_music_input.setChecked(bool(tiktok_options.get("add_music")))
             dialog_layout.addWidget(tiktok_add_music_input)
 
+            dialog_layout.addWidget(QLabel("How many times to add the selected sound"))
+            tiktok_music_add_count_input = QSpinBox()
+            tiktok_music_add_count_input.setRange(1, 10)
+            tiktok_music_add_count_input.setValue(saved_music_add_count)
+            tiktok_music_add_count_input.setToolTip("Repeatedly clicks Add sound in the editor (1-10).")
+            dialog_layout.addWidget(tiktok_music_add_count_input)
+
             dialog_layout.addWidget(QLabel("Preferred music artist/term"))
             tiktok_music_query_input = QLineEdit(str(tiktok_options.get("music_query") or "").strip())
             tiktok_music_query_input.setPlaceholderText("Search sounds")
@@ -18520,6 +18531,7 @@ class MainWindow(QMainWindow):
                 "publish_mode": str(tiktok_publish_mode_input.currentData() or "draft"),
                 "add_text_overlay": bool(tiktok_add_text_input.isChecked()) if tiktok_add_text_input is not None else False,
                 "add_music": bool(tiktok_add_music_input.isChecked()) if tiktok_add_music_input is not None else False,
+                "music_add_count": min(10, max(1, int(tiktok_music_add_count_input.value()))) if tiktok_music_add_count_input is not None else 2,
                 "music_query": tiktok_music_query_input.text().strip() if tiktok_music_query_input is not None else "",
                 "text_overlay": str(self.tiktok_upload_automation_options.get("text_overlay") or "").strip(),
                 "track_name_candidates_text": str(self.tiktok_upload_automation_options.get("track_name_candidates_text") or "").strip(),

@@ -127,12 +127,13 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
         publish_mode = "draft"
     add_text = bool(opts.get("add_text_overlay"))
     add_music = bool(opts.get("add_music"))
+    music_add_count = max(1, min(10, int(opts.get("music_add_count") or 2)))
     music_query = str(opts.get("music_query_effective") or opts.get("music_query") or "").strip()
     text_overlay = _overlay_text(opts, caption)
     action_delay_s = float(opts.get("action_delay_s") or 2.0)
     startup_delay_s = float(opts.get("startup_delay_s") or action_delay_s)
 
-    _log(log_fn, f"start: mode={publish_mode} add_text={add_text} add_music={add_music} music_query_set={bool(music_query)} text_overlay_len={len(text_overlay)}")
+    _log(log_fn, f"start: mode={publish_mode} add_text={add_text} add_music={add_music} music_add_count={music_add_count} music_query_set={bool(music_query)} text_overlay_len={len(text_overlay)}")
     executor.run("platform.open", {"platform": "tiktok", "reuseTab": True})
     _log(log_fn, "platform.open: ok")
     _pause(startup_delay_s, step="startup_wait_after_open", log_fn=log_fn)
@@ -195,14 +196,15 @@ def run(executor: BaseExecutor, video_path: str, caption: str, options: dict[str
             submit=True,
             delay_s=action_delay_s,
         )
-        _must_click(
-            executor,
-            "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
-            timeout_ms=60000,
-            step="music_add_first_track",
-            log_fn=log_fn,
-            delay_s=action_delay_s,
-        )
+        for add_index in range(music_add_count):
+            _must_click(
+                executor,
+                "div.MusicPanelMusicItem__operation button[role='button'], div.MusicPanelMusicItem__operation button",
+                timeout_ms=60000,
+                step=f"music_add_track_{add_index + 1}",
+                log_fn=log_fn,
+                delay_s=action_delay_s,
+            )
 
     if add_text or (add_music and music_query):
         _must_click(
