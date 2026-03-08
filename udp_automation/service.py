@@ -31,6 +31,8 @@ REMOTE_CDP_DIRECT_UPLOAD_LIMIT_MB = 50.0
 EXTENSION_CMD_TIMEOUTS = {
     "form.fill": 90.0,
     "post.submit": 150.0,
+    "dom.click": 45.0,
+    "dom.type": 45.0,
 }
 
 
@@ -1249,6 +1251,16 @@ class UdpAutomationService:
             raise RuntimeError("No extension client connected")
 
         timeout_s = float(EXTENSION_CMD_TIMEOUTS.get(name, 15.0))
+        try:
+            requested_timeout_ms = int(payload.get("timeoutMs") or 0)
+        except Exception:
+            requested_timeout_ms = 0
+        if requested_timeout_ms > 0:
+            # The extension can intentionally poll/retry in-tab until timeoutMs. Keep
+            # control-bus ack timeout above that window so long-running commands do not
+            # fail early with a transport timeout.
+            timeout_s = max(timeout_s, min(600.0, (requested_timeout_ms / 1000.0) + 10.0))
+
         last_error: Exception | None = None
         for client_id in clients:
             try:
