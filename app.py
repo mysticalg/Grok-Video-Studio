@@ -19761,80 +19761,116 @@ class MainWindow(QMainWindow):
             saved_music_volume_db = min(20, max(-59, int(tiktok_options.get("music_volume_db") if tiktok_options.get("music_volume_db") is not None else 0)))
             saved_upload_filename_char_limit = min(3000, max(16, int(tiktok_options.get("upload_filename_char_limit") or 167)))
 
-            dialog_layout.addWidget(QLabel("TikTok Automation: Publish Mode"))
+            # Keep TikTok automation controls compact by rendering settings in a
+            # two-column form grid (label + input pairs) instead of a long stack.
+            tiktok_options_grid = QGridLayout()
+            tiktok_options_grid.setHorizontalSpacing(14)
+            tiktok_options_grid.setVerticalSpacing(8)
+            tiktok_option_row = 0
+
+            def add_tiktok_field(left_label: str, left_widget, right_label: str | None = None, right_widget=None):
+                """Add one row of TikTok controls, optionally with a second column pair."""
+                nonlocal tiktok_option_row
+                left_label_widget = QLabel(left_label)
+                tiktok_options_grid.addWidget(left_label_widget, tiktok_option_row, 0)
+                tiktok_options_grid.addWidget(left_widget, tiktok_option_row, 1)
+                if right_label is not None and right_widget is not None:
+                    right_label_widget = QLabel(right_label)
+                    tiktok_options_grid.addWidget(right_label_widget, tiktok_option_row, 2)
+                    tiktok_options_grid.addWidget(right_widget, tiktok_option_row, 3)
+                tiktok_option_row += 1
+
+            def add_tiktok_full_row(widget):
+                """Add widgets (like checkboxes) that should span the full width."""
+                nonlocal tiktok_option_row
+                tiktok_options_grid.addWidget(widget, tiktok_option_row, 0, 1, 4)
+                tiktok_option_row += 1
+
             tiktok_publish_mode_input = QComboBox()
             tiktok_publish_mode_input.addItem("Draft", "draft")
             tiktok_publish_mode_input.addItem("Post", "post")
             tiktok_publish_mode_index = tiktok_publish_mode_input.findData(saved_publish_mode)
             tiktok_publish_mode_input.setCurrentIndex(tiktok_publish_mode_index if tiktok_publish_mode_index >= 0 else 0)
-            dialog_layout.addWidget(tiktok_publish_mode_input)
 
             tiktok_add_text_input = QCheckBox("Open editor and add text overlay from caption")
             tiktok_add_text_input.setChecked(bool(tiktok_options.get("add_text_overlay")))
-            dialog_layout.addWidget(tiktok_add_text_input)
 
             tiktok_add_music_input = QCheckBox("Open editor and add music")
             tiktok_add_music_input.setChecked(bool(tiktok_options.get("add_music")))
-            dialog_layout.addWidget(tiktok_add_music_input)
 
-            dialog_layout.addWidget(QLabel("How many times to add the selected sound"))
             tiktok_music_add_count_input = QSpinBox()
             tiktok_music_add_count_input.setRange(1, 100)
             tiktok_music_add_count_input.setValue(saved_music_add_count)
             tiktok_music_add_count_input.setToolTip("Repeatedly clicks Add sound in the editor (1-100).")
-            dialog_layout.addWidget(tiktok_music_add_count_input)
 
             tiktok_music_unique_per_add_input = QCheckBox("Use different sound search for each add (uses track list)")
             tiktok_music_unique_per_add_input.setChecked(bool(tiktok_options.get("music_unique_per_add")))
             tiktok_music_unique_per_add_input.setToolTip("When enabled, each add uses the next track from your TikTok track list as 'artist track'.")
-            dialog_layout.addWidget(tiktok_music_unique_per_add_input)
 
-            dialog_layout.addWidget(QLabel("Preferred music artist/term"))
             tiktok_music_query_input = QLineEdit(str(tiktok_options.get("music_query") or "").strip())
             tiktok_music_query_input.setPlaceholderText("Search sounds")
-            dialog_layout.addWidget(tiktok_music_query_input)
 
             tiktok_music_fade_in_enabled_input = QCheckBox("Enable music fade in")
             tiktok_music_fade_in_enabled_input.setChecked(bool(tiktok_options.get("music_fade_in_enabled")))
-            dialog_layout.addWidget(tiktok_music_fade_in_enabled_input)
 
-            dialog_layout.addWidget(QLabel("Music fade in (seconds, 0-10)"))
             tiktok_music_fade_in_seconds_input = QDoubleSpinBox()
             tiktok_music_fade_in_seconds_input.setRange(0.0, 10.0)
             tiktok_music_fade_in_seconds_input.setDecimals(1)
             tiktok_music_fade_in_seconds_input.setSingleStep(0.1)
             tiktok_music_fade_in_seconds_input.setValue(saved_music_fade_in_seconds)
-            dialog_layout.addWidget(tiktok_music_fade_in_seconds_input)
 
             tiktok_music_fade_out_enabled_input = QCheckBox("Enable music fade out")
             tiktok_music_fade_out_enabled_input.setChecked(bool(tiktok_options.get("music_fade_out_enabled")))
-            dialog_layout.addWidget(tiktok_music_fade_out_enabled_input)
 
-            dialog_layout.addWidget(QLabel("Music fade out (seconds, 0-10)"))
             tiktok_music_fade_out_seconds_input = QDoubleSpinBox()
             tiktok_music_fade_out_seconds_input.setRange(0.0, 10.0)
             tiktok_music_fade_out_seconds_input.setDecimals(1)
             tiktok_music_fade_out_seconds_input.setSingleStep(0.1)
             tiktok_music_fade_out_seconds_input.setValue(saved_music_fade_out_seconds)
-            dialog_layout.addWidget(tiktok_music_fade_out_seconds_input)
 
-            dialog_layout.addWidget(QLabel("Music volume (dB, -59 to 20)"))
             tiktok_music_volume_db_input = QSpinBox()
             tiktok_music_volume_db_input.setRange(-59, 20)
             tiktok_music_volume_db_input.setValue(saved_music_volume_db)
-            dialog_layout.addWidget(tiktok_music_volume_db_input)
 
             tiktok_rename_upload_filename_input = QCheckBox("Rename uploaded file from caption (disable for very large files)")
             tiktok_rename_upload_filename_input.setChecked(bool(tiktok_options.get("rename_upload_filename", True)))
             tiktok_rename_upload_filename_input.setToolTip("When disabled, TikTok uses the original source filename instead of caption-based rename.")
-            dialog_layout.addWidget(tiktok_rename_upload_filename_input)
 
-            dialog_layout.addWidget(QLabel("Upload filename character limit"))
             tiktok_upload_filename_char_limit_input = QSpinBox()
             tiktok_upload_filename_char_limit_input.setRange(16, 3000)
             tiktok_upload_filename_char_limit_input.setValue(saved_upload_filename_char_limit)
             tiktok_upload_filename_char_limit_input.setToolTip("Maximum characters for TikTok staged upload filenames.")
-            dialog_layout.addWidget(tiktok_upload_filename_char_limit_input)
+
+            add_tiktok_field(
+                "TikTok Automation: Publish Mode",
+                tiktok_publish_mode_input,
+                "How many times to add the selected sound",
+                tiktok_music_add_count_input,
+            )
+            add_tiktok_field(
+                "Preferred music artist/term",
+                tiktok_music_query_input,
+                "Music volume (dB, -59 to 20)",
+                tiktok_music_volume_db_input,
+            )
+            add_tiktok_field(
+                "Music fade in (seconds, 0-10)",
+                tiktok_music_fade_in_seconds_input,
+                "Music fade out (seconds, 0-10)",
+                tiktok_music_fade_out_seconds_input,
+            )
+            add_tiktok_field("Upload filename character limit", tiktok_upload_filename_char_limit_input)
+
+            add_tiktok_full_row(tiktok_add_text_input)
+            add_tiktok_full_row(tiktok_add_music_input)
+            add_tiktok_full_row(tiktok_music_unique_per_add_input)
+            add_tiktok_full_row(tiktok_music_fade_in_enabled_input)
+            add_tiktok_full_row(tiktok_music_fade_out_enabled_input)
+            add_tiktok_full_row(tiktok_rename_upload_filename_input)
+
+            tiktok_options_grid.setColumnStretch(1, 1)
+            tiktok_options_grid.setColumnStretch(3, 1)
+            dialog_layout.addLayout(tiktok_options_grid)
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(dialog.accept)
