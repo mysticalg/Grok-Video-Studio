@@ -13094,8 +13094,16 @@ class MainWindow(QMainWindow):
             (() => {{
                 const allowMakeVideoClick = {allow_make_video_click};
                 const continueFlowActive = {'true' if (self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None) else 'false'};
+                // Persist the progress gate state across navigation hops (homepage -> post and refreshes).
+                // Without this, continue-last-video can get stuck waiting for progress even after render
+                // progress was already observed earlier in the same variant.
+                const continueProgressSeenBeforePoll = {'true' if bool(getattr(self, 'manual_continue_progress_seen', False)) else 'false'};
                 window.__grokContinueFlowActive = continueFlowActive;
-                if (!continueFlowActive) window.__grokContinueProgressSeen = false;
+                if (!continueFlowActive) {{
+                    window.__grokContinueProgressSeen = false;
+                }} else if (continueProgressSeenBeforePoll) {{
+                    window.__grokContinueProgressSeen = true;
+                }}
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const isInsideInvisibleDiv = (el) => !!el?.closest?.("div.invisible");
                 const common = {{ bubbles: true, cancelable: true, composed: true }};
