@@ -764,9 +764,24 @@ async function handleCmd(msg) {
               "div[contenteditable='true']",
             ];
             const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
-            const pasteOk = setValue(tiktokEl, text);
-            const matches = getEditableText(tiktokEl).includes(text.trim());
-            out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
+            const normalizeForCompare = (value) => String(value || "")
+              .replace(/\u200B/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            const expected = normalizeForCompare(text);
+            const tiktokTextMatches = () => {
+              const current = normalizeForCompare(getEditableText(tiktokEl));
+              if (!expected) return current.length === 0;
+              return current === expected || current.includes(expected) || expected.includes(current);
+            };
+
+            // Avoid paste/DOM mutation paths on TikTok because they can trigger bot heuristics.
+            const typed = await typeTextIntoEditable(tiktokEl, text);
+            if (!tiktokTextMatches()) {
+              await wait(120);
+              await typeTextIntoEditable(tiktokEl, text);
+            }
+            out[rawKey] = Boolean(typed) && tiktokTextMatches();
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
             const facebookEl = findFacebookReelDescriptionField() || el;
             const normalizeForCompare = (value) => String(value || "")
