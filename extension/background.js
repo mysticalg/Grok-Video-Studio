@@ -324,7 +324,10 @@ async function handleCmd(msg) {
           const text = String(value || "");
           const root = el.closest(".DraftEditor-root") || el;
           const editable = root.querySelector(".public-DraftEditor-content[contenteditable='true']") || el;
-          const block = editable.querySelector("div.public-DraftStyleDefault-block")
+          const block = editable.querySelector("div.public-DraftStyleDefault-block[data-offset-key]")
+            || editable.querySelector("div[data-offset-key].public-DraftStyleDefault-block")
+            || editable.querySelector("div[data-offset-key]")
+            || editable.querySelector("div.public-DraftStyleDefault-block")
             || editable.querySelector("[data-block='true'] .public-DraftStyleDefault-block")
             || editable.querySelector("[data-block='true']");
           const textSpan = block
@@ -757,14 +760,19 @@ async function handleCmd(msg) {
 
           const text = String(value || "");
           if (currentPlatform === "tiktok" && canonicalKey === "description") {
+            const tiktokDraftBlock = document.querySelector("div.public-DraftStyleDefault-block[data-offset-key], div[data-offset-key].public-DraftStyleDefault-block");
+            const tiktokDraftEditable = tiktokDraftBlock?.closest("div.public-DraftEditor-content[contenteditable='true']")
+              || tiktokDraftBlock?.closest("[contenteditable='true']");
             const tiktokSelectors = [
               ".DraftEditor-editorContainer [contenteditable='true'][role='combobox']",
               "div.public-DraftEditor-content[contenteditable='true'][role='combobox']",
               "div[contenteditable='true'][role='combobox']",
               "div[contenteditable='true']",
             ];
-            const tiktokEl = tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean) || el;
-            const pasteOk = setValue(tiktokEl, text);
+            const tiktokEl = tiktokDraftEditable
+              || tiktokSelectors.map((sel) => document.querySelector(sel)).find(Boolean)
+              || el;
+            const pasteOk = setDraftEditorValue(tiktokEl, text) || setValue(tiktokEl, text);
             const matches = getEditableText(tiktokEl).includes(text.trim());
             out[rawKey] = matches ? pasteOk : await typeTextIntoEditable(tiktokEl, text);
           } else if (currentPlatform === "facebook" && canonicalKey === "description") {
