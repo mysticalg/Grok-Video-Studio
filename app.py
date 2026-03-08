@@ -237,6 +237,13 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "facebook_step_delay_ms": 1000,
     "facebook_form_fill_attempts": 1,
     "facebook_click_timeout_ms": 10000,
+    "facebook_upload_start_timeout_ms": 25000,
+    "facebook_upload_start_poll_ms": 350,
+    "facebook_upload_ready_timeout_ms": 120000,
+    "facebook_upload_ready_poll_ms": 500,
+    "facebook_composer_wait_timeout_ms": 45000,
+    "facebook_composer_wait_poll_ms": 400,
+    "facebook_dom_type_timeout_ms": 8000,
 }
 
 AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
@@ -292,6 +299,13 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "facebook_step_delay_ms", "label": "Step delay", "min": 0, "max": 10000, "step": 50, "group": "Core", "tab": "Facebook"},
     {"key": "facebook_form_fill_attempts", "label": "Description fill attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "Facebook"},
     {"key": "facebook_click_timeout_ms", "label": "Default click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Facebook"},
+    {"key": "facebook_upload_start_timeout_ms", "label": "Upload start timeout", "min": 1000, "max": 240000, "step": 500, "group": "Upload Readiness", "tab": "Facebook"},
+    {"key": "facebook_upload_start_poll_ms", "label": "Upload start poll interval", "min": 100, "max": 10000, "step": 50, "group": "Upload Readiness", "tab": "Facebook"},
+    {"key": "facebook_upload_ready_timeout_ms", "label": "Upload ready timeout", "min": 1000, "max": 300000, "step": 500, "group": "Upload Readiness", "tab": "Facebook"},
+    {"key": "facebook_upload_ready_poll_ms", "label": "Upload ready poll interval", "min": 100, "max": 10000, "step": 50, "group": "Upload Readiness", "tab": "Facebook"},
+    {"key": "facebook_composer_wait_timeout_ms", "label": "Composer wait timeout", "min": 1000, "max": 180000, "step": 500, "group": "Composer", "tab": "Facebook"},
+    {"key": "facebook_composer_wait_poll_ms", "label": "Composer wait poll interval", "min": 100, "max": 10000, "step": 50, "group": "Composer", "tab": "Facebook"},
+    {"key": "facebook_dom_type_timeout_ms", "label": "DOM type timeout", "min": 1000, "max": 60000, "step": 500, "group": "Composer", "tab": "Facebook"},
 )
 
 _session_download_counter_lock = threading.Lock()
@@ -6884,6 +6898,13 @@ class MainWindow(QMainWindow):
                 "facebook_step_delay_ms",
                 "facebook_form_fill_attempts",
                 "facebook_click_timeout_ms",
+                "facebook_upload_start_timeout_ms",
+                "facebook_upload_start_poll_ms",
+                "facebook_upload_ready_timeout_ms",
+                "facebook_upload_ready_poll_ms",
+                "facebook_composer_wait_timeout_ms",
+                "facebook_composer_wait_poll_ms",
+                "facebook_dom_type_timeout_ms",
             ),
         }
         return {key: self._automation_timing(key) for key in keys_by_platform.get(platform, ())}

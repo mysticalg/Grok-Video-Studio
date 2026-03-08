@@ -113,7 +113,15 @@ def _wait_for_query_match(
     return False
 
 
-def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | None = None) -> None:
+def _wait_for_facebook_upload_ready(
+    executor: BaseExecutor,
+    *,
+    log_fn: LogFn | None = None,
+    upload_start_timeout_s: float = 25.0,
+    upload_start_poll_s: float = 0.35,
+    upload_ready_timeout_s: float = 120.0,
+    upload_ready_poll_s: float = 0.5,
+) -> None:
     composer_selector = (
         "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='mind' i], "
         "div[contenteditable='true'][role='textbox'][aria-placeholder*='mind' i], "
@@ -139,8 +147,8 @@ def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | N
         executor,
         "facebook",
         "div[role='dialog'] i[aria-label*='Uploading' i]",
-        timeout_s=25.0,
-        poll_s=0.35,
+        timeout_s=max(1.0, upload_start_timeout_s),
+        poll_s=max(0.1, upload_start_poll_s),
         log_fn=log_fn,
         label="facebook upload start icon",
     )
@@ -150,7 +158,7 @@ def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | N
         _emit_progress(log_fn, "facebook upload start: icon not detected; checking ready-state heuristics")
 
     # Phase 2: poll until uploading icon disappears and composer/next is available.
-    deadline = time.monotonic() + 120.0
+    deadline = time.monotonic() + max(1.0, upload_ready_timeout_s)
     poll_idx = 0
     while time.monotonic() < deadline:
         poll_idx += 1
@@ -192,11 +200,11 @@ def _wait_for_facebook_upload_ready(executor: BaseExecutor, *, log_fn: LogFn | N
             _emit_progress(log_fn, "facebook upload readiness: ready (upload icon gone + composer/next available)")
             return
 
-        time.sleep(0.5)
+        time.sleep(max(0.1, upload_ready_poll_s))
 
     _emit_progress(log_fn, "facebook upload readiness: timeout reached; proceeding to composer wait")
 
-def _attempt_fill_description(executor: BaseExecutor, description: str, *, log_fn: LogFn | None = None, form_fill_attempts: int = FACEBOOK_FORM_FILL_ATTEMPTS, click_timeout_ms: int = 10000, step_delay_seconds: float = FACEBOOK_STEP_DELAY_SECONDS) -> bool:
+def _attempt_fill_description(executor: BaseExecutor, description: str, *, log_fn: LogFn | None = None, form_fill_attempts: int = FACEBOOK_FORM_FILL_ATTEMPTS, click_timeout_ms: int = 10000, dom_type_timeout_ms: int = 8000, step_delay_seconds: float = FACEBOOK_STEP_DELAY_SECONDS) -> bool:
     selectors = [
         "div.xzsf02u[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='mind' i]",
         "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='mind' i]",
@@ -279,7 +287,7 @@ def _attempt_fill_description(executor: BaseExecutor, description: str, *, log_f
                         "platform": "facebook",
                         "selector": selector,
                         "value": value,
-                        "timeoutMs": 8000,
+                        "timeoutMs": max(1000, int(dom_type_timeout_ms)),
                     },
                 )
                 type_payload = type_response.get("payload") or {}
@@ -325,6 +333,13 @@ def run(
     )
     form_fill_attempts = max(1, int(opts.get("facebook_form_fill_attempts") or FACEBOOK_FORM_FILL_ATTEMPTS))
     click_timeout_ms = max(1000, int(opts.get("facebook_click_timeout_ms") or 10000))
+    upload_start_timeout_s = max(1.0, int(opts.get("facebook_upload_start_timeout_ms") or 25000) / 1000.0)
+    upload_start_poll_s = max(0.1, int(opts.get("facebook_upload_start_poll_ms") or 350) / 1000.0)
+    upload_ready_timeout_s = max(1.0, int(opts.get("facebook_upload_ready_timeout_ms") or 120000) / 1000.0)
+    upload_ready_poll_s = max(0.1, int(opts.get("facebook_upload_ready_poll_ms") or 500) / 1000.0)
+    composer_wait_timeout_s = max(1.0, int(opts.get("facebook_composer_wait_timeout_ms") or 45000) / 1000.0)
+    composer_wait_poll_s = max(0.1, int(opts.get("facebook_composer_wait_poll_ms") or 400) / 1000.0)
+    dom_type_timeout_ms = max(1000, int(opts.get("facebook_dom_type_timeout_ms") or 8000))
 
     _emit_progress(log_fn, f"facebook workflow start: platform_url={platform_url or '-'}")
     executor.run(
@@ -364,7 +379,14 @@ def run(
     _best_effort_click(executor, "facebook", "div[role='button'][aria-label*='What\'s on your mind' i]", timeout_ms=max(click_timeout_ms, 12000), log_fn=log_fn, step_name="facebook composer focus")
 
     _sleep_between_actions(executor, "facebook upload progress", log_fn=log_fn, step_delay_seconds=step_delay_seconds)
-    _wait_for_facebook_upload_ready(executor, log_fn=log_fn)
+    _wait_for_facebook_upload_ready(
+        executor,
+        log_fn=log_fn,
+        upload_start_timeout_s=upload_start_timeout_s,
+        upload_start_poll_s=upload_start_poll_s,
+        upload_ready_timeout_s=upload_ready_timeout_s,
+        upload_ready_poll_s=upload_ready_poll_s,
+    )
 
     # Wait until the dialog textbox is actually mounted (after upload has started/ready).
     composer_ready = _wait_for_query_match(
@@ -373,8 +395,8 @@ def run(
         "div.xzsf02u[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='mind' i], "
         "div[contenteditable='true'][role='textbox'][data-lexical-editor='true'][aria-placeholder*='mind' i], "
         "div[contenteditable='true'][role='textbox'][aria-placeholder*='mind' i]",
-        timeout_s=45.0,
-        poll_s=0.4,
+        timeout_s=composer_wait_timeout_s,
+        poll_s=composer_wait_poll_s,
         log_fn=log_fn,
         label="facebook composer wait",
     )
@@ -388,6 +410,7 @@ def run(
         log_fn=log_fn,
         form_fill_attempts=form_fill_attempts,
         click_timeout_ms=click_timeout_ms,
+        dom_type_timeout_ms=dom_type_timeout_ms,
         step_delay_seconds=step_delay_seconds,
     )
     if not description_ok:
