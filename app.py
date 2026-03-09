@@ -228,8 +228,8 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     # automatically retry by re-clicking Make video instead of aborting immediately.
     "moderation_retry_enabled": 1,
     "moderation_retry_attempts": 2,
-    # Optional fast-path: skip the post-Make-Video prompt stage and immediately
-    # proceed to polling after Make Video / Continue-last-video configuration.
+    # Optional fast-path: skip the post-Make-Video prompt stage for create-video
+    # flows and immediately proceed to polling.
     "skip_final_prompt_entry_enabled": 0,
     "sora_option_step_delay_ms": 2000,
     # Continue-last-video often needs slower pacing than standard Sora staged clicks.
@@ -303,7 +303,7 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "moderation_retry_enabled", "label": "Retry when moderation is detected", "group": "Moderation Recovery", "tab": "Grok Polling", "type": "bool", "help": "When enabled, Create Video and Continue Video will retry Make video after moderation is detected."},
     {"key": "moderation_retry_attempts", "label": "Moderation retry attempts", "min": 1, "max": 10, "step": 1, "group": "Moderation Recovery", "suffix": " attempts", "tab": "Grok Polling"},
-    {"key": "skip_final_prompt_entry_enabled", "label": "Skip final prompt entry before Make video", "group": "Continue Video", "tab": "Grok Polling", "type": "bool", "help": "Bypass the cancel/prompt-entry stage and proceed directly to Make Video polling for Create Video and Continue-last-video flows."},
+    {"key": "skip_final_prompt_entry_enabled", "label": "Skip final prompt entry before Make video", "group": "Continue Video", "tab": "Grok Polling", "type": "bool", "help": "Bypass the cancel/prompt-entry stage and proceed directly to Make Video polling for Create Video flows only (continue-last-video always keeps prompt entry)."},
     {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
     {"key": "continue_option_step_delay_ms", "label": "Continue-last-video option step delay", "min": 100, "max": 15000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
@@ -10413,6 +10413,7 @@ class MainWindow(QMainWindow):
                 const submitToken = {self.manual_image_submit_token};
                 const submitAttemptAllowed = {"true" if submit_attempt_allowed else "false"};
                 const manualSinglePickMode = {"true" if (self.manual_single_video_manual_pick and not self.multi_video_mode_active) else "false"};
+                const createVideoSkipFinalPrompt = {"true" if (self._automation_timing("skip_final_prompt_entry_enabled") > 0 and not (self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None)) else "false"};
                 const ACTION_DELAY_MS = {self._automation_timing("automation_action_delay_ms")};
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -10687,24 +10688,28 @@ class MainWindow(QMainWindow):
                             }}
 
                             if (!clickConfirmed && clickAlreadySent) {{
-                                const cancelAlreadySent = window.__grokManualCancelVideoClickToken === submitToken;
-                                const cancelButton = [...document.querySelectorAll("button, [role='button']")]
-                                    .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el))) || null;
-                                if (cancelButton && !cancelAlreadySent) {{
-                                    const remainingDelayMs = Math.max(0, requiredCancelDelayMs - elapsedSinceMakeVideoMs);
-                                    if (remainingDelayMs > 0) await sleep(remainingDelayMs);
-                                    if (robustDirectClick(cancelButton)) {{
-                                        window.__grokManualCancelVideoClickToken = submitToken;
-                                        await sleep(ACTION_DELAY_MS + {self._automation_timing("manual_menu_settle_extra_ms")});
+                                // Skip-final-prompt (create-video only) must never click Cancel Video.
+                                // Keep polling and let Python-side logic route directly to generation polling.
+                                if (!createVideoSkipFinalPrompt) {{
+                                    const cancelAlreadySent = window.__grokManualCancelVideoClickToken === submitToken;
+                                    const cancelButton = [...document.querySelectorAll("button, [role='button']")]
+                                        .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el))) || null;
+                                    if (cancelButton && !cancelAlreadySent) {{
+                                        const remainingDelayMs = Math.max(0, requiredCancelDelayMs - elapsedSinceMakeVideoMs);
+                                        if (remainingDelayMs > 0) await sleep(remainingDelayMs);
+                                        if (robustDirectClick(cancelButton)) {{
+                                            window.__grokManualCancelVideoClickToken = submitToken;
+                                            await sleep(ACTION_DELAY_MS + {self._automation_timing("manual_menu_settle_extra_ms")});
+                                        }}
                                     }}
-                                }}
 
-                                const promptVisibleAfterCancel = promptSelectors
-                                    .flatMap((sel) => [...document.querySelectorAll(sel)])
-                                    .some((el) => isVisible(el) && !el.disabled);
-                                const submitVisibleAfterCancel = !![...document.querySelectorAll("button, [role='button']")]
-                                    .find((el) => isVisible(el) && !el.disabled && /\\b(create|generate|submit)\\b.*\\bvideo\\b|\\bvideo\\b.*\\b(create|generate|submit)\\b/i.test(descriptorOf(el)));
-                                clickConfirmed = promptVisibleAfterCancel || submitVisibleAfterCancel;
+                                    const promptVisibleAfterCancel = promptSelectors
+                                        .flatMap((sel) => [...document.querySelectorAll(sel)])
+                                        .some((el) => isVisible(el) && !el.disabled);
+                                    const submitVisibleAfterCancel = !![...document.querySelectorAll("button, [role='button']")]
+                                        .find((el) => isVisible(el) && !el.disabled && /\\b(create|generate|submit)\\b.*\\bvideo\\b|\\bvideo\\b.*\\b(create|generate|submit)\\b/i.test(descriptorOf(el)));
+                                    clickConfirmed = promptVisibleAfterCancel || submitVisibleAfterCancel;
+                                }}
                             }}
 
                             if (!clickConfirmed && !clickAlreadySent) {{
@@ -10972,9 +10977,12 @@ class MainWindow(QMainWindow):
                     cancel_visible = bool(result.get("cancelVideoButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
                     skip_final_prompt_entry_enabled = self._automation_timing("skip_final_prompt_entry_enabled") > 0
-                    if skip_final_prompt_entry_enabled:
+                    continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+                    # Skip-final-prompt is create-video only. Continue-last-video must keep
+                    # the first prompt/cancel stage so submit guarding remains correct.
+                    if skip_final_prompt_entry_enabled and not continue_last_video_mode:
                         self._append_log(
-                            f"Variant {current_variant}: final prompt entry bypass enabled; skipping cancel/prompt stage and polling Make video generation directly."
+                            f"Variant {current_variant}: final prompt entry bypass enabled for create-video; skipping cancel/prompt stage and polling Make video generation directly."
                         )
                         self.manual_image_video_mode_selected = True
                         self.manual_image_video_mode_retry_count = 0
@@ -10982,6 +10990,10 @@ class MainWindow(QMainWindow):
                         self.manual_continue_setup_in_progress = False
                         self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
                         return
+                    if skip_final_prompt_entry_enabled and continue_last_video_mode:
+                        self._append_log(
+                            f"Variant {current_variant}: skip-final-prompt is create-video only; continue-last-video will keep cancel/prompt stage."
+                        )
                     if not (prompt_visible or submit_visible):
                         self._append_log(
                             f"Variant {current_variant}: video mode active but prompt controls not ready; waiting "
@@ -11362,9 +11374,18 @@ class MainWindow(QMainWindow):
             if not self.manual_image_video_mode_selected:
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
-                        self._append_log(
-                            f"Variant {current_variant}: action: waiting for Cancel Video/prompt readiness after Make video click."
+                        create_video_skip_final_prompt = (
+                            self._automation_timing("skip_final_prompt_entry_enabled") > 0
+                            and not (self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None)
                         )
+                        if create_video_skip_final_prompt:
+                            self._append_log(
+                                f"Variant {current_variant}: action: skip-final-prompt enabled; waiting for generation/progress readiness after Make video click (no Cancel click path)."
+                            )
+                        else:
+                            self._append_log(
+                                f"Variant {current_variant}: action: waiting for Cancel Video/prompt readiness after Make video click."
+                            )
                     generation_state_probe_script = r"""
                         (() => {
                             try {
@@ -11417,7 +11438,27 @@ class MainWindow(QMainWindow):
                         has_video_source_probe = bool(isinstance(probe_result, dict) and probe_result.get("hasVideoSource"))
                         cancel_video_probe = bool(isinstance(probe_result, dict) and probe_result.get("cancelVideoVisible"))
                         can_download_probe = bool(isinstance(probe_result, dict) and probe_result.get("canDownload"))
+                        skip_final_prompt_entry_enabled = self._automation_timing("skip_final_prompt_entry_enabled") > 0
+                        continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+                        create_video_skip_final_prompt = skip_final_prompt_entry_enabled and not continue_last_video_mode
                         if on_post_view_probe and (generation_signal_probe or has_video_source_probe or cancel_video_probe):
+                            if create_video_skip_final_prompt:
+                                # Create-video with skip-final-prompt should not enter the cancel/prompt stage.
+                                # If generation/video state is already visible, jump directly to download polling.
+                                self._append_log(
+                                    "Variant "
+                                    f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
+                                    f"(generationSignal={generation_signal_probe}, cancelVideo={cancel_video_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
+                                    "skip-final-prompt is enabled for create-video, so proceeding directly to generation polling."
+                                )
+                                self.manual_image_submit_in_flight = False
+                                self.manual_image_submit_in_flight_since = 0.0
+                                self.manual_image_video_mode_selected = True
+                                self.manual_image_video_mode_retry_count = 0
+                                self.manual_image_submit_retry_count = 0
+                                self.manual_continue_setup_in_progress = False
+                                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                                return
                             self._append_log(
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
@@ -11458,6 +11499,20 @@ class MainWindow(QMainWindow):
                                 if video_clicked and not make_video_visible:
                                     strict_wait_limit = self._automation_timing("automation_retry_attempts") * 2
                                     if self.manual_image_video_mode_retry_count >= strict_wait_limit:
+                                        if create_video_skip_final_prompt:
+                                            self._append_log(
+                                                "WARNING: Variant "
+                                                f"{current_variant}: waited for Cancel Video/prompt transition after Make video click for "
+                                                f"{self.manual_image_video_mode_retry_count} checks without explicit prompt controls "
+                                                f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}); "
+                                                "skip-final-prompt is enabled for create-video, so bypassing prompt fallback and proceeding directly to generation polling."
+                                            )
+                                            self.manual_image_video_mode_selected = True
+                                            self.manual_image_video_mode_retry_count = 0
+                                            self.manual_image_submit_retry_count = 0
+                                            self.manual_continue_setup_in_progress = False
+                                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                                            return
                                         self._append_log(
                                             "WARNING: Variant "
                                             f"{current_variant}: waited for Cancel Video/prompt transition after Make video click for "
@@ -12976,7 +13031,9 @@ class MainWindow(QMainWindow):
 
         def _run_option_step(step_index: int) -> None:
             if step_index >= len(option_steps):
-                if skip_final_prompt_entry_enabled:
+                # Skip-final-prompt is intentionally scoped to create-video only.
+                # Continue-last-video must still execute cancel + prompt-entry flow.
+                if skip_final_prompt_entry_enabled and not continue_last_video_mode:
                     self._append_log(
                         f"Variant {variant}: final prompt entry is disabled in Timings; skipping cancel/prompt stage and moving directly to Make video polling."
                     )
@@ -12986,6 +13043,10 @@ class MainWindow(QMainWindow):
                         lambda: self._trigger_browser_video_download(variant, allow_make_video_click=False),
                     )
                     return
+                if skip_final_prompt_entry_enabled and continue_last_video_mode:
+                    self._append_log(
+                        f"Variant {variant}: skip-final-prompt is create-video only; continue-last-video will run cancel/prompt entry and submit as normal."
+                    )
                 self._append_log(f"Variant {variant}: all staged options attempted; continuing to prompt entry.")
                 QTimer.singleShot(self._automation_timing(option_step_delay_key), _populate_prompt_then_submit)
                 return
