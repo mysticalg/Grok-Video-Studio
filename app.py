@@ -5461,6 +5461,24 @@ class MainWindow(QMainWindow):
     def _reset_automation_timings_to_defaults(self) -> None:
         self._apply_automation_timing_values(dict(AUTOMATION_TIMING_DEFAULTS), schedule_autosave=True)
         self._append_automation_log("Automation timings reset to defaults.")
+        self._sync_automation_menu_toggles()
+
+    def _set_automation_bool_setting(self, key: str, enabled: bool) -> None:
+        """Persist a bool-like automation timing value (0/1) from menu toggles."""
+        updated_values = dict(self.automation_timing_values)
+        updated_values[key] = 1 if bool(enabled) else 0
+        self._apply_automation_timing_values(updated_values, schedule_autosave=True)
+
+    def _sync_automation_menu_toggles(self) -> None:
+        """Keep checkable Automation menu actions aligned with timing-backed values."""
+        action = getattr(self, "skip_final_prompt_entry_toggle_action", None)
+        if action is None:
+            return
+        enabled = self._automation_timing("skip_final_prompt_entry_enabled") > 0
+        if action.isChecked() != enabled:
+            action.blockSignals(True)
+            action.setChecked(enabled)
+            action.blockSignals(False)
 
     def _automation_timing_tooltip(self, field: dict[str, Any]) -> str:
         key = str(field.get("key") or "")
@@ -5615,6 +5633,7 @@ class MainWindow(QMainWindow):
         for key, spin in spinboxes.items():
             selected_values[key] = int(spin.value())
         self._apply_automation_timing_values(selected_values, schedule_autosave=True)
+        self._sync_automation_menu_toggles()
 
     def _refresh_browser_tab_selection(self) -> None:
         current = self.browser_tabs.currentIndex()
@@ -5671,6 +5690,20 @@ class MainWindow(QMainWindow):
         automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
         automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
         self.automation_menu.addAction(automation_reset_timings_action)
+
+        # Keep highly-used continue-flow options in the Automation menu for
+        # one-click access (instead of burying them in the timings dialog).
+        continue_video_menu = self.automation_menu.addMenu("Continue Video")
+        self.skip_final_prompt_entry_toggle_action = QAction("Skip final prompt entry before Make video", self)
+        self.skip_final_prompt_entry_toggle_action.setCheckable(True)
+        self.skip_final_prompt_entry_toggle_action.setToolTip(
+            "Bypass the final prompt-entry stage and proceed directly to Make Video polling."
+        )
+        self.skip_final_prompt_entry_toggle_action.toggled.connect(
+            lambda enabled: self._set_automation_bool_setting("skip_final_prompt_entry_enabled", enabled)
+        )
+        continue_video_menu.addAction(self.skip_final_prompt_entry_toggle_action)
+
         self.automation_menu.addSeparator()
 
         cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
@@ -5706,6 +5739,7 @@ class MainWindow(QMainWindow):
         }
         self.cdp_external_browser_action.setChecked(self.cdp_use_external_browser)
         self._set_cdp_enabled(self.cdp_enabled)
+        self._sync_automation_menu_toggles()
 
         view_menu = menu_bar.addMenu("View")
         self.quick_actions_toolbar_toggle_action = QAction("Show Top Icon Toolbar", self)
@@ -5969,6 +6003,19 @@ class MainWindow(QMainWindow):
         automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
         self.automation_menu.addAction(automation_reset_timings_action)
 
+        continue_video_menu = self.automation_menu.addMenu("Continue Video")
+        # Reuse the existing action so toggle state stays in sync while menus are rebuilt.
+        if not hasattr(self, "skip_final_prompt_entry_toggle_action"):
+            self.skip_final_prompt_entry_toggle_action = QAction("Skip final prompt entry before Make video", self)
+            self.skip_final_prompt_entry_toggle_action.setCheckable(True)
+            self.skip_final_prompt_entry_toggle_action.setToolTip(
+                "Bypass the final prompt-entry stage and proceed directly to Make Video polling."
+            )
+            self.skip_final_prompt_entry_toggle_action.toggled.connect(
+                lambda enabled: self._set_automation_bool_setting("skip_final_prompt_entry_enabled", enabled)
+            )
+        continue_video_menu.addAction(self.skip_final_prompt_entry_toggle_action)
+
         cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
         if hasattr(self, "cdp_menu_actions"):
             cdp_settings_menu.addAction(self.cdp_menu_actions[True])
@@ -5984,8 +6031,9 @@ class MainWindow(QMainWindow):
             cdp_settings_menu.addAction(self.extension_dom_ping_action)
         self.automation_menu.addSeparator()
 
-        # Keep Counter at the end of the Automation menu so it remains visible
-        # without interfering with access to the CDP Settings submenu.
+        # Keep Counter in its own submenu and always append it last so menu
+        # ordering remains predictable as more Automation options are added.
+        counter_menu = self.automation_menu.addMenu("Counter")
         counter_widget = QWidget(self)
         counter_layout = QHBoxLayout(counter_widget)
         counter_layout.setContentsMargins(8, 4, 8, 4)
@@ -6004,7 +6052,8 @@ class MainWindow(QMainWindow):
         counter_layout.addWidget(counter_hint)
         counter_layout.addStretch(1)
 
-        self._add_widget_to_menu(self.automation_menu, counter_widget)
+        self._add_widget_to_menu(counter_menu, counter_widget)
+        self._sync_automation_menu_toggles()
 
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_checkbox)
         self._add_widget_to_menu(self.video_settings_menu, self.stitch_crossfade_hard_cuts_only_checkbox)
