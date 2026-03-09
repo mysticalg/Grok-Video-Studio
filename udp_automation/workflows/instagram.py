@@ -9,6 +9,15 @@ _INSTAGRAM_NEXT_BUTTON_SELECTOR = (
     "div[role='button']:has-text('Next'), button:has-text('Next'), div[role='button'][tabindex='0']:has-text('Next')"
 )
 
+# User-validated CSS path for the Create menu's Post anchor. Instagram class names
+# are dynamic, so this is attempted first but followed by semantic fallbacks below.
+_INSTAGRAM_CREATE_MENU_POST_ANCHOR_SELECTOR = (
+    "#scrollview > div > div > div.x78zum5.xdt5ytf.x1t2pt76.x1n2onr6.x1ja2u2z.x10cihs4 > "
+    "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.x16ye13r.xvbhtw8.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.x1uhb9sk.x1plvlek.xryxfnj.x1c4vz4f.x2lah0s.x1q0g3np.xqjyukv.x1qjc9v5.x1oa3qoh.x1qughib > "
+    "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.xjbqb8w.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.xixxii4.x13vifvy.x1plvlek.xryxfnj.x1c4vz4f.x2lah0s.xdt5ytf.xqjyukv.x1qjc9v5.x1oa3qoh.x1nhvcw1.x1dr59a3.xeq5yr9.x1n327nk > "
+    "div > div > div > div > div > div.x6s0dn4.x78zum5.xdt5ytf.x1iyjqo2.xh8yej3 > div > div:nth-child(8) > span > div > a"
+)
+
 
 def _best_effort_click(
     executor: BaseExecutor,
@@ -89,15 +98,24 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     if not new_post_opened:
         new_post_opened = _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
 
-    # After New post is focused, the Create popover appears. Click the Post entry
-    # directly from the first link-like menu option that contains Post text.
+    # After New post is focused, the Create popover appears. First, attempt the
+    # exact CSS selector captured from the failing session for the Post anchor.
     post_entry_clicked = _best_effort_click(
         executor,
         "instagram",
-        "a[role='link']:has(span:has-text('Post'))",
+        _INSTAGRAM_CREATE_MENU_POST_ANCHOR_SELECTOR,
         timeout_ms=click_timeout_ms,
-        extra_payload={"matchIndex": 0},
     )
+    # If Instagram changes class names or menu structure, fall back to semantic
+    # selectors that still target the first visible Post entry in the menu.
+    if not post_entry_clicked:
+        post_entry_clicked = _best_effort_click(
+            executor,
+            "instagram",
+            "a[role='link']:has(span:has-text('Post'))",
+            timeout_ms=click_timeout_ms,
+            extra_payload={"matchIndex": 0},
+        )
     if not post_entry_clicked:
         post_entry_clicked = _best_effort_click(
             executor,
