@@ -10508,18 +10508,28 @@ class MainWindow(QMainWindow):
                     const postId = postMatch ? String(postMatch[1] || "") : "";
                     const onPostView = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)
                         && !/^placeholder-/i.test(postId);
+                    // Keep video-mode readiness selectors in sync with prompt-submit selectors below.
+                    // Some Grok UI variants expose "customize this video" placeholders only after cancel,
+                    // and missing those can cause a false "not ready" loop.
                     const promptSelectors = [
                         "textarea[placeholder*='Type to customize video' i]",
                         "input[placeholder*='Type to customize video' i]",
+                        "textarea[placeholder*='Type to customize this video' i]",
+                        "input[placeholder*='Type to customize this video' i]",
+                        "textarea[placeholder*='Customize video' i]",
+                        "input[placeholder*='Customize video' i]",
                         "textarea[placeholder*='Type to imagine' i]",
                         "input[placeholder*='Type to imagine' i]",
                         "textarea[aria-label*='Make a video' i]",
                         "input[aria-label*='Make a video' i]",
                         "div.tiptap.ProseMirror[contenteditable='true']",
                         "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize this video' i]",
                         "[contenteditable='true'][aria-label*='Type to imagine' i]",
                         "[contenteditable='true'][aria-label*='Make a video' i]",
                         "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
+                        "[contenteditable='true'][data-placeholder*='Customize video' i]",
                         "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
                     ];
                     const promptInputVisible = promptSelectors
@@ -11313,7 +11323,7 @@ class MainWindow(QMainWindow):
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
                         self._append_log(
-                            f"Variant {current_variant}: action: clicking visible Make video button directly, then waiting for Cancel Video/prompt readiness."
+                            f"Variant {current_variant}: action: waiting for Cancel Video/prompt readiness after Make video click."
                         )
                     generation_state_probe_script = r"""
                         (() => {
@@ -11406,16 +11416,30 @@ class MainWindow(QMainWindow):
 
                             if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
                                 if video_clicked and not make_video_visible:
+                                    strict_wait_limit = self._automation_timing("automation_retry_attempts") * 2
+                                    if self.manual_image_video_mode_retry_count >= strict_wait_limit:
+                                        self._append_log(
+                                            "WARNING: Variant "
+                                            f"{current_variant}: waited for Cancel Video/prompt transition after Make video click for "
+                                            f"{self.manual_image_video_mode_retry_count} checks without explicit prompt controls "
+                                            f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}); "
+                                            "proceeding to prompt entry fallback to avoid infinite wait loop."
+                                        )
+                                        self.manual_image_video_mode_selected = True
+                                        self.manual_image_video_mode_retry_count = 0
+                                        self.manual_image_submit_retry_count = 0
+                                        QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
+                                        return
                                     self._append_log(
                                         "WARNING: Variant "
-                                        f"{current_variant}: Make video/cancel cycle completed but prompt controls still not explicit "
+                                        f"{current_variant}: Make video click is registered and the button is now hidden, but prompt controls are still not explicit "
                                         f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}); "
-                                        "proceeding to prompt entry with Enter-submit fallback."
+                                        "continuing to poll for Cancel Video/prompt transition before proceeding."
                                     )
-                                    self.manual_image_video_mode_selected = True
-                                    self.manual_image_video_mode_retry_count = 0
-                                    self.manual_image_submit_retry_count = 0
-                                    QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
+                                    # Keep the strict manual flow in video-mode validation until prompt controls are
+                                    # actually visible, so we never re-enter prompt entry prematurely; do not reset
+                                    # retry_count here, otherwise we can loop forever if selectors miss a transient state.
+                                    QTimer.singleShot(self._automation_timing("manual_phase_poll_slow_ms"), self._poll_for_manual_image)
                                     return
                                 self._append_log(
                                     "WARNING: Variant "
