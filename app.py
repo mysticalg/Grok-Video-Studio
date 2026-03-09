@@ -3360,12 +3360,13 @@ class MainWindow(QMainWindow):
             hashtags=["grok", "ai", "generated-video"],
             category="22",
         )
+        # Set before _build_ui because setup signals can fire immediately during widget initialization.
+        self._applying_preferences = False
         self._build_ui()
         self.usage_stats_timer = QTimer(self)
         self.usage_stats_timer.setInterval(60_000)
         self.usage_stats_timer.timeout.connect(self._flush_usage_stats)
         self.usage_stats_timer.start()
-        self._applying_preferences = False
         self._last_saved_preferences_signature: str | None = None
         self._startup_cdp_bootstrap_attempted = False
         self._initialize_preferences_autosave()
@@ -6055,14 +6056,14 @@ class MainWindow(QMainWindow):
         if hasattr(self, "automation_chrome_custom_profile_dir"):
             self.automation_chrome_custom_profile_dir.setEnabled(mode == "custom")
         self._apply_automation_chrome_profile_to_runtime()
-        if not self._applying_preferences:
+        if not getattr(self, "_applying_preferences", False):
             self._autosave_preferences_to_default_file()
 
     def _on_automation_chrome_custom_profile_changed(self) -> None:
         """Persist custom profile path and apply it to runtime if active."""
 
         self._apply_automation_chrome_profile_to_runtime()
-        if not self._applying_preferences:
+        if not getattr(self, "_applying_preferences", False):
             self._autosave_preferences_to_default_file()
 
     def _populate_top_settings_menus(self) -> None:
