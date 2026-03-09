@@ -10971,11 +10971,23 @@ class MainWindow(QMainWindow):
                     submit_visible = bool(result.get("submitButtonVisible"))
                     cancel_visible = bool(result.get("cancelVideoButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
-                    # Keep continue-last-video behavior stable: it still needs the first prompt
-                    # entered and submitted before polling can safely begin.
-                    if self._automation_timing("skip_final_prompt_entry_enabled") > 0:
+                    skip_final_prompt_entry_enabled = self._automation_timing("skip_final_prompt_entry_enabled") > 0
+                    continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+                    # Skip-final-prompt is create-video only. Continue-last-video must keep
+                    # the first prompt/cancel stage so submit guarding remains correct.
+                    if skip_final_prompt_entry_enabled and not continue_last_video_mode:
                         self._append_log(
-                            f"Variant {current_variant}: skip-final-prompt setting is ignored for continue-last-video; proceeding with cancel/prompt stage."
+                            f"Variant {current_variant}: final prompt entry bypass enabled for create-video; skipping cancel/prompt stage and polling Make video generation directly."
+                        )
+                        self.manual_image_video_mode_selected = True
+                        self.manual_image_video_mode_retry_count = 0
+                        self.manual_image_submit_retry_count = 0
+                        self.manual_continue_setup_in_progress = False
+                        self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                        return
+                    if skip_final_prompt_entry_enabled and continue_last_video_mode:
+                        self._append_log(
+                            f"Variant {current_variant}: skip-final-prompt is create-video only; continue-last-video will keep cancel/prompt stage."
                         )
                     if not (prompt_visible or submit_visible):
                         self._append_log(
