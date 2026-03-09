@@ -23,6 +23,13 @@ def _pause_between_actions(delay_ms: int) -> None:
     time.sleep(delay_ms / 1000.0)
 
 
+def _require_step(step_name: str, completed: bool) -> None:
+    """Fail fast when a required Instagram automation step does not complete."""
+    if completed:
+        return
+    raise RuntimeError(f"Instagram workflow required step failed: {step_name}")
+
+
 def _best_effort_click(
     executor: BaseExecutor,
     platform: str,
@@ -108,8 +115,14 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     new_post_opened = _best_effort_click(executor, "instagram", "svg[aria-label='New post']", timeout_ms=click_timeout_ms)
     _pause_between_actions(action_delay_ms)
     if not new_post_opened:
-        _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
+        new_post_opened = _best_effort_click(
+            executor,
+            "instagram",
+            "a[role='link']:has(svg[aria-label='New post'])",
+            timeout_ms=click_timeout_ms,
+        )
         _pause_between_actions(action_delay_ms)
+    _require_step("open_new_post_menu", new_post_opened)
 
     # Click the Post entry directly after opening the New post menu.
     post_entry_clicked = _best_effort_click(
@@ -123,7 +136,7 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
 
     # Keep a light text fallback if Instagram changes the nested link markup.
     if not post_entry_clicked:
-        _best_effort_click(
+        post_entry_clicked = _best_effort_click(
             executor,
             "instagram",
             "span",
@@ -131,11 +144,24 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
             extra_payload={"textContains": "post", "matchIndex": 0},
         )
         _pause_between_actions(action_delay_ms)
+    _require_step("select_post_entry", post_entry_clicked)
 
-    _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
+    select_from_computer_clicked = _best_effort_click(
+        executor,
+        "instagram",
+        "button[aria-label*='Select from computer' i]",
+        timeout_ms=click_timeout_ms,
+    )
     _pause_between_actions(action_delay_ms)
-    _best_effort_click(executor, "instagram", "div[role='button'][aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
+    if not select_from_computer_clicked:
+        select_from_computer_clicked = _best_effort_click(
+            executor,
+            "instagram",
+            "div[role='button'][aria-label*='Select from computer' i]",
+            timeout_ms=click_timeout_ms,
+        )
     _pause_between_actions(action_delay_ms)
+    _require_step("open_select_from_computer", select_from_computer_clicked)
 
     upload_result = executor.run("upload.select_file", {"platform": "instagram", "filePath": video_path})
     upload_payload = upload_result.get("payload") or {}
@@ -145,10 +171,12 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
         raise RuntimeError(f"Instagram upload needs manual file selection ({reason}): {detail}")
 
     _pause_between_actions(action_delay_ms)
-    _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
+    next_first_clicked = _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
     _pause_between_actions(action_delay_ms)
-    _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
+    _require_step("next_button_first_click", next_first_clicked)
+    next_second_clicked = _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
     _pause_between_actions(action_delay_ms)
+    _require_step("next_button_second_click", next_second_clicked)
 
     executor.run("form.fill", {"platform": "instagram", "fields": {"description": caption}})
     _pause_between_actions(action_delay_ms)
