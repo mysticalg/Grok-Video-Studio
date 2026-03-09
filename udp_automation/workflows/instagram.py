@@ -9,13 +9,18 @@ _INSTAGRAM_NEXT_BUTTON_SELECTOR = (
     "div[role='button']:has-text('Next'), button:has-text('Next'), div[role='button'][tabindex='0']:has-text('Next')"
 )
 
-# User-validated CSS path for the Create menu's Post anchor. Instagram class names
-# are dynamic, so this is attempted first but followed by semantic fallbacks below.
-_INSTAGRAM_CREATE_MENU_POST_ANCHOR_SELECTOR = (
+# User-validated CSS paths for the Create menu's Post anchor from failing
+# sessions. Instagram class names are dynamic, so we try these exact selectors in
+# order and then fall back to semantic selectors below.
+_INSTAGRAM_CREATE_MENU_POST_ANCHOR_SELECTORS: tuple[str, ...] = (
+    "#mount_0_0_xa > div > div > div.x9f619.x1n2onr6.x1ja2u2z > div > div > div.x78zum5.xdt5ytf.x1t2pt76.x1n2onr6.x1ja2u2z.x10cihs4 > "
+    "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.x16ye13r.xvbhtw8.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.x1uhb9sk.x1plvlek.xryxfnj.x1c4vz4f.x2lah0s.x1q0g3np.xqjyukv.x1qjc9v5.x1oa3qoh.x1qughib > "
+    "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.xjbqb8w.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.xixxii4.x13vifvy.x1plvlek.xryxfnj.x1c4vz4f.x2lah0s.xdt5ytf.xqjyukv.x1qjc9v5.x1oa3qoh.x1nhvcw1.x1dr59a3.xeq5yr9.x1n327nk > "
+    "div > div > div > div > div > div.x6s0dn4.x78zum5.xdt5ytf.x1iyjqo2.xh8yej3 > div > div:nth-child(7) > div > span > div > div > div > div.x1qjc9v5.xgf5ljw.x1i5p2am.x1whfx0g.xr2y4jy.x1ihp6rs.x972fbf.x10w94by.x1qhh985.x14e42zd.x9f619.x78zum5.xdt5ytf.x2lah0s.xk390pu.x5yr21d.xdj266r.x14z9mp.xat24cr.x1lziwak.x6ikm8r.x1odjw0f.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x1n2onr6.x11njtxf.xh8yej3 > a:nth-child(1)",
     "#scrollview > div > div > div.x78zum5.xdt5ytf.x1t2pt76.x1n2onr6.x1ja2u2z.x10cihs4 > "
     "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.x16ye13r.xvbhtw8.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.x1uhb9sk.x1plvlek.xryxfnj.x1c4vz4f.x2lah0s.x1q0g3np.xqjyukv.x1qjc9v5.x1oa3qoh.x1qughib > "
     "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.xjbqb8w.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.xixxii4.x13vifvy.x1plvlek.xryxfnj.x1c4vz4f.x2lah0s.xdt5ytf.xqjyukv.x1qjc9v5.x1oa3qoh.x1nhvcw1.x1dr59a3.xeq5yr9.x1n327nk > "
-    "div > div > div > div > div > div.x6s0dn4.x78zum5.xdt5ytf.x1iyjqo2.xh8yej3 > div > div:nth-child(8) > span > div > a"
+    "div > div > div > div > div > div.x6s0dn4.x78zum5.xdt5ytf.x1iyjqo2.xh8yej3 > div > div:nth-child(8) > span > div > a",
 )
 
 
@@ -98,14 +103,18 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     if not new_post_opened:
         new_post_opened = _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
 
-    # After New post is focused, the Create popover appears. First, attempt the
-    # exact CSS selector captured from the failing session for the Post anchor.
-    post_entry_clicked = _best_effort_click(
-        executor,
-        "instagram",
-        _INSTAGRAM_CREATE_MENU_POST_ANCHOR_SELECTOR,
-        timeout_ms=click_timeout_ms,
-    )
+    # After New post is focused, the Create popover appears. First, attempt
+    # exact CSS selectors captured from failing sessions for the Post anchor.
+    post_entry_clicked = False
+    for post_selector in _INSTAGRAM_CREATE_MENU_POST_ANCHOR_SELECTORS:
+        post_entry_clicked = _best_effort_click(
+            executor,
+            "instagram",
+            post_selector,
+            timeout_ms=click_timeout_ms,
+        )
+        if post_entry_clicked:
+            break
     # If Instagram changes class names or menu structure, fall back to semantic
     # selectors that still target the first visible Post entry in the menu.
     if not post_entry_clicked:
