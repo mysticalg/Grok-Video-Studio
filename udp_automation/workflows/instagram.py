@@ -110,16 +110,17 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     executor.run("platform.ensure_logged_in", {"platform": "instagram"})
     _pause_between_actions(action_delay_ms)
 
-    # Prefer the Create trigger first to align with current Instagram nav flow.
+    # Prefer the dedicated Create entry first. Avoid generic `a[role=link]`
+    # selectors so we do not click unrelated navigation links.
     create_menu_opened = _best_effort_click(
         executor,
         "instagram",
-        "a[role='link']",
+        "a[role='link'] span",
         timeout_ms=click_timeout_ms,
         extra_payload={"textContains": "create", "matchIndex": 0},
     )
     _pause_between_actions(action_delay_ms)
-    # Fallback: some layouts expose New post glyph instead of visible Create text.
+    # Fallback: some layouts expose only the New post glyph in the collapsed nav.
     if not create_menu_opened:
         create_menu_opened = _best_effort_click(
             executor,
@@ -138,22 +139,23 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
         _pause_between_actions(action_delay_ms)
     _require_step("open_create_menu", create_menu_opened)
 
-    # Click the Post entry directly after opening the Create menu.
+    # Click Post inside the Create dialog/menu first so we do not match feed/nav
+    # links such as "Posts" elsewhere on the page.
     post_entry_clicked = _best_effort_click(
         executor,
         "instagram",
-        "a[role='link']",
+        "div[role='dialog'] a[role='link'], div[role='menu'] a[role='link']",
         timeout_ms=click_timeout_ms,
         extra_payload={"textContains": "post", "matchIndex": 0},
     )
     _pause_between_actions(action_delay_ms)
 
-    # Keep a light text fallback if Instagram changes the nested link markup.
+    # Keep a scoped text fallback inside dialog/menu if nested markup shifts.
     if not post_entry_clicked:
         post_entry_clicked = _best_effort_click(
             executor,
             "instagram",
-            "span",
+            "div[role='dialog'] span, div[role='menu'] span",
             timeout_ms=click_timeout_ms,
             extra_payload={"textContains": "post", "matchIndex": 0},
         )
