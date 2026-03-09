@@ -13366,7 +13366,7 @@ class MainWindow(QMainWindow):
                         return fired;
                     };
 
-                    const targetMode = String(arguments[0] || "spicy").trim().toLowerCase() === "normal" ? "normal" : "spicy";
+                    const targetMode = "__TARGET_MODE__";
                     // Moderation recovery path: open the Settings menu and pick the requested mode before Enter.
                     // Alternating mode across retries helps avoid repeated policy/queue outcomes.
                     const settingsButton = [...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]")]
@@ -13473,7 +13473,8 @@ class MainWindow(QMainWindow):
             if on_complete is not None:
                 on_complete()
 
-        self._run_active_browser_javascript(resubmit_script, _after_resubmit, target_mode)
+        # _run_active_browser_javascript does not accept JS args; inline target mode into script before execution.
+        self._run_active_browser_javascript(resubmit_script.replace("__TARGET_MODE__", target_mode), _after_resubmit)
 
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
