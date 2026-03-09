@@ -13342,7 +13342,7 @@ class MainWindow(QMainWindow):
         retry_mode: str,
         on_complete: Callable[[], None] | None = None,
     ) -> None:
-        """Attempt moderation recovery by selecting the requested mode and resubmitting via Enter."""
+        """Attempt moderation recovery by selecting the requested mode only."""
         target_mode = "normal" if str(retry_mode or "").strip().lower() == "normal" else "spicy"
         resubmit_script = r"""
             (() => {
@@ -13367,8 +13367,8 @@ class MainWindow(QMainWindow):
                     };
 
                     const targetMode = "__TARGET_MODE__";
-                    // Moderation recovery path: open the Settings menu and pick the requested mode before Enter.
-                    // Alternating mode across retries helps avoid repeated policy/queue outcomes.
+                    // Moderation recovery path: open Settings and switch mode.
+                    // We intentionally do not submit Enter here to avoid duplicate renders.
                     const settingsButton = [...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]")]
                         .find((el) => isVisible(el) && !el.disabled) || null;
                     const settingsClicked = clickLikeUser(settingsButton);
@@ -13388,67 +13388,8 @@ class MainWindow(QMainWindow):
                     }) || null;
                     const modeClicked = clickLikeUser(modeOption);
 
-                    const selectors = [
-                        "textarea[placeholder*='Describe your video' i]",
-                        "textarea[aria-label*='Describe your video' i]",
-                        "textarea[placeholder*='Type to imagine' i]",
-                        "input[placeholder*='Type to imagine' i]",
-                        "textarea[placeholder*='Type to customize this video' i]",
-                        "input[placeholder*='Type to customize this video' i]",
-                        "textarea[placeholder*='Type to customize video' i]",
-                        "input[placeholder*='Type to customize video' i]",
-                        "textarea[placeholder*='Customize video' i]",
-                        "input[placeholder*='Customize video' i]",
-                        "div.tiptap.ProseMirror[contenteditable='true']",
-                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
-                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
-                        "[contenteditable='true'][aria-label*='Type to customize this video' i]",
-                        "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
-                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
-                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
-                        "[contenteditable='true'][aria-label*='Make a video' i]",
-                        "[contenteditable='true'][data-placeholder*='Customize video' i]",
-                    ];
-                    const promptInput = selectors
-                        .flatMap((selector) => [...document.querySelectorAll(selector)])
-                        .find((el) => isVisible(el));
-                    if (!promptInput) {
-                        return { ok: settingsClicked || modeClicked, error: "prompt-input-not-found", settingsClicked, modeClicked, targetMode };
-                    }
-
-                    try { promptInput.focus({ preventScroll: true }); } catch (_) {}
-                    let appendedTrailingNewline = false;
-                    if (promptInput.isContentEditable) {
-                        try {
-                            const current = String(promptInput.textContent || "");
-                            // Preserve the existing prompt and only add a trailing newline nudge.
-                            promptInput.textContent = `${current}\n`;
-                            appendedTrailingNewline = true;
-                            promptInput.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
-                            promptInput.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
-                        } catch (_) {}
-                    } else if ("value" in promptInput) {
-                        try {
-                            const nextValue = `${String(promptInput.value || "")}\n`;
-                            const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(promptInput), "value")?.set;
-                            if (setter) setter.call(promptInput, nextValue);
-                            else promptInput.value = nextValue;
-                            appendedTrailingNewline = true;
-                            promptInput.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
-                            promptInput.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
-                        } catch (_) {}
-                    }
-
-                    const keyEvent = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true };
-                    let enterDispatched = false;
-                    try { promptInput.dispatchEvent(new KeyboardEvent("keydown", keyEvent)); enterDispatched = true; } catch (_) {}
-                    try { promptInput.dispatchEvent(new KeyboardEvent("keypress", keyEvent)); enterDispatched = true; } catch (_) {}
-                    try { promptInput.dispatchEvent(new KeyboardEvent("keyup", keyEvent)); enterDispatched = true; } catch (_) {}
-
                     return {
-                        ok: enterDispatched || appendedTrailingNewline || settingsClicked || modeClicked,
-                        enterDispatched,
-                        appendedTrailingNewline,
+                        ok: settingsClicked || modeClicked,
                         settingsClicked,
                         modeClicked,
                         targetMode,
@@ -13462,13 +13403,12 @@ class MainWindow(QMainWindow):
         def _after_resubmit(result) -> None:
             if isinstance(result, dict) and result.get("ok"):
                 self._append_log(
-                    f"Variant {variant}: moderation retry attempted Settings→{str(result.get('targetMode') or target_mode).title()} + trailing Enter "
-                    f"(settingsClicked={bool(result.get('settingsClicked'))}, modeClicked={bool(result.get('modeClicked'))}, "
-                    f"newlineAppended={bool(result.get('appendedTrailingNewline'))})."
+                    f"Variant {variant}: moderation retry attempted Settings→{str(result.get('targetMode') or target_mode).title()} "
+                    f"(settingsClicked={bool(result.get('settingsClicked'))}, modeClicked={bool(result.get('modeClicked'))})."
                 )
             else:
                 self._append_log(
-                    f"WARNING: Variant {variant}: moderation retry could not confirm Settings→{target_mode.title()} + trailing Enter resubmit. result={result!r}"
+                    f"WARNING: Variant {variant}: moderation retry could not confirm Settings→{target_mode.title()} selection. result={result!r}"
                 )
             if on_complete is not None:
                 on_complete()
@@ -13951,7 +13891,7 @@ class MainWindow(QMainWindow):
 
                     # Some moderation retries expose an icon-only Make video control that does
                     # not actually trigger generation when clicked. In that case, resubmit the
-                    # prompt via trailing Enter to keep the flow moving without UI click reliance.
+                    # mode via Settings to keep retries simple and avoid duplicate submissions.
                     self._resubmit_video_prompt_with_trailing_enter_for_mode(
                         current_variant,
                         retry_mode,
