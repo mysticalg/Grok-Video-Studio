@@ -13867,8 +13867,10 @@ class MainWindow(QMainWindow):
                     return
                 if moderation_retry_enabled and self.manual_moderation_retry_count < moderation_retry_limit:
                     self.manual_moderation_retry_count += 1
-                    retry_mode = self.manual_moderation_retry_next_mode
-                    self.manual_moderation_retry_next_mode = "normal" if retry_mode == "spicy" else "spicy"
+                    # Always force Spicy on moderation retries so we do not oscillate between
+                    # modes and accidentally undo the prior recovery selection.
+                    retry_mode = "spicy"
+                    self.manual_moderation_retry_next_mode = "spicy"
                     self.manual_moderation_retry_pending = True
                     self.manual_moderation_retry_last_attempt_at = now
                     self._append_log(
