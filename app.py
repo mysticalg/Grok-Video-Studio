@@ -13445,15 +13445,22 @@ class MainWindow(QMainWindow):
                         return /redo/i.test(aria) || /redo/i.test(txt);
                     }});
 
-                const makeVideoButton = [...document.querySelectorAll("button")]
+                // Moderation retries can surface icon-only Make video controls that only expose
+                // their label via aria attributes. Include role=button fallbacks so we still
+                // find and click the control even when there is no visible text.
+                const makeVideoCandidates = [
+                    ...document.querySelectorAll("button, [role='button']"),
+                ];
+                const makeVideoButton = makeVideoCandidates
                     .find((btn) => {{
                         if (!isVisible(btn) || btn.disabled) return false;
                         const aria = (btn.getAttribute("aria-label") || "").trim();
                         const txt = (btn.textContent || "").trim();
                         const srOnly = (btn.querySelector(".sr-only")?.textContent || "").trim();
+                        const title = (btn.getAttribute("title") || "").trim();
                         const combined = `${{aria}} ${{txt}} ${{srOnly}}`.trim();
                         if (/redo/i.test(combined)) return false;
-                        return /make\\s+video/i.test(combined);
+                        return /make\\s+video/i.test(`${{combined}} ${{title}}`);
                     }});
                 const promptInput = document.querySelector("textarea[placeholder*='Describe your video' i], textarea[aria-label*='Describe your video' i], textarea[placeholder*='Type to imagine' i], input[placeholder*='Type to imagine' i], textarea[placeholder*='Type to customize this video' i], input[placeholder*='Type to customize this video' i], textarea[placeholder*='Type to customize video' i], input[placeholder*='Type to customize video' i], textarea[placeholder*='Customize video' i], input[placeholder*='Customize video' i], div.tiptap.ProseMirror[contenteditable='true'], [contenteditable='true'][aria-label*='Type to imagine' i], [contenteditable='true'][data-placeholder*='Type to imagine' i], [contenteditable='true'][aria-label*='Type to customize this video' i], [contenteditable='true'][data-placeholder*='Type to customize this video' i], [contenteditable='true'][aria-label*='Type to customize video' i], [contenteditable='true'][data-placeholder*='Type to customize video' i], [contenteditable='true'][aria-label*='Make a video' i], [contenteditable='true'][data-placeholder*='Customize video' i]");
                 const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
