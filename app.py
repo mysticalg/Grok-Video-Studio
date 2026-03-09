@@ -10413,6 +10413,7 @@ class MainWindow(QMainWindow):
                 const submitToken = {self.manual_image_submit_token};
                 const submitAttemptAllowed = {"true" if submit_attempt_allowed else "false"};
                 const manualSinglePickMode = {"true" if (self.manual_single_video_manual_pick and not self.multi_video_mode_active) else "false"};
+                const createVideoSkipFinalPrompt = {"true" if (self._automation_timing("skip_final_prompt_entry_enabled") > 0 and not (self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None)) else "false"};
                 const ACTION_DELAY_MS = {self._automation_timing("automation_action_delay_ms")};
                 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -10687,24 +10688,28 @@ class MainWindow(QMainWindow):
                             }}
 
                             if (!clickConfirmed && clickAlreadySent) {{
-                                const cancelAlreadySent = window.__grokManualCancelVideoClickToken === submitToken;
-                                const cancelButton = [...document.querySelectorAll("button, [role='button']")]
-                                    .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el))) || null;
-                                if (cancelButton && !cancelAlreadySent) {{
-                                    const remainingDelayMs = Math.max(0, requiredCancelDelayMs - elapsedSinceMakeVideoMs);
-                                    if (remainingDelayMs > 0) await sleep(remainingDelayMs);
-                                    if (robustDirectClick(cancelButton)) {{
-                                        window.__grokManualCancelVideoClickToken = submitToken;
-                                        await sleep(ACTION_DELAY_MS + {self._automation_timing("manual_menu_settle_extra_ms")});
+                                // Skip-final-prompt (create-video only) must never click Cancel Video.
+                                // Keep polling and let Python-side logic route directly to generation polling.
+                                if (!createVideoSkipFinalPrompt) {{
+                                    const cancelAlreadySent = window.__grokManualCancelVideoClickToken === submitToken;
+                                    const cancelButton = [...document.querySelectorAll("button, [role='button']")]
+                                        .find((el) => isVisible(el) && !el.disabled && /\\bcancel\\s+video\\b/i.test(descriptorOf(el))) || null;
+                                    if (cancelButton && !cancelAlreadySent) {{
+                                        const remainingDelayMs = Math.max(0, requiredCancelDelayMs - elapsedSinceMakeVideoMs);
+                                        if (remainingDelayMs > 0) await sleep(remainingDelayMs);
+                                        if (robustDirectClick(cancelButton)) {{
+                                            window.__grokManualCancelVideoClickToken = submitToken;
+                                            await sleep(ACTION_DELAY_MS + {self._automation_timing("manual_menu_settle_extra_ms")});
+                                        }}
                                     }}
-                                }}
 
-                                const promptVisibleAfterCancel = promptSelectors
-                                    .flatMap((sel) => [...document.querySelectorAll(sel)])
-                                    .some((el) => isVisible(el) && !el.disabled);
-                                const submitVisibleAfterCancel = !![...document.querySelectorAll("button, [role='button']")]
-                                    .find((el) => isVisible(el) && !el.disabled && /\\b(create|generate|submit)\\b.*\\bvideo\\b|\\bvideo\\b.*\\b(create|generate|submit)\\b/i.test(descriptorOf(el)));
-                                clickConfirmed = promptVisibleAfterCancel || submitVisibleAfterCancel;
+                                    const promptVisibleAfterCancel = promptSelectors
+                                        .flatMap((sel) => [...document.querySelectorAll(sel)])
+                                        .some((el) => isVisible(el) && !el.disabled);
+                                    const submitVisibleAfterCancel = !![...document.querySelectorAll("button, [role='button']")]
+                                        .find((el) => isVisible(el) && !el.disabled && /\\b(create|generate|submit)\\b.*\\bvideo\\b|\\bvideo\\b.*\\b(create|generate|submit)\\b/i.test(descriptorOf(el)));
+                                    clickConfirmed = promptVisibleAfterCancel || submitVisibleAfterCancel;
+                                }}
                             }}
 
                             if (!clickConfirmed && !clickAlreadySent) {{
@@ -11369,9 +11374,18 @@ class MainWindow(QMainWindow):
             if not self.manual_image_video_mode_selected:
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
-                        self._append_log(
-                            f"Variant {current_variant}: action: waiting for Cancel Video/prompt readiness after Make video click."
+                        create_video_skip_final_prompt = (
+                            self._automation_timing("skip_final_prompt_entry_enabled") > 0
+                            and not (self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None)
                         )
+                        if create_video_skip_final_prompt:
+                            self._append_log(
+                                f"Variant {current_variant}: action: skip-final-prompt enabled; waiting for generation/progress readiness after Make video click (no Cancel click path)."
+                            )
+                        else:
+                            self._append_log(
+                                f"Variant {current_variant}: action: waiting for Cancel Video/prompt readiness after Make video click."
+                            )
                     generation_state_probe_script = r"""
                         (() => {
                             try {
