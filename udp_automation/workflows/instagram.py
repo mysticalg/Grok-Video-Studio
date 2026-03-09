@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from udp_automation.executors import BaseExecutor
@@ -8,6 +9,18 @@ from udp_automation.executors import BaseExecutor
 _INSTAGRAM_NEXT_BUTTON_SELECTOR = (
     "div[role='button']:has-text('Next'), button:has-text('Next'), div[role='button'][tabindex='0']:has-text('Next')"
 )
+
+
+def _is_user_stop_error(exc: Exception) -> bool:
+    """Return True when the automation engine reports an explicit user stop."""
+    return "stopped by user" in str(exc).lower()
+
+
+def _pause_between_actions(delay_ms: int) -> None:
+    """Keep interactions stable by sleeping briefly between high-level actions."""
+    if delay_ms <= 0:
+        return
+    time.sleep(delay_ms / 1000.0)
 
 
 def _best_effort_click(
@@ -49,6 +62,8 @@ def _best_effort_click(
                 )
             except Exception:
                 pass
+        if _is_user_stop_error(exc):
+            raise
         return False
 
 
@@ -73,6 +88,8 @@ def _best_effort_keypress(executor: BaseExecutor, platform: str, keys: list[str]
                 )
             except Exception:
                 pass
+        if _is_user_stop_error(exc):
+            raise
         return False
 
 
@@ -87,6 +104,8 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     opts = options or {}
     click_timeout_ms = max(1000, int(opts.get("instagram_click_timeout_ms") or 10000))
     next_timeout_ms = max(1000, int(opts.get("instagram_next_timeout_ms") or 12000))
+    # Small per-action pause keeps Instagram menu transitions stable.
+    action_delay_ms = max(0, int(opts.get("instagram_action_delay_ms") or 350))
     log_callback = getattr(executor, "log_callback", None)
     if callable(log_callback):
         try:
@@ -105,24 +124,29 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
             "reuseTab": True,
         },
     )
+    _pause_between_actions(action_delay_ms)
     executor.run("platform.ensure_logged_in", {"platform": "instagram"})
+    _pause_between_actions(action_delay_ms)
 
     # Instagram can keep the Create entry collapsed in the left nav until the
     # New post glyph is activated first, so prioritize that icon/link sequence.
     new_post_opened = _best_effort_click(executor, "instagram", "svg[aria-label='New post']", timeout_ms=click_timeout_ms)
+    _pause_between_actions(action_delay_ms)
     if not new_post_opened:
-        new_post_opened = _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
+        _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
+        _pause_between_actions(action_delay_ms)
+
     # After New post receives focus, use keyboard navigation (Tab + Enter) to
-    # choose the highlighted Create menu option. This avoids brittle CSS paths
-    # that often break when Instagram rotates class names.
+    # choose the highlighted Create menu option.
     post_entry_clicked = _best_effort_keypress(
         executor,
         "instagram",
         ["Tab", "Enter"],
         timeout_ms=click_timeout_ms,
     )
-    # Keep a semantic click fallback so automation still progresses if key events
-    # are ignored in a given session/browser context.
+    _pause_between_actions(action_delay_ms)
+
+    # Keep semantic click fallbacks when key events are ignored.
     if not post_entry_clicked:
         post_entry_clicked = _best_effort_click(
             executor,
@@ -131,11 +155,15 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
             timeout_ms=click_timeout_ms,
             extra_payload={"matchIndex": 0},
         )
+        _pause_between_actions(action_delay_ms)
     if not post_entry_clicked:
         _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=click_timeout_ms)
+        _pause_between_actions(action_delay_ms)
 
     _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
+    _pause_between_actions(action_delay_ms)
     _best_effort_click(executor, "instagram", "div[role='button'][aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
+    _pause_between_actions(action_delay_ms)
 
     upload_result = executor.run("upload.select_file", {"platform": "instagram", "filePath": video_path})
     upload_payload = upload_result.get("payload") or {}
@@ -144,11 +172,16 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
         detail = upload_payload.get("message") or "automatic file input was not found"
         raise RuntimeError(f"Instagram upload needs manual file selection ({reason}): {detail}")
 
+    _pause_between_actions(action_delay_ms)
     _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
+    _pause_between_actions(action_delay_ms)
     _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
+    _pause_between_actions(action_delay_ms)
 
     executor.run("form.fill", {"platform": "instagram", "fields": {"description": caption}})
+    _pause_between_actions(action_delay_ms)
     executor.run("post.submit", {"platform": "instagram"})
+    _pause_between_actions(action_delay_ms)
     status = executor.run("post.status", {"platform": "instagram"})
     if callable(log_callback):
         try:
