@@ -19,12 +19,21 @@ class ChromeInstance:
 
 
 class AutomationChromeManager:
-    def __init__(self, extension_dir: Path, port: int = 9222, timeout_s: float = 20.0):
+    def __init__(
+        self,
+        extension_dir: Path,
+        port: int = 9222,
+        timeout_s: float = 20.0,
+        profile_mode: str | None = None,
+        profile_dir_override: str | Path | None = None,
+    ):
         self.extension_dir = extension_dir.resolve()
         self.port = port
         self.timeout_s = timeout_s
         self.process: subprocess.Popen[str] | None = None
         self._active_profile_dir: Path | None = None
+        self.profile_mode = str(profile_mode or "").strip().lower() or None
+        self.profile_dir_override = str(profile_dir_override or "").strip()
 
     def _resolve_profile_strategy(self) -> tuple[Path | None, str]:
         """Resolve how Chrome profile data should be handled for automation launch.
@@ -43,8 +52,8 @@ class AutomationChromeManager:
         - default: do not pass --user-data-dir (Chrome will use normal user profile).
         """
 
-        mode = os.getenv("GROK_AUTOMATION_CHROME_PROFILE_MODE", "dedicated").strip().lower()
-        custom_dir = os.getenv("GROK_AUTOMATION_CHROME_USER_DATA_DIR", "").strip()
+        mode = self.profile_mode or os.getenv("GROK_AUTOMATION_CHROME_PROFILE_MODE", "dedicated").strip().lower()
+        custom_dir = self.profile_dir_override or os.getenv("GROK_AUTOMATION_CHROME_USER_DATA_DIR", "").strip()
         if mode not in {"dedicated", "custom", "default"}:
             mode = "custom" if custom_dir else "dedicated"
 
