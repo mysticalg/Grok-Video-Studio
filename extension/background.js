@@ -242,7 +242,9 @@ async function handleCmd(msg) {
         const textMatches = (el, needle) => {
           const expected = String(needle || "").trim().toLowerCase();
           if (!expected) return true;
-          const text = String((el?.closest("button, [role='button']") || el)?.textContent || "").trim().toLowerCase();
+          // Include link-like parents too so menu anchors such as Instagram's
+          // Create -> Post entry can be matched by textContains reliably.
+          const text = String((el?.closest("button, [role='button'], a, [role='link']") || el)?.textContent || "").trim().toLowerCase();
           return text.includes(expected);
         };
 

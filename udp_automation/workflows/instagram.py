@@ -115,15 +115,21 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     post_entry_clicked = _best_effort_click(
         executor,
         "instagram",
-        "a[role='link']:has(span:has-text('Post'))",
+        "a[role='link']",
         timeout_ms=click_timeout_ms,
-        extra_payload={"matchIndex": 0},
+        extra_payload={"textContains": "post", "matchIndex": 0},
     )
     _pause_between_actions(action_delay_ms)
 
     # Keep a light text fallback if Instagram changes the nested link markup.
     if not post_entry_clicked:
-        _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=click_timeout_ms)
+        _best_effort_click(
+            executor,
+            "instagram",
+            "span",
+            timeout_ms=click_timeout_ms,
+            extra_payload={"textContains": "post", "matchIndex": 0},
+        )
         _pause_between_actions(action_delay_ms)
 
     _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
