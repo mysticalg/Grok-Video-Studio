@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from udp_automation.executors import BaseExecutor
@@ -10,7 +11,32 @@ _INSTAGRAM_NEXT_BUTTON_SELECTOR = (
 )
 
 
-def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, timeout_ms: int = 8000) -> None:
+def _is_user_stop_error(exc: Exception) -> bool:
+    """Return True when the automation engine reports an explicit user stop."""
+    return "stopped by user" in str(exc).lower()
+
+
+def _pause_between_actions(delay_ms: int) -> None:
+    """Keep interactions stable by sleeping briefly between high-level actions."""
+    if delay_ms <= 0:
+        return
+    time.sleep(delay_ms / 1000.0)
+
+
+def _require_step(step_name: str, completed: bool) -> None:
+    """Fail fast when a required Instagram automation step does not complete."""
+    if completed:
+        return
+    raise RuntimeError(f"Instagram workflow required step failed: {step_name}")
+
+
+def _best_effort_click(
+    executor: BaseExecutor,
+    platform: str,
+    selector: str,
+    timeout_ms: int = 8000,
+    extra_payload: dict[str, Any] | None = None,
+) -> bool:
     log_callback = getattr(executor, "log_callback", None)
     if callable(log_callback):
         try:
@@ -20,16 +46,20 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, tim
         except Exception:
             pass
     try:
-        response = executor.run("dom.click", {"platform": platform, "selector": selector, "timeoutMs": timeout_ms})
+        payload = {"platform": platform, "selector": selector, "timeoutMs": timeout_ms}
+        if extra_payload:
+            payload.update(extra_payload)
+        response = executor.run("dom.click", payload)
         if callable(log_callback):
             try:
-                payload = response.get("payload") or {}
+                response_payload = response.get("payload") or {}
                 log_callback(
                     "Instagram workflow: dom.click completed "
-                    f"target={{platform={platform}, selector={selector!r}}} clicked={bool(payload.get('clicked'))}"
+                    f"target={{platform={platform}, selector={selector!r}}} clicked={bool(response_payload.get('clicked'))}"
                 )
             except Exception:
                 pass
+        return bool((response.get("payload") or {}).get("clicked"))
     except Exception as exc:
         if callable(log_callback):
             try:
@@ -39,7 +69,10 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, tim
                 )
             except Exception:
                 pass
-        return
+        if _is_user_stop_error(exc):
+            raise
+        return False
+
 
 
 def _safe_instagram_url(url: str | None) -> str:
@@ -53,6 +86,8 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     opts = options or {}
     click_timeout_ms = max(1000, int(opts.get("instagram_click_timeout_ms") or 10000))
     next_timeout_ms = max(1000, int(opts.get("instagram_next_timeout_ms") or 12000))
+    # Small per-action pause keeps Instagram menu transitions stable.
+    action_delay_ms = max(0, int(opts.get("instagram_action_delay_ms") or 350))
     log_callback = getattr(executor, "log_callback", None)
     if callable(log_callback):
         try:
@@ -71,24 +106,62 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
             "reuseTab": True,
         },
     )
+    _pause_between_actions(action_delay_ms)
     executor.run("platform.ensure_logged_in", {"platform": "instagram"})
+    _pause_between_actions(action_delay_ms)
 
-    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=click_timeout_ms)
-    # Instagram can keep the "Create" text hidden until the side-nav "New post"
-    # glyph is focused/hovered. Click the glyph first so the label/menu is revealed.
-    _best_effort_click(executor, "instagram", "svg[aria-label='New post']", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "title:has-text('New post')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Post')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=click_timeout_ms)
+    # Instagram can keep the Create entry collapsed in the left nav until the
+    # New post glyph is activated first, so prioritize that icon/link sequence.
+    new_post_opened = _best_effort_click(executor, "instagram", "svg[aria-label='New post']", timeout_ms=click_timeout_ms)
+    _pause_between_actions(action_delay_ms)
+    if not new_post_opened:
+        new_post_opened = _best_effort_click(
+            executor,
+            "instagram",
+            "a[role='link']:has(svg[aria-label='New post'])",
+            timeout_ms=click_timeout_ms,
+        )
+        _pause_between_actions(action_delay_ms)
+    _require_step("open_new_post_menu", new_post_opened)
 
-    _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "div[role='button'][aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
+    # Click the Post entry directly after opening the New post menu.
+    post_entry_clicked = _best_effort_click(
+        executor,
+        "instagram",
+        "a[role='link']",
+        timeout_ms=click_timeout_ms,
+        extra_payload={"textContains": "post", "matchIndex": 0},
+    )
+    _pause_between_actions(action_delay_ms)
+
+    # Keep a light text fallback if Instagram changes the nested link markup.
+    if not post_entry_clicked:
+        post_entry_clicked = _best_effort_click(
+            executor,
+            "instagram",
+            "span",
+            timeout_ms=click_timeout_ms,
+            extra_payload={"textContains": "post", "matchIndex": 0},
+        )
+        _pause_between_actions(action_delay_ms)
+    _require_step("select_post_entry", post_entry_clicked)
+
+    select_from_computer_clicked = _best_effort_click(
+        executor,
+        "instagram",
+        "button[aria-label*='Select from computer' i]",
+        timeout_ms=click_timeout_ms,
+    )
+    _pause_between_actions(action_delay_ms)
+    if not select_from_computer_clicked:
+        select_from_computer_clicked = _best_effort_click(
+            executor,
+            "instagram",
+            "div[role='button'][aria-label*='Select from computer' i]",
+            timeout_ms=click_timeout_ms,
+        )
+    _pause_between_actions(action_delay_ms)
+    _require_step("open_select_from_computer", select_from_computer_clicked)
 
     upload_result = executor.run("upload.select_file", {"platform": "instagram", "filePath": video_path})
     upload_payload = upload_result.get("payload") or {}
@@ -97,11 +170,18 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
         detail = upload_payload.get("message") or "automatic file input was not found"
         raise RuntimeError(f"Instagram upload needs manual file selection ({reason}): {detail}")
 
-    _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
-    _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
+    _pause_between_actions(action_delay_ms)
+    next_first_clicked = _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
+    _pause_between_actions(action_delay_ms)
+    _require_step("next_button_first_click", next_first_clicked)
+    next_second_clicked = _best_effort_click(executor, "instagram", _INSTAGRAM_NEXT_BUTTON_SELECTOR, timeout_ms=next_timeout_ms)
+    _pause_between_actions(action_delay_ms)
+    _require_step("next_button_second_click", next_second_clicked)
 
     executor.run("form.fill", {"platform": "instagram", "fields": {"description": caption}})
+    _pause_between_actions(action_delay_ms)
     executor.run("post.submit", {"platform": "instagram"})
+    _pause_between_actions(action_delay_ms)
     status = executor.run("post.status", {"platform": "instagram"})
     if callable(log_callback):
         try:

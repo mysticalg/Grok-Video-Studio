@@ -264,6 +264,7 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "tiktok_submit_timeout_ms": 120000,
     "instagram_click_timeout_ms": 10000,
     "instagram_next_timeout_ms": 12000,
+    "instagram_action_delay_ms": 350,
     "youtube_step_delay_ms": 1200,
     "youtube_form_fill_attempts": 3,
     "youtube_publish_attempts": 2,
@@ -334,6 +335,7 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "tiktok_submit_timeout_ms", "label": "Submit timeout", "min": 1000, "max": 240000, "step": 500, "group": "Core", "tab": "TikTok"},
     {"key": "instagram_click_timeout_ms", "label": "Default click timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Instagram"},
     {"key": "instagram_next_timeout_ms", "label": "Next button timeout", "min": 1000, "max": 60000, "step": 500, "group": "Core", "tab": "Instagram"},
+    {"key": "instagram_action_delay_ms", "label": "Action delay", "min": 0, "max": 5000, "step": 50, "group": "Core", "tab": "Instagram"},
     {"key": "youtube_step_delay_ms", "label": "Step delay", "min": 0, "max": 10000, "step": 50, "group": "Core", "tab": "YouTube"},
     {"key": "youtube_form_fill_attempts", "label": "Metadata fill attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "YouTube"},
     {"key": "youtube_publish_attempts", "label": "Publish attempts", "min": 1, "max": 20, "step": 1, "group": "Core", "suffix": " attempts", "tab": "YouTube"},
@@ -355,7 +357,7 @@ AUTOMATION_TIMING_TAB_DESCRIPTIONS: dict[str, str] = {
     "Grok Polling": "Grok generation timings grouped by function (New Video, Continue Video, and Multi-Video), including continue-last-video pacing controls.",
     "X": "Affects X upload automation steps only (compose click and description retries).",
     "TikTok": "Affects TikTok upload automation waits, click/editor timeouts, and submit behavior.",
-    "Instagram": "Affects Instagram upload automation click and Next-step timing behavior.",
+    "Instagram": "Affects Instagram upload automation click, action pacing delays, and Next-step timing behavior.",
     "YouTube": "Affects YouTube upload automation delays, retries, and publish step timing.",
     "Facebook": "Affects Facebook upload readiness polling, composer waits, and fallback fill timing.",
 }
@@ -7333,6 +7335,7 @@ class MainWindow(QMainWindow):
             "instagram": (
                 "instagram_click_timeout_ms",
                 "instagram_next_timeout_ms",
+                "instagram_action_delay_ms",
             ),
             "youtube": (
                 "youtube_step_delay_ms",
