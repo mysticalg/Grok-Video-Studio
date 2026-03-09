@@ -11313,7 +11313,7 @@ class MainWindow(QMainWindow):
                 if status == "waiting-for-video-mode":
                     if self.manual_single_video_manual_pick and not self.multi_video_mode_active:
                         self._append_log(
-                            f"Variant {current_variant}: action: clicking visible Make video button directly, then waiting for Cancel Video/prompt readiness."
+                            f"Variant {current_variant}: action: waiting for Cancel Video/prompt readiness after Make video click."
                         )
                     generation_state_probe_script = r"""
                         (() => {
@@ -11408,14 +11408,14 @@ class MainWindow(QMainWindow):
                                 if video_clicked and not make_video_visible:
                                     self._append_log(
                                         "WARNING: Variant "
-                                        f"{current_variant}: Make video/cancel cycle completed but prompt controls still not explicit "
+                                        f"{current_variant}: Make video click is registered and the button is now hidden, but prompt controls are still not explicit "
                                         f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}); "
-                                        "proceeding to prompt entry with Enter-submit fallback."
+                                        "continuing to poll for Cancel Video/prompt transition before proceeding."
                                     )
-                                    self.manual_image_video_mode_selected = True
                                     self.manual_image_video_mode_retry_count = 0
-                                    self.manual_image_submit_retry_count = 0
-                                    QTimer.singleShot(self._automation_timing("manual_phase_poll_fast_ms"), self._poll_for_manual_image)
+                                    # Keep the strict manual flow in video-mode validation until prompt controls are
+                                    # actually visible, so we never re-enter prompt entry prematurely.
+                                    QTimer.singleShot(self._automation_timing("manual_phase_poll_slow_ms"), self._poll_for_manual_image)
                                     return
                                 self._append_log(
                                     "WARNING: Variant "
