@@ -13319,11 +13319,44 @@ class MainWindow(QMainWindow):
         self._run_active_browser_javascript(capture_script, _after_capture)
 
     def _resubmit_video_prompt_with_trailing_enter(self, variant: int, on_complete: Callable[[], None] | None = None) -> None:
-        """Attempt moderation recovery by resubmitting from the prompt field via Enter."""
+        """Attempt moderation recovery by selecting Spicy mode and resubmitting via Enter."""
         resubmit_script = r"""
             (() => {
                 try {
                     const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const clickLikeUser = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        let fired = false;
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new MouseEvent("mousedown", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new MouseEvent("mouseup", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new MouseEvent("click", common)); fired = true; } catch (_) {}
+                        if (!fired) {
+                            try { el.click(); fired = true; } catch (_) {}
+                        }
+                        return fired;
+                    };
+
+                    // Moderation recovery path: open the Settings menu and pick Spicy before Enter.
+                    // This gives the retry a stronger signal than Enter alone when content policy blocks.
+                    const settingsButton = [...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]")]
+                        .find((el) => isVisible(el) && !el.disabled) || null;
+                    const settingsClicked = clickLikeUser(settingsButton);
+
+                    const menuItems = [...document.querySelectorAll("[role='menuitem'], [role='menuitemradio'], [data-radix-collection-item]")]
+                        .filter((el) => isVisible(el) && !el.disabled);
+                    const spicyOption = menuItems.find((el) => {
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        return /(^|\s)spicy(\s|$)/i.test(`${aria} ${txt}`) || /might be nsfw/i.test(`${aria} ${txt}`);
+                    }) || null;
+                    const spicyClicked = clickLikeUser(spicyOption);
+
                     const selectors = [
                         "textarea[placeholder*='Describe your video' i]",
                         "textarea[aria-label*='Describe your video' i]",
@@ -13348,13 +13381,16 @@ class MainWindow(QMainWindow):
                     const promptInput = selectors
                         .flatMap((selector) => [...document.querySelectorAll(selector)])
                         .find((el) => isVisible(el));
-                    if (!promptInput) return { ok: false, error: "prompt-input-not-found" };
+                    if (!promptInput) {
+                        return { ok: settingsClicked || spicyClicked, error: "prompt-input-not-found", settingsClicked, spicyClicked };
+                    }
 
                     try { promptInput.focus({ preventScroll: true }); } catch (_) {}
                     let appendedTrailingNewline = false;
                     if (promptInput.isContentEditable) {
                         try {
                             const current = String(promptInput.textContent || "");
+                            // Preserve the existing prompt and only add a trailing newline nudge.
                             promptInput.textContent = `${current}\n`;
                             appendedTrailingNewline = true;
                             promptInput.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
@@ -13378,7 +13414,13 @@ class MainWindow(QMainWindow):
                     try { promptInput.dispatchEvent(new KeyboardEvent("keypress", keyEvent)); enterDispatched = true; } catch (_) {}
                     try { promptInput.dispatchEvent(new KeyboardEvent("keyup", keyEvent)); enterDispatched = true; } catch (_) {}
 
-                    return { ok: enterDispatched || appendedTrailingNewline, enterDispatched, appendedTrailingNewline };
+                    return {
+                        ok: enterDispatched || appendedTrailingNewline || settingsClicked || spicyClicked,
+                        enterDispatched,
+                        appendedTrailingNewline,
+                        settingsClicked,
+                        spicyClicked,
+                    };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
                 }
@@ -13388,11 +13430,13 @@ class MainWindow(QMainWindow):
         def _after_resubmit(result) -> None:
             if isinstance(result, dict) and result.get("ok"):
                 self._append_log(
-                    f"Variant {variant}: moderation retry sent trailing Enter from prompt field (newlineAppended={bool(result.get('appendedTrailingNewline'))})."
+                    f"Variant {variant}: moderation retry attempted Settings→Spicy + trailing Enter "
+                    f"(settingsClicked={bool(result.get('settingsClicked'))}, spicyClicked={bool(result.get('spicyClicked'))}, "
+                    f"newlineAppended={bool(result.get('appendedTrailingNewline'))})."
                 )
             else:
                 self._append_log(
-                    f"WARNING: Variant {variant}: moderation retry could not confirm trailing Enter resubmit. result={result!r}"
+                    f"WARNING: Variant {variant}: moderation retry could not confirm Settings→Spicy + trailing Enter resubmit. result={result!r}"
                 )
             if on_complete is not None:
                 on_complete()
