@@ -149,6 +149,41 @@ class CDPController:
             except Exception:
                 pass
 
+
+    async def set_download_directory(self, download_dir: str) -> tuple[bool, str]:
+        """Try to force Chrome downloads into a specific folder via CDP."""
+
+        target_dir = str(download_dir or "").strip()
+        if not target_dir:
+            return False, "download dir is empty"
+
+        # Ensure we have a page-backed CDP session target.
+        page = await self.get_or_create_page("about:blank", reuse_tab=True)
+        session = await page.context.new_cdp_session(page)
+
+        try:
+            await session.send(
+                "Browser.setDownloadBehavior",
+                {
+                    "behavior": "allow",
+                    "downloadPath": target_dir,
+                    "eventsEnabled": True,
+                },
+            )
+            return True, "Browser.setDownloadBehavior"
+        except Exception as browser_exc:
+            try:
+                await session.send(
+                    "Page.setDownloadBehavior",
+                    {
+                        "behavior": "allow",
+                        "downloadPath": target_dir,
+                    },
+                )
+                return True, "Page.setDownloadBehavior"
+            except Exception as page_exc:
+                return False, f"{browser_exc}; fallback failed: {page_exc}"
+
     async def smoke_test(self) -> str:
         page = await self.get_or_create_page("https://example.com")
         await page.wait_for_load_state("domcontentloaded")

@@ -90,6 +90,7 @@ The desktop app now supports a dedicated **Automation Chrome** controller path:
 - Desktop launches real Chrome with `--remote-debugging-port=9222` and, by default, a dedicated user-data-dir.
 - Optional profile overrides are available directly in **Automation** menu via the **Chrome Profile** dropdown, **Custom Dir** input, and folder **Browse (📁)** button.
 - In `default` mode, the app now only attaches to an already remote-debuggable Chrome session (to avoid default-profile relaunch/lock loops).
+- In external CDP mode, downloads are now explicitly pointed at the app's configured Downloads folder when CDP connects.
 - The same profile behavior can also be controlled by env vars:
   - `GROK_AUTOMATION_CHROME_PROFILE_MODE=dedicated|custom|default`
   - `GROK_AUTOMATION_CHROME_USER_DATA_DIR=<path>` (required for `custom`)
@@ -199,3 +200,9 @@ You can set env vars first, or enter directly in the UI.
 - Buy Me a Coffee: https://buymeacoffee.com/dhooksterm
 - PayPal: https://www.paypal.com/paypalme/dhookster
 - SOL: `6HiqW3jeF3ymxjK5Fcm6dHi46gDuFmeCeSNdW99CfJjp`
+
+
+### Embedded browser cache path
+
+- Embedded QtWebEngine cache/storage can be overridden with `GROK_BROWSER_CACHE_DIR`.
+- Additional cache sizing flags: `GROK_BROWSER_DISK_CACHE_BYTES`, `GROK_BROWSER_MEDIA_CACHE_BYTES`.

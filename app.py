@@ -2610,6 +2610,7 @@ class AutomationRuntimeWorker(QThread):
         self.automation_flow_pages: dict[str, Any] = {}
         self.chrome_profile_mode = "dedicated"
         self.chrome_custom_profile_dir = ""
+        self.chrome_download_dir = ""
 
     async def _find_recent_page_for_scope(self, scope_key: str) -> Any:
         scope = str(scope_key or "").strip().lower()
@@ -2690,6 +2691,11 @@ class AutomationRuntimeWorker(QThread):
         self.chrome_profile_mode = resolved_mode
         self.chrome_custom_profile_dir = str(custom_dir or "").strip()
 
+    def set_chrome_download_dir(self, download_dir: str) -> None:
+        """Set preferred download directory for external Automation Chrome CDP sessions."""
+
+        self.chrome_download_dir = str(download_dir or "").strip()
+
     def start_chrome(self) -> ChromeInstance:
         manager = AutomationChromeManager(
             extension_dir=self.extension_dir,
@@ -2707,6 +2713,12 @@ class AutomationRuntimeWorker(QThread):
 
         async def _connect() -> str:
             self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+            if self.chrome_download_dir:
+                ok, detail = await self.cdp_controller.set_download_directory(self.chrome_download_dir)
+                status_text = "configured" if ok else "not configured"
+                self.log.emit(
+                    f"Automation Chrome download directory {status_text}: {self.chrome_download_dir} ({detail})"
+                )
             title = await self.cdp_controller.smoke_test()
             return title
 
@@ -6518,6 +6530,8 @@ class MainWindow(QMainWindow):
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.download_path_input.setText(str(self.download_dir))
         self._sync_embedded_browser_download_path()
+        if self.automation_runtime is not None:
+            self.automation_runtime.set_chrome_download_dir(str(self.download_dir))
         self._append_log(f"Download folder set to: {self.download_dir}")
 
     def _on_video_options_selected(self, index: int) -> None:
@@ -7403,9 +7417,11 @@ class MainWindow(QMainWindow):
             runtime.start()
             self.automation_runtime = runtime
             self._apply_automation_chrome_profile_to_runtime()
+            runtime.set_chrome_download_dir(str(self.download_dir))
             time.sleep(0.2)
         else:
             self._apply_automation_chrome_profile_to_runtime()
+            self.automation_runtime.set_chrome_download_dir(str(self.download_dir))
         return self.automation_runtime
 
     def _start_automation_chrome(self) -> None:
