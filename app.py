@@ -7736,6 +7736,7 @@ class MainWindow(QMainWindow):
             "session_count",
             "total_usage_seconds",
             "videos_generated_total",
+            "videos_moderated_total",
             "uploads_success_total",
             "uploads_failed_total",
             "unexpected_exit_total",
@@ -7783,6 +7784,7 @@ class MainWindow(QMainWindow):
             f"App launches: {snapshot['app_launch_count']}\n"
             f"Sessions: {snapshot['session_count']}\n"
             f"Videos generated: {snapshot['videos_generated_total']}\n"
+            f"Videos moderated: {snapshot['videos_moderated_total']}\n"
             f"Successful uploads: {snapshot['uploads_success_total']}\n"
             f"Failed uploads: {snapshot['uploads_failed_total']}\n"
             f"Unexpected upload exits: {snapshot['unexpected_exit_total']}\n"
@@ -13916,6 +13918,9 @@ class MainWindow(QMainWindow):
                 self._append_log(
                     f"Variant {current_variant}: moderation indicator detected (eye-off icon). Aborting this flow and returning to homepage."
                 )
+                # Count moderation outcomes in user stats so moderation load is visible alongside
+                # successful generations and upload results in the User Stats dialog.
+                self._stats_increment("videos_moderated_total", 1)
                 self.pending_manual_variant_for_download = None
                 self.pending_manual_download_type = None
                 self.manual_download_click_sent = False
@@ -14522,6 +14527,8 @@ class MainWindow(QMainWindow):
                 self._remove_file_best_effort(output_path, "direct-download cleanup")
             self.manual_public_moderation_count += 1
             if self.manual_public_moderation_count >= MANUAL_PUBLIC_MODERATION_CONFIRM_ATTEMPTS:
+                # Only increment once we've confirmed moderation across configured checks.
+                self._stats_increment("videos_moderated_total", 1)
                 self._abort_manual_video_generation_due_to_moderation(
                     variant,
                     f"public URL moderation signal persisted for {self.manual_public_moderation_count} checks ({exc})",
