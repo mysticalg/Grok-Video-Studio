@@ -88,7 +88,8 @@ python app.py
 The desktop app now supports a dedicated **Automation Chrome** controller path:
 
 - Desktop launches real Chrome with `--remote-debugging-port=9222` and, by default, a dedicated user-data-dir.
-- Optional profile overrides are available directly in **Automation** menu via the **Chrome Profile** dropdown and **Custom Dir** input.
+- Optional profile overrides are available directly in **Automation** menu via the **Chrome Profile** dropdown, **Custom Dir** input, and folder **Browse (📁)** button.
+- In `default` mode, the app now only attaches to an already remote-debuggable Chrome session (to avoid default-profile relaunch/lock loops).
 - The same profile behavior can also be controlled by env vars:
   - `GROK_AUTOMATION_CHROME_PROFILE_MODE=dedicated|custom|default`
   - `GROK_AUTOMATION_CHROME_USER_DATA_DIR=<path>` (required for `custom`)

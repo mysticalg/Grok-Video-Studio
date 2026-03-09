@@ -120,9 +120,22 @@ class AutomationChromeManager:
             return existing
 
         chrome_path = self._detect_chrome_path()
-        profile_dir, _profile_mode = self._resolve_profile_strategy()
+        profile_dir, profile_mode = self._resolve_profile_strategy()
         self._active_profile_dir = profile_dir
         extension_dir = self._validate_extension_dir()
+
+        # Default-profile mode can fight with a user's actively running Chrome session
+        # (profile lock, startup restore, multiple windows/tabs), so we only attach if CDP
+        # is already available. This avoids repeated relaunch loops and app lockups.
+        if profile_mode == "default":
+            ready = self._wait_for_ready(ready_timeout_s=2.5)
+            if ready is not None:
+                return ready
+            raise RuntimeError(
+                "Default Chrome profile mode could not find an existing remote-debuggable Chrome on "
+                f"port {self.port}. For stability, use Dedicated/Custom mode, or start Chrome manually with "
+                f"--remote-debugging-port={self.port} before connecting."
+            )
 
         # Keep Chrome in normal profile mode (no guest/incognito/app/kiosk launch flags)
         # so MV3 extension service workers can run reliably.

@@ -3464,7 +3464,7 @@ class MainWindow(QMainWindow):
         self.automation_chrome_profile_mode.addItem("Use Default Chrome Profile", "default")
         self.automation_chrome_profile_mode.setToolTip(
             "Select how external Automation Chrome manages profile data. "
-            "Dedicated is safest; Default shares your normal Chrome profile."
+            "Dedicated is safest and fastest; Default can be unstable with a busy regular Chrome session."
         )
         initial_profile_mode = os.getenv("GROK_AUTOMATION_CHROME_PROFILE_MODE", "dedicated").strip().lower()
         initial_profile_mode_index = self.automation_chrome_profile_mode.findData(initial_profile_mode)
@@ -3475,6 +3475,10 @@ class MainWindow(QMainWindow):
         self.automation_chrome_custom_profile_dir.setToolTip(
             "Used when profile mode is Custom. Example: C:/Users/<you>/AppData/Local/Google/Chrome/User Data"
         )
+        self.automation_chrome_custom_profile_browse_btn = QPushButton("📁")
+        self.automation_chrome_custom_profile_browse_btn.setToolTip("Browse for a custom Chrome user-data-dir folder.")
+        self.automation_chrome_custom_profile_browse_btn.setMaximumWidth(42)
+        self.automation_chrome_custom_profile_browse_btn.clicked.connect(self._browse_automation_chrome_custom_profile_dir)
         self.automation_chrome_profile_mode.currentIndexChanged.connect(self._on_automation_chrome_profile_mode_changed)
         self.automation_chrome_custom_profile_dir.editingFinished.connect(self._on_automation_chrome_custom_profile_changed)
         self._on_automation_chrome_profile_mode_changed(self.automation_chrome_profile_mode.currentIndex())
@@ -6055,6 +6059,8 @@ class MainWindow(QMainWindow):
         mode, _custom_dir = self._automation_chrome_profile_config()
         if hasattr(self, "automation_chrome_custom_profile_dir"):
             self.automation_chrome_custom_profile_dir.setEnabled(mode == "custom")
+        if hasattr(self, "automation_chrome_custom_profile_browse_btn"):
+            self.automation_chrome_custom_profile_browse_btn.setEnabled(mode == "custom")
         self._apply_automation_chrome_profile_to_runtime()
         if not getattr(self, "_applying_preferences", False):
             self._autosave_preferences_to_default_file()
@@ -6065,6 +6071,17 @@ class MainWindow(QMainWindow):
         self._apply_automation_chrome_profile_to_runtime()
         if not getattr(self, "_applying_preferences", False):
             self._autosave_preferences_to_default_file()
+
+    def _browse_automation_chrome_custom_profile_dir(self) -> None:
+        """Open a folder picker for the custom Automation Chrome profile directory."""
+
+        current_path = self.automation_chrome_custom_profile_dir.text().strip()
+        start_dir = current_path or str(Path.home())
+        selected = QFileDialog.getExistingDirectory(self, "Select Custom Chrome Profile Directory", start_dir)
+        if not selected:
+            return
+        self.automation_chrome_custom_profile_dir.setText(selected)
+        self._on_automation_chrome_custom_profile_changed()
 
     def _populate_top_settings_menus(self) -> None:
         self.video_settings_menu.clear()
@@ -6104,6 +6121,7 @@ class MainWindow(QMainWindow):
         profile_path_layout.setSpacing(8)
         profile_path_layout.addWidget(QLabel("Custom Dir"))
         profile_path_layout.addWidget(self.automation_chrome_custom_profile_dir, 1)
+        profile_path_layout.addWidget(self.automation_chrome_custom_profile_browse_btn)
         self._add_widget_to_menu(self.automation_menu, profile_path_widget)
 
         cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
