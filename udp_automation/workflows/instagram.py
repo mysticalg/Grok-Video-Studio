@@ -12,6 +12,13 @@ _INSTAGRAM_NEXT_BUTTON_SELECTOR = (
 # User-validated CSS paths for the Create menu's Post anchor from failing
 # sessions. Instagram class names are dynamic, so we try these exact selectors in
 # order and then fall back to semantic selectors below.
+
+# Reliable semantic selector: target the link that directly contains the visible
+# Post label span reported from real sessions.
+_INSTAGRAM_POST_TEXT_SPAN_IN_LINK_SELECTOR = (
+    "a[role='link']:has(span.x1lliihq.x193iq5w.x6ikm8r:has-text('Post'))"
+)
+
 _INSTAGRAM_CREATE_MENU_POST_ANCHOR_SELECTORS: tuple[str, ...] = (
     "#mount_0_0_xa > div > div > div.x9f619.x1n2onr6.x1ja2u2z > div > div > div.x78zum5.xdt5ytf.x1t2pt76.x1n2onr6.x1ja2u2z.x10cihs4 > "
     "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.x16ye13r.xvbhtw8.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.x1uhb9sk.x1plvlek.xryxfnj.x1c4vz4f.x2lah0s.x1q0g3np.xqjyukv.x1qjc9v5.x1oa3qoh.x1qughib > "
@@ -117,6 +124,14 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
             break
     # If Instagram changes class names or menu structure, fall back to semantic
     # selectors that still target the first visible Post entry in the menu.
+    if not post_entry_clicked:
+        post_entry_clicked = _best_effort_click(
+            executor,
+            "instagram",
+            _INSTAGRAM_POST_TEXT_SPAN_IN_LINK_SELECTOR,
+            timeout_ms=click_timeout_ms,
+            extra_payload={"matchIndex": 0},
+        )
     if not post_entry_clicked:
         post_entry_clicked = _best_effort_click(
             executor,
