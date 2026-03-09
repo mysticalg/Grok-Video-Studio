@@ -13297,7 +13297,10 @@ class MainWindow(QMainWindow):
 
                 const moderationIcon = [...document.querySelectorAll("svg.lucide-eye-off, svg[class*='lucide-eye-off'], svg.lucide.lucide-eye-off")]
                     .find((el) => isVisible(el));
-                if (moderationIcon) {{
+                const moderatedContentDetected = !!moderationIcon;
+                // During moderation recovery we must still attempt Make Video clicks even if the
+                // moderation icon is visible; otherwise retries loop without ever re-clicking.
+                if (moderatedContentDetected && !allowMakeVideoClick) {{
                     return {{ status: "moderated-content-detected" }};
                 }}
 
@@ -13521,6 +13524,10 @@ class MainWindow(QMainWindow):
                         }};
                     }}
                     return {{ status: "make-video-awaiting-progress", buttonLabel }};
+                }}
+
+                if (moderatedContentDetected) {{
+                    return {{ status: "moderated-content-detected" }};
                 }}
 
                 if (downloadButton) {{
