@@ -10,7 +10,13 @@ _INSTAGRAM_NEXT_BUTTON_SELECTOR = (
 )
 
 
-def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, timeout_ms: int = 8000) -> None:
+def _best_effort_click(
+    executor: BaseExecutor,
+    platform: str,
+    selector: str,
+    timeout_ms: int = 8000,
+    extra_payload: dict[str, Any] | None = None,
+) -> bool:
     log_callback = getattr(executor, "log_callback", None)
     if callable(log_callback):
         try:
@@ -20,16 +26,20 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, tim
         except Exception:
             pass
     try:
-        response = executor.run("dom.click", {"platform": platform, "selector": selector, "timeoutMs": timeout_ms})
+        payload = {"platform": platform, "selector": selector, "timeoutMs": timeout_ms}
+        if extra_payload:
+            payload.update(extra_payload)
+        response = executor.run("dom.click", payload)
         if callable(log_callback):
             try:
-                payload = response.get("payload") or {}
+                response_payload = response.get("payload") or {}
                 log_callback(
                     "Instagram workflow: dom.click completed "
-                    f"target={{platform={platform}, selector={selector!r}}} clicked={bool(payload.get('clicked'))}"
+                    f"target={{platform={platform}, selector={selector!r}}} clicked={bool(response_payload.get('clicked'))}"
                 )
             except Exception:
                 pass
+        return bool((response.get("payload") or {}).get("clicked"))
     except Exception as exc:
         if callable(log_callback):
             try:
@@ -39,7 +49,7 @@ def _best_effort_click(executor: BaseExecutor, platform: str, selector: str, tim
                 )
             except Exception:
                 pass
-        return
+        return False
 
 
 def _safe_instagram_url(url: str | None) -> str:
@@ -73,20 +83,31 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     )
     executor.run("platform.ensure_logged_in", {"platform": "instagram"})
 
-    # Instagram can keep the "Create" entry collapsed in the left nav until the
-    # "New post" glyph is activated first. Run the glyph selectors before the
-    # textual "Create" selectors so the first interaction follows that UI flow.
-    _best_effort_click(executor, "instagram", "svg[aria-label='New post']", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "title:has-text('New post')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Post')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=click_timeout_ms)
+    # Instagram can keep the Create entry collapsed in the left nav until the
+    # New post glyph is activated first, so prioritize that icon/link sequence.
+    new_post_opened = _best_effort_click(executor, "instagram", "svg[aria-label='New post']", timeout_ms=click_timeout_ms)
+    if not new_post_opened:
+        new_post_opened = _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
+
+    # After New post is focused, the Create popover appears. Click the Post entry
+    # directly from the first link-like menu option that contains Post text.
+    post_entry_clicked = _best_effort_click(
+        executor,
+        "instagram",
+        "a[role='link']:has(span:has-text('Post'))",
+        timeout_ms=click_timeout_ms,
+        extra_payload={"matchIndex": 0},
+    )
+    if not post_entry_clicked:
+        post_entry_clicked = _best_effort_click(
+            executor,
+            "instagram",
+            "a[role='link']",
+            timeout_ms=click_timeout_ms,
+            extra_payload={"textContains": "post", "matchIndex": 0},
+        )
+    if not post_entry_clicked:
+        _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=click_timeout_ms)
 
     _best_effort_click(executor, "instagram", "button[aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
     _best_effort_click(executor, "instagram", "div[role='button'][aria-label*='Select from computer' i]", timeout_ms=click_timeout_ms)
