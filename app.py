@@ -5455,12 +5455,30 @@ class MainWindow(QMainWindow):
         self.automation_retry_attempts.setValue(self._automation_timing("automation_retry_attempts"))
         self.manual_download_poll_interval_ms.setValue(self._automation_timing("manual_download_poll_interval_ms"))
 
+        # Keep the dropdown toggle synchronized with automation timing state.
+        if hasattr(self, "skip_final_prompt_entry_action"):
+            skip_enabled = self._automation_timing("skip_final_prompt_entry_enabled") > 0
+            if self.skip_final_prompt_entry_action.isChecked() != skip_enabled:
+                self.skip_final_prompt_entry_action.blockSignals(True)
+                self.skip_final_prompt_entry_action.setChecked(skip_enabled)
+                self.skip_final_prompt_entry_action.blockSignals(False)
+
         if schedule_autosave:
             self._schedule_preferences_autosave()
 
     def _reset_automation_timings_to_defaults(self) -> None:
         self._apply_automation_timing_values(dict(AUTOMATION_TIMING_DEFAULTS), schedule_autosave=True)
         self._append_automation_log("Automation timings reset to defaults.")
+
+    def _set_skip_final_prompt_entry_enabled(self, enabled: bool) -> None:
+        # Persist this dropdown toggle by storing it in automation timing values,
+        # which are already included in preferences save/load.
+        updated_timings = dict(self.automation_timing_values)
+        updated_timings["skip_final_prompt_entry_enabled"] = 1 if bool(enabled) else 0
+        self._apply_automation_timing_values(updated_timings, schedule_autosave=True)
+        self._append_automation_log(
+            f"Skip final prompt entry before Make Video {'enabled' if enabled else 'disabled'}."
+        )
 
     def _automation_timing_tooltip(self, field: dict[str, Any]) -> str:
         key = str(field.get("key") or "")
@@ -5630,10 +5648,17 @@ class MainWindow(QMainWindow):
 
         file_menu = menu_bar.addMenu("File")
         save_action = QAction("Save Preferences", self)
+        save_action.setToolTip("Save preferences to the default preferences.json file.")
         save_action.triggered.connect(self.save_preferences)
         file_menu.addAction(save_action)
 
+        save_as_action = QAction("Save Preferences As...", self)
+        save_as_action.setToolTip("Choose a custom file name and location for preferences.")
+        save_as_action.triggered.connect(self.save_preferences_as)
+        file_menu.addAction(save_as_action)
+
         load_action = QAction("Load Preferences...", self)
+        load_action.setToolTip("Load preferences from a chosen JSON file.")
         load_action.triggered.connect(self.load_preferences)
         file_menu.addAction(load_action)
 
@@ -5671,6 +5696,15 @@ class MainWindow(QMainWindow):
         automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
         automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
         self.automation_menu.addAction(automation_reset_timings_action)
+        self.automation_menu.addSeparator()
+
+        self.skip_final_prompt_entry_action = QAction("Skip Final Prompt Entry Before Make Video", self)
+        self.skip_final_prompt_entry_action.setCheckable(True)
+        self.skip_final_prompt_entry_action.setToolTip(
+            "Toggle bypassing the cancel/prompt-entry stage for create-video flows."
+        )
+        self.skip_final_prompt_entry_action.toggled.connect(self._set_skip_final_prompt_entry_enabled)
+        self.automation_menu.addAction(self.skip_final_prompt_entry_action)
         self.automation_menu.addSeparator()
 
         cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
@@ -5968,6 +6002,11 @@ class MainWindow(QMainWindow):
         automation_reset_timings_action = QAction("Reset Timings to Defaults", self)
         automation_reset_timings_action.triggered.connect(self._reset_automation_timings_to_defaults)
         self.automation_menu.addAction(automation_reset_timings_action)
+        self.automation_menu.addSeparator()
+
+        # Keep a direct toggle in the Automation dropdown for quick access.
+        if hasattr(self, "skip_final_prompt_entry_action"):
+            self.automation_menu.addAction(self.skip_final_prompt_entry_action)
 
         cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
         if hasattr(self, "cdp_menu_actions"):
@@ -7090,6 +7129,22 @@ class MainWindow(QMainWindow):
 
     def save_preferences(self) -> None:
         self._save_preferences_to_path(DEFAULT_PREFERENCES_FILE, show_feedback=True)
+
+    def save_preferences_as(self) -> None:
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Preferences As",
+            str(DEFAULT_PREFERENCES_FILE),
+            "JSON Files (*.json)",
+        )
+        if not file_path:
+            return
+
+        chosen_path = Path(file_path)
+        if chosen_path.suffix.lower() != ".json":
+            chosen_path = chosen_path.with_suffix(".json")
+
+        self._save_preferences_to_path(chosen_path, show_feedback=True)
 
     def load_preferences(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
