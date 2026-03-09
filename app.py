@@ -471,6 +471,15 @@ def _slugify_filename_part(value: str, fallback: str = "na") -> str:
     return cleaned or fallback
 
 
+def _sanitize_download_filename(name: str, fallback: str = "download") -> str:
+    """Return a filesystem-safe filename while preserving common punctuation."""
+    candidate = str(name or "").strip().replace("\\", "_").replace("/", "_")
+    # Replace characters disallowed on Windows/macOS/Linux filesystems.
+    candidate = re.sub(r'[<>:"|?*\x00-\x1F]', "_", candidate)
+    candidate = candidate.strip(" .")
+    return candidate or fallback
+
+
 def _looks_like_public_video_url(candidate: str) -> bool:
     value = str(candidate or "").strip()
     if not value:
@@ -2598,9 +2607,10 @@ class AutomationRuntimeWorker(QThread):
     log = Signal(str)
     status = Signal(str, str)
 
-    def __init__(self, extension_dir: Path):
+    def __init__(self, extension_dir: Path, download_dir: Path):
         super().__init__()
         self.extension_dir = extension_dir
+        self.download_dir = download_dir.resolve()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.bus: ControlBusServer | None = None
         self.chrome_instance: ChromeInstance | None = None
@@ -2680,7 +2690,7 @@ class AutomationRuntimeWorker(QThread):
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=max(1.0, float(timeout_s)))
 
     def start_chrome(self) -> ChromeInstance:
-        manager = AutomationChromeManager(extension_dir=self.extension_dir)
+        manager = AutomationChromeManager(extension_dir=self.extension_dir, download_dir=self.download_dir)
         self.chrome_instance = manager.launch_or_reuse()
         self.status.emit("chrome", "started")
         self.log.emit(f"Automation Chrome ready on port {self.chrome_instance.port} (pid={self.chrome_instance.pid})")
@@ -7272,7 +7282,7 @@ class MainWindow(QMainWindow):
 
     def _ensure_automation_runtime(self) -> AutomationRuntimeWorker:
         if self.automation_runtime is None:
-            runtime = AutomationRuntimeWorker(BASE_DIR / "extension")
+            runtime = AutomationRuntimeWorker(BASE_DIR / "extension", self.download_dir)
             runtime.log.connect(self._append_automation_log)
             runtime.status.connect(lambda k, v: self._append_automation_log(f"{k}: {v}"))
             runtime.start()
@@ -14854,8 +14864,20 @@ class MainWindow(QMainWindow):
 
     def _on_browser_download_requested(self, download) -> None:
         variant = self.pending_manual_variant_for_download
-        if variant is None:
+        manual_download = variant is not None
+
+        if not manual_download:
+            # Keep *all* user-triggered downloads in the app downloads folder so they are easy to find.
+            suggested_name = _sanitize_download_filename(str(download.downloadFileName() or ""), fallback="download")
+            try:
+                download.setDownloadDirectory(str(self.download_dir))
+                download.setDownloadFileName(suggested_name)
+            except Exception as exc:
+                self._append_log(f"WARNING: Failed to route browser download into downloads folder: {exc}")
+            download.accept()
+            self._append_log(f"Saved browser download to {self.download_dir / suggested_name}")
             return
+
         if self.manual_download_request_pending:
             self._append_log("Ignoring duplicate browser download request for current manual variant.")
             download.cancel()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -19,10 +20,17 @@ class ChromeInstance:
 
 
 class AutomationChromeManager:
-    def __init__(self, extension_dir: Path, port: int = 9222, timeout_s: float = 20.0):
+    def __init__(
+        self,
+        extension_dir: Path,
+        port: int = 9222,
+        timeout_s: float = 20.0,
+        download_dir: Path | None = None,
+    ):
         self.extension_dir = extension_dir.resolve()
         self.port = port
         self.timeout_s = timeout_s
+        self.download_dir = download_dir.resolve() if download_dir is not None else None
         self.process: subprocess.Popen[str] | None = None
 
     def _detect_chrome_path(self) -> Path:
@@ -46,6 +54,39 @@ class AutomationChromeManager:
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
         return profile_dir
+
+
+    def _configure_profile_download_preferences(self, profile_dir: Path) -> None:
+        if self.download_dir is None:
+            return
+
+        download_dir = self.download_dir
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        default_profile_dir = profile_dir / "Default"
+        default_profile_dir.mkdir(parents=True, exist_ok=True)
+        preferences_path = default_profile_dir / "Preferences"
+
+        preferences: dict[str, Any] = {}
+        if preferences_path.exists():
+            try:
+                preferences = json.loads(preferences_path.read_text(encoding="utf-8"))
+                if not isinstance(preferences, dict):
+                    preferences = {}
+            except Exception:
+                preferences = {}
+
+        # Persist a predictable download location for user-triggered downloads in external Automation Chrome.
+        # Chrome does not expose a reliable launch flag for this, so we seed profile preferences before startup.
+        download_settings = preferences.get("download")
+        if not isinstance(download_settings, dict):
+            download_settings = {}
+        download_settings["default_directory"] = str(download_dir)
+        download_settings["directory_upgrade"] = True
+        download_settings["prompt_for_download"] = False
+        preferences["download"] = download_settings
+
+        preferences_path.write_text(json.dumps(preferences, indent=2), encoding="utf-8")
 
     def _validate_extension_dir(self) -> Path:
         extension_dir = self.extension_dir
@@ -73,6 +114,7 @@ class AutomationChromeManager:
         chrome_path = self._detect_chrome_path()
         profile_dir = self._profile_dir()
         extension_dir = self._validate_extension_dir()
+        self._configure_profile_download_preferences(profile_dir)
 
         # Keep Chrome in normal profile mode (no guest/incognito/app/kiosk launch flags)
         # so MV3 extension service workers can run reliably.
