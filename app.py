@@ -13318,6 +13318,131 @@ class MainWindow(QMainWindow):
 
         self._run_active_browser_javascript(capture_script, _after_capture)
 
+    def _resubmit_video_prompt_with_trailing_enter(self, variant: int, on_complete: Callable[[], None] | None = None) -> None:
+        """Attempt moderation recovery by selecting Spicy mode and resubmitting via Enter."""
+        resubmit_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+                    const common = { bubbles: true, cancelable: true, composed: true };
+                    const clickLikeUser = (el) => {
+                        if (!el || !isVisible(el) || el.disabled) return false;
+                        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                        try { el.focus({ preventScroll: true }); } catch (_) {}
+                        let fired = false;
+                        try { el.dispatchEvent(new PointerEvent("pointerdown", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new MouseEvent("mousedown", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new PointerEvent("pointerup", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new MouseEvent("mouseup", common)); fired = true; } catch (_) {}
+                        try { el.dispatchEvent(new MouseEvent("click", common)); fired = true; } catch (_) {}
+                        if (!fired) {
+                            try { el.click(); fired = true; } catch (_) {}
+                        }
+                        return fired;
+                    };
+
+                    // Moderation recovery path: open the Settings menu and pick Spicy before Enter.
+                    // This gives the retry a stronger signal than Enter alone when content policy blocks.
+                    const settingsButton = [...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]")]
+                        .find((el) => isVisible(el) && !el.disabled) || null;
+                    const settingsClicked = clickLikeUser(settingsButton);
+
+                    const menuItems = [...document.querySelectorAll("[role='menuitem'], [role='menuitemradio'], [data-radix-collection-item]")]
+                        .filter((el) => isVisible(el) && !el.disabled);
+                    const spicyOption = menuItems.find((el) => {
+                        const aria = clean(el.getAttribute("aria-label"));
+                        const txt = clean(el.textContent);
+                        return /(^|\s)spicy(\s|$)/i.test(`${aria} ${txt}`) || /might be nsfw/i.test(`${aria} ${txt}`);
+                    }) || null;
+                    const spicyClicked = clickLikeUser(spicyOption);
+
+                    const selectors = [
+                        "textarea[placeholder*='Describe your video' i]",
+                        "textarea[aria-label*='Describe your video' i]",
+                        "textarea[placeholder*='Type to imagine' i]",
+                        "input[placeholder*='Type to imagine' i]",
+                        "textarea[placeholder*='Type to customize this video' i]",
+                        "input[placeholder*='Type to customize this video' i]",
+                        "textarea[placeholder*='Type to customize video' i]",
+                        "input[placeholder*='Type to customize video' i]",
+                        "textarea[placeholder*='Customize video' i]",
+                        "input[placeholder*='Customize video' i]",
+                        "div.tiptap.ProseMirror[contenteditable='true']",
+                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize this video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize this video' i]",
+                        "[contenteditable='true'][aria-label*='Type to customize video' i]",
+                        "[contenteditable='true'][data-placeholder*='Type to customize video' i]",
+                        "[contenteditable='true'][aria-label*='Make a video' i]",
+                        "[contenteditable='true'][data-placeholder*='Customize video' i]",
+                    ];
+                    const promptInput = selectors
+                        .flatMap((selector) => [...document.querySelectorAll(selector)])
+                        .find((el) => isVisible(el));
+                    if (!promptInput) {
+                        return { ok: settingsClicked || spicyClicked, error: "prompt-input-not-found", settingsClicked, spicyClicked };
+                    }
+
+                    try { promptInput.focus({ preventScroll: true }); } catch (_) {}
+                    let appendedTrailingNewline = false;
+                    if (promptInput.isContentEditable) {
+                        try {
+                            const current = String(promptInput.textContent || "");
+                            // Preserve the existing prompt and only add a trailing newline nudge.
+                            promptInput.textContent = `${current}\n`;
+                            appendedTrailingNewline = true;
+                            promptInput.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+                            promptInput.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+                        } catch (_) {}
+                    } else if ("value" in promptInput) {
+                        try {
+                            const nextValue = `${String(promptInput.value || "")}\n`;
+                            const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(promptInput), "value")?.set;
+                            if (setter) setter.call(promptInput, nextValue);
+                            else promptInput.value = nextValue;
+                            appendedTrailingNewline = true;
+                            promptInput.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+                            promptInput.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+                        } catch (_) {}
+                    }
+
+                    const keyEvent = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true };
+                    let enterDispatched = false;
+                    try { promptInput.dispatchEvent(new KeyboardEvent("keydown", keyEvent)); enterDispatched = true; } catch (_) {}
+                    try { promptInput.dispatchEvent(new KeyboardEvent("keypress", keyEvent)); enterDispatched = true; } catch (_) {}
+                    try { promptInput.dispatchEvent(new KeyboardEvent("keyup", keyEvent)); enterDispatched = true; } catch (_) {}
+
+                    return {
+                        ok: enterDispatched || appendedTrailingNewline || settingsClicked || spicyClicked,
+                        enterDispatched,
+                        appendedTrailingNewline,
+                        settingsClicked,
+                        spicyClicked,
+                    };
+                } catch (err) {
+                    return { ok: false, error: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _after_resubmit(result) -> None:
+            if isinstance(result, dict) and result.get("ok"):
+                self._append_log(
+                    f"Variant {variant}: moderation retry attempted Settings→Spicy + trailing Enter "
+                    f"(settingsClicked={bool(result.get('settingsClicked'))}, spicyClicked={bool(result.get('spicyClicked'))}, "
+                    f"newlineAppended={bool(result.get('appendedTrailingNewline'))})."
+                )
+            else:
+                self._append_log(
+                    f"WARNING: Variant {variant}: moderation retry could not confirm Settings→Spicy + trailing Enter resubmit. result={result!r}"
+                )
+            if on_complete is not None:
+                on_complete()
+
+        self._run_active_browser_javascript(resubmit_script, _after_resubmit)
+
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
             self._append_log("Stop-all flag active; skipping queued job activity.")
@@ -13778,7 +13903,14 @@ class MainWindow(QMainWindow):
                     self.manual_download_request_pending = False
                     self.manual_download_in_progress = False
                     self.manual_video_allow_make_click = True
-                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+
+                    # Some moderation retries expose an icon-only Make video control that does
+                    # not actually trigger generation when clicked. In that case, resubmit the
+                    # prompt via trailing Enter to keep the flow moving without UI click reliance.
+                    self._resubmit_video_prompt_with_trailing_enter(
+                        current_variant,
+                        lambda: self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms()),
+                    )
                     return
 
                 self._append_log(
