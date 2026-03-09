@@ -13733,7 +13733,8 @@ class MainWindow(QMainWindow):
                 self.manual_video_start_click_sent = True
                 self.manual_continue_progress_seen = True
                 self.manual_continue_progress_gate_logged = False
-                self.manual_moderation_retry_count = 0
+                # Do not reset moderation retry count here; retries are budgeted per
+                # variant session and must accumulate across Make video attempts.
                 progress_done = progress_text in {"100%", "100"}
                 if progress_done and not self.manual_refresh_after_progress_100_sent:
                     self.manual_refresh_after_progress_100_sent = True
@@ -13762,7 +13763,6 @@ class MainWindow(QMainWindow):
                 self.manual_continue_progress_seen = True
                 self.manual_continue_progress_gate_logged = False
                 self.manual_refresh_after_progress_100_sent = False
-                self.manual_moderation_retry_count = 0
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
@@ -13773,7 +13773,6 @@ class MainWindow(QMainWindow):
                 self.manual_video_start_click_sent = True
                 self.manual_video_allow_make_click = False
                 self.manual_video_make_click_fallback_used = True
-                self.manual_moderation_retry_count = 0
 
                 def _after_capture_make_video_start() -> None:
                     self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
