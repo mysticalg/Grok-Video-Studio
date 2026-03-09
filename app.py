@@ -303,7 +303,7 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "moderation_retry_enabled", "label": "Retry when moderation is detected", "group": "Moderation Recovery", "tab": "Grok Polling", "type": "bool", "help": "When enabled, Create Video and Continue Video will retry Make video after moderation is detected."},
     {"key": "moderation_retry_attempts", "label": "Moderation retry attempts", "min": 1, "max": 10, "step": 1, "group": "Moderation Recovery", "suffix": " attempts", "tab": "Grok Polling"},
-    {"key": "skip_final_prompt_entry_enabled", "label": "Skip final prompt entry before Make video", "group": "Continue Video", "tab": "Grok Polling", "type": "bool", "help": "Bypass the cancel/prompt-entry stage and proceed directly to Make Video polling for Create Video and Continue-last-video flows."},
+    {"key": "skip_final_prompt_entry_enabled", "label": "Skip final prompt entry before Make video", "group": "Continue Video", "tab": "Grok Polling", "type": "bool", "help": "Continue-last-video only: bypass the cancel/prompt-entry stage after the first Make Video click and proceed directly to Make Video progress polling."},
     {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
     {"key": "continue_option_step_delay_ms", "label": "Continue-last-video option step delay", "min": 100, "max": 15000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
@@ -5697,7 +5697,7 @@ class MainWindow(QMainWindow):
         self.skip_final_prompt_entry_toggle_action = QAction("Skip final prompt entry before Make video", self)
         self.skip_final_prompt_entry_toggle_action.setCheckable(True)
         self.skip_final_prompt_entry_toggle_action.setToolTip(
-            "Bypass the final prompt-entry stage and proceed directly to Make Video polling."
+            "Continue-last-video only: bypass final prompt entry after initial Make Video and poll generation directly."
         )
         self.skip_final_prompt_entry_toggle_action.toggled.connect(
             lambda enabled: self._set_automation_bool_setting("skip_final_prompt_entry_enabled", enabled)
@@ -6009,7 +6009,7 @@ class MainWindow(QMainWindow):
             self.skip_final_prompt_entry_toggle_action = QAction("Skip final prompt entry before Make video", self)
             self.skip_final_prompt_entry_toggle_action.setCheckable(True)
             self.skip_final_prompt_entry_toggle_action.setToolTip(
-                "Bypass the final prompt-entry stage and proceed directly to Make Video polling."
+                "Continue-last-video only: bypass final prompt entry after initial Make Video and poll generation directly."
             )
             self.skip_final_prompt_entry_toggle_action.toggled.connect(
                 lambda enabled: self._set_automation_bool_setting("skip_final_prompt_entry_enabled", enabled)
@@ -11020,10 +11020,11 @@ class MainWindow(QMainWindow):
                     submit_visible = bool(result.get("submitButtonVisible"))
                     cancel_visible = bool(result.get("cancelVideoButtonVisible"))
                     on_post_view = bool(result.get("onPostView"))
-                    skip_final_prompt_entry_enabled = self._automation_timing("skip_final_prompt_entry_enabled") > 0
+                    continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+                    skip_final_prompt_entry_enabled = continue_last_video_mode and (self._automation_timing("skip_final_prompt_entry_enabled") > 0)
                     if skip_final_prompt_entry_enabled:
                         self._append_log(
-                            f"Variant {current_variant}: final prompt entry bypass enabled; skipping cancel/prompt stage and polling Make video generation directly."
+                            f"Variant {current_variant}: continue-last-video final prompt bypass enabled; skipping cancel/prompt stage and polling Make video generation directly."
                         )
                         self.manual_image_video_mode_selected = True
                         self.manual_image_video_mode_retry_count = 0
@@ -12995,7 +12996,8 @@ class MainWindow(QMainWindow):
             self._run_active_browser_javascript(script, _after_prompt_populate)
 
         continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
-        skip_final_prompt_entry_enabled = self._automation_timing("skip_final_prompt_entry_enabled") > 0
+        # This bypass is intentionally scoped to continue-last-video only.
+        skip_final_prompt_entry_enabled = continue_last_video_mode and (self._automation_timing("skip_final_prompt_entry_enabled") > 0)
         # Continue-last-video often needs independent pacing controls versus generic Sora/manual flows.
         option_step_delay_key = "continue_option_step_delay_ms" if continue_last_video_mode else "sora_option_step_delay_ms"
         submit_delay_key = "continue_submit_after_prompt_delay_ms" if continue_last_video_mode else "sora_download_trigger_delay_ms"
