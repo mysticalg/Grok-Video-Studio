@@ -26,6 +26,7 @@ class AutomationChromeManager:
         timeout_s: float = 20.0,
         profile_mode: str | None = None,
         profile_dir_override: str | Path | None = None,
+        profile_directory_override: str | None = None,
     ):
         self.extension_dir = extension_dir.resolve()
         self.port = port
@@ -34,17 +35,20 @@ class AutomationChromeManager:
         self._active_profile_dir: Path | None = None
         self.profile_mode = str(profile_mode or "").strip().lower() or None
         self.profile_dir_override = str(profile_dir_override or "").strip()
+        self.profile_directory_override = str(profile_directory_override or "").strip()
 
-    def _resolve_profile_strategy(self) -> tuple[Path | None, str]:
+    def _resolve_profile_strategy(self) -> tuple[Path | None, str, str]:
         """Resolve how Chrome profile data should be handled for automation launch.
 
-        Returns a tuple of `(user_data_dir, mode)` where:
+        Returns a tuple of `(user_data_dir, mode, profile_directory)` where:
         - `user_data_dir` is the directory passed to `--user-data-dir` (or None to skip it)
         - `mode` is one of `dedicated`, `custom`, or `default`
+        - `profile_directory` maps to Chrome `--profile-directory=<name>` (optional)
 
         Environment overrides (in priority order):
         - GROK_AUTOMATION_CHROME_PROFILE_MODE=dedicated|custom|default
         - GROK_AUTOMATION_CHROME_USER_DATA_DIR=<path>
+        - GROK_AUTOMATION_CHROME_PROFILE_DIRECTORY=Default|Profile 1|Profile 2|...
 
         Behavior:
         - dedicated (default): use an isolated profile under AppData/Roaming.
@@ -54,11 +58,12 @@ class AutomationChromeManager:
 
         mode = self.profile_mode or os.getenv("GROK_AUTOMATION_CHROME_PROFILE_MODE", "dedicated").strip().lower()
         custom_dir = self.profile_dir_override or os.getenv("GROK_AUTOMATION_CHROME_USER_DATA_DIR", "").strip()
+        profile_directory = self.profile_directory_override or os.getenv("GROK_AUTOMATION_CHROME_PROFILE_DIRECTORY", "").strip()
         if mode not in {"dedicated", "custom", "default"}:
             mode = "custom" if custom_dir else "dedicated"
 
         if mode == "default":
-            return None, mode
+            return None, mode, profile_directory
 
         if mode == "custom" or custom_dir:
             if not custom_dir:
@@ -70,9 +75,9 @@ class AutomationChromeManager:
             probe = profile_dir / ".write_probe"
             probe.write_text("ok", encoding="utf-8")
             probe.unlink(missing_ok=True)
-            return profile_dir, "custom"
+            return profile_dir, "custom", profile_directory
 
-        return self._profile_dir(), "dedicated"
+        return self._profile_dir(), "dedicated", ""
 
     def _detect_chrome_path(self) -> Path:
         candidates = [
@@ -120,7 +125,7 @@ class AutomationChromeManager:
             return existing
 
         chrome_path = self._detect_chrome_path()
-        profile_dir, profile_mode = self._resolve_profile_strategy()
+        profile_dir, profile_mode, profile_directory = self._resolve_profile_strategy()
         self._active_profile_dir = profile_dir
         extension_dir = self._validate_extension_dir()
 
@@ -151,6 +156,8 @@ class AutomationChromeManager:
         ]
         if profile_dir is not None:
             args.insert(2, f"--user-data-dir={profile_dir}")
+        if profile_directory:
+            args.append(f"--profile-directory={profile_directory}")
         self.process = subprocess.Popen(args)
 
         ready = self._wait_for_ready(ready_timeout_s=self.timeout_s)

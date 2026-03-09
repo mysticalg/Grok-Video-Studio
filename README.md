@@ -90,10 +90,12 @@ The desktop app now supports a dedicated **Automation Chrome** controller path:
 - Desktop launches real Chrome with `--remote-debugging-port=9222` and, by default, a dedicated user-data-dir.
 - Optional profile overrides are available directly in **Automation** menu via the **Chrome Profile** dropdown, **Custom Dir** input, and folder **Browse (📁)** button.
 - In `default` mode, the app now only attaches to an already remote-debuggable Chrome session (to avoid default-profile relaunch/lock loops).
+- To target a real Chrome profile reliably, use `custom` mode with User Data root + optional Profile Name (`Default`, `Profile 1`, etc.).
 - In external CDP mode, downloads are now explicitly pointed at the app's configured Downloads folder when CDP connects.
 - The same profile behavior can also be controlled by env vars:
   - `GROK_AUTOMATION_CHROME_PROFILE_MODE=dedicated|custom|default`
   - `GROK_AUTOMATION_CHROME_USER_DATA_DIR=<path>` (required for `custom`)
+  - `GROK_AUTOMATION_CHROME_PROFILE_DIRECTORY=Default|Profile 1|...` (optional profile subdir)
 - Desktop connects through Playwright `connect_over_cdp(...)` for browser-level control.
 - A local WebSocket bus (`ws://127.0.0.1:18792`) enables extension ⇄ desktop commands/events.
 - An unpacked MV3 extension (`extension/`) handles DOM checks/actions in the active tab via `chrome.scripting.executeScript`.

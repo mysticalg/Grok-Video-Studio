@@ -2610,6 +2610,7 @@ class AutomationRuntimeWorker(QThread):
         self.automation_flow_pages: dict[str, Any] = {}
         self.chrome_profile_mode = "dedicated"
         self.chrome_custom_profile_dir = ""
+        self.chrome_profile_directory = ""
         self.chrome_download_dir = ""
 
     async def _find_recent_page_for_scope(self, scope_key: str) -> Any:
@@ -2682,14 +2683,21 @@ class AutomationRuntimeWorker(QThread):
             raise RuntimeError("Automation runtime not started")
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=max(1.0, float(timeout_s)))
 
-    def set_chrome_profile_settings(self, *, mode: str, custom_dir: str = "") -> None:
-        """Configure how Automation Chrome should choose a user-data-dir on next launch."""
+    def set_chrome_profile_settings(
+        self,
+        *,
+        mode: str,
+        custom_dir: str = "",
+        profile_directory: str = "",
+    ) -> None:
+        """Configure profile-root and profile-subdir behavior for next Automation Chrome launch."""
 
         resolved_mode = str(mode or "dedicated").strip().lower()
         if resolved_mode not in {"dedicated", "custom", "default"}:
             resolved_mode = "dedicated"
         self.chrome_profile_mode = resolved_mode
         self.chrome_custom_profile_dir = str(custom_dir or "").strip()
+        self.chrome_profile_directory = str(profile_directory or "").strip()
 
     def set_chrome_download_dir(self, download_dir: str) -> None:
         """Set preferred download directory for external Automation Chrome CDP sessions."""
@@ -2701,6 +2709,7 @@ class AutomationRuntimeWorker(QThread):
             extension_dir=self.extension_dir,
             profile_mode=self.chrome_profile_mode,
             profile_dir_override=self.chrome_custom_profile_dir,
+            profile_directory_override=self.chrome_profile_directory,
         )
         self.chrome_instance = manager.launch_or_reuse()
         self.status.emit("chrome", "started")
@@ -3491,8 +3500,14 @@ class MainWindow(QMainWindow):
         self.automation_chrome_custom_profile_browse_btn.setToolTip("Browse for a custom Chrome user-data-dir folder.")
         self.automation_chrome_custom_profile_browse_btn.setMaximumWidth(42)
         self.automation_chrome_custom_profile_browse_btn.clicked.connect(self._browse_automation_chrome_custom_profile_dir)
+        self.automation_chrome_profile_directory = QLineEdit(os.getenv("GROK_AUTOMATION_CHROME_PROFILE_DIRECTORY", "").strip())
+        self.automation_chrome_profile_directory.setPlaceholderText("Optional profile directory name (e.g. Default, Profile 1)")
+        self.automation_chrome_profile_directory.setToolTip(
+            "Optional Chrome profile directory name. Use with Custom mode to target a real profile inside User Data root."
+        )
         self.automation_chrome_profile_mode.currentIndexChanged.connect(self._on_automation_chrome_profile_mode_changed)
         self.automation_chrome_custom_profile_dir.editingFinished.connect(self._on_automation_chrome_custom_profile_changed)
+        self.automation_chrome_profile_directory.editingFinished.connect(self._on_automation_chrome_custom_profile_changed)
         self._on_automation_chrome_profile_mode_changed(self.automation_chrome_profile_mode.currentIndex())
         prompt_group = QGroupBox("✨ Prompt Inputs")
         prompt_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -6043,7 +6058,7 @@ class MainWindow(QMainWindow):
             if isinstance(button, QToolButton):
                 button.setToolButtonStyle(Qt.ToolButtonTextOnly)
 
-    def _automation_chrome_profile_config(self) -> tuple[str, str]:
+    def _automation_chrome_profile_config(self) -> tuple[str, str, str]:
         """Return selected automation Chrome profile mode + custom path from UI controls."""
 
         mode = str(
@@ -6054,7 +6069,12 @@ class MainWindow(QMainWindow):
             if hasattr(self, "automation_chrome_custom_profile_dir")
             else ""
         )
-        return mode or "dedicated", custom_dir
+        profile_directory = (
+            self.automation_chrome_profile_directory.text().strip()
+            if hasattr(self, "automation_chrome_profile_directory")
+            else ""
+        )
+        return mode or "dedicated", custom_dir, profile_directory
 
     def _apply_automation_chrome_profile_to_runtime(self) -> None:
         """Push currently selected profile strategy into the background automation runtime worker."""
@@ -6062,17 +6082,19 @@ class MainWindow(QMainWindow):
         runtime = self.automation_runtime
         if runtime is None:
             return
-        mode, custom_dir = self._automation_chrome_profile_config()
-        runtime.set_chrome_profile_settings(mode=mode, custom_dir=custom_dir)
+        mode, custom_dir, profile_directory = self._automation_chrome_profile_config()
+        runtime.set_chrome_profile_settings(mode=mode, custom_dir=custom_dir, profile_directory=profile_directory)
 
     def _on_automation_chrome_profile_mode_changed(self, _index: int) -> None:
         """Enable/disable custom dir input based on selected profile mode and persist settings."""
 
-        mode, _custom_dir = self._automation_chrome_profile_config()
+        mode, _custom_dir, _profile_directory = self._automation_chrome_profile_config()
         if hasattr(self, "automation_chrome_custom_profile_dir"):
             self.automation_chrome_custom_profile_dir.setEnabled(mode == "custom")
         if hasattr(self, "automation_chrome_custom_profile_browse_btn"):
             self.automation_chrome_custom_profile_browse_btn.setEnabled(mode == "custom")
+        if hasattr(self, "automation_chrome_profile_directory"):
+            self.automation_chrome_profile_directory.setEnabled(mode in {"custom", "default"})
         self._apply_automation_chrome_profile_to_runtime()
         if not getattr(self, "_applying_preferences", False):
             self._autosave_preferences_to_default_file()
@@ -6135,6 +6157,18 @@ class MainWindow(QMainWindow):
         profile_path_layout.addWidget(self.automation_chrome_custom_profile_dir, 1)
         profile_path_layout.addWidget(self.automation_chrome_custom_profile_browse_btn)
         self._add_widget_to_menu(self.automation_menu, profile_path_widget)
+
+        profile_name_widget = QWidget(self)
+        profile_name_layout = QHBoxLayout(profile_name_widget)
+        profile_name_layout.setContentsMargins(8, 4, 8, 4)
+        profile_name_layout.setSpacing(8)
+        profile_name_layout.addWidget(QLabel("Profile Name"))
+        profile_name_layout.addWidget(self.automation_chrome_profile_directory, 1)
+        profile_name_hint = QLabel("ℹ")
+        profile_name_hint.setStyleSheet("color: palette(mid);")
+        profile_name_hint.setToolTip("Example: Default or Profile 1. Works with Custom mode user-data-dir roots.")
+        profile_name_layout.addWidget(profile_name_hint)
+        self._add_widget_to_menu(self.automation_menu, profile_name_widget)
 
         cdp_settings_menu = self.automation_menu.addMenu("CDP Settings")
         if hasattr(self, "cdp_menu_actions"):
@@ -6666,6 +6700,7 @@ class MainWindow(QMainWindow):
             "automation_mode": self.automation_mode.currentData(),
             "automation_chrome_profile_mode": self.automation_chrome_profile_mode.currentData(),
             "automation_chrome_custom_profile_dir": self.automation_chrome_custom_profile_dir.text().strip(),
+            "automation_chrome_profile_directory": self.automation_chrome_profile_directory.text().strip(),
             "counter": self.count.value(),
             "automation_action_delay_ms": self._automation_timing("automation_action_delay_ms"),
             "automation_retry_attempts": self._automation_timing("automation_retry_attempts"),
@@ -6902,6 +6937,9 @@ class MainWindow(QMainWindow):
                 self.automation_chrome_profile_mode.setCurrentIndex(profile_mode_index)
         if "automation_chrome_custom_profile_dir" in preferences:
             self.automation_chrome_custom_profile_dir.setText(str(preferences["automation_chrome_custom_profile_dir"]))
+        if "automation_chrome_profile_directory" in preferences:
+            self.automation_chrome_profile_directory.setText(str(preferences["automation_chrome_profile_directory"]))
+        if "automation_chrome_custom_profile_dir" in preferences or "automation_chrome_profile_directory" in preferences:
             self._on_automation_chrome_custom_profile_changed()
         if "ai_social_metadata" in preferences and isinstance(preferences["ai_social_metadata"], dict):
             metadata = preferences["ai_social_metadata"]
@@ -7427,8 +7465,8 @@ class MainWindow(QMainWindow):
     def _start_automation_chrome(self) -> None:
         try:
             runtime = self._ensure_automation_runtime()
-            mode, custom_dir = self._automation_chrome_profile_config()
-            runtime.set_chrome_profile_settings(mode=mode, custom_dir=custom_dir)
+            mode, custom_dir, profile_directory = self._automation_chrome_profile_config()
+            runtime.set_chrome_profile_settings(mode=mode, custom_dir=custom_dir, profile_directory=profile_directory)
             instance = runtime.start_chrome()
             self.automation_chrome_instance = instance
             profile_msg = custom_dir if mode == "custom" and custom_dir else ("default Chrome profile" if mode == "default" else str(instance.profile_dir))
