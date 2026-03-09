@@ -224,6 +224,10 @@ AUTOMATION_TIMING_DEFAULTS: dict[str, int] = {
     "manual_phase_poll_hard_backoff_ms": 3000,
     "manual_multi_video_poll_ms": 1200,
     "manual_multi_video_poll_fast_ms": 200,
+    # Optional safety net: if Grok flags the generated draft as moderated, we can
+    # automatically retry by re-clicking Make video instead of aborting immediately.
+    "moderation_retry_enabled": 1,
+    "moderation_retry_attempts": 2,
     "sora_option_step_delay_ms": 2000,
     # Continue-last-video often needs slower pacing than standard Sora staged clicks.
     "continue_option_step_delay_ms": 2000,
@@ -294,6 +298,8 @@ AUTOMATION_TIMING_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "manual_phase_poll_hard_backoff_ms", "label": "Phase poll (hard backoff)", "min": 100, "max": 15000, "step": 100, "group": "New Video (Manual)", "tab": "Grok Polling"},
     {"key": "manual_multi_video_poll_ms", "label": "Multi-video poll interval", "min": 100, "max": 10000, "step": 100, "group": "Multi-Video", "tab": "Grok Polling"},
     {"key": "manual_multi_video_poll_fast_ms", "label": "Multi-video fast poll", "min": 100, "max": 5000, "step": 50, "group": "Multi-Video", "tab": "Grok Polling"},
+    {"key": "moderation_retry_enabled", "label": "Retry when moderation is detected", "group": "Moderation Recovery", "tab": "Grok Polling", "type": "bool", "help": "When enabled, Create Video and Continue Video will retry Make video after moderation is detected."},
+    {"key": "moderation_retry_attempts", "label": "Moderation retry attempts", "min": 1, "max": 10, "step": 1, "group": "Moderation Recovery", "suffix": " attempts", "tab": "Grok Polling"},
     {"key": "sora_option_step_delay_ms", "label": "Sora option step delay", "min": 100, "max": 15000, "step": 100, "group": "Sora", "tab": "General"},
     {"key": "continue_option_step_delay_ms", "label": "Continue-last-video option step delay", "min": 100, "max": 15000, "step": 100, "group": "Continue Video", "tab": "Grok Polling"},
     {"key": "sora_download_trigger_delay_ms", "label": "Sora download trigger delay", "min": 100, "max": 5000, "step": 50, "group": "Sora", "tab": "General"},
@@ -3273,6 +3279,7 @@ class MainWindow(QMainWindow):
         self.manual_download_last_status_log_at = 0.0
         self.manual_public_not_ready_count = 0
         self.manual_public_moderation_count = 0
+        self.manual_moderation_retry_count = 0
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
@@ -5459,13 +5466,24 @@ class MainWindow(QMainWindow):
         minimum = int(field.get("min", 0))
         maximum = int(field.get("max", 60000))
         step = int(field.get("step", 1))
-        suffix = str(field.get("suffix") or " ms")
+        field_type = str(field.get("type") or "int").strip().lower()
+        suffix = str(field.get("suffix") or ("" if field_type == "bool" else " ms"))
         default_value = int(AUTOMATION_TIMING_DEFAULTS.get(key, minimum))
         scope_text = AUTOMATION_TIMING_TAB_DESCRIPTIONS.get(tab_name, "Affects automation behavior for this tab.")
+        if field_type == "bool":
+            default_display = "On" if default_value else "Off"
+            range_text = "Range: Off or On."
+            step_text = ""
+        else:
+            default_display = f"{default_value}{suffix}"
+            range_text = f"Range: {minimum} to {maximum}{suffix}."
+            step_text = f" Step: {step}{suffix}."
+        help_text = str(field.get("help") or "").strip()
+        help_line = f"\nHint: {help_text}" if help_text else ""
         return (
             f"{label}: controls '{key}'.\n"
             f"Scope: {scope_text}\n"
-            f"Group: {group_name}. Default: {default_value}{suffix}. Range: {minimum} to {maximum}{suffix}. Step: {step}{suffix}."
+            f"Group: {group_name}. Default: {default_display}. {range_text}{step_text}{help_line}"
         )
 
     def _open_automation_timings_dialog(self) -> None:
@@ -5535,12 +5553,19 @@ class MainWindow(QMainWindow):
                 tab_columns[tab_name][column_index].addWidget(group_box)
 
             spin = QSpinBox()
-            spin.setRange(int(field.get("min", 0)), int(field.get("max", 60000)))
-            spin.setSingleStep(int(field.get("step", 1)))
-            if field.get("suffix"):
-                spin.setSuffix(str(field.get("suffix")))
+            field_type = str(field.get("type") or "int").strip().lower()
+            if field_type == "bool":
+                spin.setRange(0, 1)
+                spin.setSingleStep(1)
+                spin.setSpecialValueText("Off")
+                spin.setSuffix(" (On)")
             else:
-                spin.setSuffix(" ms")
+                spin.setRange(int(field.get("min", 0)), int(field.get("max", 60000)))
+                spin.setSingleStep(int(field.get("step", 1)))
+                if field.get("suffix"):
+                    spin.setSuffix(str(field.get("suffix")))
+                else:
+                    spin.setSuffix(" ms")
             key = str(field["key"])
             spin.setValue(self._automation_timing(key))
             tooltip_text = self._automation_timing_tooltip(field)
@@ -13017,6 +13042,7 @@ class MainWindow(QMainWindow):
         self.manual_download_last_status_log_at = 0.0
         self.manual_public_not_ready_count = 0
         self.manual_public_moderation_count = 0
+        self.manual_moderation_retry_count = 0
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -13575,6 +13601,30 @@ class MainWindow(QMainWindow):
                     return
 
             if status == "moderated-content-detected":
+                moderation_retry_enabled = self._automation_timing("moderation_retry_enabled") > 0
+                moderation_retry_limit = max(1, self._automation_timing("moderation_retry_attempts"))
+                if moderation_retry_enabled and self.manual_moderation_retry_count < moderation_retry_limit:
+                    self.manual_moderation_retry_count += 1
+                    self._append_log(
+                        f"Variant {current_variant}: moderation indicator detected (eye-off icon). "
+                        f"Retrying Make video ({self.manual_moderation_retry_count}/{moderation_retry_limit})."
+                    )
+                    # Re-arm generation start guards so the next poll can click Make video again.
+                    self.manual_video_start_click_sent = False
+                    self.manual_video_make_click_fallback_used = False
+                    self.manual_make_video_awaiting_progress_count = 0
+                    self.manual_generating_indicator_seen = False
+                    self.manual_refresh_after_generating_sent = False
+                    self.manual_refresh_after_progress_100_sent = False
+                    self.manual_continue_progress_seen = False
+                    self.manual_continue_progress_gate_logged = False
+                    self.manual_download_click_sent = False
+                    self.manual_download_request_pending = False
+                    self.manual_download_in_progress = False
+                    self.manual_video_allow_make_click = True
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                    return
+
                 self._append_log(
                     f"Variant {current_variant}: moderation indicator detected (eye-off icon). Aborting this flow and returning to homepage."
                 )
@@ -13601,6 +13651,7 @@ class MainWindow(QMainWindow):
                 self.manual_video_start_click_sent = True
                 self.manual_continue_progress_seen = True
                 self.manual_continue_progress_gate_logged = False
+                self.manual_moderation_retry_count = 0
                 progress_done = progress_text in {"100%", "100"}
                 if progress_done and not self.manual_refresh_after_progress_100_sent:
                     self.manual_refresh_after_progress_100_sent = True
@@ -13629,6 +13680,7 @@ class MainWindow(QMainWindow):
                 self.manual_continue_progress_seen = True
                 self.manual_continue_progress_gate_logged = False
                 self.manual_refresh_after_progress_100_sent = False
+                self.manual_moderation_retry_count = 0
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
@@ -13639,6 +13691,7 @@ class MainWindow(QMainWindow):
                 self.manual_video_start_click_sent = True
                 self.manual_video_allow_make_click = False
                 self.manual_video_make_click_fallback_used = True
+                self.manual_moderation_retry_count = 0
 
                 def _after_capture_make_video_start() -> None:
                     self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
