@@ -1,3 +1,15 @@
+#     *    
+#    * *   
+#   * * *  
+#  *  *  * 
+# *********
+#  *  *  * 
+#   * * *  
+#    * *   
+#     *    
+
+"""Control Bus module for Grok Video Studio automation flows."""
+
 from __future__ import annotations
 
 import asyncio

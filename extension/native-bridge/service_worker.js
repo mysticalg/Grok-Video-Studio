@@ -1,3 +1,16 @@
+//     *    
+//    * *   
+//   * * *  
+//  *  *  * 
+// *********
+//  *  *  * 
+//   * * *  
+//    * *   
+//     *    
+
+// Automation bridge script for Grok Video Studio.
+// Handles command routing from the desktop app to the active web tab/native host.
+
 const HOST_NAME = 'com.grok.video_studio.host';
 
 function sendNative(message) {

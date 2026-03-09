@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+#     *    
+#    * *   
+#   * * *  
+#  *  *  * 
+# *********
+#  *  *  * 
+#   * * *  
+#    * *   
+#     *    
+
 """CDP relay endpoint for Grok Video Studio social uploads.
 
 Runs an HTTP endpoint used by app.py and executes best-effort actions in the

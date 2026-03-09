@@ -1,3 +1,13 @@
+#     *    
+#    * *   
+#   * * *  
+#  *  *  * 
+# *********
+#  *  *  * 
+#   * * *  
+#    * *   
+#     *    
+
 import os
 import asyncio
 import json

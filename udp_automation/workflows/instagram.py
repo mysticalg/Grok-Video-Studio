@@ -1,3 +1,15 @@
+#     *    
+#    * *   
+#   * * *  
+#  *  *  * 
+# *********
+#  *  *  * 
+#   * * *  
+#    * *   
+#     *    
+
+"""Instagram module for Grok Video Studio automation flows."""
+
 from __future__ import annotations
 
 from typing import Any

@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+#     *    
+#    * *   
+#   * * *  
+#  *  *  * 
+# *********
+#  *  *  * 
+#   * * *  
+#    * *   
+#     *    
+
 """Chrome Native Messaging host for Grok Video Studio.
 
 Protocol:

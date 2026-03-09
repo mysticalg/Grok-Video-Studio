@@ -1,3 +1,16 @@
+//     *    
+//    * *   
+//   * * *  
+//  *  *  * 
+// *********
+//  *  *  * 
+//   * * *  
+//    * *   
+//     *    
+
+// Automation bridge script for Grok Video Studio.
+// Handles command routing from the desktop app to the active web tab/native host.
+
 const WS_URL = "ws://127.0.0.1:18792";
 const SCHEMA_VERSION = 1;
 const CLIENT_ID = "relay-extension";
