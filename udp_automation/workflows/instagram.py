@@ -110,21 +110,35 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     executor.run("platform.ensure_logged_in", {"platform": "instagram"})
     _pause_between_actions(action_delay_ms)
 
-    # Instagram can keep the Create entry collapsed in the left nav until the
-    # New post glyph is activated first, so prioritize that icon/link sequence.
-    new_post_opened = _best_effort_click(executor, "instagram", "svg[aria-label='New post']", timeout_ms=click_timeout_ms)
+    # Prefer the Create trigger first to align with current Instagram nav flow.
+    create_menu_opened = _best_effort_click(
+        executor,
+        "instagram",
+        "a[role='link']",
+        timeout_ms=click_timeout_ms,
+        extra_payload={"textContains": "create", "matchIndex": 0},
+    )
     _pause_between_actions(action_delay_ms)
-    if not new_post_opened:
-        new_post_opened = _best_effort_click(
+    # Fallback: some layouts expose New post glyph instead of visible Create text.
+    if not create_menu_opened:
+        create_menu_opened = _best_effort_click(
+            executor,
+            "instagram",
+            "svg[aria-label='New post']",
+            timeout_ms=click_timeout_ms,
+        )
+        _pause_between_actions(action_delay_ms)
+    if not create_menu_opened:
+        create_menu_opened = _best_effort_click(
             executor,
             "instagram",
             "a[role='link']:has(svg[aria-label='New post'])",
             timeout_ms=click_timeout_ms,
         )
         _pause_between_actions(action_delay_ms)
-    _require_step("open_new_post_menu", new_post_opened)
+    _require_step("open_create_menu", create_menu_opened)
 
-    # Click the Post entry directly after opening the New post menu.
+    # Click the Post entry directly after opening the Create menu.
     post_entry_clicked = _best_effort_click(
         executor,
         "instagram",
