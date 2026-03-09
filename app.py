@@ -3284,6 +3284,12 @@ class MainWindow(QMainWindow):
         self.manual_public_not_ready_count = 0
         self.manual_public_moderation_count = 0
         self.manual_moderation_retry_count = 0
+        # Alternate moderation recovery style between Spicy and Normal to reduce repeated
+        # policy hits from retrying with the exact same setting every time.
+        self.manual_moderation_retry_next_mode = "spicy"
+        # Debounce moderation retries so repeated moderated poll ticks don't submit duplicates.
+        self.manual_moderation_retry_pending = False
+        self.manual_moderation_retry_last_attempt_at = 0.0
         self.manual_download_poll_timer = QTimer(self)
         self.manual_download_poll_timer.setSingleShot(True)
         self.manual_download_poll_timer.timeout.connect(self._poll_for_manual_video)
@@ -13187,6 +13193,9 @@ class MainWindow(QMainWindow):
         self.manual_public_not_ready_count = 0
         self.manual_public_moderation_count = 0
         self.manual_moderation_retry_count = 0
+        self.manual_moderation_retry_next_mode = "spicy"
+        self.manual_moderation_retry_pending = False
+        self.manual_moderation_retry_last_attempt_at = 0.0
         self.manual_download_click_sent = False
         self.manual_download_request_pending = False
         self.manual_video_start_click_sent = False
@@ -13321,7 +13330,20 @@ class MainWindow(QMainWindow):
         self._run_active_browser_javascript(capture_script, _after_capture)
 
     def _resubmit_video_prompt_with_trailing_enter(self, variant: int, on_complete: Callable[[], None] | None = None) -> None:
-        """Attempt moderation recovery by selecting Spicy mode and resubmitting via Enter."""
+        self._resubmit_video_prompt_with_trailing_enter_for_mode(
+            variant,
+            "spicy",
+            on_complete,
+        )
+
+    def _resubmit_video_prompt_with_trailing_enter_for_mode(
+        self,
+        variant: int,
+        retry_mode: str,
+        on_complete: Callable[[], None] | None = None,
+    ) -> None:
+        """Attempt moderation recovery by selecting the requested mode and resubmitting via Enter."""
+        target_mode = "normal" if str(retry_mode or "").strip().lower() == "normal" else "spicy"
         resubmit_script = r"""
             (() => {
                 try {
@@ -13344,20 +13366,27 @@ class MainWindow(QMainWindow):
                         return fired;
                     };
 
-                    // Moderation recovery path: open the Settings menu and pick Spicy before Enter.
-                    // This gives the retry a stronger signal than Enter alone when content policy blocks.
+                    const targetMode = String(arguments[0] || "spicy").trim().toLowerCase() === "normal" ? "normal" : "spicy";
+                    // Moderation recovery path: open the Settings menu and pick the requested mode before Enter.
+                    // Alternating mode across retries helps avoid repeated policy/queue outcomes.
                     const settingsButton = [...document.querySelectorAll("button[aria-label='Settings' i], [role='button'][aria-label='Settings' i]")]
                         .find((el) => isVisible(el) && !el.disabled) || null;
                     const settingsClicked = clickLikeUser(settingsButton);
 
                     const menuItems = [...document.querySelectorAll("[role='menuitem'], [role='menuitemradio'], [data-radix-collection-item]")]
                         .filter((el) => isVisible(el) && !el.disabled);
-                    const spicyOption = menuItems.find((el) => {
+                    const modeOption = menuItems.find((el) => {
                         const aria = clean(el.getAttribute("aria-label"));
                         const txt = clean(el.textContent);
-                        return /(^|\s)spicy(\s|$)/i.test(`${aria} ${txt}`) || /might be nsfw/i.test(`${aria} ${txt}`);
+                        const searchable = `${aria} ${txt}`;
+                        if (targetMode === "normal") {
+                            return /(^|\s)normal(\s|$)/i.test(searchable)
+                                || /let grok animate for you/i.test(searchable);
+                        }
+                        return /(^|\s)spicy(\s|$)/i.test(searchable)
+                            || /might be nsfw/i.test(searchable);
                     }) || null;
-                    const spicyClicked = clickLikeUser(spicyOption);
+                    const modeClicked = clickLikeUser(modeOption);
 
                     const selectors = [
                         "textarea[placeholder*='Describe your video' i]",
@@ -13384,7 +13413,7 @@ class MainWindow(QMainWindow):
                         .flatMap((selector) => [...document.querySelectorAll(selector)])
                         .find((el) => isVisible(el));
                     if (!promptInput) {
-                        return { ok: settingsClicked || spicyClicked, error: "prompt-input-not-found", settingsClicked, spicyClicked };
+                        return { ok: settingsClicked || modeClicked, error: "prompt-input-not-found", settingsClicked, modeClicked, targetMode };
                     }
 
                     try { promptInput.focus({ preventScroll: true }); } catch (_) {}
@@ -13417,11 +13446,12 @@ class MainWindow(QMainWindow):
                     try { promptInput.dispatchEvent(new KeyboardEvent("keyup", keyEvent)); enterDispatched = true; } catch (_) {}
 
                     return {
-                        ok: enterDispatched || appendedTrailingNewline || settingsClicked || spicyClicked,
+                        ok: enterDispatched || appendedTrailingNewline || settingsClicked || modeClicked,
                         enterDispatched,
                         appendedTrailingNewline,
                         settingsClicked,
-                        spicyClicked,
+                        modeClicked,
+                        targetMode,
                     };
                 } catch (err) {
                     return { ok: false, error: String(err && err.stack ? err.stack : err) };
@@ -13432,18 +13462,18 @@ class MainWindow(QMainWindow):
         def _after_resubmit(result) -> None:
             if isinstance(result, dict) and result.get("ok"):
                 self._append_log(
-                    f"Variant {variant}: moderation retry attempted Settings→Spicy + trailing Enter "
-                    f"(settingsClicked={bool(result.get('settingsClicked'))}, spicyClicked={bool(result.get('spicyClicked'))}, "
+                    f"Variant {variant}: moderation retry attempted Settings→{str(result.get('targetMode') or target_mode).title()} + trailing Enter "
+                    f"(settingsClicked={bool(result.get('settingsClicked'))}, modeClicked={bool(result.get('modeClicked'))}, "
                     f"newlineAppended={bool(result.get('appendedTrailingNewline'))})."
                 )
             else:
                 self._append_log(
-                    f"WARNING: Variant {variant}: moderation retry could not confirm Settings→Spicy + trailing Enter resubmit. result={result!r}"
+                    f"WARNING: Variant {variant}: moderation retry could not confirm Settings→{target_mode.title()} + trailing Enter resubmit. result={result!r}"
                 )
             if on_complete is not None:
                 on_complete()
 
-        self._run_active_browser_javascript(resubmit_script, _after_resubmit)
+        self._run_active_browser_javascript(resubmit_script, _after_resubmit, target_mode)
 
     def _poll_for_manual_video(self) -> None:
         if self.stop_all_requested:
@@ -13859,6 +13889,7 @@ class MainWindow(QMainWindow):
 
             was_generating = bool(getattr(self, "manual_generating_indicator_seen", False))
             if status == "generating-indicator-visible":
+                self.manual_moderation_retry_pending = False
                 if not was_generating:
                     self._append_log(
                         f"Variant {current_variant}: found 'Generating' span; polling until it disappears before download checks."
@@ -13886,11 +13917,22 @@ class MainWindow(QMainWindow):
             if status == "moderated-content-detected":
                 moderation_retry_enabled = self._automation_timing("moderation_retry_enabled") > 0
                 moderation_retry_limit = max(1, self._automation_timing("moderation_retry_attempts"))
+                moderation_retry_cooldown_s = max(1.0, self._manual_download_poll_interval_ms() / 1000.0)
+                if self.manual_moderation_retry_pending and (now - self.manual_moderation_retry_last_attempt_at) < moderation_retry_cooldown_s:
+                    self._append_log(
+                        f"Variant {current_variant}: moderation still detected; waiting for retry cooldown to avoid duplicate Make video submissions."
+                    )
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                    return
                 if moderation_retry_enabled and self.manual_moderation_retry_count < moderation_retry_limit:
                     self.manual_moderation_retry_count += 1
+                    retry_mode = self.manual_moderation_retry_next_mode
+                    self.manual_moderation_retry_next_mode = "normal" if retry_mode == "spicy" else "spicy"
+                    self.manual_moderation_retry_pending = True
+                    self.manual_moderation_retry_last_attempt_at = now
                     self._append_log(
                         f"Variant {current_variant}: moderation indicator detected (eye-off icon). "
-                        f"Retrying Make video ({self.manual_moderation_retry_count}/{moderation_retry_limit})."
+                        f"Retrying Make video ({self.manual_moderation_retry_count}/{moderation_retry_limit}) with {retry_mode.title()} mode."
                     )
                     # Re-arm generation start guards so the next poll can click Make video again.
                     self.manual_video_start_click_sent = False
@@ -13909,8 +13951,9 @@ class MainWindow(QMainWindow):
                     # Some moderation retries expose an icon-only Make video control that does
                     # not actually trigger generation when clicked. In that case, resubmit the
                     # prompt via trailing Enter to keep the flow moving without UI click reliance.
-                    self._resubmit_video_prompt_with_trailing_enter(
+                    self._resubmit_video_prompt_with_trailing_enter_for_mode(
                         current_variant,
+                        retry_mode,
                         lambda: self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms()),
                     )
                     return
@@ -13940,6 +13983,7 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "progress":
+                self.manual_moderation_retry_pending = False
                 self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
                 self.manual_continue_progress_seen = True
@@ -13968,6 +14012,7 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "generating-indicator-visible":
+                self.manual_moderation_retry_pending = False
                 self.manual_make_video_awaiting_progress_count = 0
                 self.manual_video_start_click_sent = True
                 self.manual_continue_progress_seen = True
@@ -13978,6 +14023,7 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "make-video-clicked":
+                self.manual_moderation_retry_pending = False
                 self.manual_make_video_awaiting_progress_count = 0
                 label = (result.get("buttonLabel") or "Make video").strip()
                 self._append_log(f"Variant {current_variant}: clicked '{label}' to start video generation.")
@@ -13997,6 +14043,7 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "make-video-awaiting-progress":
+                self.manual_moderation_retry_pending = False
                 self.manual_make_video_awaiting_progress_count = int(getattr(self, "manual_make_video_awaiting_progress_count", 0)) + 1
                 if bool(getattr(self, "manual_continue_setup_in_progress", False)):
                     self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
