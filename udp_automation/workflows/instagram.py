@@ -67,31 +67,6 @@ def _best_effort_click(
         return False
 
 
-def _best_effort_keypress(executor: BaseExecutor, platform: str, keys: list[str], timeout_ms: int = 8000) -> bool:
-    log_callback = getattr(executor, "log_callback", None)
-    if callable(log_callback):
-        try:
-            log_callback(
-                f"Instagram workflow: attempting dom.keypress target={{platform={platform}, keys={keys!r}}} timeout_ms={timeout_ms} retry_mode=best_effort"
-            )
-        except Exception:
-            pass
-    try:
-        response = executor.run("dom.keypress", {"platform": platform, "keys": keys, "timeoutMs": timeout_ms})
-        return bool((response.get("payload") or {}).get("pressed"))
-    except Exception as exc:
-        if callable(log_callback):
-            try:
-                log_callback(
-                    "Instagram workflow: dom.keypress best-effort step failed "
-                    f"target={{platform={platform}, keys={keys!r}}} timeout_ms={timeout_ms} error={exc}"
-                )
-            except Exception:
-                pass
-        if _is_user_stop_error(exc):
-            raise
-        return False
-
 
 def _safe_instagram_url(url: str | None) -> str:
     candidate = str(url or "").strip()
@@ -136,26 +111,17 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
         _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
         _pause_between_actions(action_delay_ms)
 
-    # After New post receives focus, use keyboard navigation (Tab + Enter) to
-    # choose the highlighted Create menu option.
-    post_entry_clicked = _best_effort_keypress(
+    # Click the Post entry directly after opening the New post menu.
+    post_entry_clicked = _best_effort_click(
         executor,
         "instagram",
-        ["Tab", "Enter"],
+        "a[role='link']:has(span:has-text('Post'))",
         timeout_ms=click_timeout_ms,
+        extra_payload={"matchIndex": 0},
     )
     _pause_between_actions(action_delay_ms)
 
-    # Keep semantic click fallbacks when key events are ignored.
-    if not post_entry_clicked:
-        post_entry_clicked = _best_effort_click(
-            executor,
-            "instagram",
-            "a[role='link']:has(span:has-text('Post'))",
-            timeout_ms=click_timeout_ms,
-            extra_payload={"matchIndex": 0},
-        )
-        _pause_between_actions(action_delay_ms)
+    # Keep a light text fallback if Instagram changes the nested link markup.
     if not post_entry_clicked:
         _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=click_timeout_ms)
         _pause_between_actions(action_delay_ms)
