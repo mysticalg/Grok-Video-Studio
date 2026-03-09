@@ -11424,7 +11424,27 @@ class MainWindow(QMainWindow):
                         has_video_source_probe = bool(isinstance(probe_result, dict) and probe_result.get("hasVideoSource"))
                         cancel_video_probe = bool(isinstance(probe_result, dict) and probe_result.get("cancelVideoVisible"))
                         can_download_probe = bool(isinstance(probe_result, dict) and probe_result.get("canDownload"))
+                        skip_final_prompt_entry_enabled = self._automation_timing("skip_final_prompt_entry_enabled") > 0
+                        continue_last_video_mode = self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None
+                        create_video_skip_final_prompt = skip_final_prompt_entry_enabled and not continue_last_video_mode
                         if on_post_view_probe and (generation_signal_probe or has_video_source_probe or cancel_video_probe):
+                            if create_video_skip_final_prompt:
+                                # Create-video with skip-final-prompt should not enter the cancel/prompt stage.
+                                # If generation/video state is already visible, jump directly to download polling.
+                                self._append_log(
+                                    "Variant "
+                                    f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
+                                    f"(generationSignal={generation_signal_probe}, cancelVideo={cancel_video_probe}, videoSrc={has_video_source_probe}, download={can_download_probe}); "
+                                    "skip-final-prompt is enabled for create-video, so proceeding directly to generation polling."
+                                )
+                                self.manual_image_submit_in_flight = False
+                                self.manual_image_submit_in_flight_since = 0.0
+                                self.manual_image_video_mode_selected = True
+                                self.manual_image_video_mode_retry_count = 0
+                                self.manual_image_submit_retry_count = 0
+                                self.manual_continue_setup_in_progress = False
+                                self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                                return
                             self._append_log(
                                 "Variant "
                                 f"{current_variant}: detected active/ready video state while waiting-for-video-mode "
@@ -11465,6 +11485,20 @@ class MainWindow(QMainWindow):
                                 if video_clicked and not make_video_visible:
                                     strict_wait_limit = self._automation_timing("automation_retry_attempts") * 2
                                     if self.manual_image_video_mode_retry_count >= strict_wait_limit:
+                                        if create_video_skip_final_prompt:
+                                            self._append_log(
+                                                "WARNING: Variant "
+                                                f"{current_variant}: waited for Cancel Video/prompt transition after Make video click for "
+                                                f"{self.manual_image_video_mode_retry_count} checks without explicit prompt controls "
+                                                f"(status={status}, promptVisible={prompt_visible}, submitVisible={submit_visible}, generationVisible={generation_visible}); "
+                                                "skip-final-prompt is enabled for create-video, so bypassing prompt fallback and proceeding directly to generation polling."
+                                            )
+                                            self.manual_image_video_mode_selected = True
+                                            self.manual_image_video_mode_retry_count = 0
+                                            self.manual_image_submit_retry_count = 0
+                                            self.manual_continue_setup_in_progress = False
+                                            self._trigger_browser_video_download(current_variant, allow_make_video_click=False)
+                                            return
                                         self._append_log(
                                             "WARNING: Variant "
                                             f"{current_variant}: waited for Cancel Video/prompt transition after Make video click for "
