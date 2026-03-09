@@ -133,6 +133,93 @@ async function handleCmd(msg) {
       return;
     }
 
+    if (msg.name === "dom.keypress") {
+      const platform = String(payload.platform || "").toLowerCase();
+      const result = await executeInTab(async (keys, opts) => {
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+        const isFocusable = (el) => {
+          if (!el) return false;
+          if (String(el.getAttribute("disabled") || "").toLowerCase() === "true") return false;
+          if (String(el.getAttribute("aria-disabled") || "").toLowerCase() === "true") return false;
+          const tabindex = el.getAttribute("tabindex");
+          const hasTabIndex = tabindex != null && Number(tabindex) >= 0;
+          const tag = String(el.tagName || "").toLowerCase();
+          const nativeFocusable = ["a", "button", "input", "select", "textarea", "summary"].includes(tag);
+          const contentEditable = String(el.getAttribute("contenteditable") || "").toLowerCase() === "true";
+          return nativeFocusable || hasTabIndex || contentEditable;
+        };
+
+        const focusNext = () => {
+          const focusables = Array.from(document.querySelectorAll("a[href], button, input, select, textarea, [tabindex], [contenteditable='true'], [role='button'], [role='link']"))
+            .filter((node) => isVisible(node) && isFocusable(node));
+          if (!focusables.length) return false;
+          const active = document.activeElement;
+          const idx = Math.max(-1, focusables.indexOf(active));
+          const next = focusables[(idx + 1) % focusables.length];
+          try { next.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+          try { next.focus({ preventScroll: true }); } catch (_) { try { next.focus(); } catch (_) {} }
+          return document.activeElement === next;
+        };
+
+        const pressKey = async (key) => {
+          const k = String(key || "").trim();
+          if (!k) return false;
+          const target = document.activeElement || document.body;
+
+          if (k.toLowerCase() === "tab") {
+            try {
+              target.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", code: "Tab", keyCode: 9, which: 9, bubbles: true, cancelable: true, composed: true }));
+              target.dispatchEvent(new KeyboardEvent("keyup", { key: "Tab", code: "Tab", keyCode: 9, which: 9, bubbles: true, cancelable: true, composed: true }));
+            } catch (_) {}
+            return focusNext();
+          }
+
+          if (k.toLowerCase() === "enter") {
+            let dispatched = false;
+            try {
+              target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true }));
+              target.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true }));
+              dispatched = true;
+            } catch (_) {}
+            const clickTarget = target.closest("a, button, [role='button'], [role='link']") || target;
+            try { clickTarget.click?.(); dispatched = true; } catch (_) {}
+            return dispatched;
+          }
+
+          try {
+            target.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: k, bubbles: true, cancelable: true, composed: true }));
+            target.dispatchEvent(new KeyboardEvent("keyup", { key: k, code: k, bubbles: true, cancelable: true, composed: true }));
+            return true;
+          } catch (_) {
+            return false;
+          }
+        };
+
+        const sequence = Array.isArray(keys) ? keys : [String(keys || "")];
+        let pressed = true;
+        const applied = [];
+        for (const key of sequence) {
+          const ok = await pressKey(key);
+          applied.push({ key: String(key || ""), ok });
+          if (!ok) pressed = false;
+          if (opts.delayMs > 0) await wait(opts.delayMs);
+        }
+
+        const activeEl = document.activeElement;
+        return {
+          pressed,
+          applied,
+          activeTag: String(activeEl?.tagName || "").toLowerCase(),
+          activeRole: String(activeEl?.getAttribute?.("role") || ""),
+          activeText: String(activeEl?.textContent || "").trim().slice(0, 80),
+          platform: opts.platform || "",
+        };
+      }, [payload.keys || [], { delayMs: Math.max(0, Number(payload.delayMs || 80)), platform }], platform);
+      ackCmd(msg, true, result);
+      return;
+    }
+
     if (msg.name === "dom.click" || msg.name === "dom.click_random" || msg.name === "post.submit") {
       const platform = String(payload.platform || "").toLowerCase();
       const isDraft = String(payload.mode || payload.publishMode || "").toLowerCase() === "draft";
