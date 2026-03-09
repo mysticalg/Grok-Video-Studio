@@ -87,7 +87,10 @@ python app.py
 
 The desktop app now supports a dedicated **Automation Chrome** controller path:
 
-- Desktop launches real Chrome with `--remote-debugging-port=9222` and a dedicated user-data-dir.
+- Desktop launches real Chrome with `--remote-debugging-port=9222` and, by default, a dedicated user-data-dir.
+- Optional profile overrides via env vars:
+  - `GROK_AUTOMATION_CHROME_PROFILE_MODE=dedicated|custom|default`
+  - `GROK_AUTOMATION_CHROME_USER_DATA_DIR=<path>` (required for `custom`)
 - Desktop connects through Playwright `connect_over_cdp(...)` for browser-level control.
 - A local WebSocket bus (`ws://127.0.0.1:18792`) enables extension ⇄ desktop commands/events.
 - An unpacked MV3 extension (`extension/`) handles DOM checks/actions in the active tab via `chrome.scripting.executeScript`.

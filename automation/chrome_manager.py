@@ -14,7 +14,7 @@ import requests
 class ChromeInstance:
     port: int
     ws_endpoint: str
-    profile_dir: Path
+    profile_dir: Path | None
     pid: int | None
 
 
@@ -24,6 +24,46 @@ class AutomationChromeManager:
         self.port = port
         self.timeout_s = timeout_s
         self.process: subprocess.Popen[str] | None = None
+        self._active_profile_dir: Path | None = None
+
+    def _resolve_profile_strategy(self) -> tuple[Path | None, str]:
+        """Resolve how Chrome profile data should be handled for automation launch.
+
+        Returns a tuple of `(user_data_dir, mode)` where:
+        - `user_data_dir` is the directory passed to `--user-data-dir` (or None to skip it)
+        - `mode` is one of `dedicated`, `custom`, or `default`
+
+        Environment overrides (in priority order):
+        - GROK_AUTOMATION_CHROME_PROFILE_MODE=dedicated|custom|default
+        - GROK_AUTOMATION_CHROME_USER_DATA_DIR=<path>
+
+        Behavior:
+        - dedicated (default): use an isolated profile under AppData/Roaming.
+        - custom: use GROK_AUTOMATION_CHROME_USER_DATA_DIR.
+        - default: do not pass --user-data-dir (Chrome will use normal user profile).
+        """
+
+        mode = os.getenv("GROK_AUTOMATION_CHROME_PROFILE_MODE", "dedicated").strip().lower()
+        custom_dir = os.getenv("GROK_AUTOMATION_CHROME_USER_DATA_DIR", "").strip()
+        if mode not in {"dedicated", "custom", "default"}:
+            mode = "custom" if custom_dir else "dedicated"
+
+        if mode == "default":
+            return None, mode
+
+        if mode == "custom" or custom_dir:
+            if not custom_dir:
+                raise ValueError(
+                    "GROK_AUTOMATION_CHROME_PROFILE_MODE is 'custom' but GROK_AUTOMATION_CHROME_USER_DATA_DIR is not set"
+                )
+            profile_dir = Path(custom_dir).expanduser().resolve()
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            probe = profile_dir / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return profile_dir, "custom"
+
+        return self._profile_dir(), "dedicated"
 
     def _detect_chrome_path(self) -> Path:
         candidates = [
@@ -71,7 +111,8 @@ class AutomationChromeManager:
             return existing
 
         chrome_path = self._detect_chrome_path()
-        profile_dir = self._profile_dir()
+        profile_dir, _profile_mode = self._resolve_profile_strategy()
+        self._active_profile_dir = profile_dir
         extension_dir = self._validate_extension_dir()
 
         # Keep Chrome in normal profile mode (no guest/incognito/app/kiosk launch flags)
@@ -79,7 +120,6 @@ class AutomationChromeManager:
         args = [
             str(chrome_path),
             f"--remote-debugging-port={self.port}",
-            f"--user-data-dir={profile_dir}",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-popup-blocking",
@@ -87,6 +127,8 @@ class AutomationChromeManager:
             "--autoplay-policy=user-gesture-required",
             f"--load-extension={extension_dir}",
         ]
+        if profile_dir is not None:
+            args.insert(2, f"--user-data-dir={profile_dir}")
         self.process = subprocess.Popen(args)
 
         ready = self._wait_for_ready(ready_timeout_s=self.timeout_s)
@@ -104,7 +146,7 @@ class AutomationChromeManager:
                 return ChromeInstance(
                     port=self.port,
                     ws_endpoint=str(ws_endpoint),
-                    profile_dir=self._profile_dir(),
+                    profile_dir=self._active_profile_dir,
                     pid=self.process.pid if self.process else None,
                 )
             time.sleep(0.25)
