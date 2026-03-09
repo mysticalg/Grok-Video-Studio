@@ -73,14 +73,15 @@ def run(executor: BaseExecutor, video_path: str, caption: str, platform_url: str
     )
     executor.run("platform.ensure_logged_in", {"platform": "instagram"})
 
-    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=click_timeout_ms)
-    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=click_timeout_ms)
-    # Instagram can keep the "Create" text hidden until the side-nav "New post"
-    # glyph is focused/hovered. Click the glyph first so the label/menu is revealed.
+    # Instagram can keep the "Create" entry collapsed in the left nav until the
+    # "New post" glyph is activated first. Run the glyph selectors before the
+    # textual "Create" selectors so the first interaction follows that UI flow.
     _best_effort_click(executor, "instagram", "svg[aria-label='New post']", timeout_ms=click_timeout_ms)
     _best_effort_click(executor, "instagram", "title:has-text('New post')", timeout_ms=click_timeout_ms)
     _best_effort_click(executor, "instagram", "a[role='link']:has(svg[aria-label='New post'])", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=click_timeout_ms)
+    _best_effort_click(executor, "instagram", "a[href*='create']", timeout_ms=click_timeout_ms)
     _best_effort_click(executor, "instagram", "span:has-text('Create')", timeout_ms=click_timeout_ms)
     _best_effort_click(executor, "instagram", "div[role='button']:has-text('Create')", timeout_ms=click_timeout_ms)
     _best_effort_click(executor, "instagram", "span:has-text('Post')", timeout_ms=click_timeout_ms)
