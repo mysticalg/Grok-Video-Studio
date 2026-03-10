@@ -11,6 +11,7 @@ Desktop PySide6 app for generating AI videos, managing clips, previewing/stitchi
 - 📖 **User guide (Markdown):** [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
 - 🧾 **Printable PDF manual (generated locally):** run `python docs/generate_user_manual.py` to create `docs/out/Grok-Video-Studio-User-Manual.pdf`
 - 🖼️ **Workflow screenshots (generated locally):** created under `docs/out/assets/` by the same script
+- 📦 **Windows build size notes:** [`docs/WINDOWS_BUILD_SIZE.md`](docs/WINDOWS_BUILD_SIZE.md)
 
 ## ✨ Latest feature highlights
 
