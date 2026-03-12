@@ -1,0 +1,77 @@
+name: Release GitHub Pages Downloads
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-pages:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build release download metadata for the site
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Pull the latest published release so the site always points to current installers.
+            const latestRelease = await github.rest.repos.getLatestRelease({ owner, repo });
+            const release = latestRelease.data;
+            const assets = Array.isArray(release.assets) ? release.assets : [];
+
+            const pickFirst = (patterns) => {
+              for (const pattern of patterns) {
+                const found = assets.find((asset) => pattern.test(asset.name || ''));
+                if (found) return found;
+              }
+              return null;
+            };
+
+            const payload = {
+              generated_at: new Date().toISOString(),
+              release: {
+                tag_name: release.tag_name,
+                name: release.name,
+                published_at: release.published_at,
+              },
+              downloads: {
+                windows_msi: pickFirst([/setup-windows-x64\.msi$/i, /windows.*\.msi$/i]),
+                windows_exe: pickFirst([/setup-windows-x64\.exe$/i, /windows-x64\.exe$/i, /windows.*\.exe$/i]),
+                macos: pickFirst([/macos.*\.(zip|dmg|pkg)$/i, /\.(dmg|pkg|zip)$/i]),
+              },
+            };
+
+            const outputPath = path.join(process.env.GITHUB_WORKSPACE, 'docs', 'release-downloads.json');
+            fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2));
+            core.info(`Wrote ${outputPath}`);
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
+

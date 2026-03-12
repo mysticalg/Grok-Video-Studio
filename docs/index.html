@@ -149,12 +149,16 @@
 
     <section class="panel downloads" aria-label="Latest downloads">
       <article class="panel dl-card">
-        <h2>🪟 Windows installer</h2>
-        <p class="helper">Recommended for most users: guided setup with Start Menu shortcuts.</p>
-        <a id="windows-link" class="btn" aria-disabled="true" href="#" title="Fetches newest installer from latest GitHub release">
-          ⬇️ Download for Windows
+        <h2>🪟 Windows downloads</h2>
+        <p class="helper">Choose installer format: MSI for managed enterprise installs, EXE for guided setup.</p>
+        <a id="windows-msi-link" class="btn" aria-disabled="true" href="#" title="Latest Windows MSI installer from the newest GitHub release">
+          ⬇️ Download Windows MSI
         </a>
-        <p id="windows-meta" class="status">Loading latest release…</p>
+        <a id="windows-exe-link" class="btn" aria-disabled="true" href="#" title="Latest Windows EXE installer from the newest GitHub release">
+          ⬇️ Download Windows EXE
+        </a>
+        <p id="windows-msi-meta" class="status">Loading latest release…</p>
+        <p id="windows-exe-meta" class="status">Loading latest release…</p>
       </article>
 
       <article class="panel dl-card">
@@ -196,9 +200,11 @@
     const owner = derivedOwner;
     const repo = derivedRepo;
 
-    const windowsLink = document.getElementById('windows-link');
+    const windowsMsiLink = document.getElementById('windows-msi-link');
+    const windowsExeLink = document.getElementById('windows-exe-link');
     const macLink = document.getElementById('mac-link');
-    const windowsMeta = document.getElementById('windows-meta');
+    const windowsMsiMeta = document.getElementById('windows-msi-meta');
+    const windowsExeMeta = document.getElementById('windows-exe-meta');
     const macMeta = document.getElementById('mac-meta');
 
     const setDownload = (linkEl, metaEl, asset, releaseTag) => {
@@ -225,17 +231,43 @@
 
     const loadLatest = async () => {
       try {
-        const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);
-        if (!response.ok) {
-          throw new Error(`GitHub API responded ${response.status}`);
+        // Prefer generated metadata from the release-to-pages workflow to avoid GitHub API rate limits.
+        let release = null;
+        let assets = [];
+
+        try {
+          const metadataResponse = await fetch('./release-downloads.json', { cache: 'no-store' });
+          if (metadataResponse.ok) {
+            const metadata = await metadataResponse.json();
+            release = metadata.release || null;
+            assets = [
+              metadata.downloads?.windows_msi,
+              metadata.downloads?.windows_exe,
+              metadata.downloads?.macos
+            ].filter(Boolean);
+          }
+        } catch (metadataError) {
+          console.warn('release-downloads.json unavailable, falling back to GitHub API', metadataError);
         }
 
-        const release = await response.json();
-        const assets = release.assets || [];
+        if (!release || !assets.length) {
+          const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);
+          if (!response.ok) {
+            throw new Error(`GitHub API responded ${response.status}`);
+          }
 
-        const windowsAsset = pickFirstMatch(assets, [
+          release = await response.json();
+          assets = release.assets || [];
+        }
+
+        const windowsMsiAsset = pickFirstMatch(assets, [
+          /setup-windows-x64\.msi$/i,
+          /windows.*\.msi$/i
+        ]);
+
+        const windowsExeAsset = pickFirstMatch(assets, [
           /setup-windows-x64\.exe$/i,
-          /windows.*\.msi$/i,
+          /windows-x64\.exe$/i,
           /windows.*\.exe$/i
         ]);
 
@@ -244,17 +276,22 @@
           /macos.*\.pkg$/i,
           /macos.*\.zip$/i,
           /\.dmg$/i,
-          /\.pkg$/i
+          /\.pkg$/i,
+          /\.zip$/i
         ]);
 
-        setDownload(windowsLink, windowsMeta, windowsAsset, release.tag_name || 'latest');
-        setDownload(macLink, macMeta, macAsset, release.tag_name || 'latest');
+        const releaseTag = release.tag_name || 'latest';
+        setDownload(windowsMsiLink, windowsMsiMeta, windowsMsiAsset, releaseTag);
+        setDownload(windowsExeLink, windowsExeMeta, windowsExeAsset, releaseTag);
+        setDownload(macLink, macMeta, macAsset, releaseTag);
       } catch (error) {
         const message = `Could not load release info (${error.message}).`;
 
-        windowsMeta.textContent = message;
+        windowsMsiMeta.textContent = message;
+        windowsExeMeta.textContent = message;
         macMeta.textContent = message;
-        windowsMeta.classList.add('error');
+        windowsMsiMeta.classList.add('error');
+        windowsExeMeta.classList.add('error');
         macMeta.classList.add('error');
       }
     };
