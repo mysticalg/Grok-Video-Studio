@@ -1,0 +1,125 @@
+name: Release GitHub Pages Downloads
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-pages:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build release download metadata for the site
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const windowsMsiPatterns = [/setup-windows-x64\.msi$/i, /windows.*\.msi$/i];
+            const windowsExePatterns = [/setup-windows-x64\.exe$/i, /windows-x64\.exe$/i, /windows.*\.exe$/i];
+            const macosPatterns = [/macos.*\.(zip|dmg|pkg)$/i, /\.(dmg|pkg|zip)$/i];
+
+            const pickFirst = (assets, patterns) => {
+              for (const pattern of patterns) {
+                const found = assets.find((asset) => pattern.test(asset.name || ''));
+                if (found) return found;
+              }
+              return null;
+            };
+
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            if (!Array.isArray(releases) || releases.length === 0) {
+              throw new Error('No releases found while generating docs/release-downloads.json');
+            }
+
+            const latestRelease = releases[0];
+            const recentReleases = releases.slice(0, 6).map((release) => ({
+              tag_name: release.tag_name,
+              name: release.name,
+              published_at: release.published_at,
+              html_url: release.html_url,
+              prerelease: Boolean(release.prerelease),
+              asset_count: Array.isArray(release.assets) ? release.assets.length : 0,
+            }));
+
+            const findAssetAcrossReleases = (patterns) => {
+              for (const release of releases) {
+                const assets = Array.isArray(release.assets) ? release.assets : [];
+                const match = pickFirst(assets, patterns);
+                if (match) {
+                  return {
+                    ...match,
+                    source_release_tag: release.tag_name,
+                    source_release_url: release.html_url,
+                  };
+                }
+              }
+              return null;
+            };
+
+            const payload = {
+              generated_at: new Date().toISOString(),
+              repository: {
+                owner,
+                name: repo,
+                html_url: `https://github.com/${owner}/${repo}`,
+              },
+              release: {
+                tag_name: latestRelease.tag_name,
+                name: latestRelease.name,
+                published_at: latestRelease.published_at,
+                html_url: latestRelease.html_url,
+              },
+              recent_releases: recentReleases,
+              downloads: {
+                windows_msi: findAssetAcrossReleases(windowsMsiPatterns),
+                windows_exe: findAssetAcrossReleases(windowsExePatterns),
+                macos: findAssetAcrossReleases(macosPatterns),
+              },
+            };
+
+            const outputPath = path.join(process.env.GITHUB_WORKSPACE, 'docs', 'release-downloads.json');
+            fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2));
+            core.info(`Wrote ${outputPath}`);
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Publish deployed site URL to the workflow summary
+        run: |
+          echo "### GitHub Pages deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ Site URL: ${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"

@@ -3,8 +3,9 @@ requests==2.32.3
 google-api-python-client
 google-auth-oauthlib
 google-auth
-google
 playwright
-ffmpeg
-
 websockets
+
+# NOTE:
+# - `google` was removed: it's a legacy meta-package and is not imported by the app.
+# - `ffmpeg` (PyPI wrapper) was removed: the app shells out to system `ffmpeg` in PATH.

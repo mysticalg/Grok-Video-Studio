@@ -1,0 +1,90 @@
+{
+  "generated_at": "2026-03-12T12:34:37.365339Z",
+  "repository": {
+    "owner": "mysticalg",
+    "name": "Grok-Video-Studio",
+    "html_url": "https://github.com/mysticalg/Grok-Video-Studio"
+  },
+  "release": {
+    "tag_name": "v0.1.49",
+    "name": "v0.1.49",
+    "published_at": "2026-03-12T12:18:32Z",
+    "html_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.49"
+  },
+  "recent_releases": [
+    {
+      "tag_name": "v0.1.49",
+      "name": "v0.1.49",
+      "published_at": "2026-03-12T12:18:32Z",
+      "html_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.49",
+      "prerelease": false,
+      "asset_count": 0
+    },
+    {
+      "tag_name": "v0.1.48",
+      "name": "v0.1.48",
+      "published_at": "2026-03-12T11:55:53Z",
+      "html_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.48",
+      "prerelease": false,
+      "asset_count": 5
+    },
+    {
+      "tag_name": "v0.1.47",
+      "name": "v0.1.47",
+      "published_at": "2026-03-10T17:07:50Z",
+      "html_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.47",
+      "prerelease": false,
+      "asset_count": 5
+    },
+    {
+      "tag_name": "nightly",
+      "name": "Nightly Build (309)",
+      "published_at": "2026-03-08T04:51:42Z",
+      "html_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/nightly",
+      "prerelease": true,
+      "asset_count": 4
+    },
+    {
+      "tag_name": "v0.1.46",
+      "name": "v0.1.46",
+      "published_at": "2026-03-09T16:34:21Z",
+      "html_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.46",
+      "prerelease": false,
+      "asset_count": 5
+    },
+    {
+      "tag_name": "v0.1.45",
+      "name": "v0.1.45",
+      "published_at": "2026-03-09T05:30:47Z",
+      "html_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.45",
+      "prerelease": false,
+      "asset_count": 5
+    }
+  ],
+  "downloads": {
+    "windows_msi": {
+      "name": "GrokVideoDesktopStudio-setup-windows-x64.msi",
+      "browser_download_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/download/v0.1.48/GrokVideoDesktopStudio-setup-windows-x64.msi",
+      "size": 273224732,
+      "content_type": "application/x-msdownload",
+      "source_release_tag": "v0.1.48",
+      "source_release_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.48"
+    },
+    "windows_exe": {
+      "name": "GrokVideoDesktopStudio-setup-windows-x64.exe",
+      "browser_download_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/download/v0.1.48/GrokVideoDesktopStudio-setup-windows-x64.exe",
+      "size": 182904170,
+      "content_type": "application/x-msdos-program",
+      "source_release_tag": "v0.1.48",
+      "source_release_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.48"
+    },
+    "macos": {
+      "name": "GrokVideoDesktopStudio-macos-universal2.zip",
+      "browser_download_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/download/v0.1.48/GrokVideoDesktopStudio-macos-universal2.zip",
+      "size": 305678115,
+      "content_type": "application/zip",
+      "source_release_tag": "v0.1.48",
+      "source_release_url": "https://github.com/mysticalg/Grok-Video-Studio/releases/tag/v0.1.48"
+    }
+  }
+}

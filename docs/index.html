@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grok Video Studio — Download</title>
+  <meta
+    name="description"
+    content="Official GitHub Pages site for Grok Video Studio with app overview and latest Windows/macOS downloads."
+  />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --card: #121a31;
+      --card-border: #273057;
+      --text: #f3f6ff;
+      --muted: #b8c1de;
+      --accent: #68a6ff;
+      --accent-2: #4be6c3;
+      --danger: #ff8f8f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: radial-gradient(circle at top, #162046 0%, var(--bg) 55%);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 2.5rem 1rem 3.5rem;
+    }
+
+    .hero {
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+    }
+
+    .subtitle {
+      margin: 0.8rem auto 0;
+      max-width: 760px;
+      color: var(--muted);
+    }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%), var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1rem;
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.35);
+      margin-top: 1rem;
+    }
+
+    .downloads {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+
+    .dl-card h2 {
+      margin: 0;
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .helper {
+      color: var(--muted);
+      margin-top: 0.5rem;
+      min-height: 2.6em;
+      font-size: 0.95rem;
+    }
+
+    .btn {
+      margin-top: 0.8rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      text-decoration: none;
+      color: #031127;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      padding: 0.65rem 0.9rem;
+      border-radius: 10px;
+      font-weight: 700;
+      border: 0;
+      cursor: pointer;
+      transition: transform 130ms ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); }
+
+    .btn:disabled,
+    .btn[aria-disabled="true"] {
+      opacity: 0.55;
+      pointer-events: none;
+    }
+
+    .status {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .status.error { color: var(--danger); }
+
+    ul { margin: 0.6rem 0 0; padding-left: 1.15rem; }
+
+    .footer-links {
+      margin-top: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      justify-content: center;
+    }
+
+    .text-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .tooltip {
+      border-bottom: 1px dashed #90a5ff;
+      cursor: help;
+    }
+
+    .release-list {
+      list-style: none;
+      padding: 0;
+      margin: 0.75rem 0 0;
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .release-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 0.55rem 0.7rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .release-meta {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <h1>🎬 Grok Video Studio</h1>
+      <p class="subtitle">
+        A desktop app for generating AI videos, stitching clips, previewing output, and publishing to social platforms.
+        This page always points to the latest downloadable builds.
+      </p>
+    </header>
+
+    <section class="panel downloads" aria-label="Latest downloads">
+      <article class="panel dl-card">
+        <h2>🪟 Windows downloads</h2>
+        <p class="helper">Choose installer format: MSI for managed enterprise installs, EXE for guided setup.</p>
+        <a id="windows-msi-link" class="btn" aria-disabled="true" href="#" title="Latest Windows MSI installer from the newest GitHub release">
+          ⬇️ Download Windows MSI
+        </a>
+        <a id="windows-exe-link" class="btn" aria-disabled="true" href="#" title="Latest Windows EXE installer from the newest GitHub release">
+          ⬇️ Download Windows EXE
+        </a>
+        <p id="windows-msi-meta" class="status">Loading latest release…</p>
+        <p id="windows-exe-meta" class="status">Loading latest release…</p>
+      </article>
+
+      <article class="panel dl-card">
+        <h2>🍎 macOS installer</h2>
+        <p class="helper">
+          Download the latest macOS package.
+          <span class="tooltip" title="Current builds are distributed as a .zip containing the .app bundle.">ⓘ</span>
+        </p>
+        <a id="mac-link" class="btn" aria-disabled="true" href="#" title="Fetches newest macOS asset from latest GitHub release">
+          ⬇️ Download for macOS
+        </a>
+        <p id="mac-meta" class="status">Loading latest release…</p>
+      </article>
+    </section>
+
+    <section class="panel" aria-label="Recent releases">
+      <h2 style="margin-top: 0;">🧾 Recent versions</h2>
+      <p class="helper" style="margin-top: 0; min-height: 0;">
+        Quick links to the most recent tagged releases.
+        <span class="tooltip" title="Shows the newest versions and how many downloadable artifacts each release includes.">ⓘ</span>
+      </p>
+      <p id="recent-releases-meta" class="status">Loading release history…</p>
+      <ul id="recent-releases-list" class="release-list" aria-live="polite"></ul>
+    </section>
+
+    <section class="panel" aria-label="About the app">
+      <h2 style="margin-top: 0;">✨ What it does</h2>
+      <ul>
+        <li>Generate videos from prompts using Grok, Sora, and Seedance providers.</li>
+        <li>Stitch clips together with crossfade, interpolation, upscale, and music tools.</li>
+        <li>Upload to YouTube, TikTok, Facebook, and Instagram via API or browser automation.</li>
+        <li>Train and replay browser workflows from the built-in AI Flow Trainer.</li>
+      </ul>
+      <div class="footer-links">
+        <a id="repo-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
+        <a id="user-guide-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">User Guide</a>
+        <a id="release-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">Latest Release</a>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    // Derive owner/repo automatically on GitHub Pages project URLs.
+    const derivedOwner = window.location.hostname.endsWith('github.io')
+      ? window.location.hostname.split('.')[0]
+      : 'mysticalg';
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const derivedRepo = pathParts[0] || 'Grok-Video-Studio';
+
+    const owner = derivedOwner;
+    const repo = derivedRepo;
+
+    const windowsMsiLink = document.getElementById('windows-msi-link');
+    const windowsExeLink = document.getElementById('windows-exe-link');
+    const macLink = document.getElementById('mac-link');
+    const repoLink = document.getElementById('repo-link');
+    const userGuideLink = document.getElementById('user-guide-link');
+    const releaseLink = document.getElementById('release-link');
+    const windowsMsiMeta = document.getElementById('windows-msi-meta');
+    const windowsExeMeta = document.getElementById('windows-exe-meta');
+    const macMeta = document.getElementById('mac-meta');
+    const recentReleasesMeta = document.getElementById('recent-releases-meta');
+    const recentReleasesList = document.getElementById('recent-releases-list');
+
+    const setDownload = (linkEl, metaEl, asset, releaseTag) => {
+      if (!asset) {
+        linkEl.setAttribute('aria-disabled', 'true');
+        metaEl.textContent = `No compatible asset found in ${releaseTag}.`;
+        metaEl.classList.add('error');
+        return;
+      }
+
+      linkEl.href = asset.browser_download_url;
+      linkEl.removeAttribute('aria-disabled');
+      metaEl.textContent = `${asset.name} • ${releaseTag}`;
+      metaEl.classList.remove('error');
+    };
+
+    const pickFirstMatch = (assets, patterns) => {
+      for (const pattern of patterns) {
+        const found = assets.find((asset) => pattern.test(asset.name));
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const hydrateStaticLinks = () => {
+      // Keep footer links aligned with the currently served owner/repository.
+      repoLink.href = `https://github.com/${owner}/${repo}`;
+      userGuideLink.href = `https://github.com/${owner}/${repo}/blob/main/docs/USER_GUIDE.md`;
+      releaseLink.href = `https://github.com/${owner}/${repo}/releases/latest`;
+    };
+
+    const findLatestAssetAcrossReleases = (releases, patterns) => {
+      for (const release of releases) {
+        const assets = Array.isArray(release.assets) ? release.assets : [];
+        const found = pickFirstMatch(assets, patterns);
+        if (found) {
+          return {
+            ...found,
+            _release_tag: release.tag_name || 'latest',
+          };
+        }
+      }
+      return null;
+    };
+
+
+    const renderRecentReleases = (releases) => {
+      recentReleasesList.innerHTML = '';
+      if (!Array.isArray(releases) || releases.length === 0) {
+        recentReleasesMeta.textContent = 'No recent releases found.';
+        recentReleasesMeta.classList.add('error');
+        return;
+      }
+
+      recentReleasesMeta.textContent = `Showing ${releases.length} recent versions.`;
+      recentReleasesMeta.classList.remove('error');
+
+      for (const release of releases) {
+        const item = document.createElement('li');
+        item.className = 'release-item';
+
+        const link = document.createElement('a');
+        link.className = 'text-link';
+        link.href = release.html_url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = `🏷️ ${release.tag_name || release.name || 'untagged'}`;
+
+        const meta = document.createElement('span');
+        meta.className = 'release-meta';
+        const assetCount = Number.isFinite(release.asset_count) ? release.asset_count : (Array.isArray(release.assets) ? release.assets.length : 0);
+        meta.textContent = `${assetCount} assets`;
+
+        item.append(link, meta);
+        recentReleasesList.appendChild(item);
+      }
+    };
+
+    const loadLatest = async () => {
+      try {
+        hydrateStaticLinks();
+
+        // Prefer generated metadata from the release-to-pages workflow to avoid GitHub API rate limits.
+        let release = null;
+        let releases = [];
+        let windowsMsiAsset = null;
+        let windowsExeAsset = null;
+        let macAsset = null;
+
+        try {
+          const metadataResponse = await fetch('./release-downloads.json', { cache: 'no-store' });
+          if (metadataResponse.ok) {
+            const metadata = await metadataResponse.json();
+            release = metadata.release || null;
+            releases = Array.isArray(metadata.recent_releases) ? metadata.recent_releases : [];
+            windowsMsiAsset = metadata.downloads?.windows_msi || null;
+            windowsExeAsset = metadata.downloads?.windows_exe || null;
+            macAsset = metadata.downloads?.macos || null;
+          }
+        } catch (metadataError) {
+          console.warn('release-downloads.json unavailable, falling back to GitHub API', metadataError);
+        }
+
+        if (!release || !releases.length || (!windowsMsiAsset && !windowsExeAsset && !macAsset)) {
+          // Query multiple releases so each platform can use the newest release that has a compatible artifact.
+          const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`);
+          if (!response.ok) {
+            throw new Error(`GitHub API responded ${response.status}`);
+          }
+
+          releases = await response.json();
+          if (!Array.isArray(releases) || releases.length === 0) {
+            throw new Error('No releases found');
+          }
+
+          release = releases[0];
+          windowsMsiAsset = findLatestAssetAcrossReleases(releases, [
+            /setup-windows-x64\.msi$/i,
+            /windows.*\.msi$/i
+          ]);
+          windowsExeAsset = findLatestAssetAcrossReleases(releases, [
+            /setup-windows-x64\.exe$/i,
+            /windows-x64\.exe$/i,
+            /windows.*\.exe$/i
+          ]);
+          macAsset = findLatestAssetAcrossReleases(releases, [
+            /macos.*\.dmg$/i,
+            /macos.*\.pkg$/i,
+            /macos.*\.zip$/i,
+            /\.dmg$/i,
+            /\.pkg$/i,
+            /\.zip$/i
+          ]);
+        }
+
+        const fallbackReleaseTag = release?.tag_name || 'latest';
+        setDownload(windowsMsiLink, windowsMsiMeta, windowsMsiAsset, windowsMsiAsset?._release_tag || fallbackReleaseTag);
+        setDownload(windowsExeLink, windowsExeMeta, windowsExeAsset, windowsExeAsset?._release_tag || fallbackReleaseTag);
+        setDownload(macLink, macMeta, macAsset, macAsset?._release_tag || fallbackReleaseTag);
+        renderRecentReleases((releases || []).slice(0, 6));
+      } catch (error) {
+        const message = `Could not load release info (${error.message}).`;
+
+        windowsMsiMeta.textContent = message;
+        windowsExeMeta.textContent = message;
+        macMeta.textContent = message;
+        windowsMsiMeta.classList.add('error');
+        windowsExeMeta.classList.add('error');
+        macMeta.classList.add('error');
+        recentReleasesMeta.textContent = message;
+        recentReleasesMeta.classList.add('error');
+      }
+    };
+
+    loadLatest();
+  </script>
+</body>
+</html>
