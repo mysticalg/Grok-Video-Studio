@@ -35,12 +35,11 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            // Pull the latest published release so the site always points to current installers.
-            const latestRelease = await github.rest.repos.getLatestRelease({ owner, repo });
-            const release = latestRelease.data;
-            const assets = Array.isArray(release.assets) ? release.assets : [];
+            const windowsMsiPatterns = [/setup-windows-x64\.msi$/i, /windows.*\.msi$/i];
+            const windowsExePatterns = [/setup-windows-x64\.exe$/i, /windows-x64\.exe$/i, /windows.*\.exe$/i];
+            const macosPatterns = [/macos.*\.(zip|dmg|pkg)$/i, /\.(dmg|pkg|zip)$/i];
 
-            const pickFirst = (patterns) => {
+            const pickFirst = (assets, patterns) => {
               for (const pattern of patterns) {
                 const found = assets.find((asset) => pattern.test(asset.name || ''));
                 if (found) return found;
@@ -48,17 +47,49 @@ jobs:
               return null;
             };
 
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            if (!Array.isArray(releases) || releases.length === 0) {
+              throw new Error('No releases found while generating docs/release-downloads.json');
+            }
+
+            const latestRelease = releases[0];
+            const findAssetAcrossReleases = (patterns) => {
+              for (const release of releases) {
+                const assets = Array.isArray(release.assets) ? release.assets : [];
+                const match = pickFirst(assets, patterns);
+                if (match) {
+                  return {
+                    ...match,
+                    source_release_tag: release.tag_name,
+                    source_release_url: release.html_url,
+                  };
+                }
+              }
+              return null;
+            };
+
             const payload = {
               generated_at: new Date().toISOString(),
+              repository: {
+                owner,
+                name: repo,
+                html_url: `https://github.com/${owner}/${repo}`,
+              },
               release: {
-                tag_name: release.tag_name,
-                name: release.name,
-                published_at: release.published_at,
+                tag_name: latestRelease.tag_name,
+                name: latestRelease.name,
+                published_at: latestRelease.published_at,
+                html_url: latestRelease.html_url,
               },
               downloads: {
-                windows_msi: pickFirst([/setup-windows-x64\.msi$/i, /windows.*\.msi$/i]),
-                windows_exe: pickFirst([/setup-windows-x64\.exe$/i, /windows-x64\.exe$/i, /windows.*\.exe$/i]),
-                macos: pickFirst([/macos.*\.(zip|dmg|pkg)$/i, /\.(dmg|pkg|zip)$/i]),
+                windows_msi: findAssetAcrossReleases(windowsMsiPatterns),
+                windows_exe: findAssetAcrossReleases(windowsExePatterns),
+                macos: findAssetAcrossReleases(macosPatterns),
               },
             };
 

@@ -183,8 +183,9 @@
         <li>Train and replay browser workflows from the built-in AI Flow Trainer.</li>
       </ul>
       <div class="footer-links">
-        <a class="text-link" href="https://github.com/dhookster/Grok-Video-Studio" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
-        <a class="text-link" href="https://github.com/dhookster/Grok-Video-Studio/blob/main/docs/USER_GUIDE.md" target="_blank" rel="noopener noreferrer">User Guide</a>
+        <a id="repo-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
+        <a id="user-guide-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">User Guide</a>
+        <a id="release-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">Latest Release</a>
       </div>
     </section>
   </main>
@@ -193,7 +194,7 @@
     // Derive owner/repo automatically on GitHub Pages project URLs.
     const derivedOwner = window.location.hostname.endsWith('github.io')
       ? window.location.hostname.split('.')[0]
-      : 'dhookster';
+      : 'mysticalg';
     const pathParts = window.location.pathname.split('/').filter(Boolean);
     const derivedRepo = pathParts[0] || 'Grok-Video-Studio';
 
@@ -203,6 +204,9 @@
     const windowsMsiLink = document.getElementById('windows-msi-link');
     const windowsExeLink = document.getElementById('windows-exe-link');
     const macLink = document.getElementById('mac-link');
+    const repoLink = document.getElementById('repo-link');
+    const userGuideLink = document.getElementById('user-guide-link');
+    const releaseLink = document.getElementById('release-link');
     const windowsMsiMeta = document.getElementById('windows-msi-meta');
     const windowsExeMeta = document.getElementById('windows-exe-meta');
     const macMeta = document.getElementById('mac-meta');
@@ -229,61 +233,86 @@
       return null;
     };
 
+    const hydrateStaticLinks = () => {
+      // Keep footer links aligned with the currently served owner/repository.
+      repoLink.href = `https://github.com/${owner}/${repo}`;
+      userGuideLink.href = `https://github.com/${owner}/${repo}/blob/main/docs/USER_GUIDE.md`;
+      releaseLink.href = `https://github.com/${owner}/${repo}/releases/latest`;
+    };
+
+    const findLatestAssetAcrossReleases = (releases, patterns) => {
+      for (const release of releases) {
+        const assets = Array.isArray(release.assets) ? release.assets : [];
+        const found = pickFirstMatch(assets, patterns);
+        if (found) {
+          return {
+            ...found,
+            _release_tag: release.tag_name || 'latest',
+          };
+        }
+      }
+      return null;
+    };
+
     const loadLatest = async () => {
       try {
+        hydrateStaticLinks();
+
         // Prefer generated metadata from the release-to-pages workflow to avoid GitHub API rate limits.
         let release = null;
-        let assets = [];
+        let windowsMsiAsset = null;
+        let windowsExeAsset = null;
+        let macAsset = null;
 
         try {
           const metadataResponse = await fetch('./release-downloads.json', { cache: 'no-store' });
           if (metadataResponse.ok) {
             const metadata = await metadataResponse.json();
             release = metadata.release || null;
-            assets = [
-              metadata.downloads?.windows_msi,
-              metadata.downloads?.windows_exe,
-              metadata.downloads?.macos
-            ].filter(Boolean);
+            windowsMsiAsset = metadata.downloads?.windows_msi || null;
+            windowsExeAsset = metadata.downloads?.windows_exe || null;
+            macAsset = metadata.downloads?.macos || null;
           }
         } catch (metadataError) {
           console.warn('release-downloads.json unavailable, falling back to GitHub API', metadataError);
         }
 
-        if (!release || !assets.length) {
-          const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);
+        if (!release || (!windowsMsiAsset && !windowsExeAsset && !macAsset)) {
+          // Query multiple releases so each platform can use the newest release that has a compatible artifact.
+          const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`);
           if (!response.ok) {
             throw new Error(`GitHub API responded ${response.status}`);
           }
 
-          release = await response.json();
-          assets = release.assets || [];
+          const releases = await response.json();
+          if (!Array.isArray(releases) || releases.length === 0) {
+            throw new Error('No releases found');
+          }
+
+          release = releases[0];
+          windowsMsiAsset = findLatestAssetAcrossReleases(releases, [
+            /setup-windows-x64\.msi$/i,
+            /windows.*\.msi$/i
+          ]);
+          windowsExeAsset = findLatestAssetAcrossReleases(releases, [
+            /setup-windows-x64\.exe$/i,
+            /windows-x64\.exe$/i,
+            /windows.*\.exe$/i
+          ]);
+          macAsset = findLatestAssetAcrossReleases(releases, [
+            /macos.*\.dmg$/i,
+            /macos.*\.pkg$/i,
+            /macos.*\.zip$/i,
+            /\.dmg$/i,
+            /\.pkg$/i,
+            /\.zip$/i
+          ]);
         }
 
-        const windowsMsiAsset = pickFirstMatch(assets, [
-          /setup-windows-x64\.msi$/i,
-          /windows.*\.msi$/i
-        ]);
-
-        const windowsExeAsset = pickFirstMatch(assets, [
-          /setup-windows-x64\.exe$/i,
-          /windows-x64\.exe$/i,
-          /windows.*\.exe$/i
-        ]);
-
-        const macAsset = pickFirstMatch(assets, [
-          /macos.*\.dmg$/i,
-          /macos.*\.pkg$/i,
-          /macos.*\.zip$/i,
-          /\.dmg$/i,
-          /\.pkg$/i,
-          /\.zip$/i
-        ]);
-
-        const releaseTag = release.tag_name || 'latest';
-        setDownload(windowsMsiLink, windowsMsiMeta, windowsMsiAsset, releaseTag);
-        setDownload(windowsExeLink, windowsExeMeta, windowsExeAsset, releaseTag);
-        setDownload(macLink, macMeta, macAsset, releaseTag);
+        const fallbackReleaseTag = release?.tag_name || 'latest';
+        setDownload(windowsMsiLink, windowsMsiMeta, windowsMsiAsset, windowsMsiAsset?._release_tag || fallbackReleaseTag);
+        setDownload(windowsExeLink, windowsExeMeta, windowsExeAsset, windowsExeAsset?._release_tag || fallbackReleaseTag);
+        setDownload(macLink, macMeta, macAsset, macAsset?._release_tag || fallbackReleaseTag);
       } catch (error) {
         const message = `Could not load release info (${error.message}).`;
 
