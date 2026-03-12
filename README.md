@@ -6,6 +6,11 @@ Desktop PySide6 app for generating AI videos, managing clips, previewing/stitchi
 
 
 
+## 🌐 GitHub Pages download site
+
+- Live page: `https://dhookster.github.io/Grok-Video-Studio/`
+- Includes app overview and auto-updating links to the latest Windows installer and macOS build from GitHub Releases.
+
 ## 📚 Full documentation
 
 - 📖 **User guide (Markdown):** [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
