@@ -159,6 +159,37 @@
       color: var(--muted);
       font-size: 0.88rem;
     }
+
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 0.9rem;
+      margin-top: 0.85rem;
+    }
+
+    .shot {
+      margin: 0;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 0.55rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .shot img {
+      width: 100%;
+      max-width: 460px;
+      display: block;
+      margin: 0 auto;
+      border-radius: 8px;
+      height: auto;
+    }
+
+    .shot figcaption {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-top: 0.5rem;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -222,6 +253,24 @@
         <a id="release-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">Latest Release</a>
       </div>
     </section>
+
+    <section class="panel" aria-label="Application screenshots">
+      <h2 style="margin-top: 0;">🖼️ App screenshots</h2>
+      <p class="helper" style="margin-top: 0; min-height: 0;">
+        Recent UI captures shared from the desktop app.
+        <span class="tooltip" title="Images are scaled down for faster page load while preserving detail.">ⓘ</span>
+      </p>
+      <div class="gallery-grid">
+        <figure class="shot">
+          <img data-image-name="snap1.jpg" alt="Grok Video Studio main workspace with generation and upload controls" loading="lazy" />
+          <figcaption>Main workspace and publishing controls.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img data-image-name="snap2.jpg" alt="Grok Video Studio workflow view showing video tooling and social publishing options" loading="lazy" />
+          <figcaption>Workflow tools for editing and social delivery.</figcaption>
+        </figure>
+      </div>
+    </section>
   </main>
 
   <script>
@@ -276,6 +325,16 @@
       releaseLink.href = `https://github.com/${owner}/${repo}/releases/latest`;
     };
 
+    const hydrateScreenshotLinks = () => {
+      // Keep screenshot binaries in the repository-level images/ folder
+      // and map them dynamically so Pages works across forks.
+      const screenshotBase = `https://raw.githubusercontent.com/${owner}/${repo}/main/images/`;
+      document.querySelectorAll('img[data-image-name]').forEach((imgEl) => {
+        const fileName = imgEl.getAttribute('data-image-name');
+        if (fileName) imgEl.src = `${screenshotBase}${fileName}`;
+      });
+    };
+
     const findLatestAssetAcrossReleases = (releases, patterns) => {
       for (const release of releases) {
         const assets = Array.isArray(release.assets) ? release.assets : [];
@@ -326,6 +385,7 @@
     const loadLatest = async () => {
       try {
         hydrateStaticLinks();
+        hydrateScreenshotLinks();
 
         // Prefer generated metadata from the release-to-pages workflow to avoid GitHub API rate limits.
         let release = null;
