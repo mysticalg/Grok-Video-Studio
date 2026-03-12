@@ -135,6 +135,30 @@
       border-bottom: 1px dashed #90a5ff;
       cursor: help;
     }
+
+    .release-list {
+      list-style: none;
+      padding: 0;
+      margin: 0.75rem 0 0;
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .release-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 0.55rem 0.7rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .release-meta {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
   </style>
 </head>
 <body>
@@ -174,6 +198,16 @@
       </article>
     </section>
 
+    <section class="panel" aria-label="Recent releases">
+      <h2 style="margin-top: 0;">🧾 Recent versions</h2>
+      <p class="helper" style="margin-top: 0; min-height: 0;">
+        Quick links to the most recent tagged releases.
+        <span class="tooltip" title="Shows the newest versions and how many downloadable artifacts each release includes.">ⓘ</span>
+      </p>
+      <p id="recent-releases-meta" class="status">Loading release history…</p>
+      <ul id="recent-releases-list" class="release-list" aria-live="polite"></ul>
+    </section>
+
     <section class="panel" aria-label="About the app">
       <h2 style="margin-top: 0;">✨ What it does</h2>
       <ul>
@@ -183,8 +217,9 @@
         <li>Train and replay browser workflows from the built-in AI Flow Trainer.</li>
       </ul>
       <div class="footer-links">
-        <a class="text-link" href="https://github.com/dhookster/Grok-Video-Studio" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
-        <a class="text-link" href="https://github.com/dhookster/Grok-Video-Studio/blob/main/docs/USER_GUIDE.md" target="_blank" rel="noopener noreferrer">User Guide</a>
+        <a id="repo-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
+        <a id="user-guide-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">User Guide</a>
+        <a id="release-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">Latest Release</a>
       </div>
     </section>
   </main>
@@ -193,7 +228,7 @@
     // Derive owner/repo automatically on GitHub Pages project URLs.
     const derivedOwner = window.location.hostname.endsWith('github.io')
       ? window.location.hostname.split('.')[0]
-      : 'dhookster';
+      : 'mysticalg';
     const pathParts = window.location.pathname.split('/').filter(Boolean);
     const derivedRepo = pathParts[0] || 'Grok-Video-Studio';
 
@@ -203,9 +238,14 @@
     const windowsMsiLink = document.getElementById('windows-msi-link');
     const windowsExeLink = document.getElementById('windows-exe-link');
     const macLink = document.getElementById('mac-link');
+    const repoLink = document.getElementById('repo-link');
+    const userGuideLink = document.getElementById('user-guide-link');
+    const releaseLink = document.getElementById('release-link');
     const windowsMsiMeta = document.getElementById('windows-msi-meta');
     const windowsExeMeta = document.getElementById('windows-exe-meta');
     const macMeta = document.getElementById('mac-meta');
+    const recentReleasesMeta = document.getElementById('recent-releases-meta');
+    const recentReleasesList = document.getElementById('recent-releases-list');
 
     const setDownload = (linkEl, metaEl, asset, releaseTag) => {
       if (!asset) {
@@ -229,61 +269,122 @@
       return null;
     };
 
+    const hydrateStaticLinks = () => {
+      // Keep footer links aligned with the currently served owner/repository.
+      repoLink.href = `https://github.com/${owner}/${repo}`;
+      userGuideLink.href = `https://github.com/${owner}/${repo}/blob/main/docs/USER_GUIDE.md`;
+      releaseLink.href = `https://github.com/${owner}/${repo}/releases/latest`;
+    };
+
+    const findLatestAssetAcrossReleases = (releases, patterns) => {
+      for (const release of releases) {
+        const assets = Array.isArray(release.assets) ? release.assets : [];
+        const found = pickFirstMatch(assets, patterns);
+        if (found) {
+          return {
+            ...found,
+            _release_tag: release.tag_name || 'latest',
+          };
+        }
+      }
+      return null;
+    };
+
+
+    const renderRecentReleases = (releases) => {
+      recentReleasesList.innerHTML = '';
+      if (!Array.isArray(releases) || releases.length === 0) {
+        recentReleasesMeta.textContent = 'No recent releases found.';
+        recentReleasesMeta.classList.add('error');
+        return;
+      }
+
+      recentReleasesMeta.textContent = `Showing ${releases.length} recent versions.`;
+      recentReleasesMeta.classList.remove('error');
+
+      for (const release of releases) {
+        const item = document.createElement('li');
+        item.className = 'release-item';
+
+        const link = document.createElement('a');
+        link.className = 'text-link';
+        link.href = release.html_url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = `🏷️ ${release.tag_name || release.name || 'untagged'}`;
+
+        const meta = document.createElement('span');
+        meta.className = 'release-meta';
+        const assetCount = Number.isFinite(release.asset_count) ? release.asset_count : (Array.isArray(release.assets) ? release.assets.length : 0);
+        meta.textContent = `${assetCount} assets`;
+
+        item.append(link, meta);
+        recentReleasesList.appendChild(item);
+      }
+    };
+
     const loadLatest = async () => {
       try {
+        hydrateStaticLinks();
+
         // Prefer generated metadata from the release-to-pages workflow to avoid GitHub API rate limits.
         let release = null;
-        let assets = [];
+        let releases = [];
+        let windowsMsiAsset = null;
+        let windowsExeAsset = null;
+        let macAsset = null;
 
         try {
           const metadataResponse = await fetch('./release-downloads.json', { cache: 'no-store' });
           if (metadataResponse.ok) {
             const metadata = await metadataResponse.json();
             release = metadata.release || null;
-            assets = [
-              metadata.downloads?.windows_msi,
-              metadata.downloads?.windows_exe,
-              metadata.downloads?.macos
-            ].filter(Boolean);
+            releases = Array.isArray(metadata.recent_releases) ? metadata.recent_releases : [];
+            windowsMsiAsset = metadata.downloads?.windows_msi || null;
+            windowsExeAsset = metadata.downloads?.windows_exe || null;
+            macAsset = metadata.downloads?.macos || null;
           }
         } catch (metadataError) {
           console.warn('release-downloads.json unavailable, falling back to GitHub API', metadataError);
         }
 
-        if (!release || !assets.length) {
-          const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);
+        if (!release || !releases.length || (!windowsMsiAsset && !windowsExeAsset && !macAsset)) {
+          // Query multiple releases so each platform can use the newest release that has a compatible artifact.
+          const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`);
           if (!response.ok) {
             throw new Error(`GitHub API responded ${response.status}`);
           }
 
-          release = await response.json();
-          assets = release.assets || [];
+          releases = await response.json();
+          if (!Array.isArray(releases) || releases.length === 0) {
+            throw new Error('No releases found');
+          }
+
+          release = releases[0];
+          windowsMsiAsset = findLatestAssetAcrossReleases(releases, [
+            /setup-windows-x64\.msi$/i,
+            /windows.*\.msi$/i
+          ]);
+          windowsExeAsset = findLatestAssetAcrossReleases(releases, [
+            /setup-windows-x64\.exe$/i,
+            /windows-x64\.exe$/i,
+            /windows.*\.exe$/i
+          ]);
+          macAsset = findLatestAssetAcrossReleases(releases, [
+            /macos.*\.dmg$/i,
+            /macos.*\.pkg$/i,
+            /macos.*\.zip$/i,
+            /\.dmg$/i,
+            /\.pkg$/i,
+            /\.zip$/i
+          ]);
         }
 
-        const windowsMsiAsset = pickFirstMatch(assets, [
-          /setup-windows-x64\.msi$/i,
-          /windows.*\.msi$/i
-        ]);
-
-        const windowsExeAsset = pickFirstMatch(assets, [
-          /setup-windows-x64\.exe$/i,
-          /windows-x64\.exe$/i,
-          /windows.*\.exe$/i
-        ]);
-
-        const macAsset = pickFirstMatch(assets, [
-          /macos.*\.dmg$/i,
-          /macos.*\.pkg$/i,
-          /macos.*\.zip$/i,
-          /\.dmg$/i,
-          /\.pkg$/i,
-          /\.zip$/i
-        ]);
-
-        const releaseTag = release.tag_name || 'latest';
-        setDownload(windowsMsiLink, windowsMsiMeta, windowsMsiAsset, releaseTag);
-        setDownload(windowsExeLink, windowsExeMeta, windowsExeAsset, releaseTag);
-        setDownload(macLink, macMeta, macAsset, releaseTag);
+        const fallbackReleaseTag = release?.tag_name || 'latest';
+        setDownload(windowsMsiLink, windowsMsiMeta, windowsMsiAsset, windowsMsiAsset?._release_tag || fallbackReleaseTag);
+        setDownload(windowsExeLink, windowsExeMeta, windowsExeAsset, windowsExeAsset?._release_tag || fallbackReleaseTag);
+        setDownload(macLink, macMeta, macAsset, macAsset?._release_tag || fallbackReleaseTag);
+        renderRecentReleases((releases || []).slice(0, 6));
       } catch (error) {
         const message = `Could not load release info (${error.message}).`;
 
@@ -293,6 +394,8 @@
         windowsMsiMeta.classList.add('error');
         windowsExeMeta.classList.add('error');
         macMeta.classList.add('error');
+        recentReleasesMeta.textContent = message;
+        recentReleasesMeta.classList.add('error');
       }
     };
 
