@@ -58,6 +58,15 @@ jobs:
             }
 
             const latestRelease = releases[0];
+            const recentReleases = releases.slice(0, 6).map((release) => ({
+              tag_name: release.tag_name,
+              name: release.name,
+              published_at: release.published_at,
+              html_url: release.html_url,
+              prerelease: Boolean(release.prerelease),
+              asset_count: Array.isArray(release.assets) ? release.assets.length : 0,
+            }));
+
             const findAssetAcrossReleases = (patterns) => {
               for (const release of releases) {
                 const assets = Array.isArray(release.assets) ? release.assets : [];
@@ -86,6 +95,7 @@ jobs:
                 published_at: latestRelease.published_at,
                 html_url: latestRelease.html_url,
               },
+              recent_releases: recentReleases,
               downloads: {
                 windows_msi: findAssetAcrossReleases(windowsMsiPatterns),
                 windows_exe: findAssetAcrossReleases(windowsExePatterns),
