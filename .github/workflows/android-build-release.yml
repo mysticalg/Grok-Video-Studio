@@ -181,22 +181,16 @@ jobs:
         if: steps.android.outputs.has_android_project == 'true'
         run: |
           set -euo pipefail
-          # Keep this preflight lightweight: verify the artifact is a readable zip and contains
-          # expected base module entries. The canonical validity check runs in the bundletool step.
+          # Keep this preflight lightweight and non-opinionated: verify the artifact is a readable
+          # zip before we run bundletool's canonical validation.
           unzip -t "${{ steps.bundle.outputs.release_bundle }}"
           unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
 
-          # These files are always present for Gradle-produced Android App Bundles.
-          # Checking these avoids false negatives from BundleConfig.pb path differences
-          # while still catching obvious packaging errors early.
-          for required_entry in \
-            "base/manifest/AndroidManifest.xml" \
-            "base/resources.pb"; do
-            if ! rg -Fxq "$required_entry" /tmp/aab-contents.txt; then
-              echo "::error::Required bundle entry '$required_entry' is missing from ${{ steps.bundle.outputs.release_bundle }}"
-              exit 1
-            fi
-          done
+          # BundleConfig.pb is required for all AABs and is stable across AGP versions.
+          if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt; then
+            echo "::error::BundleConfig.pb is missing from ${{ steps.bundle.outputs.release_bundle }}"
+            exit 1
+          fi
 
       - name: Validate with bundletool
         if: steps.android.outputs.has_android_project == 'true'
