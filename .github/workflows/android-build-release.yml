@@ -181,16 +181,27 @@ jobs:
         if: steps.android.outputs.has_android_project == 'true'
         run: |
           set -euo pipefail
+          BUNDLETOOL_VERSION="1.17.2"
+
+          ensure_bundletool() {
+            if [ ! -f /tmp/bundletool.jar ]; then
+              curl -fsSL "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar" -o /tmp/bundletool.jar
+            fi
+          }
+
+          has_bundle_config() {
+            local archive="$1"
+            unzip -Z1 "$archive" | tee /tmp/aab-contents.txt
+            rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt || rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt
+          }
+
           # Keep this preflight lightweight and non-opinionated: verify the artifact is a readable
           # zip before we run bundletool's canonical validation.
           unzip -t "${{ steps.bundle.outputs.release_bundle }}"
           unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
 
-          # BundleConfig can be emitted either at archive root (legacy) or in bundle metadata
-          # (newer AGP/bundletool packaging). Accept either shape.
-          if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt \
-            && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt \
-            && ! rg -Fxq "BUNDLE-METADATA/com.android.tools.build.bundletool/BundleConfig.pb" /tmp/aab-contents.txt; then
+          # Bundletool/Play requires a root-level BundleConfig.pb. If it is missing, recover deterministically.
+          if ! has_bundle_config "${{ steps.bundle.outputs.release_bundle }}"; then
             echo "BundleConfig.pb missing in release bundle; attempting deterministic recovery from Gradle outputs..."
 
             RECOVERY_CONFIG=""
@@ -217,16 +228,27 @@ jobs:
                 zip -q "$GITHUB_WORKSPACE/${{ steps.bundle.outputs.release_bundle }}" BundleConfig.pb
               )
               rm -rf "$tmp_dir"
-
-              unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
-              if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt \
-                && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt \
-                && ! rg -Fxq "BUNDLE-METADATA/com.android.tools.build.bundletool/BundleConfig.pb" /tmp/aab-contents.txt; then
-                echo "::error::BundleConfig.pb recovery ran but the entry is still missing from ${{ steps.bundle.outputs.release_bundle }}"
+            else
+              # Some environments occasionally surface a module zip (base/...) instead of a full .aab.
+              # Rebuild a canonical App Bundle from that module archive with bundletool.
+              if rg -Fxq "base/manifest/AndroidManifest.xml" /tmp/aab-contents.txt && rg -Fxq "base/resources.pb" /tmp/aab-contents.txt; then
+                echo "Detected module archive layout; rebuilding canonical .aab with bundletool build-bundle..."
+                ensure_bundletool
+                java -jar /tmp/bundletool.jar build-bundle \
+                  --modules="${{ steps.bundle.outputs.release_bundle }}" \
+                  --output="${{ steps.bundle.outputs.release_bundle }}.repacked"
+                mv "${{ steps.bundle.outputs.release_bundle }}.repacked" "${{ steps.bundle.outputs.release_bundle }}"
+              else
+                echo "::error::BundleConfig.pb is missing from ${{ steps.bundle.outputs.release_bundle }} and no recovery source was found"
+                echo "::group::AAB entries"
+                cat /tmp/aab-contents.txt
+                echo "::endgroup::"
                 exit 1
               fi
-            else
-              echo "::error::BundleConfig.pb is missing from ${{ steps.bundle.outputs.release_bundle }} and no recovery source was found"
+            fi
+
+            if ! has_bundle_config "${{ steps.bundle.outputs.release_bundle }}"; then
+              echo "::error::BundleConfig.pb recovery ran but the entry is still missing from ${{ steps.bundle.outputs.release_bundle }}"
               echo "::group::AAB entries"
               cat /tmp/aab-contents.txt
               echo "::endgroup::"
