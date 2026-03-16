@@ -147,6 +147,39 @@ A starter implementation is included for a reliable extension-to-desktop control
 
 This is a good fit for automation control because Chrome supports it natively and the desktop app can keep privileged operations local.
 
+
+## 🤖 Android (Google Play)
+
+An Android project is included at `android/` so CI can generate a distributable **.aab** bundle for Google Play.
+
+### Build locally
+
+```bash
+gradle -p android bundleRelease
+```
+
+Release bundle output:
+
+- `android/app/build/outputs/bundle/release/app-release.aab`
+
+### Optional release signing
+
+For local Gradle signing, create `android/release-keystore.properties`:
+
+```properties
+storeFile=release.keystore
+storePassword=your_store_password
+keyAlias=your_key_alias
+keyPassword=your_key_password
+```
+
+In GitHub Actions, the workflow signs with `jarsigner` when these repository secrets are set:
+
+- `ANDROID_SIGNING_KEY_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
 ## Configure credentials
 
 In **Model/API Settings** tab configure what you need:
