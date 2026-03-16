@@ -173,12 +173,14 @@ keyAlias=your_key_alias
 keyPassword=your_key_password
 ```
 
-In GitHub Actions, the workflow signs with `jarsigner` when these repository secrets are set:
+In GitHub Actions, the workflow decodes the keystore and writes `android/release-keystore.properties` before running `gradle -p android bundleRelease` when these repository secrets are set:
 
 - `ANDROID_SIGNING_KEY_BASE64`
 - `ANDROID_KEYSTORE_PASSWORD`
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
+
+The CI build also validates the final `.aab` with `bundletool validate` and fails fast if `BundleConfig.pb` is missing.
 
 ## Configure credentials
 
