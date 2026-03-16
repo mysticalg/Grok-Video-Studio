@@ -186,10 +186,11 @@ jobs:
           unzip -t "${{ steps.bundle.outputs.release_bundle }}"
           unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
 
-          # Google Play requires BundleConfig.pb in the final .aab. Some zip producers may record
-          # entries with a leading "./", so accept both forms while still enforcing presence.
+          # BundleConfig can be emitted either at archive root (legacy) or in bundle metadata
+          # (newer AGP/bundletool packaging). Accept either shape.
           if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt \
-            && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt; then
+            && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt \
+            && ! rg -Fxq "BUNDLE-METADATA/com.android.tools.build.bundletool/BundleConfig.pb" /tmp/aab-contents.txt; then
             echo "BundleConfig.pb missing in release bundle; attempting deterministic recovery from Gradle outputs..."
 
             RECOVERY_CONFIG=""
@@ -198,6 +199,8 @@ jobs:
             if unzip -p "android/app/build/outputs/bundle/release/app-release.aab" BundleConfig.pb > /tmp/BundleConfig.pb 2>/dev/null; then
               RECOVERY_CONFIG="/tmp/BundleConfig.pb"
             elif unzip -p "android/app/build/outputs/bundle/release/app-release.aab" ./BundleConfig.pb > /tmp/BundleConfig.pb 2>/dev/null; then
+              RECOVERY_CONFIG="/tmp/BundleConfig.pb"
+            elif unzip -p "android/app/build/outputs/bundle/release/app-release.aab" BUNDLE-METADATA/com.android.tools.build.bundletool/BundleConfig.pb > /tmp/BundleConfig.pb 2>/dev/null; then
               RECOVERY_CONFIG="/tmp/BundleConfig.pb"
             else
               # Fall back to any BundleConfig.pb emitted by AGP intermediates.
@@ -217,7 +220,8 @@ jobs:
 
               unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
               if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt \
-                && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt; then
+                && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt \
+                && ! rg -Fxq "BUNDLE-METADATA/com.android.tools.build.bundletool/BundleConfig.pb" /tmp/aab-contents.txt; then
                 echo "::error::BundleConfig.pb recovery ran but the entry is still missing from ${{ steps.bundle.outputs.release_bundle }}"
                 exit 1
               fi
