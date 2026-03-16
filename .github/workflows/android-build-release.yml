@@ -190,11 +190,44 @@ jobs:
           # entries with a leading "./", so accept both forms while still enforcing presence.
           if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt \
             && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt; then
-            echo "::error::BundleConfig.pb is missing from ${{ steps.bundle.outputs.release_bundle }}"
-            echo "::group::AAB entries"
-            cat /tmp/aab-contents.txt
-            echo "::endgroup::"
-            exit 1
+            echo "BundleConfig.pb missing in release bundle; attempting deterministic recovery from Gradle outputs..."
+
+            RECOVERY_CONFIG=""
+
+            # Prefer the source bundle first (in case a post-process step ever mutates RELEASE_BUNDLE).
+            if unzip -p "android/app/build/outputs/bundle/release/app-release.aab" BundleConfig.pb > /tmp/BundleConfig.pb 2>/dev/null; then
+              RECOVERY_CONFIG="/tmp/BundleConfig.pb"
+            elif unzip -p "android/app/build/outputs/bundle/release/app-release.aab" ./BundleConfig.pb > /tmp/BundleConfig.pb 2>/dev/null; then
+              RECOVERY_CONFIG="/tmp/BundleConfig.pb"
+            else
+              # Fall back to any BundleConfig.pb emitted by AGP intermediates.
+              RECOVERY_CONFIG="$(find android/app/build -type f -name BundleConfig.pb | head -n 1 || true)"
+            fi
+
+            if [ -n "$RECOVERY_CONFIG" ] && [ -f "$RECOVERY_CONFIG" ]; then
+              echo "Recovered BundleConfig.pb from: $RECOVERY_CONFIG"
+              tmp_dir="$(mktemp -d)"
+              cp "$RECOVERY_CONFIG" "$tmp_dir/BundleConfig.pb"
+              (
+                cd "$tmp_dir"
+                # Reinsert as a root-level entry so Google Play and bundletool recognize it.
+                zip -q "$GITHUB_WORKSPACE/${{ steps.bundle.outputs.release_bundle }}" BundleConfig.pb
+              )
+              rm -rf "$tmp_dir"
+
+              unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
+              if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt \
+                && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt; then
+                echo "::error::BundleConfig.pb recovery ran but the entry is still missing from ${{ steps.bundle.outputs.release_bundle }}"
+                exit 1
+              fi
+            else
+              echo "::error::BundleConfig.pb is missing from ${{ steps.bundle.outputs.release_bundle }} and no recovery source was found"
+              echo "::group::AAB entries"
+              cat /tmp/aab-contents.txt
+              echo "::endgroup::"
+              exit 1
+            fi
           fi
 
       - name: Validate with bundletool
