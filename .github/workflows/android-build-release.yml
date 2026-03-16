@@ -181,13 +181,22 @@ jobs:
         if: steps.android.outputs.has_android_project == 'true'
         run: |
           set -euo pipefail
-          # Google Play errors like "BundleConfig.pb was not found" come from malformed bundles.
-          # Fail CI immediately if the generated bundle is structurally invalid.
-          unzip -l "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
-          if ! rg -q "BundleConfig.pb" /tmp/aab-contents.txt; then
-            echo "::error::BundleConfig.pb is missing from ${{ steps.bundle.outputs.release_bundle }}"
-            exit 1
-          fi
+          # Keep this preflight lightweight: verify the artifact is a readable zip and contains
+          # expected base module entries. The canonical validity check runs in the bundletool step.
+          unzip -t "${{ steps.bundle.outputs.release_bundle }}"
+          unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
+
+          # These files are always present for Gradle-produced Android App Bundles.
+          # Checking these avoids false negatives from BundleConfig.pb path differences
+          # while still catching obvious packaging errors early.
+          for required_entry in \
+            "base/manifest/AndroidManifest.xml" \
+            "base/resources.pb"; do
+            if ! rg -Fxq "$required_entry" /tmp/aab-contents.txt; then
+              echo "::error::Required bundle entry '$required_entry' is missing from ${{ steps.bundle.outputs.release_bundle }}"
+              exit 1
+            fi
+          done
 
       - name: Validate with bundletool
         if: steps.android.outputs.has_android_project == 'true'
