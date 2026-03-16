@@ -186,9 +186,14 @@ jobs:
           unzip -t "${{ steps.bundle.outputs.release_bundle }}"
           unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
 
-          # BundleConfig.pb is required for all AABs and is stable across AGP versions.
-          if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt; then
+          # Google Play requires BundleConfig.pb in the final .aab. Some zip producers may record
+          # entries with a leading "./", so accept both forms while still enforcing presence.
+          if ! rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt \
+            && ! rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt; then
             echo "::error::BundleConfig.pb is missing from ${{ steps.bundle.outputs.release_bundle }}"
+            echo "::group::AAB entries"
+            cat /tmp/aab-contents.txt
+            echo "::endgroup::"
             exit 1
           fi
 
