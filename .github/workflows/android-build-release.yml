@@ -87,22 +87,39 @@ jobs:
             echo "should_release=$SHOULD_RELEASE"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Detect Android project layout
+        id: android
+        run: |
+          # Guard Android-specific steps so this workflow still passes on branches
+          # where the Android project has not been generated yet.
+          if [ -d android ] && { [ -f android/settings.gradle ] || [ -f android/settings.gradle.kts ]; }; then
+            echo "has_android_project=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_android_project=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping Android bundle build because ./android is missing or incomplete."
+          fi
+
       - name: Set up Java
+        if: steps.android.outputs.has_android_project == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
+        if: steps.android.outputs.has_android_project == 'true'
         uses: android-actions/setup-android@v3
 
       - name: Set up Gradle
+        if: steps.android.outputs.has_android_project == 'true'
         uses: gradle/actions/setup-gradle@v3
 
       - name: Build unsigned release bundle
+        if: steps.android.outputs.has_android_project == 'true'
         run: gradle -p android bundleRelease
 
       - name: Resolve Play bundle paths
+        if: steps.android.outputs.has_android_project == 'true'
         id: bundle
         run: |
           set -euo pipefail
@@ -118,6 +135,7 @@ jobs:
           echo "release_bundle=$RELEASE_BUNDLE" >> "$GITHUB_OUTPUT"
 
       - name: Validate signing configuration
+        if: steps.android.outputs.has_android_project == 'true'
         env:
           ANDROID_SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -143,7 +161,7 @@ jobs:
           fi
 
       - name: Decode signing keystore
-        if: env.HAS_ANDROID_SIGNING_KEY == 'true'
+        if: steps.android.outputs.has_android_project == 'true' && env.HAS_ANDROID_SIGNING_KEY == 'true'
         env:
           ANDROID_SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
         run: |
@@ -151,7 +169,7 @@ jobs:
           echo "$ANDROID_SIGNING_KEY_BASE64" | base64 --decode > android/release.keystore
 
       - name: Sign Play bundle (.aab)
-        if: env.HAS_ANDROID_SIGNING_KEY == 'true'
+        if: steps.android.outputs.has_android_project == 'true' && env.HAS_ANDROID_SIGNING_KEY == 'true'
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -166,19 +184,21 @@ jobs:
             "$KEY_ALIAS"
 
       - name: Upload artifact
+        if: steps.android.outputs.has_android_project == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: GrokVideoDesktopStudio-android-play-aab
           path: ${{ steps.bundle.outputs.release_bundle }}
 
       - name: Publish release asset
-        if: steps.meta.outputs.should_release == 'true'
+        if: steps.android.outputs.has_android_project == 'true' && steps.meta.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.release_tag }}
           files: ${{ steps.bundle.outputs.release_bundle }}
 
       - name: Explain unsigned build
-        if: env.HAS_ANDROID_SIGNING_KEY != 'true'
+        if: steps.android.outputs.has_android_project == 'true' && env.HAS_ANDROID_SIGNING_KEY != 'true'
         run: |
           echo "ANDROID_SIGNING_KEY_BASE64 is not configured. Uploaded unsigned .aab artifact and attached it to the release when applicable."
+
