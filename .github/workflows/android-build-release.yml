@@ -90,18 +90,29 @@ jobs:
       - name: Detect Android project layout
         id: android
         run: |
-          # Keep Android CI strict for real release/build triggers so misconfiguration
-          # is visible, but allow scheduled jobs to skip gracefully when Android
-          # sources are not present on that commit.
-          if [ -d android ] && { [ -f android/settings.gradle ] || [ -f android/settings.gradle.kts ]; }; then
+          set -euo pipefail
+
+          # Validate the minimum Gradle/Android files required for `gradle -p android bundleRelease`.
+          # This keeps build/release triggers strict while allowing scheduled jobs to skip gracefully.
+          missing=()
+
+          [ -d android ] || missing+=("android/")
+          [ -f android/settings.gradle ] || [ -f android/settings.gradle.kts ] || missing+=("android/settings.gradle(.kts)")
+          [ -f android/app/build.gradle ] || [ -f android/app/build.gradle.kts ] || missing+=("android/app/build.gradle(.kts)")
+          [ -f android/app/src/main/AndroidManifest.xml ] || missing+=("android/app/src/main/AndroidManifest.xml")
+
+          if [ ${#missing[@]} -eq 0 ]; then
             echo "has_android_project=true" >> "$GITHUB_OUTPUT"
+            echo "Android project preflight checks passed."
           else
             echo "has_android_project=false" >> "$GITHUB_OUTPUT"
+            MISSING_LIST="$(printf '%s, ' "${missing[@]}")"
+            MISSING_LIST="${MISSING_LIST%, }"
 
             if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
-              echo "::warning::Skipping Android bundle build because ./android is missing or incomplete on this scheduled run."
+              echo "::warning::Skipping Android bundle build. Missing required Android files: ${MISSING_LIST}"
             else
-              echo "::error::Android project is required for this workflow trigger but ./android is missing or incomplete (expected settings.gradle or settings.gradle.kts)."
+              echo "::error::Android project is required for this workflow trigger. Missing required Android files: ${MISSING_LIST}"
               exit 1
             fi
           fi
