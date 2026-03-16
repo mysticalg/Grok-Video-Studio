@@ -2,14 +2,16 @@ name: Build Android Play Bundle
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   schedule:
     - cron: '0 3 * * *'
   release:
     types:
       - published
-  push:
-    tags:
-      - 'v*'
   workflow_run:
     workflows:
       - Auto Bump Version and Tag
@@ -78,6 +80,8 @@ jobs:
             fi
           fi
 
+          # Keep the output contract explicit so later steps can decide
+          # whether to upload release assets for signed and unsigned builds.
           {
             echo "release_tag=$RELEASE_TAG"
             echo "should_release=$SHOULD_RELEASE"
@@ -97,6 +101,21 @@ jobs:
 
       - name: Build unsigned release bundle
         run: gradle -p android bundleRelease
+
+      - name: Resolve Play bundle paths
+        id: bundle
+        run: |
+          set -euo pipefail
+          SOURCE_BUNDLE="android/app/build/outputs/bundle/release/app-release.aab"
+          RELEASE_BUNDLE="android/app/build/outputs/bundle/release/GrokVideoDesktopStudio-android-play.aab"
+
+          if [ ! -f "$SOURCE_BUNDLE" ]; then
+            echo "::error::Expected bundle not found at $SOURCE_BUNDLE"
+            exit 1
+          fi
+
+          cp "$SOURCE_BUNDLE" "$RELEASE_BUNDLE"
+          echo "release_bundle=$RELEASE_BUNDLE" >> "$GITHUB_OUTPUT"
 
       - name: Validate signing configuration
         env:
@@ -138,27 +157,28 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
           jarsigner \
             -keystore android/release.keystore \
             -storepass "$KEYSTORE_PASSWORD" \
             -keypass "$KEY_PASSWORD" \
-            android/app/build/outputs/bundle/release/app-release.aab \
+            "${{ steps.bundle.outputs.release_bundle }}" \
             "$KEY_ALIAS"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: GrokVideoDesktopStudio-android-play-aab
-          path: android/app/build/outputs/bundle/release/app-release.aab
+          path: ${{ steps.bundle.outputs.release_bundle }}
 
       - name: Publish release asset
-        if: steps.meta.outputs.should_release == 'true' && env.HAS_ANDROID_SIGNING_KEY == 'true'
+        if: steps.meta.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.release_tag }}
-          files: android/app/build/outputs/bundle/release/app-release.aab
+          files: ${{ steps.bundle.outputs.release_bundle }}
 
       - name: Explain unsigned build
         if: env.HAS_ANDROID_SIGNING_KEY != 'true'
         run: |
-          echo "ANDROID_SIGNING_KEY_BASE64 is not configured. Skipping signing and release upload; unsigned .aab artifact has been uploaded."
+          echo "ANDROID_SIGNING_KEY_BASE64 is not configured. Uploaded unsigned .aab artifact and attached it to the release when applicable."
