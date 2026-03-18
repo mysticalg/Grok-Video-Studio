@@ -13830,6 +13830,19 @@ class MainWindow(QMainWindow):
                         return value;
                     }}
                 }};
+                const sdVideo = document.querySelector("video#sd-video[src]");
+                if (sdVideo && isVisible(sdVideo)) {{
+                    const sdVideoSrc = normalizeAbsoluteUrl(sdVideo.getAttribute("src") || "");
+                    if (isDirectVideoUrl(sdVideoSrc)) {{
+                        return {{
+                            status: downloadGateReady ? "direct-url-ready" : "waiting-for-progress-before-direct-url",
+                            src: sdVideoSrc,
+                            sourceType: "sd-video",
+                            readyState: Number(sdVideo.readyState || 0),
+                            duration: Number(sdVideo.duration || 0),
+                        }};
+                    }}
+                }};
 
                 const directUrlCandidates = [anchorUrl, src];
                 for (const anchor of document.querySelectorAll("a[href]")) {{
@@ -14082,17 +14095,6 @@ class MainWindow(QMainWindow):
                 self.manual_continue_progress_gate_logged = False
             elif was_generating:
                 self.manual_generating_indicator_seen = False
-                self._append_log(
-                    f"Variant {current_variant}: 'Generating' span disappeared; checking whether download is now ready."
-                )
-                if not self.manual_refresh_after_generating_sent:
-                    self.manual_refresh_after_generating_sent = True
-                    self._refresh_active_browser_page_before_download(
-                        current_variant,
-                        "'Generating' disappeared",
-                    )
-                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
-                    return
 
             if status == "moderated-content-detected":
                 moderation_retry_enabled = self._automation_timing("moderation_retry_enabled") > 0
@@ -14264,6 +14266,23 @@ class MainWindow(QMainWindow):
                     getattr(self, "manual_waiting_for_progress_direct_url_count", 0)
                 ) + 1
                 pending_ready_url = str(result.get("src") or "").strip()
+                ready_source_type = str(result.get("sourceType") or "").strip().lower()
+                if (
+                    not self.manual_refresh_after_progress_100_sent
+                    and ready_source_type == "sd-video"
+                    and int(getattr(self, "manual_highest_progress_percent", 0)) >= 70
+                    and int(getattr(self, "manual_waiting_for_progress_direct_url_count", 0)) >= 2
+                ):
+                    if self._active_ai_browser_external_control_enabled():
+                        if not self.manual_download_request_pending and self._click_active_browser_download_button(current_variant):
+                            self._append_log(
+                                f"Variant {current_variant}: detected final page video (#sd-video) after render progress; clicking the browser Download button directly."
+                            )
+                            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                            return
+                    self._append_log(
+                        f"Variant {current_variant}: detected final page video (#sd-video) after render progress; continuing download detection without waiting for a higher percentage."
+                    )
                 if (
                     not self.manual_refresh_after_progress_100_sent
                     and int(getattr(self, "manual_highest_progress_percent", 0)) >= 99
@@ -14288,7 +14307,7 @@ class MainWindow(QMainWindow):
                     return
                 if (
                     not self.manual_refresh_after_progress_100_sent
-                    and int(getattr(self, "manual_highest_progress_percent", 0)) >= 80
+                    and int(getattr(self, "manual_highest_progress_percent", 0)) >= 70
                     and int(getattr(self, "manual_waiting_for_progress_direct_url_count", 0)) >= 3
                 ):
                     if self._active_ai_browser_external_control_enabled():
