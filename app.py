@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import math
+import ctypes
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Any, Callable, Iterable
 
 import requests
 from PySide6.QtCore import QEvent, QFileInfo, QPoint, QStandardPaths, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QLayout,
@@ -366,6 +368,16 @@ AUTOMATION_TIMING_TAB_DESCRIPTIONS: dict[str, str] = {
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
 _media_tool_path_cache: dict[str, str | None] = {}
+DEFAULT_THEME_COLORS: dict[str, str] = {
+    "window_bg": "#171a22",
+    "panel_bg": "#1e232d",
+    "control_bg": "#252b36",
+    "border": "#3a4456",
+    "text": "#f1f5fb",
+    "muted_text": "#9fb3c8",
+    "accent": "#4da3ff",
+    "link": "#7bc4ff",
+}
 
 
 def _default_user_download_dir() -> Path:
@@ -404,6 +416,26 @@ def _resolve_media_tool(tool_name: str) -> str:
         _media_tool_path_cache[normalized] = discovered
         return discovered
     return normalized
+
+
+def _normalize_theme_color(value: object, fallback: str) -> str:
+    candidate = str(value or "").strip()
+    color = QColor(candidate)
+    if color.isValid():
+        return color.name(QColor.NameFormat.HexRgb)
+    return QColor(fallback).name(QColor.NameFormat.HexRgb)
+
+
+THEME_COLOR_LABELS: dict[str, str] = {
+    "window_bg": "Window Background",
+    "panel_bg": "Panel Background",
+    "control_bg": "Control Background",
+    "border": "Borders",
+    "text": "Text",
+    "muted_text": "Muted Text",
+    "accent": "Accent",
+    "link": "Links",
+}
 
 
 def _normalize_ollama_base_for_tags(base_url: str) -> str:
@@ -3218,6 +3250,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Grok Video Desktop Studio")
+        self.theme_colors: dict[str, str] = dict(DEFAULT_THEME_COLORS)
+        self._theme_menu_actions: dict[str, QAction] = {}
+        self._apply_app_icon()
         self.resize(1500, 900)
         self.download_dir = _default_user_download_dir()
         self.download_dir.mkdir(parents=True, exist_ok=True)
@@ -3427,6 +3462,7 @@ class MainWindow(QMainWindow):
         )
         self._build_ui()
         self.thumbnail_ready.connect(self._on_thumbnail_ready)
+        self._apply_default_theme()
         self.usage_stats_timer = QTimer(self)
         self.usage_stats_timer.setInterval(60_000)
         self.usage_stats_timer.timeout.connect(self._flush_usage_stats)
@@ -3439,8 +3475,8 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.installEventFilter(self)
         self._load_startup_preferences()
+        self._apply_theme_colors(schedule_autosave=False)
         QTimer.singleShot(300, self._bootstrap_cdp_on_startup_if_enabled)
-        self._apply_default_theme()
         QTimer.singleShot(1200, self.check_for_updates_on_startup)
 
     def eventFilter(self, watched, event):
@@ -3470,7 +3506,191 @@ class MainWindow(QMainWindow):
         self._append_log(f"Stop-all flag cleared by button click: {button_label or 'Unnamed button'}")
 
     def _apply_default_theme(self) -> None:
-        self.setStyleSheet("")
+        self.theme_colors = dict(DEFAULT_THEME_COLORS)
+        self._apply_theme_colors(schedule_autosave=False)
+
+    def _build_app_icon(self) -> QIcon:
+        size = 256
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        outer = QPainterPath()
+        outer.addRoundedRect(12, 12, size - 24, size - 24, 56, 56)
+        painter.fillPath(outer, QColor("#11151d"))
+
+        inner = QPainterPath()
+        inner.addRoundedRect(26, 26, size - 52, size - 52, 44, 44)
+        painter.fillPath(inner, QColor("#1d2430"))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#4da3ff"))
+        painter.drawRoundedRect(44, 48, 32, size - 96, 12, 12)
+        painter.drawRoundedRect(size - 76, 48, 32, size - 96, 12, 12)
+
+        play_path = QPainterPath()
+        play_path.moveTo(96, 78)
+        play_path.lineTo(186, 128)
+        play_path.lineTo(96, 178)
+        play_path.closeSubpath()
+        painter.fillPath(play_path, QColor("#f1f5fb"))
+
+        glow = QPainterPath()
+        glow.addEllipse(154, 84, 42, 42)
+        painter.fillPath(glow, QColor("#ff8c42"))
+        painter.end()
+        return QIcon(pixmap)
+
+    def _apply_app_icon(self) -> None:
+        icon = self._build_app_icon()
+        self.setWindowIcon(icon)
+        app = QApplication.instance()
+        if app is not None:
+            app.setWindowIcon(icon)
+        if sys.platform.startswith("win"):
+            try:
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Mystical.GrokVideoDesktopStudio")
+            except Exception:
+                pass
+
+    def _theme_stylesheet(self) -> str:
+        theme = self.theme_colors
+        return f"""
+QMainWindow, QWidget {{
+    background-color: {theme['window_bg']};
+    color: {theme['text']};
+}}
+QMenuBar, QMenu, QStatusBar, QToolBar {{
+    background-color: {theme['panel_bg']};
+    color: {theme['text']};
+    border: 1px solid {theme['border']};
+}}
+QMenu::item:selected, QMenuBar::item:selected, QTabBar::tab:selected, QToolButton:hover, QPushButton:hover {{
+    background-color: {theme['accent']};
+    color: {theme['window_bg']};
+}}
+QTabWidget::pane, QGroupBox, QListWidget, QTreeWidget, QTextBrowser, QPlainTextEdit, QTextEdit, QScrollArea, QStackedWidget {{
+    background-color: {theme['panel_bg']};
+    color: {theme['text']};
+    border: 1px solid {theme['border']};
+}}
+QLabel {{
+    color: {theme['text']};
+}}
+QPushButton, QToolButton, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QSlider, QCheckBox, QFontComboBox {{
+    background-color: {theme['control_bg']};
+    color: {theme['text']};
+    border: 1px solid {theme['border']};
+    border-radius: 6px;
+    padding: 4px 8px;
+}}
+QComboBox QAbstractItemView, QListWidget::item:selected, QTreeWidget::item:selected {{
+    background-color: {theme['accent']};
+    color: {theme['window_bg']};
+}}
+QTabBar::tab {{
+    background-color: {theme['control_bg']};
+    color: {theme['text']};
+    border: 1px solid {theme['border']};
+    padding: 6px 10px;
+    margin-right: 2px;
+}}
+QProgressBar {{
+    background-color: {theme['control_bg']};
+    color: {theme['text']};
+    border: 1px solid {theme['border']};
+    border-radius: 6px;
+    text-align: center;
+}}
+QProgressBar::chunk {{
+    background-color: {theme['accent']};
+}}
+QHeaderView::section {{
+    background-color: {theme['control_bg']};
+    color: {theme['text']};
+    border: 1px solid {theme['border']};
+    padding: 4px;
+}}
+QTextBrowser, QTextEdit, QPlainTextEdit {{
+    selection-background-color: {theme['accent']};
+}}
+"""
+
+    def _apply_theme_palette(self) -> None:
+        palette = self.palette()
+        theme = self.theme_colors
+        palette.setColor(QPalette.ColorRole.Window, QColor(theme["window_bg"]))
+        palette.setColor(QPalette.ColorRole.Base, QColor(theme["panel_bg"]))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(theme["control_bg"]))
+        palette.setColor(QPalette.ColorRole.Button, QColor(theme["control_bg"]))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(theme["text"]))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(theme["text"]))
+        palette.setColor(QPalette.ColorRole.Text, QColor(theme["text"]))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(theme["panel_bg"]))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(theme["text"]))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(theme["accent"]))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(theme["window_bg"]))
+        palette.setColor(QPalette.ColorRole.Link, QColor(theme["link"]))
+        palette.setColor(QPalette.ColorRole.Mid, QColor(theme["muted_text"]))
+        self.setPalette(palette)
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(palette)
+
+    def _apply_theme_to_existing_labels(self) -> None:
+        muted_color = self.theme_colors["muted_text"]
+        for label in self.findChildren(QLabel):
+            style = (label.styleSheet() or "").strip()
+            if not style:
+                continue
+            updated = style
+            if "#9fb3c8" in updated.lower():
+                updated = re.sub(r"#9fb3c8", muted_color, updated, flags=re.IGNORECASE)
+            if "palette(mid)" in updated.lower():
+                updated = re.sub(r"palette\(mid\)", muted_color, updated, flags=re.IGNORECASE)
+            if updated != style:
+                label.setStyleSheet(updated)
+
+    def _normalize_theme_colors(self, colors: dict[str, object] | None) -> dict[str, str]:
+        resolved = dict(DEFAULT_THEME_COLORS)
+        if not isinstance(colors, dict):
+            return resolved
+        for key, fallback in DEFAULT_THEME_COLORS.items():
+            resolved[key] = _normalize_theme_color(colors.get(key), fallback)
+        return resolved
+
+    def _apply_theme_colors(self, *, schedule_autosave: bool = True) -> None:
+        self.theme_colors = self._normalize_theme_colors(getattr(self, "theme_colors", {}))
+        self._apply_theme_palette()
+        self.setStyleSheet(self._theme_stylesheet())
+        self._apply_theme_to_existing_labels()
+        if schedule_autosave and not getattr(self, "_applying_preferences", False):
+            self._schedule_preferences_autosave()
+
+    def _choose_theme_color(self, theme_key: str) -> None:
+        if theme_key not in DEFAULT_THEME_COLORS:
+            return
+        current = QColor(self.theme_colors.get(theme_key, DEFAULT_THEME_COLORS[theme_key]))
+        color = QColorDialog.getColor(
+            current,
+            self,
+            f"{THEME_COLOR_LABELS.get(theme_key, theme_key)} Color",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel if False else QColorDialog.ColorDialogOption(0),
+        )
+        if not color.isValid():
+            return
+        self.theme_colors[theme_key] = color.name(QColor.NameFormat.HexRgb)
+        self._apply_theme_colors()
+        self.statusBar().showMessage(
+            f"{THEME_COLOR_LABELS.get(theme_key, theme_key)} updated to {self.theme_colors[theme_key]}.",
+            3000,
+        )
+
+    def _reset_theme_to_default(self) -> None:
+        self.theme_colors = dict(DEFAULT_THEME_COLORS)
+        self._apply_theme_colors()
+        self.statusBar().showMessage("Theme reset to default colors.", 3000)
 
     def _instagram_reels_create_url(self) -> str:
         username = ""
@@ -3602,7 +3822,10 @@ class MainWindow(QMainWindow):
         self.generate_image_btn.setToolTip("Build and paste a video prompt into the Grok browser tab.")
         self.generate_image_btn.setCheckable(True)
         self.generate_image_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.generate_image_btn, self.populate_video_prompt)
+            lambda: self._run_with_button_feedback(
+                self.generate_image_btn,
+                lambda: self._run_exclusive_browser_action(self.populate_video_prompt, "Create New Video"),
+            )
         )
 
         self.create_video_from_image_btn = QPushButton("🖼️ Create Video")
@@ -3611,7 +3834,10 @@ class MainWindow(QMainWindow):
         )
         self.create_video_from_image_btn.setCheckable(True)
         self.create_video_from_image_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.create_video_from_image_btn, self.start_image_generation)
+            lambda: self._run_with_button_feedback(
+                self.create_video_from_image_btn,
+                lambda: self._run_exclusive_browser_action(self.start_image_generation, "Create Video"),
+            )
         )
 
         self.stop_all_btn = QPushButton("🛑 Stop All Jobs")
@@ -3623,21 +3849,33 @@ class MainWindow(QMainWindow):
         self.continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
         self.continue_frame_btn.setCheckable(True)
         self.continue_frame_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.continue_frame_btn, self.continue_from_last_frame)
+            lambda: self._run_with_button_feedback(
+                self.continue_frame_btn,
+                lambda: self._run_exclusive_browser_action(self.continue_from_last_frame, "Continue Last Video"),
+            )
         )
 
         self.continue_image_btn = QPushButton("🖼️ Create From Image")
         self.continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
         self.continue_image_btn.setCheckable(True)
         self.continue_image_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.continue_image_btn, self.continue_from_local_image)
+            lambda: self._run_with_button_feedback(
+                self.continue_image_btn,
+                lambda: self._run_exclusive_browser_action(self.continue_from_local_image, "Create From Image"),
+            )
         )
 
         self.browser_external_btn = QPushButton("🌐 External")
         self.browser_external_btn.setToolTip("Open the current browser tab URL in your system default browser.")
         self.browser_external_btn.setCheckable(True)
         self.browser_external_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.browser_external_btn, self.open_current_browser_in_external_browser)
+            lambda: self._run_with_button_feedback(
+                self.browser_external_btn,
+                lambda: self._run_exclusive_browser_action(
+                    self.open_current_browser_in_external_browser,
+                    "External Browser",
+                ),
+            )
         )
 
         self.multi_video_manual_pick_checkbox = QCheckBox("Manual image pick")
@@ -3654,28 +3892,43 @@ class MainWindow(QMainWindow):
         self.sora_generate_image_btn.setToolTip("Build and paste a video prompt into the Sora browser tab.")
         self.sora_generate_image_btn.setCheckable(True)
         self.sora_generate_image_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.sora_generate_image_btn, self.start_sora_video_generation)
+            lambda: self._run_with_button_feedback(
+                self.sora_generate_image_btn,
+                lambda: self._run_exclusive_browser_action(self.start_sora_video_generation, "Create New Video"),
+            )
         )
 
         self.sora_continue_frame_btn = QPushButton("🟨 Continue Last Video")
         self.sora_continue_frame_btn.setToolTip("Use the last generated video's final frame and continue from it.")
         self.sora_continue_frame_btn.setCheckable(True)
         self.sora_continue_frame_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.sora_continue_frame_btn, self.continue_from_last_frame)
+            lambda: self._run_with_button_feedback(
+                self.sora_continue_frame_btn,
+                lambda: self._run_exclusive_browser_action(self.continue_from_last_frame, "Continue Last Video"),
+            )
         )
 
         self.sora_continue_image_btn = QPushButton("🖼️ Create From Image")
         self.sora_continue_image_btn.setToolTip("Choose a local image and continue generation from that frame.")
         self.sora_continue_image_btn.setCheckable(True)
         self.sora_continue_image_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.sora_continue_image_btn, self.continue_from_local_image)
+            lambda: self._run_with_button_feedback(
+                self.sora_continue_image_btn,
+                lambda: self._run_exclusive_browser_action(self.continue_from_local_image, "Create From Image"),
+            )
         )
 
         self.sora_browser_external_btn = QPushButton("🌐 External")
         self.sora_browser_external_btn.setToolTip("Open the current browser tab URL in your system default browser.")
         self.sora_browser_external_btn.setCheckable(True)
         self.sora_browser_external_btn.clicked.connect(
-            lambda: self._run_with_button_feedback(self.sora_browser_external_btn, self.open_current_browser_in_external_browser)
+            lambda: self._run_with_button_feedback(
+                self.sora_browser_external_btn,
+                lambda: self._run_exclusive_browser_action(
+                    self.open_current_browser_in_external_browser,
+                    "External Browser",
+                ),
+            )
         )
 
         self.generate_image_btn.setMaximumWidth(170)
@@ -5871,6 +6124,18 @@ class MainWindow(QMainWindow):
         open_social_settings_action.triggered.connect(self.show_social_networking_settings)
         settings_menu.addAction(open_social_settings_action)
 
+        themes_menu = menu_bar.addMenu("Themes")
+        self._theme_menu_actions = {}
+        for theme_key, label in THEME_COLOR_LABELS.items():
+            action = QAction(f"{label}...", self)
+            action.triggered.connect(lambda _checked=False, key=theme_key: self._choose_theme_color(key))
+            themes_menu.addAction(action)
+            self._theme_menu_actions[theme_key] = action
+        themes_menu.addSeparator()
+        reset_theme_action = QAction("Reset to Default", self)
+        reset_theme_action.triggered.connect(self._reset_theme_to_default)
+        themes_menu.addAction(reset_theme_action)
+
         video_menu = menu_bar.addMenu("Video")
         self.video_settings_menu = video_menu.addMenu("Settings")
         self.video_grok_settings_menu = video_menu.addMenu("Grok Settings")
@@ -6023,7 +6288,9 @@ class MainWindow(QMainWindow):
 
         create_video_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "Create New Video", self)
         create_video_action.setToolTip("Create a new video from the current prompt in Grok.")
-        create_video_action.triggered.connect(self.populate_video_prompt)
+        create_video_action.triggered.connect(
+            lambda: self._run_exclusive_browser_action(self.populate_video_prompt, "Create New Video")
+        )
         self.quick_actions_toolbar.addAction(create_video_action)
 
         create_video_from_image_action = QAction(
@@ -6034,17 +6301,23 @@ class MainWindow(QMainWindow):
         create_video_from_image_action.setToolTip(
             "Generate image first, then pick it and continue with the image-to-video flow."
         )
-        create_video_from_image_action.triggered.connect(self.start_image_generation)
+        create_video_from_image_action.triggered.connect(
+            lambda: self._run_exclusive_browser_action(self.start_image_generation, "Create Video")
+        )
         self.quick_actions_toolbar.addAction(create_video_from_image_action)
 
         continue_last_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward), "Continue Last Video", self)
         continue_last_action.setToolTip("Continue from the last generated video's final frame.")
-        continue_last_action.triggered.connect(self.continue_from_last_frame)
+        continue_last_action.triggered.connect(
+            lambda: self._run_exclusive_browser_action(self.continue_from_last_frame, "Continue Last Video")
+        )
         self.quick_actions_toolbar.addAction(continue_last_action)
 
         continue_image_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton), "Create From Image", self)
         continue_image_action.setToolTip("Choose a local image and generate a new continuation video.")
-        continue_image_action.triggered.connect(self.continue_from_local_image)
+        continue_image_action.triggered.connect(
+            lambda: self._run_exclusive_browser_action(self.continue_from_local_image, "Create From Image")
+        )
         self.quick_actions_toolbar.addAction(continue_image_action)
 
         self.quick_actions_toolbar.addSeparator()
@@ -6125,6 +6398,33 @@ class MainWindow(QMainWindow):
                 details={"error": str(exc)},
             )
             raise
+
+    def _browser_generation_activity_active(self) -> bool:
+        return any(
+            (
+                self.pending_manual_variant_for_download is not None,
+                bool(self.pending_manual_download_type),
+                bool(self.manual_generation_queue),
+                bool(self.manual_image_generation_queue),
+                self.manual_download_poll_timer.isActive(),
+                self.multi_video_download_timer.isActive(),
+                self.continue_from_frame_reload_timeout_timer.isActive(),
+                self.manual_download_request_pending,
+                self.manual_download_in_progress,
+                self.manual_image_submit_in_flight,
+                self.multi_video_mode_active,
+                self.continue_from_frame_active,
+                bool(self.worker and self.worker.isRunning()),
+            )
+        )
+
+    def _run_exclusive_browser_action(self, callback: Callable[[], None], action_label: str | None = None) -> None:
+        label = str(action_label or getattr(callback, "__name__", "browser action")).strip() or "browser action"
+        if self._browser_generation_activity_active():
+            self._append_log(f"Cancelling current browser activity before starting '{label}'.")
+            self.stop_all_jobs()
+            self._clear_stop_all_flag(label)
+        callback()
 
     def _add_widget_to_menu(self, menu: QMenu, widget: QWidget) -> None:
         action = QWidgetAction(menu)
@@ -6780,6 +7080,7 @@ class MainWindow(QMainWindow):
             "crossfade_duration": self.crossfade_duration.value(),
             "download_dir": str(self.download_dir),
             "download_dir_customized": bool(self.download_dir_customized),
+            "theme_colors": dict(self.theme_colors),
             "preview_muted": self.preview_mute_checkbox.isChecked(),
             "preview_volume": self.preview_volume_slider.value(),
             "browser_audio_muted": self.browser_audio_mute_checkbox.isChecked(),
@@ -6810,6 +7111,9 @@ class MainWindow(QMainWindow):
             raise ValueError("Preferences file must contain a JSON object.")
 
         self._applying_preferences = True
+        if "theme_colors" in preferences:
+            self.theme_colors = self._normalize_theme_colors(preferences.get("theme_colors"))
+            self._apply_theme_colors(schedule_autosave=False)
         if "api_key" in preferences:
             self.api_key.setText(str(preferences["api_key"]))
         if "chat_model" in preferences:
@@ -17674,19 +17978,39 @@ class MainWindow(QMainWindow):
         index = self.browser_tabs.currentIndex()
         target_browser = self._browser_for_tab_index(index)
         url = ""
+        flow_scope = ""
         if target_browser is not None:
             url = target_browser.url().toString().strip()
         if not url:
             if index == getattr(self, "grok_browser_tab_index", -1):
                 url = GROK_IMAGINE_URL
+                flow_scope = "grok"
             elif index == getattr(self, "sora_browser_tab_index", -1):
                 url = SORA_DRAFTS_URL
+                flow_scope = "sora"
             elif index == getattr(self, "sora2_settings_tab_index", -1):
                 url = SORA_DRAFTS_URL
+                flow_scope = "sora"
+        elif index == getattr(self, "grok_browser_tab_index", -1):
+            flow_scope = "grok"
+        elif index in {getattr(self, "sora_browser_tab_index", -1), getattr(self, "sora2_settings_tab_index", -1)}:
+            flow_scope = "sora"
 
         if not url:
             self._append_log("Current tab has no URL to open externally.")
             return
+
+        if flow_scope and self._active_ai_browser_external_control_enabled():
+            try:
+                runtime = self._ensure_automation_runtime()
+                if runtime.chrome_instance is None:
+                    runtime.start_chrome()
+                runtime.ensure_cdp_connected()
+                runtime.open_url_in_automation_chrome(url, flow_scope=flow_scope)
+                self._append_log(f"Opened external Automation Chrome tab: {url}")
+                return
+            except Exception as exc:
+                self._append_log(f"Failed to open external Automation Chrome tab for URL {url}: {exc}")
 
         if QDesktopServices.openUrl(QUrl(url)):
             self._append_log(f"Opened external browser: {url}")
