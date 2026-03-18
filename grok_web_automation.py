@@ -19,9 +19,9 @@ def _require_playwright():
         py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         raise RuntimeError(
             "Playwright (Python) is required for web automation. "
-            "Install with: pip install -r requirements-web.txt && python -m playwright install chromium firefox webkit. "
+            "Install with: python -m pip install playwright requests && python -m playwright install chromium firefox webkit. "
             f"Current Python: {py} on {platform.system()}. "
-            "If greenlet wheel build fails on Windows, use Python 3.11 or 3.12 (64-bit)."
+            "If installation fails on Windows, make sure you are using a 64-bit Python build and upgrade pip before retrying."
         ) from exc
     return sync_playwright
 

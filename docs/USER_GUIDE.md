@@ -4,12 +4,12 @@ This guide provides a full end-to-end workflow for setup, generation, post-proce
 
 ## 1. Install and launch
 
-1. Install Python 3.11+.
+1. Install Python 3.11+ (native OS Python is fine, including 3.14).
 2. Install `ffmpeg` and ensure it is in your PATH.
 3. Create a virtual environment and install dependencies:
-   - `python -m venv .venv`
+   - `python -m venv .venv` (Linux/macOS) or `py -m venv .venv` (Windows)
    - `source .venv/bin/activate` (Linux/macOS) or `.\.venv\Scripts\Activate.ps1` (Windows)
-   - `pip install -r requirements.txt`
+   - `python -m pip install -r requirements.txt`
 4. Launch the app:
    - `python app.py`
 5. Optional: install Playwright Chromium if you plan to use CDP automation:

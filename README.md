@@ -74,25 +74,27 @@ Desktop PySide6 app for generating AI videos, managing clips, previewing/stitchi
 
 ### 1) Prerequisites
 
-- Python 3.11+
+- Python 3.11+ (native OS Python is fine, including 3.14)
 - `ffmpeg` in PATH (required for stitch/interpolate/upscale/audio mix)
 
 ### 2) Create env + install deps
 
+Use the launcher that maps to your system Python install: `python`, `python3`, or `py`.
+
 macOS/Linux:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Windows PowerShell:
 
 ```powershell
-py -3.11 -m venv .venv
+py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ### 3) Run

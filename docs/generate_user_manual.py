@@ -102,7 +102,7 @@ c.showPage()
 
 sections = [
     ('1) Installation & First Run', [
-        'Install Python 3.11+ and ffmpeg in PATH.',
+        'Install Python 3.11+ (native OS Python is fine, including 3.14) and ffmpeg in PATH.',
         'Create a virtual environment and install requirements.txt.',
         'Launch with: python app.py',
         'Optional for automation browser control: python -m playwright install chromium',
