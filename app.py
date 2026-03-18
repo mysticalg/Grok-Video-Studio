@@ -14194,6 +14194,38 @@ class MainWindow(QMainWindow):
                     )
                     return
                 if (
+                    not self.manual_refresh_after_progress_100_sent
+                    and self.continue_from_frame_active
+                    and self.continue_from_frame_seed_image_path is None
+                    and self.manual_continue_progress_seen
+                    and int(getattr(self, "manual_waiting_for_progress_direct_url_count", 0)) >= 2
+                ):
+                    if self._active_ai_browser_external_control_enabled():
+                        if not self.manual_download_request_pending and self._click_active_browser_download_button(current_variant):
+                            self._append_log(
+                                f"Variant {current_variant}: continue-last-video render progress was observed and the ready-state persisted; clicking the browser Download button directly."
+                            )
+                            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                            return
+                    self.manual_refresh_after_progress_100_sent = True
+                    self._append_log(
+                        f"Variant {current_variant}: continue-last-video render progress was observed and the ready-state persisted; refreshing the post page and proceeding to download detection."
+                    )
+
+                    def _after_capture_continue_progress_ready() -> None:
+                        self._refresh_active_browser_page_before_download(
+                            current_variant,
+                            "continue-last-video ready-state persisted after progress",
+                        )
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+
+                    self._capture_active_post_url_before_download_retry(
+                        current_variant,
+                        "continue-last-video ready-state persisted after progress",
+                        _after_capture_continue_progress_ready,
+                    )
+                    return
+                if (
                     self._active_ai_browser_external_control_enabled()
                     and self.manual_download_request_pending
                 ):
