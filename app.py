@@ -18,11 +18,11 @@ import math
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urlparse, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlsplit
 from typing import Any, Callable, Iterable
 
 import requests
-from PySide6.QtCore import QEvent, QPoint, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QFileInfo, QPoint, QStandardPaths, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFileIconProvider,
     QFontComboBox,
     QFormLayout,
     QGridLayout,
@@ -90,9 +91,9 @@ from udp_automation.workflows import x as udp_x_workflow
 from udp_automation.workflows import youtube as udp_youtube_workflow
 
 BASE_DIR = Path(__file__).resolve().parent
-DOWNLOAD_DIR = BASE_DIR / "downloads"
-DOWNLOAD_DIR.mkdir(exist_ok=True)
-THUMBNAILS_DIR = DOWNLOAD_DIR / ".thumbnails"
+APP_DOWNLOADS_DIR = BASE_DIR / "downloads"
+APP_DOWNLOADS_DIR.mkdir(exist_ok=True)
+THUMBNAILS_DIR = APP_DOWNLOADS_DIR / ".thumbnails"
 THUMBNAILS_DIR.mkdir(exist_ok=True)
 LOGS_DIR = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
@@ -364,6 +365,45 @@ AUTOMATION_TIMING_TAB_DESCRIPTIONS: dict[str, str] = {
 
 _session_download_counter_lock = threading.Lock()
 _session_download_counter = 0
+_media_tool_path_cache: dict[str, str | None] = {}
+
+
+def _default_user_download_dir() -> Path:
+    qt_downloads = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+    if qt_downloads:
+        return Path(qt_downloads)
+    return Path.home() / "Downloads"
+
+
+def _resolve_media_tool(tool_name: str) -> str:
+    normalized = str(tool_name or "").strip().lower()
+    if not normalized:
+        return str(tool_name or "")
+    cached = _media_tool_path_cache.get(normalized)
+    if cached:
+        return cached
+
+    discovered = shutil.which(normalized)
+    if not discovered and os.name == "nt":
+        local_app_data = Path(os.getenv("LOCALAPPDATA", "")).expanduser()
+        winget_packages = local_app_data / "Microsoft" / "WinGet" / "Packages"
+        if winget_packages.exists():
+            matches = sorted(
+                winget_packages.glob(f"**/{normalized}.exe"),
+                key=lambda path: path.stat().st_mtime if path.exists() else 0,
+                reverse=True,
+            )
+            if matches:
+                discovered = str(matches[0])
+        if not discovered:
+            winget_links = local_app_data / "Microsoft" / "WinGet" / "Links" / f"{normalized}.exe"
+            if winget_links.exists():
+                discovered = str(winget_links)
+
+    if discovered:
+        _media_tool_path_cache[normalized] = discovered
+        return discovered
+    return normalized
 
 
 def _normalize_ollama_base_for_tags(base_url: str) -> str:
@@ -502,9 +542,16 @@ def _ensure_public_download_query(url: str) -> str:
     parsed = urlparse(raw)
     if not parsed.scheme or not parsed.netloc:
         return raw
-    # Public imagine-public media URLs should be probed without transient query params
-    # such as cache/dl. Keep only the clean .mp4 URL.
-    return parsed._replace(query="").geturl()
+    host = str(parsed.netloc or "").lower()
+    path = str(parsed.path or "")
+    if not re.search(r"[.]mp4(?:$|/)", path, re.IGNORECASE):
+        return raw
+    if "assets.grok.com" not in host and "imagine-public.x.ai" not in host:
+        return raw
+    query_items = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query_items["cache"] = "1"
+    query_items["dl"] = "1"
+    return parsed._replace(query=urlencode(query_items)).geturl()
 
 
 def _public_video_url_from_post_url(post_url: str) -> str:
@@ -1108,7 +1155,7 @@ def _resolve_qtwebengine_cache_dir() -> tuple[Path, bool]:
 def _probe_video_color_properties(video_path: str | Path) -> dict[str, str]:
     path_str = str(video_path)
     cmd = [
-        "ffprobe",
+        _resolve_media_tool("ffprobe"),
         "-v",
         "error",
         "-select_streams",
@@ -1151,7 +1198,7 @@ def _probe_video_color_properties(video_path: str | Path) -> dict[str, str]:
 
 def _probe_video_duration_seconds(video_path: str | Path) -> float:
     cmd = [
-        "ffprobe",
+        _resolve_media_tool("ffprobe"),
         "-v",
         "error",
         "-show_entries",
@@ -2600,9 +2647,10 @@ class AutomationRuntimeWorker(QThread):
     log = Signal(str)
     status = Signal(str, str)
 
-    def __init__(self, extension_dir: Path):
+    def __init__(self, extension_dir: Path, download_dir: Path):
         super().__init__()
         self.extension_dir = extension_dir
+        self.download_dir = Path(download_dir).resolve()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.bus: ControlBusServer | None = None
         self.chrome_instance: ChromeInstance | None = None
@@ -2682,7 +2730,7 @@ class AutomationRuntimeWorker(QThread):
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=max(1.0, float(timeout_s)))
 
     def start_chrome(self) -> ChromeInstance:
-        manager = AutomationChromeManager(extension_dir=self.extension_dir)
+        manager = AutomationChromeManager(extension_dir=self.extension_dir, download_dir=self.download_dir)
         self.chrome_instance = manager.launch_or_reuse()
         self.status.emit("chrome", "started")
         self.log.emit(f"Automation Chrome ready on port {self.chrome_instance.port} (pid={self.chrome_instance.pid})")
@@ -2694,7 +2742,9 @@ class AutomationRuntimeWorker(QThread):
 
         async def _connect() -> str:
             self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+            download_status = await self.cdp_controller.configure_downloads(str(self.download_dir))
             title = await self.cdp_controller.smoke_test()
+            self.log.emit(f"Automation Chrome downloads configured: {download_status}")
             return title
 
         title = self._run_coro(_connect())
@@ -2706,6 +2756,18 @@ class AutomationRuntimeWorker(QThread):
         if self.cdp_controller is not None:
             return "already-connected"
         return self.connect_cdp()
+
+    def set_download_dir(self, download_dir: Path) -> None:
+        self.download_dir = Path(download_dir).resolve()
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        if self.cdp_controller is None:
+            return
+
+        async def _configure() -> str:
+            return await self.cdp_controller.configure_downloads(str(self.download_dir))
+
+        status = self._run_coro(_configure())
+        self.log.emit(f"Automation Chrome downloads reconfigured: {status}")
 
     def open_url_in_automation_chrome(
         self,
@@ -3156,7 +3218,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Grok Video Desktop Studio")
         self.resize(1500, 900)
-        self.download_dir = DOWNLOAD_DIR
+        self.download_dir = _default_user_download_dir()
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.download_dir_customized = False
         self.videos: list[dict] = []
         self.worker: GenerateWorker | None = None
         self.stitch_worker: StitchWorker | None = None
@@ -3273,10 +3337,13 @@ class MainWindow(QMainWindow):
         self.manual_refresh_after_progress_100_sent = False
         self.manual_continue_progress_seen = False
         self.manual_continue_progress_gate_logged = False
+        self.manual_highest_progress_percent = 0
+        self.manual_waiting_for_progress_direct_url_count = 0
         self.manual_video_allow_make_click = True
         self.manual_continue_setup_in_progress = False
         self.manual_download_in_progress = False
         self.manual_download_started_at: float | None = None
+        self.manual_external_download_started_at: float | None = None
         self.manual_public_video_url = ""
         self.manual_last_generated_post_url = ""
         self.manual_download_attempt_count = 0
@@ -6408,8 +6475,14 @@ class MainWindow(QMainWindow):
             return
         self.download_dir = Path(path)
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.download_dir_customized = True
         self.download_path_input.setText(str(self.download_dir))
         self._sync_embedded_browser_download_path()
+        if self.automation_runtime is not None:
+            try:
+                self.automation_runtime.set_download_dir(self.download_dir)
+            except Exception as exc:
+                self._append_log(f"WARNING: Could not update Automation Chrome download folder: {exc}")
         self._append_log(f"Download folder set to: {self.download_dir}")
 
     def _on_video_options_selected(self, index: int) -> None:
@@ -6590,6 +6663,7 @@ class MainWindow(QMainWindow):
             "stitch_custom_music_file": str(self.custom_music_file) if self.custom_music_file else "",
             "crossfade_duration": self.crossfade_duration.value(),
             "download_dir": str(self.download_dir),
+            "download_dir_customized": bool(self.download_dir_customized),
             "preview_muted": self.preview_mute_checkbox.isChecked(),
             "preview_volume": self.preview_volume_slider.value(),
             "browser_audio_muted": self.browser_audio_mute_checkbox.isChecked(),
@@ -6976,6 +7050,14 @@ class MainWindow(QMainWindow):
         if "download_dir" in preferences:
             download_dir = Path(str(preferences["download_dir"]))
             try:
+                saved_customized = preferences.get("download_dir_customized")
+                legacy_default_dir = APP_DOWNLOADS_DIR.resolve()
+                requested_dir = download_dir.resolve(strict=False)
+                if saved_customized is None and requested_dir == legacy_default_dir:
+                    download_dir = _default_user_download_dir()
+                    self.download_dir_customized = False
+                else:
+                    self.download_dir_customized = bool(saved_customized) if saved_customized is not None else True
                 download_dir.mkdir(parents=True, exist_ok=True)
                 self.download_dir = download_dir
                 self.download_path_input.setText(str(self.download_dir))
@@ -7280,7 +7362,7 @@ class MainWindow(QMainWindow):
 
     def _ensure_automation_runtime(self) -> AutomationRuntimeWorker:
         if self.automation_runtime is None:
-            runtime = AutomationRuntimeWorker(BASE_DIR / "extension")
+            runtime = AutomationRuntimeWorker(BASE_DIR / "extension", self.download_dir)
             runtime.log.connect(self._append_automation_log)
             runtime.status.connect(lambda k, v: self._append_automation_log(f"{k}: {v}"))
             runtime.start()
@@ -13209,9 +13291,12 @@ class MainWindow(QMainWindow):
         self.manual_refresh_after_progress_100_sent = False
         self.manual_continue_progress_seen = False
         self.manual_continue_progress_gate_logged = False
+        self.manual_highest_progress_percent = 0
+        self.manual_waiting_for_progress_direct_url_count = 0
         self.manual_video_allow_make_click = allow_make_video_click
         self.manual_download_in_progress = False
         self.manual_download_started_at = time.time()
+        self.manual_external_download_started_at = None
         if self.continue_from_frame_active and self.continue_from_frame_seed_image_path is None:
             # Continue-last-video should never auto-click Make/Create during polling because the
             # submit step is already handled in setup and duplicate clicks can start a second video.
@@ -13469,6 +13554,7 @@ class MainWindow(QMainWindow):
                 // Without this, continue-last-video can get stuck waiting for progress even after render
                 // progress was already observed earlier in the same variant.
                 const continueProgressSeenBeforePoll = {'true' if bool(getattr(self, 'manual_continue_progress_seen', False)) else 'false'};
+                const downloadGateReady = {'true' if bool(getattr(self, 'manual_refresh_after_progress_100_sent', False)) else 'false'};
                 window.__grokContinueFlowActive = continueFlowActive;
                 if (!continueFlowActive) {{
                     window.__grokContinueProgressSeen = false;
@@ -13642,10 +13728,7 @@ class MainWindow(QMainWindow):
 
                 const firstDirectUrl = directUrlCandidates.find((candidate) => isDirectVideoUrl(candidate));
                 if (firstDirectUrl) {{
-                    // Continue-last-video flow must observe at least one render/progress signal before
-                    // accepting a direct URL, otherwise we can accidentally grab a stale homepage/player URL.
-                    const continueProgressSeen = !!window.__grokContinueProgressSeen;
-                    if (window.__grokContinueFlowActive && !continueProgressSeen) {{
+                    if (!downloadGateReady) {{
                         return {{ status: "waiting-for-progress-before-direct-url", src: firstDirectUrl, sourceType: "page-scan" }};
                     }}
                     return {{ status: "direct-url-ready", src: firstDirectUrl, sourceType: "page-scan" }};
@@ -13662,8 +13745,7 @@ class MainWindow(QMainWindow):
                         || ""
                     );
                     if (isDirectVideoUrl(firstDraftVideoSrc)) {{
-                        const continueProgressSeen = !!window.__grokContinueProgressSeen;
-                        if (window.__grokContinueFlowActive && !continueProgressSeen) {{
+                        if (!downloadGateReady) {{
                             return {{ status: "waiting-for-progress-before-direct-url", src: firstDraftVideoSrc, sourceType: "first-draft-card" }};
                         }}
                         return {{ status: "direct-url-ready", src: firstDraftVideoSrc, sourceType: "first-draft-card" }};
@@ -13779,6 +13861,24 @@ class MainWindow(QMainWindow):
                         }}
                     }} catch (_) {{}}
                     const directUrl = directUrlCandidatesForDownload.find((candidate) => isDirectVideoUrl(candidate)) || "";
+                    if (!downloadGateReady) {{
+                        return {{
+                            status: "waiting-for-progress-before-direct-url",
+                            src: directUrl,
+                            sourceType: "download-button",
+                        }};
+                    }}
+                    if (!window.__grokManualDownloadClicked) {{
+                        const clickedNow = emulateClick(downloadButton);
+                        if (clickedNow) {{
+                            window.__grokManualDownloadClicked = true;
+                            return {{
+                                status: "download-clicked",
+                                directUrl,
+                                clickedNow: true,
+                            }};
+                        }}
+                    }}
                     return {{
                         status: "download-visible",
                         directUrl,
@@ -13807,6 +13907,19 @@ class MainWindow(QMainWindow):
         def after_poll(result):
             current_variant = self.pending_manual_variant_for_download
             if current_variant is None:
+                return
+
+            if self._active_ai_browser_external_control_enabled() and (
+                self.manual_download_in_progress or self.manual_download_request_pending
+            ):
+                external_download = self._capture_external_browser_download_file(current_variant)
+                if external_download is not None:
+                    self._complete_manual_video_download(external_download, current_variant)
+                    return
+                self._append_log(
+                    f"Variant {current_variant}: waiting for external browser download file to appear in {self.download_dir}."
+                )
+                self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if not isinstance(result, dict):
@@ -13935,6 +14048,19 @@ class MainWindow(QMainWindow):
                 self.manual_continue_progress_seen = True
                 self.manual_continue_progress_gate_logged = False
                 self.manual_moderation_retry_count = 0
+                self.manual_waiting_for_progress_direct_url_count = 0
+                progress_value = -1
+                progress_match = re.search(r"(\d{1,3})", progress_text)
+                if progress_match:
+                    try:
+                        progress_value = int(progress_match.group(1))
+                    except (TypeError, ValueError):
+                        progress_value = -1
+                if progress_value >= 0:
+                    self.manual_highest_progress_percent = max(
+                        int(getattr(self, "manual_highest_progress_percent", 0)),
+                        progress_value,
+                    )
                 progress_done = progress_text in {"100%", "100"}
                 if progress_done and not self.manual_refresh_after_progress_100_sent:
                     self.manual_refresh_after_progress_100_sent = True
@@ -13965,6 +14091,7 @@ class MainWindow(QMainWindow):
                 self.manual_continue_progress_gate_logged = False
                 self.manual_refresh_after_progress_100_sent = False
                 self.manual_moderation_retry_count = 0
+                self.manual_waiting_for_progress_direct_url_count = 0
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
@@ -14010,7 +14137,76 @@ class MainWindow(QMainWindow):
                 return
 
             if status == "waiting-for-progress-before-direct-url":
+                self.manual_waiting_for_progress_direct_url_count = int(
+                    getattr(self, "manual_waiting_for_progress_direct_url_count", 0)
+                ) + 1
+                pending_ready_url = str(result.get("src") or "").strip()
                 if (
+                    not self.manual_refresh_after_progress_100_sent
+                    and int(getattr(self, "manual_highest_progress_percent", 0)) >= 99
+                ):
+                    self.manual_refresh_after_progress_100_sent = True
+                    self._append_log(
+                        f"Variant {current_variant}: render reached {self.manual_highest_progress_percent}% and then exposed the direct URL/download control; treating this as completion and refreshing the post page."
+                    )
+
+                    def _after_capture_progress_terminal() -> None:
+                        self._refresh_active_browser_page_before_download(
+                            current_variant,
+                            f"render stabilized at {self.manual_highest_progress_percent}%",
+                        )
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+
+                    self._capture_active_post_url_before_download_retry(
+                        current_variant,
+                        f"progress stabilized at {self.manual_highest_progress_percent}%",
+                        _after_capture_progress_terminal,
+                    )
+                    return
+                if (
+                    not self.manual_refresh_after_progress_100_sent
+                    and int(getattr(self, "manual_highest_progress_percent", 0)) >= 80
+                    and int(getattr(self, "manual_waiting_for_progress_direct_url_count", 0)) >= 3
+                ):
+                    if self._active_ai_browser_external_control_enabled():
+                        if not self.manual_download_request_pending and self._click_active_browser_download_button(current_variant):
+                            self._append_log(
+                                f"Variant {current_variant}: render progressed to {self.manual_highest_progress_percent}% and the ready-state persisted; clicking the browser Download button directly."
+                            )
+                            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                            return
+                    self.manual_refresh_after_progress_100_sent = True
+                    self._append_log(
+                        f"Variant {current_variant}: render progressed to {self.manual_highest_progress_percent}% and the direct URL/download control persisted; treating this as completion and refreshing the post page."
+                    )
+
+                    def _after_capture_progress_persistent() -> None:
+                        self._refresh_active_browser_page_before_download(
+                            current_variant,
+                            f"persistent direct-url state after {self.manual_highest_progress_percent}%",
+                        )
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+
+                    self._capture_active_post_url_before_download_retry(
+                        current_variant,
+                        f"persistent direct-url state after {self.manual_highest_progress_percent}%",
+                        _after_capture_progress_persistent,
+                    )
+                    return
+                if (
+                    self._active_ai_browser_external_control_enabled()
+                    and self.manual_download_request_pending
+                ):
+                    self._append_log(
+                        f"Variant {current_variant}: browser Download click already sent; waiting for external browser download file."
+                    )
+                    self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                    return
+                if not self.manual_refresh_after_progress_100_sent:
+                    self._append_log(
+                        f"Variant {current_variant}: direct URL/download control appeared before render completion was confirmed; waiting for progress polling to finish."
+                    )
+                elif (
                     self.continue_from_frame_active
                     and self.continue_from_frame_seed_image_path is None
                     and not self.manual_continue_progress_seen
@@ -14024,6 +14220,7 @@ class MainWindow(QMainWindow):
                 return
 
             if status in ("waiting-for-redo", "waiting-for-download", "rendering-cancel-visible"):
+                self.manual_waiting_for_progress_direct_url_count = 0
                 self.manual_video_start_click_sent = True
                 self._append_log(
                     f"Variant {current_variant}: status={status}; waiting for download control readiness."
@@ -14032,6 +14229,7 @@ class MainWindow(QMainWindow):
                 return
 
             if status in ("download-clicked", "download-visible"):
+                self.manual_waiting_for_progress_direct_url_count = 0
                 self.manual_download_attempt_count += 1
                 if status == "download-clicked":
                     self.manual_download_click_sent = True
@@ -14046,20 +14244,37 @@ class MainWindow(QMainWindow):
                     "download-visible",
                 )
                 if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
-                    if self.manual_download_attempt_count >= 2:
+                    if self._active_ai_browser_external_control_enabled():
+                        if not self.manual_download_request_pending and self._click_active_browser_download_button(current_variant):
+                            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                            return
                         self._append_log(
-                            f"Variant {current_variant}: download control is visible but browser download event is still pending; polling the public URL directly (attempt #{self.manual_download_attempt_count})."
+                            f"Variant {current_variant}: waiting for external browser download file after clicking Download (attempt #{self.manual_download_attempt_count})."
+                        )
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                        return
+                    if status == "download-visible" and self.manual_download_attempt_count == 2:
+                        self._append_log(
+                            f"Variant {current_variant}: download control is visible but no browser download event arrived yet; requesting download through the embedded browser directly."
+                        )
+                        if self._start_manual_embedded_browser_direct_download(current_variant, resolved_url):
+                            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                            return
+                    if self.manual_download_attempt_count >= 4:
+                        self._append_log(
+                            f"Variant {current_variant}: download control is visible but browser download event is still pending after waiting; polling the public URL directly (attempt #{self.manual_download_attempt_count})."
                         )
                         if self._start_manual_direct_download(current_variant, resolved_url):
                             self.manual_download_click_sent = True
                         return
                 self._append_log(
-                    f"Variant {current_variant}: download control is visible; waiting for public URL detection (attempt #{self.manual_download_attempt_count})."
+                    f"Variant {current_variant}: download control is visible; waiting for the browser download event before fallback (attempt #{self.manual_download_attempt_count})."
                 )
                 self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                 return
 
             if status in ("direct-url-ready", "draft-ready-no-direct-download"):
+                self.manual_waiting_for_progress_direct_url_count = 0
                 self.manual_download_attempt_count += 1
                 direct_url = str(result.get("src") or "").strip()
                 resolved_url = self._resolve_manual_retry_source_url(
@@ -14068,6 +14283,20 @@ class MainWindow(QMainWindow):
                     status,
                 )
                 if resolved_url and re.match(r"^https?://", resolved_url, re.IGNORECASE):
+                    if self._active_ai_browser_external_control_enabled():
+                        if not self.manual_download_request_pending and self._click_active_browser_download_button(current_variant):
+                            self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                            return
+                        if self.manual_download_request_pending:
+                            self._append_log(
+                                f"Variant {current_variant}: browser download click sent; waiting for external browser download file (attempt #{self.manual_download_attempt_count})."
+                            )
+                        else:
+                            self._append_log(
+                                f"Variant {current_variant}: direct URL detected, but external browser Download button is not clickable yet; waiting for the page button instead of using curl (attempt #{self.manual_download_attempt_count})."
+                            )
+                        self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
+                        return
                     if self.manual_download_attempt_count == 1:
                         if self._is_sora_manual_redirect_target():
                             self._append_log(
@@ -14075,9 +14304,9 @@ class MainWindow(QMainWindow):
                             )
                         else:
                             self._append_log(
-                                f"Variant {current_variant}: direct URL detected; loading Grok homepage before starting public URL polling/download attempts."
+                                f"Variant {current_variant}: direct URL detected; staying on the Grok post page and refreshing it before starting public URL polling/download attempts."
                             )
-                            self._load_grok_homepage_then_return_to_post(resolved_url, current_variant)
+                            self._reload_active_browser_post_page(resolved_url, current_variant)
                         self.manual_download_click_sent = False
                         self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
                         return
@@ -14472,9 +14701,12 @@ class MainWindow(QMainWindow):
         self.manual_refresh_after_progress_100_sent = False
         self.manual_continue_progress_seen = False
         self.manual_continue_progress_gate_logged = False
+        self.manual_highest_progress_percent = 0
+        self.manual_waiting_for_progress_direct_url_count = 0
         self.manual_video_allow_make_click = True
         self.manual_download_in_progress = False
         self.manual_download_started_at = None
+        self.manual_external_download_started_at = None
         self.manual_download_deadline = None
         self.manual_public_video_url = ""
         self.manual_last_generated_post_url = ""
@@ -14569,12 +14801,12 @@ class MainWindow(QMainWindow):
                 )
             else:
                 self._append_log(
-                    f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); loading Grok homepage before retrying download detection."
+                    f"WARNING: Direct URL download for variant {variant} is only {file_size} bytes (< 1MB); refreshing the Grok post page before retrying download detection."
                 )
             if download_path.exists():
                 self._remove_file_best_effort(download_path, "tiny direct-download cleanup")
             if not self._is_sora_manual_redirect_target():
-                self._load_grok_homepage_then_return_to_post(source_url, variant)
+                self._reload_active_browser_post_page(source_url, variant)
             self.manual_download_click_sent = False
             self.manual_download_poll_timer.start(self._manual_download_poll_interval_ms())
             return False
@@ -14583,6 +14815,30 @@ class MainWindow(QMainWindow):
         self.manual_public_moderation_count = 0
         self._complete_manual_video_download(download_path, variant)
         return True
+
+    def _start_manual_embedded_browser_direct_download(self, variant: int, source_url: str) -> bool:
+        active_browser = getattr(self, "browser", None)
+        if active_browser is None or self._active_ai_browser_external_control_enabled():
+            return False
+        try:
+            final_url = _ensure_public_download_query(source_url)
+            if not final_url or not re.match(r"^https?://", final_url, re.IGNORECASE):
+                return False
+            browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+            filename = self._build_session_download_filename("video", variant, "mp4", provider_override=browser_provider)
+            self.manual_download_click_sent = True
+            self.manual_download_in_progress = True
+            self.manual_download_request_pending = False
+            active_browser.page().download(QUrl(final_url), filename)
+            self._append_log(
+                f"Variant {variant}: requested embedded browser direct download for {filename} ({final_url})."
+            )
+            return True
+        except Exception as exc:
+            self.manual_download_click_sent = False
+            self.manual_download_in_progress = False
+            self._append_log(f"WARNING: Embedded browser direct download request failed for variant {variant}: {exc}")
+            return False
 
     @staticmethod
     def _resolve_grok_post_page_url(source_url: str) -> str:
@@ -14666,7 +14922,9 @@ class MainWindow(QMainWindow):
         self._run_active_browser_javascript(hop_script, _after_hop)
 
     def _reload_active_browser_post_page(self, source_url: str, variant: int) -> None:
-        post_url = self._resolve_grok_post_page_url(source_url)
+        post_url = str(getattr(self, "manual_last_generated_post_url", "") or "").strip()
+        if not post_url:
+            post_url = self._resolve_grok_post_page_url(source_url)
         if not post_url:
             self._append_log(
                 f"Variant {variant}: could not derive Grok post URL from source for reload; continuing with polling."
@@ -14692,7 +14950,29 @@ class MainWindow(QMainWindow):
                 }}
             }})()
         """
-        self._run_active_browser_javascript(reload_script)
+
+        def _after_reload(result) -> None:
+            active_browser = getattr(self, "browser", None)
+            if active_browser is None:
+                return
+            ok = isinstance(result, dict) and bool(result.get("ok"))
+            if ok:
+                try:
+                    active_browser.setUrl(QUrl(refresh_url))
+                    return
+                except Exception:
+                    pass
+            try:
+                active_browser.setUrl(QUrl(refresh_url))
+                return
+            except Exception:
+                pass
+            try:
+                active_browser.reload()
+            except Exception:
+                pass
+
+        self._run_active_browser_javascript(reload_script, _after_reload)
 
     def _clear_manual_direct_download_tracking(self) -> None:
         self._manual_direct_download_future = None
@@ -14990,6 +15270,96 @@ class MainWindow(QMainWindow):
             return True
         except Exception:
             return False
+
+    def _click_active_browser_download_button(self, variant: int) -> bool:
+        clicked = False
+        click_script = r"""
+            (() => {
+                try {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const candidates = [
+                        ...document.querySelectorAll("button[type='button'][aria-label='Download'][data-state='closed']"),
+                        ...document.querySelectorAll("button[aria-label='Download'], [role='button'][aria-label='Download']"),
+                    ];
+                    const button = candidates.find((btn) => isVisible(btn) && !btn.disabled);
+                    if (!button) return { ok: false, reason: "download-button-not-found" };
+                    try { button.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (_) {}
+                    button.click();
+                    return { ok: true };
+                } catch (err) {
+                    return { ok: false, reason: String(err && err.stack ? err.stack : err) };
+                }
+            })()
+        """
+
+        def _after_click(result) -> None:
+            nonlocal clicked
+            clicked = bool(isinstance(result, dict) and result.get("ok"))
+            if not clicked:
+                reason = ""
+                if isinstance(result, dict):
+                    reason = str(result.get("reason") or "").strip()
+                if reason:
+                    self._append_log(f"Variant {variant}: browser download button click was not confirmed ({reason}).")
+
+        self._run_active_browser_javascript(click_script, _after_click)
+        if clicked:
+            self.manual_download_click_sent = True
+            self.manual_download_in_progress = True
+            self.manual_download_request_pending = True
+            self.manual_download_started_at = time.time()
+            self.manual_external_download_started_at = self.manual_download_started_at
+            self._append_log(f"Variant {variant}: clicked browser Download button directly.")
+        return clicked
+
+    def _capture_external_browser_download_file(self, variant: int) -> Path | None:
+        started_at = float(getattr(self, "manual_external_download_started_at", 0.0) or 0.0)
+        if started_at <= 0:
+            return None
+        candidates: list[Path] = []
+        for path in self.download_dir.glob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() in {".crdownload", ".tmp", ".part"}:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if stat.st_size < MIN_VALID_VIDEO_BYTES:
+                continue
+            if stat.st_mtime < (started_at - 2.0):
+                continue
+            candidates.append(path)
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda path: path.stat().st_mtime)
+        extension = latest.suffix.lstrip(".").lower()
+        if extension not in {"mp4", "mov", "webm", "m4v"}:
+            extension = "mp4"
+        browser_provider = "sora" if (self.pending_manual_redirect_target or "grok").lower() == "sora" else "grok"
+        target = self.download_dir / self._build_session_download_filename(
+            "video",
+            variant,
+            extension,
+            provider_override=browser_provider,
+        )
+        if latest != target:
+            try:
+                if target.exists():
+                    self._remove_file_best_effort(target, "external-browser download target cleanup")
+                latest.replace(target)
+                latest = target
+            except Exception as exc:
+                self._append_log(
+                    f"Variant {variant}: keeping externally downloaded file at {latest.name} because rename failed: {exc}"
+                )
+        self._append_log(f"Variant {variant}: captured external browser download from downloads folder: {latest}")
+        self.manual_download_request_pending = False
+        self.manual_download_in_progress = False
+        self.manual_download_click_sent = False
+        self.manual_external_download_started_at = None
+        return latest
 
     def _on_browser_download_requested(self, download) -> None:
         variant = self.pending_manual_variant_for_download
@@ -15396,7 +15766,7 @@ class MainWindow(QMainWindow):
             try:
                 subprocess.run(
                     [
-                        "ffmpeg",
+                        _resolve_media_tool("ffmpeg"),
                         "-y",
                         "-ss",
                         "00:00:01.000",
@@ -17248,7 +17618,7 @@ class MainWindow(QMainWindow):
     def _probe_video_duration(self, video_path: Path) -> float:
         result = subprocess.run(
             [
-                "ffprobe",
+                _resolve_media_tool("ffprobe"),
                 "-v",
                 "error",
                 "-show_entries",
@@ -17272,7 +17642,7 @@ class MainWindow(QMainWindow):
     def _probe_video_stream_info(self, video_path: Path) -> dict:
         result = subprocess.run(
             [
-                "ffprobe",
+                _resolve_media_tool("ffprobe"),
                 "-v",
                 "error",
                 "-select_streams",
@@ -17306,7 +17676,7 @@ class MainWindow(QMainWindow):
     def _video_has_audio_stream(self, video_path: Path) -> bool:
         result = subprocess.run(
             [
-                "ffprobe",
+                _resolve_media_tool("ffprobe"),
                 "-v",
                 "error",
                 "-select_streams",
@@ -17333,7 +17703,7 @@ class MainWindow(QMainWindow):
         self._ffmpeg_nvenc_checked = True
         try:
             result = subprocess.run(
-                ["ffmpeg", "-hide_banner", "-encoders"],
+                [_resolve_media_tool("ffmpeg"), "-hide_banner", "-encoders"],
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

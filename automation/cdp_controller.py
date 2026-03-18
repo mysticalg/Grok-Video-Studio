@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from urllib.parse import urlparse
 
 from playwright.async_api import Browser, Dialog, Page, async_playwright
@@ -123,6 +124,42 @@ class CDPController:
 
     async def navigate(self, page: Page, url: str) -> None:
         await page.goto(url)
+
+    async def configure_downloads(self, download_dir: str) -> str:
+        target_dir = Path(str(download_dir or "")).expanduser().resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        browser_session = await self.browser.new_browser_cdp_session()
+        browser_error: Exception | None = None
+        try:
+            await browser_session.send(
+                "Browser.setDownloadBehavior",
+                {
+                    "behavior": "allow",
+                    "downloadPath": str(target_dir),
+                    "eventsEnabled": True,
+                },
+            )
+            return f"Browser.setDownloadBehavior -> {target_dir}"
+        except Exception as exc:
+            browser_error = exc
+
+        page = await self.get_most_recent_page()
+        if page is None:
+            page = await self.create_new_page("about:blank")
+        page_session = await page.context.new_cdp_session(page)
+        try:
+            await page_session.send(
+                "Page.setDownloadBehavior",
+                {
+                    "behavior": "allow",
+                    "downloadPath": str(target_dir),
+                },
+            )
+            return f"Page.setDownloadBehavior -> {target_dir}"
+        except Exception:
+            if browser_error is not None:
+                raise browser_error
+            raise
 
     async def set_file_input_files_via_dom(self, page: Page, selector: str, file_path: str) -> bool:
         session = await page.context.new_cdp_session(page)

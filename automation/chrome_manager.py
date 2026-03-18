@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -19,10 +20,11 @@ class ChromeInstance:
 
 
 class AutomationChromeManager:
-    def __init__(self, extension_dir: Path, port: int = 9222, timeout_s: float = 20.0):
+    def __init__(self, extension_dir: Path, port: int = 9222, timeout_s: float = 20.0, download_dir: Path | None = None):
         self.extension_dir = extension_dir.resolve()
         self.port = port
         self.timeout_s = timeout_s
+        self.download_dir = download_dir.resolve() if download_dir is not None else None
         self.process: subprocess.Popen[str] | None = None
 
     def _detect_chrome_path(self) -> Path:
@@ -65,6 +67,27 @@ class AutomationChromeManager:
             return None
         return None
 
+    def _seed_profile_download_preferences(self, profile_dir: Path) -> None:
+        if self.download_dir is None:
+            return
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        default_dir = profile_dir / "Default"
+        default_dir.mkdir(parents=True, exist_ok=True)
+        preferences_path = default_dir / "Preferences"
+        preferences: dict[str, Any] = {}
+        if preferences_path.exists():
+            try:
+                preferences = json.loads(preferences_path.read_text(encoding="utf-8"))
+            except Exception:
+                preferences = {}
+        preferences.setdefault("download", {})
+        preferences["download"]["default_directory"] = str(self.download_dir)
+        preferences["download"]["directory_upgrade"] = True
+        preferences["download"]["prompt_for_download"] = False
+        preferences.setdefault("savefile", {})
+        preferences["savefile"]["default_directory"] = str(self.download_dir)
+        preferences_path.write_text(json.dumps(preferences, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def launch_or_reuse(self) -> ChromeInstance:
         existing = self._wait_for_ready(ready_timeout_s=1.0)
         if existing is not None:
@@ -72,6 +95,7 @@ class AutomationChromeManager:
 
         chrome_path = self._detect_chrome_path()
         profile_dir = self._profile_dir()
+        self._seed_profile_download_preferences(profile_dir)
         extension_dir = self._validate_extension_dir()
 
         # Keep Chrome in normal profile mode (no guest/incognito/app/kiosk launch flags)
