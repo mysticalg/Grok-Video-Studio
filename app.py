@@ -3213,6 +3213,7 @@ class FilteredWebEnginePage(QWebEnginePage):
 
 class MainWindow(QMainWindow):
     DEFAULT_BROWSER_ZOOM_FACTOR = 0.5
+    thumbnail_ready = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -3252,8 +3253,10 @@ class MainWindow(QMainWindow):
         self._cdp_relay_temporarily_disabled = False
         self._cdp_relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cdp-relay")
         self._manual_download_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manual-download")
+        self._thumbnail_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="thumbnail-worker")
         self.social_upload_timers: dict[str, QTimer] = {}
         self.social_upload_browsers: dict[str, QWebEngineView] = {}
+        self.social_upload_browser_mounts: dict[str, QWidget] = {}
         self.browser_devtools_windows: dict[QWebEngineView, QMainWindow] = {}
         self.browser_popup_windows: list[QMainWindow] = []
         self.social_upload_status_labels: dict[str, QLabel] = {}
@@ -3382,27 +3385,29 @@ class MainWindow(QMainWindow):
         self._openai_sora_help_always_show = True
         self.custom_music_file: Path | None = None
         self.last_update_prompt_ts = 0
-        self.cdp_enabled = False
-        self.cdp_use_external_browser = False
+        self.cdp_enabled = True
+        self.cdp_use_external_browser = True
         self.external_ai_browser_only = os.getenv("GROK_EXTERNAL_AI_BROWSER_ONLY", "0").strip().lower() not in {"0", "false", "no"}
         self.browser_tab_enabled = {
             "Grok": True,
-            "Sora": True,
-            "Facebook": True,
-            "Instagram": True,
-            "TikTok": True,
-            "X": True,
+            "Sora": False,
+            "Facebook": False,
+            "Instagram": False,
+            "TikTok": False,
+            "X": False,
             "YouTube": True,
-            "WordTool": True,
-            "Sora2Settings": True,
-            "SeedanceSettings": True,
-            "AIFlowTrainer": True,
+            "WordTool": False,
+            "Sora2Settings": False,
+            "SeedanceSettings": False,
+            "AIFlowTrainer": False,
         }
         self.browser_zoom_factor = self.DEFAULT_BROWSER_ZOOM_FACTOR
         self._pending_log_messages: list[str] = []
         self.session_started_at = time.time()
         self._last_usage_stats_flush_at = self.session_started_at
         self._video_metadata_cache: dict[str, dict[str, Any]] = {}
+        self._thumbnail_icon_cache: dict[str, QIcon] = {}
+        self._thumbnail_generation_pending: set[str] = set()
         self._active_upload_context: dict[str, Any] = {}
         self.video_grid_size_mode = 0
         self.video_grid_titles_visible = True
@@ -3421,6 +3426,7 @@ class MainWindow(QMainWindow):
             category="22",
         )
         self._build_ui()
+        self.thumbnail_ready.connect(self._on_thumbnail_ready)
         self.usage_stats_timer = QTimer(self)
         self.usage_stats_timer.setInterval(60_000)
         self.usage_stats_timer.timeout.connect(self._flush_usage_stats)
@@ -3513,7 +3519,7 @@ class MainWindow(QMainWindow):
         self.automation_mode = QComboBox()
         self.automation_mode.addItem("Embedded", "embedded")
         self.automation_mode.addItem("External Browser", "external")
-        self.automation_mode.setCurrentIndex(0)
+        self.automation_mode.setCurrentIndex(self.automation_mode.findData("external"))
         self.automation_mode.currentIndexChanged.connect(self._on_automation_mode_changed)
         prompt_group = QGroupBox("✨ Prompt Inputs")
         prompt_group.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -4216,14 +4222,13 @@ class MainWindow(QMainWindow):
             "Grok": self.grok_browser_tab,
             "Sora": self.sora_browser_tab,
         }
-        for platform_name in self.social_upload_browsers:
+        for platform_name in self.social_upload_tab_indices:
             tab_idx = self.social_upload_tab_indices.get(platform_name)
             if tab_idx is not None:
                 self.browser_tab_widgets[platform_name] = self.browser_tabs.widget(tab_idx)
         self.browser_tab_webviews = {
             "Grok": self.grok_browser_view,
             "Sora": self.sora_browser,
-            **self.social_upload_browsers,
         }
 
         for tab_key in self.browser_tab_indices:
@@ -4363,6 +4368,82 @@ class MainWindow(QMainWindow):
         progress_bar.setVisible(False)
         layout.addWidget(progress_bar)
 
+        browser_mount = QWidget(tab)
+        browser_mount_layout = QVBoxLayout(browser_mount)
+        browser_mount_layout.setContentsMargins(0, 0, 0, 0)
+        browser_mount_layout.setSpacing(0)
+        layout.addWidget(browser_mount, 1)
+
+        self.social_upload_browser_mounts[platform_name] = browser_mount
+        self.social_upload_status_labels[platform_name] = status_label
+        self.social_upload_progress_bars[platform_name] = progress_bar
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda p=platform_name: self._run_social_browser_upload_step(p))
+        self.social_upload_timers[platform_name] = timer
+
+        return tab
+
+    def _teardown_webengine_view(self, browser: QWebEngineView | None) -> None:
+        if browser is None:
+            return
+        try:
+            browser.stop()
+        except Exception:
+            pass
+        page = None
+        try:
+            page = browser.page()
+        except Exception:
+            page = None
+        if page is not None:
+            try:
+                page.setDevToolsPage(None)
+            except Exception:
+                pass
+            try:
+                page.triggerAction(QWebEnginePage.WebAction.Stop)
+            except Exception:
+                pass
+            try:
+                page.deleteLater()
+            except Exception:
+                pass
+        try:
+            browser.setPage(None)
+        except Exception:
+            pass
+        try:
+            browser.setParent(None)
+        except Exception:
+            pass
+        try:
+            browser.deleteLater()
+        except Exception:
+            pass
+
+    def _clear_layout_widgets(self, layout: QLayout | None) -> None:
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if child_layout is not None:
+                self._clear_layout_widgets(child_layout)
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _ensure_social_upload_browser(self, platform_name: str) -> QWebEngineView | None:
+        browser = self.social_upload_browsers.get(platform_name)
+        if browser is not None:
+            return browser
+        browser_mount = self.social_upload_browser_mounts.get(platform_name)
+        if browser_mount is None:
+            return None
+
         browser = QWebEngineView()
         browser.setPage(
             FilteredWebEnginePage(
@@ -4382,20 +4463,49 @@ class MainWindow(QMainWindow):
         if developer_extras_attr is not None:
             browser.settings().setAttribute(developer_extras_attr, True)
         browser.page().setAudioMuted(self.browser_audio_muted)
-        browser.setUrl(QUrl(self._social_upload_url_for_platform(platform_name, upload_url)))
         browser.loadFinished.connect(lambda ok, p=platform_name: self._on_social_browser_load_finished(p, ok))
-        layout.addWidget(self._build_browser_container(browser, role="social"), 1)
+
+        mount_layout = browser_mount.layout()
+        self._clear_layout_widgets(mount_layout)
+        if mount_layout is not None:
+            mount_layout.addWidget(self._build_browser_container(browser, role="social"), 1)
+
+        initial_social_url = self._social_upload_url_for_platform(platform_name, self._default_social_upload_url_for_platform(platform_name))
+        if self._is_browser_tab_enabled(platform_name) and not self._is_external_ai_browser_mode_active():
+            browser.setUrl(QUrl(initial_social_url))
+        else:
+            browser.setUrl(QUrl("about:blank"))
 
         self.social_upload_browsers[platform_name] = browser
-        self.social_upload_status_labels[platform_name] = status_label
-        self.social_upload_progress_bars[platform_name] = progress_bar
+        if hasattr(self, "browser_tab_webviews"):
+            self.browser_tab_webviews[platform_name] = browser
+        return browser
 
-        timer = QTimer(self)
-        timer.setSingleShot(True)
-        timer.timeout.connect(lambda p=platform_name: self._run_social_browser_upload_step(p))
-        self.social_upload_timers[platform_name] = timer
+    def _release_social_upload_browser(self, platform_name: str) -> None:
+        browser = self.social_upload_browsers.pop(platform_name, None)
+        if browser is None:
+            return
+        if hasattr(self, "browser_tab_webviews"):
+            self.browser_tab_webviews.pop(platform_name, None)
+        self.browser_address_bars.pop(browser, None)
+        self.browser_container_hosts.pop(browser, None)
+        self.browser_roles.pop(browser, None)
 
-        return tab
+        devtools_window = self.browser_devtools_windows.pop(browser, None)
+        if devtools_window is not None:
+            try:
+                devtools_window.close()
+            except Exception:
+                pass
+            try:
+                devtools_window.deleteLater()
+            except Exception:
+                pass
+
+        self._teardown_webengine_view(browser)
+        browser_mount = self.social_upload_browser_mounts.get(platform_name)
+        if browser_mount is not None:
+            self._clear_layout_widgets(browser_mount.layout())
 
     def _facebook_upload_home_url(self) -> str:
         configured = self.facebook_profile_url.text().strip() if hasattr(self, "facebook_profile_url") else ""
@@ -4424,7 +4534,7 @@ class MainWindow(QMainWindow):
         if not self._is_browser_tab_enabled(platform_name):
             self._append_log(f"{platform_name} upload tab is disabled. Re-enable it from View → Browser Tabs.")
             return
-        browser = self.social_upload_browsers.get(platform_name)
+        browser = self._ensure_social_upload_browser(platform_name)
         if browser is None:
             return
         browser.setUrl(QUrl(upload_url))
@@ -5478,6 +5588,12 @@ class MainWindow(QMainWindow):
                 self._refresh_browser_tab_selection()
 
         browser = self.browser_tab_webviews.get(tab_key) if hasattr(self, "browser_tab_webviews") else None
+        if tab_key in getattr(self, "social_upload_tab_indices", {}):
+            if enabled and tab_index is not None and self.browser_tabs.currentIndex() == tab_index:
+                browser = self._ensure_social_upload_browser(tab_key)
+            elif not enabled:
+                self._release_social_upload_browser(tab_key)
+                browser = None
         if browser is not None:
             if enabled:
                 browser.setEnabled(True)
@@ -7922,7 +8038,7 @@ class MainWindow(QMainWindow):
     def _video_cache_key(self, video_path: str | Path) -> str:
         return Path(video_path).name.casefold()
 
-    def _resolve_video_metadata(self, video_path: str | Path) -> dict[str, Any]:
+    def _resolve_video_metadata(self, video_path: str | Path, *, allow_probe: bool = True) -> dict[str, Any]:
         path = Path(video_path)
         if not path.exists():
             return {}
@@ -7935,6 +8051,13 @@ class MainWindow(QMainWindow):
         cached = self._video_metadata_cache.get(cache_key)
         if isinstance(cached, dict) and cached.get("fingerprint") == fingerprint:
             return dict(cached)
+        if not allow_probe:
+            return {
+                "fingerprint": fingerprint,
+                "path": str(path),
+                "filename": path.name,
+                "size_bytes": int(stat.st_size),
+            }
 
         metadata: dict[str, Any] = {
             "fingerprint": fingerprint,
@@ -7968,12 +8091,12 @@ class MainWindow(QMainWindow):
             return True
         return "web" in normalized
 
-    def _resolve_video_resolution(self, video: dict[str, Any]) -> str:
+    def _resolve_video_resolution(self, video: dict[str, Any], *, allow_probe: bool = False) -> str:
         current_resolution = str(video.get("resolution") or "").strip()
         video_path = str(video.get("video_file_path") or "").strip()
         if not video_path:
             return current_resolution or "unknown"
-        metadata = self._resolve_video_metadata(video_path)
+        metadata = self._resolve_video_metadata(video_path, allow_probe=allow_probe)
         resolved = str(metadata.get("resolution") or "").strip()
         if resolved and (self._looks_like_placeholder_resolution(current_resolution) or current_resolution != resolved):
             video["resolution"] = resolved
@@ -15633,6 +15756,10 @@ class MainWindow(QMainWindow):
             self._cdp_relay_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
+        try:
+            self._thumbnail_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
         if self.automation_runtime is not None:
             try:
                 self.automation_runtime.stop_runtime()
@@ -15677,13 +15804,58 @@ class MainWindow(QMainWindow):
                 }
                 self._record_upload_failure(platform_name, pending_video_path, "application closed during browser upload", unexpected_exit=True)
 
+        for browser in list(getattr(self, "browser_tab_webviews", {}).values()):
+            self._teardown_webengine_view(browser)
+        self.browser_tab_webviews.clear()
+        self.social_upload_browsers.clear()
+
+        for popup_window in list(getattr(self, "browser_popup_windows", [])):
+            try:
+                popup_view = popup_window.centralWidget()
+                if isinstance(popup_view, QWebEngineView):
+                    self._teardown_webengine_view(popup_view)
+            except Exception:
+                pass
+            try:
+                popup_window.close()
+            except Exception:
+                pass
+            try:
+                popup_window.deleteLater()
+            except Exception:
+                pass
+        self.browser_popup_windows.clear()
+
+        for browser, devtools_window in list(getattr(self, "browser_devtools_windows", {}).items()):
+            try:
+                devtools_view = devtools_window.centralWidget()
+                if isinstance(devtools_view, QWebEngineView):
+                    self._teardown_webengine_view(devtools_view)
+            except Exception:
+                pass
+            try:
+                page = browser.page()
+                if page is not None:
+                    page.setDevToolsPage(None)
+            except Exception:
+                pass
+            try:
+                devtools_window.close()
+            except Exception:
+                pass
+            try:
+                devtools_window.deleteLater()
+            except Exception:
+                pass
+        self.browser_devtools_windows.clear()
+
         self._flush_usage_stats()
         self._save_video_metadata_cache()
         super().closeEvent(event)
 
     def _build_video_label(self, video: dict) -> str:
         title = str(video.get("title") or "Video")
-        resolution = self._resolve_video_resolution(video)
+        resolution = self._resolve_video_resolution(video, allow_probe=False)
         return f"{title} ({resolution})"
 
     def _serialize_video_list_for_preferences(self) -> list[dict[str, str]]:
@@ -15749,7 +15921,7 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             pass
 
-        self._refresh_video_picker(selected_index=target_index)
+        self._refresh_video_picker(selected_index=target_index, autoplay=False)
 
         if missing_paths:
             self._append_log(
@@ -15778,48 +15950,58 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"{normalized_type}_{provider}_{resolution}_{aspect}_v{item_variant:02d}_{timestamp}_d{session_index:03d}.{normalized_ext}"
 
-    def _thumbnail_for_video(self, video_path: str) -> QIcon:
+    @staticmethod
+    def _thumbnail_cache_key(video_path: str | Path) -> str:
+        source_path = Path(video_path)
+        try:
+            source_stat = source_path.stat()
+        except Exception:
+            return str(source_path)
+        return f"{source_path.resolve()}::{source_stat.st_mtime_ns}::{source_stat.st_size}"
+
+    @staticmethod
+    def _thumbnail_output_path_for_video(video_path: str | Path) -> Path | None:
         source_path = Path(video_path)
         if not source_path.exists():
-            return QIcon()
+            return None
 
         try:
             source_stat = source_path.stat()
         except Exception:
-            return QIcon()
+            return None
 
         source_fingerprint = hashlib.sha1(str(source_path.resolve()).encode("utf-8")).hexdigest()[:12]
         safe_name = (
             f"thumb_{source_path.stem}_{source_fingerprint}_"
             f"{source_stat.st_mtime_ns}_{source_stat.st_size}.jpg"
         )
-        thumb_path = THUMBNAILS_DIR / safe_name
-        if not thumb_path.exists():
-            try:
-                subprocess.run(
-                    [
-                        _resolve_media_tool("ffmpeg"),
-                        "-y",
-                        "-ss",
-                        "00:00:01.000",
-                        "-i",
-                        str(source_path),
-                        "-frames:v",
-                        "1",
-                        "-vf",
-                        "scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
-                        str(thumb_path),
-                    ],
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-            except Exception:
-                return QIcon()
+        return THUMBNAILS_DIR / safe_name
 
+    @staticmethod
+    def _render_thumbnail_image(source_path: Path, thumb_path: Path) -> None:
+        subprocess.run(
+            [
+                _resolve_media_tool("ffmpeg"),
+                "-y",
+                "-ss",
+                "00:00:01.000",
+                "-i",
+                str(source_path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
+                str(thumb_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    def _load_thumbnail_icon_from_path(self, thumb_path: Path) -> QIcon:
         pixmap = QPixmap(str(thumb_path))
         if pixmap.isNull():
             return QIcon()
@@ -15834,6 +16016,66 @@ class MainWindow(QMainWindow):
         painter.drawPixmap(0, 0, pixmap)
         painter.end()
         return QIcon(rounded)
+
+    def _schedule_thumbnail_generation(self, video_path: str) -> None:
+        source_path = Path(video_path)
+        thumb_path = self._thumbnail_output_path_for_video(source_path)
+        if thumb_path is None:
+            return
+        cache_key = self._thumbnail_cache_key(source_path)
+        if cache_key in self._thumbnail_generation_pending:
+            return
+        if thumb_path.exists():
+            return
+        self._thumbnail_generation_pending.add(cache_key)
+        future = self._thumbnail_executor.submit(self._render_thumbnail_image, source_path, thumb_path)
+
+        def _after_thumbnail(_future: concurrent.futures.Future) -> None:
+            self._thumbnail_generation_pending.discard(cache_key)
+            try:
+                _future.result()
+            except Exception:
+                return
+            self.thumbnail_ready.emit(str(source_path))
+
+        future.add_done_callback(_after_thumbnail)
+
+    def _on_thumbnail_ready(self, video_path: str) -> None:
+        thumb_path = self._thumbnail_output_path_for_video(video_path)
+        if thumb_path is None or not thumb_path.exists():
+            return
+        cache_key = self._thumbnail_cache_key(video_path)
+        icon = self._load_thumbnail_icon_from_path(thumb_path)
+        if icon.isNull():
+            return
+        self._thumbnail_icon_cache[cache_key] = icon
+        if not hasattr(self, "video_grid"):
+            return
+        normalized_target = str(Path(video_path).expanduser())
+        for index, video in enumerate(self.videos):
+            candidate = str(Path(str(video.get("video_file_path") or "")).expanduser())
+            if candidate != normalized_target:
+                continue
+            item = self.video_grid.item(index)
+            if item is not None:
+                item.setIcon(icon)
+            break
+
+    def _thumbnail_for_video(self, video_path: str) -> QIcon:
+        thumb_path = self._thumbnail_output_path_for_video(video_path)
+        if thumb_path is None:
+            return QIcon()
+        cache_key = self._thumbnail_cache_key(video_path)
+        cached_icon = self._thumbnail_icon_cache.get(cache_key)
+        if cached_icon is not None:
+            return cached_icon
+        if thumb_path.exists():
+            icon = self._load_thumbnail_icon_from_path(thumb_path)
+            if not icon.isNull():
+                self._thumbnail_icon_cache[cache_key] = icon
+                return icon
+        self._schedule_thumbnail_generation(video_path)
+        return QIcon()
 
     def _format_video_date(self, video_path: str) -> str:
         try:
@@ -15955,7 +16197,7 @@ class MainWindow(QMainWindow):
         self._apply_video_grid_layout()
         self._refresh_video_picker(selected_index=self._selected_video_index())
 
-    def _refresh_video_picker(self, selected_index: int = -1) -> None:
+    def _refresh_video_picker(self, selected_index: int = -1, *, autoplay: bool = True) -> None:
         self._apply_video_grid_layout()
         self.video_grid.blockSignals(True)
         self.video_details.blockSignals(True)
@@ -15975,7 +16217,7 @@ class MainWindow(QMainWindow):
             detail_item = QTreeWidgetItem([
                 self._format_video_date(video_path),
                 filename,
-                self._resolve_video_resolution(video),
+                self._resolve_video_resolution(video, allow_probe=False),
                 self._format_video_filesize(video_path),
             ])
             detail_item.setData(0, Qt.UserRole, index)
@@ -15991,7 +16233,16 @@ class MainWindow(QMainWindow):
         if selected_index < 0 or selected_index >= len(self.videos):
             selected_index = len(self.videos) - 1
         self._set_selected_video_index(selected_index)
-        self.show_selected_video(selected_index)
+        if autoplay:
+            self.show_selected_video(selected_index)
+        else:
+            self.player.stop()
+            self.player.setSource(QUrl())
+            self.preview_seek_slider.blockSignals(True)
+            self.preview_seek_slider.setRange(0, 0)
+            self.preview_seek_slider.setValue(0)
+            self.preview_seek_slider.blockSignals(False)
+            self.preview_position_label.setText("00:00 / 00:00")
 
     def on_video_finished(self, video: dict) -> None:
         # Keep generation origin for smarter stitching choices (create vs continue boundaries).
@@ -16340,21 +16591,26 @@ class MainWindow(QMainWindow):
         self._append_log(f"ERROR: {error}")
         QMessageBox.critical(self, "Generation Failed", error)
 
-    def show_selected_video(self, index: int) -> None:
+    def show_selected_video(self, index: int, *, autoplay: bool = True) -> None:
         if index < 0 or index >= len(self.videos):
             return
         video = self.videos[index]
-        self._preview_video(video["video_file_path"])
+        self._preview_video(video["video_file_path"], autoplay=autoplay)
 
-    def _preview_video(self, file_path: str) -> None:
-        self.player.setSource(QUrl.fromLocalFile(file_path))
-        self.player.play()
-        self._append_log(f"Selected video for preview: {file_path}")
+    def _preview_video(self, file_path: str, *, autoplay: bool = True) -> None:
+        if autoplay:
+            self.player.setSource(QUrl.fromLocalFile(file_path))
+            self.player.play()
+            self._append_log(f"Selected video for preview: {file_path}")
 
     def play_preview(self) -> None:
         if self.player.source().isEmpty():
-            self._append_log("Preview play requested, but no video is currently loaded.")
-            return
+            selected_index = self._selected_video_index()
+            if 0 <= selected_index < len(self.videos):
+                self._preview_video(str(self.videos[selected_index].get("video_file_path") or ""), autoplay=True)
+            else:
+                self._append_log("Preview play requested, but no video is currently loaded.")
+                return
         self.player.play()
         self._append_log("Preview playback started.")
 
@@ -17242,7 +17498,9 @@ class MainWindow(QMainWindow):
             return self.sora_browser
         for platform_name, tab_index in self.social_upload_tab_indices.items():
             if index == tab_index:
-                return self.social_upload_browsers.get(platform_name)
+                if not self._is_browser_tab_enabled(platform_name):
+                    return None
+                return self._ensure_social_upload_browser(platform_name)
         return None
 
     def _open_devtools_for_browser(self, browser: QWebEngineView, label: str) -> None:
@@ -18592,7 +18850,7 @@ class MainWindow(QMainWindow):
             self._append_log(f"{platform_name}: previous automation run detected; canceling and starting fresh.")
             self._cancel_social_upload_run(platform_name, reason="new run requested")
 
-        browser = self.social_upload_browsers.get(platform_name)
+        browser = self._ensure_social_upload_browser(platform_name)
         timer = self.social_upload_timers.get(platform_name)
         status_label = self.social_upload_status_labels.get(platform_name)
         progress_bar = self.social_upload_progress_bars.get(platform_name)

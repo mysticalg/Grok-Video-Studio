@@ -104,6 +104,7 @@ class AutomationChromeManager:
             str(chrome_path),
             f"--remote-debugging-port={self.port}",
             f"--user-data-dir={profile_dir}",
+            "--start-minimized",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-popup-blocking",
