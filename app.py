@@ -92,13 +92,90 @@ from udp_automation.workflows import tiktok as udp_tiktok_workflow
 from udp_automation.workflows import x as udp_x_workflow
 from udp_automation.workflows import youtube as udp_youtube_workflow
 
+APP_NAME = "GrokVideoDesktopStudio"
 BASE_DIR = Path(__file__).resolve().parent
-APP_DOWNLOADS_DIR = BASE_DIR / "downloads"
-APP_DOWNLOADS_DIR.mkdir(exist_ok=True)
+IS_PACKAGED_BUILD = bool(getattr(sys, "frozen", False))
+LEGACY_APP_DOWNLOADS_DIR = BASE_DIR / "downloads"
+
+
+def _path_supports_rw(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe_file = path / f".rw_probe_{os.getpid()}"
+        moved_file = path / f".rw_probe_{os.getpid()}_moved"
+        probe_file.write_text("ok", encoding="utf-8")
+        probe_file.replace(moved_file)
+        moved_file.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _runtime_data_dir_candidates() -> list[Path]:
+    override = os.getenv("GROK_APP_DATA_DIR", "").strip()
+    if override:
+        return [Path(override).expanduser()]
+
+    if not IS_PACKAGED_BUILD:
+        return [BASE_DIR]
+
+    if sys.platform.startswith("win"):
+        candidates: list[Path] = []
+        local_app_data = os.getenv("LOCALAPPDATA", "").strip()
+        roaming_app_data = os.getenv("APPDATA", "").strip()
+        if local_app_data:
+            candidates.append(Path(local_app_data) / APP_NAME)
+        if roaming_app_data:
+            candidates.append(Path(roaming_app_data) / APP_NAME)
+        return candidates
+
+    if sys.platform == "darwin":
+        return [Path.home() / "Library" / "Application Support" / APP_NAME]
+
+    candidates = []
+    xdg_data_home = os.getenv("XDG_DATA_HOME", "").strip()
+    if xdg_data_home:
+        candidates.append(Path(xdg_data_home) / APP_NAME)
+    candidates.append(Path.home() / ".local" / "share" / APP_NAME)
+    return candidates
+
+
+def _resolve_runtime_data_dir() -> Path:
+    candidates = _runtime_data_dir_candidates()
+    candidates.append(Path(tempfile.gettempdir()) / APP_NAME)
+
+    for candidate in candidates:
+        if _path_supports_rw(candidate):
+            return candidate
+
+    fallback = Path(tempfile.gettempdir()) / f"{APP_NAME}_{os.getpid()}"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+APP_DATA_DIR = _resolve_runtime_data_dir()
+
+
+def _resolve_runtime_file(file_name: str, *, migrate_from_base_dir: bool = False) -> Path:
+    target = APP_DATA_DIR / file_name
+    if migrate_from_base_dir and target != BASE_DIR / file_name:
+        legacy = BASE_DIR / file_name
+        if not target.exists() and legacy.is_file():
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(legacy, target)
+            except Exception:
+                pass
+    return target
+
+
+APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+APP_DOWNLOADS_DIR = APP_DATA_DIR / "downloads"
+APP_DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 THUMBNAILS_DIR = APP_DOWNLOADS_DIR / ".thumbnails"
-THUMBNAILS_DIR.mkdir(exist_ok=True)
-LOGS_DIR = BASE_DIR / "logs"
-LOGS_DIR.mkdir(exist_ok=True)
+THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR = APP_DATA_DIR / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 VIDEO_METADATA_CACHE_FILE = LOGS_DIR / "video_metadata_cache.json"
 UPLOAD_SUCCESS_LOG_FILE = LOGS_DIR / "upload_success.log"
 UPLOAD_FAILURE_LOG_FILE = LOGS_DIR / "upload_failure.log"
@@ -162,7 +239,10 @@ TIKTOK_OAUTH_SCOPE = os.getenv("TIKTOK_OAUTH_SCOPE", "user.info.basic,video.uplo
 TIKTOK_PKCE_CHALLENGE_ENCODING = os.getenv("TIKTOK_PKCE_CHALLENGE_ENCODING", "hex").strip().lower()
 if TIKTOK_PKCE_CHALLENGE_ENCODING not in {"hex", "base64url"}:
     TIKTOK_PKCE_CHALLENGE_ENCODING = "hex"
-DEFAULT_PREFERENCES_FILE = BASE_DIR / "preferences.json"
+DEFAULT_PREFERENCES_FILE = _resolve_runtime_file("preferences.json", migrate_from_base_dir=IS_PACKAGED_BUILD)
+YOUTUBE_TOKEN_FILE = _resolve_runtime_file("youtube_token.json", migrate_from_base_dir=IS_PACKAGED_BUILD)
+USER_CLIENT_SECRET_FILE = APP_DATA_DIR / "client_secret.json"
+BUNDLED_CLIENT_SECRET_FILE = BASE_DIR / "client_secret.json"
 CDP_RELAY_SOCIAL_UPLOAD_URL = os.getenv("GROK_CDP_RELAY_SOCIAL_UPLOAD_URL", "http://127.0.0.1:8765/social-upload-step")
 CDP_RELAY_TIMEOUT_SECONDS = max(1.0, float(os.getenv("GROK_CDP_RELAY_TIMEOUT_SECONDS", "25")))
 GITHUB_REPO_URL = "https://github.com/mysticalg/Grok-video-to-youtube-api"
@@ -1137,20 +1217,6 @@ def _get_qtwebengine_remote_debug_port_from_preferences(default: int = 0) -> int
         return default
 
     return port if port > 0 else default
-
-
-def _path_supports_rw(path: Path) -> bool:
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        probe_file = path / f".rw_probe_{os.getpid()}"
-        moved_file = path / f".rw_probe_{os.getpid()}_moved"
-        probe_file.write_text("ok", encoding="utf-8")
-        probe_file.replace(moved_file)
-        moved_file.unlink(missing_ok=True)
-        return True
-    except Exception:
-        return False
-
 
 def _resolve_qtwebengine_cache_dir() -> tuple[Path, bool]:
     candidates: list[Path] = []
@@ -7471,7 +7537,7 @@ QTextBrowser, QTextEdit, QPlainTextEdit {{
             download_dir = Path(str(preferences["download_dir"]))
             try:
                 saved_customized = preferences.get("download_dir_customized")
-                legacy_default_dir = APP_DOWNLOADS_DIR.resolve()
+                legacy_default_dir = LEGACY_APP_DOWNLOADS_DIR.resolve()
                 requested_dir = download_dir.resolve(strict=False)
                 if saved_customized is None and requested_dir == legacy_default_dir:
                     download_dir = _default_user_download_dir()
@@ -18669,9 +18735,12 @@ QTextBrowser, QTextEdit, QPlainTextEdit {{
         if not accepted:
             return
 
-        client_secret_path = BASE_DIR / "client_secret.json"
-        client_secret_file = str(client_secret_path) if client_secret_path.exists() else ""
-        token_file = str(BASE_DIR / "youtube_token.json")
+        client_secret_path = next(
+            (path for path in (USER_CLIENT_SECRET_FILE, BUNDLED_CLIENT_SECRET_FILE) if path.exists()),
+            None,
+        )
+        client_secret_file = str(client_secret_path) if client_secret_path is not None else ""
+        token_file = str(YOUTUBE_TOKEN_FILE)
         if not client_secret_file and not Path(token_file).exists():
             QMessageBox.critical(
                 self,
