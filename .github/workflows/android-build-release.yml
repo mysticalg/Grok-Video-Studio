@@ -191,14 +191,14 @@ jobs:
 
           has_bundle_config() {
             local archive="$1"
-            unzip -Z1 "$archive" | tee /tmp/aab-contents.txt
-            rg -Fxq "BundleConfig.pb" /tmp/aab-contents.txt || rg -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt
+            unzip -Z1 "$archive" | tr -d '\r' | tee /tmp/aab-contents.txt >/dev/null
+            grep -Fxq "BundleConfig.pb" /tmp/aab-contents.txt || grep -Fxq "./BundleConfig.pb" /tmp/aab-contents.txt
           }
 
           # Keep this preflight lightweight and non-opinionated: verify the artifact is a readable
           # zip before we run bundletool's canonical validation.
           unzip -t "${{ steps.bundle.outputs.release_bundle }}"
-          unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tee /tmp/aab-contents.txt
+          unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tr -d '\r' | tee /tmp/aab-contents.txt >/dev/null
 
           # Bundletool/Play requires a root-level BundleConfig.pb. If it is missing, recover deterministically.
           if ! has_bundle_config "${{ steps.bundle.outputs.release_bundle }}"; then
@@ -231,7 +231,7 @@ jobs:
             else
               # Some environments occasionally surface a module zip (base/...) instead of a full .aab.
               # Rebuild a canonical App Bundle from that module archive with bundletool.
-              if rg -Fxq "base/manifest/AndroidManifest.xml" /tmp/aab-contents.txt && rg -Fxq "base/resources.pb" /tmp/aab-contents.txt; then
+              if grep -Fxq "base/manifest/AndroidManifest.xml" /tmp/aab-contents.txt && grep -Fxq "base/resources.pb" /tmp/aab-contents.txt; then
                 echo "Detected module archive layout; rebuilding canonical .aab with bundletool build-bundle..."
                 ensure_bundletool
                 java -jar /tmp/bundletool.jar build-bundle \
