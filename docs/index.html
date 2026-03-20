@@ -3,32 +3,32 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Grok Video Studio - Downloads</title>
+  <title>Grok Video Studio - Downloads and Guide</title>
   <meta
     name="description"
-    content="Official downloads page for Grok Video Studio with the latest Windows, macOS, and Android builds plus recent release history."
+    content="Official GitHub Pages site for Grok Video Studio with app screenshots, setup help, step-by-step workflow guidance, and the latest Windows, macOS, and Android downloads."
   />
   <meta
     name="keywords"
-    content="Grok Video Studio, AI video generator, GitHub releases, Windows installer, macOS app, Android apk"
+    content="Grok Video Studio, AI video generator, video editor, GitHub releases, Windows installer, macOS app, Android apk, help guide"
   />
   <meta name="robots" content="index,follow,max-image-preview:large" />
   <link rel="canonical" href="https://mysticalg.github.io/Grok-Video-Studio/" />
 
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="Grok Video Studio - Downloads" />
+  <meta property="og:title" content="Grok Video Studio - Downloads and Guide" />
   <meta
     property="og:description"
-    content="Download the latest Grok Video Studio builds for Windows, macOS, and Android on the official GitHub Pages site."
+    content="Download the latest Grok Video Studio builds for Windows, macOS, and Android, view app screenshots, and follow the step-by-step desktop quick start guide."
   />
   <meta property="og:url" content="https://mysticalg.github.io/Grok-Video-Studio/" />
   <meta property="og:image" content="https://raw.githubusercontent.com/mysticalg/Grok-Video-Studio/main/images/snap1.jpg" />
 
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Grok Video Studio - Downloads" />
+  <meta name="twitter:title" content="Grok Video Studio - Downloads and Guide" />
   <meta
     name="twitter:description"
-    content="Official downloads page for Grok Video Studio with the newest Windows, macOS, and Android builds."
+    content="Official downloads page for Grok Video Studio with screenshots, setup help, and the newest Windows, macOS, and Android builds."
   />
   <meta name="twitter:image" content="https://raw.githubusercontent.com/mysticalg/Grok-Video-Studio/main/images/snap1.jpg" />
 
@@ -41,7 +41,7 @@
       "operatingSystem": "Windows, macOS, Android",
       "url": "https://mysticalg.github.io/Grok-Video-Studio/",
       "downloadUrl": "https://github.com/mysticalg/Grok-Video-Studio/releases/latest",
-      "description": "App suite for generating AI videos, stitching clips, and publishing to social platforms.",
+      "description": "Desktop app for generating AI videos, stitching clips, and publishing to social platforms.",
       "publisher": {
         "@type": "Person",
         "name": "mysticalg"
@@ -52,223 +52,324 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #08111f;
-      --bg-accent: #112346;
-      --panel: #111a30;
-      --panel-border: #263253;
-      --text: #f3f6ff;
-      --muted: #b8c3e0;
-      --accent: #77a8ff;
-      --accent-2: #57e4c5;
+      --bg: #081019;
+      --bg-soft: #101a29;
+      --card: rgba(9, 20, 34, 0.88);
+      --card-border: rgba(146, 180, 255, 0.18);
+      --text: #f5f7fb;
+      --muted: #bcc7dc;
+      --accent: #8fd2ff;
+      --accent-strong: #37b6ff;
+      --accent-2: #73f0d1;
       --danger: #ff9b9b;
-      --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      --shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
     }
 
     * {
       box-sizing: border-box;
     }
 
+    html {
+      scroll-behavior: smooth;
+    }
+
     body {
       margin: 0;
-      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
       color: var(--text);
+      line-height: 1.55;
       background:
-        radial-gradient(circle at top, rgba(81, 123, 255, 0.22), transparent 38%),
-        linear-gradient(180deg, var(--bg-accent) 0%, var(--bg) 54%);
-      line-height: 1.5;
+        radial-gradient(circle at top, rgba(55, 182, 255, 0.22), transparent 32%),
+        radial-gradient(circle at right, rgba(115, 240, 209, 0.14), transparent 26%),
+        linear-gradient(180deg, #0a111c 0%, #071019 100%);
     }
 
     main {
-      max-width: 1080px;
+      max-width: 1100px;
       margin: 0 auto;
-      padding: 2.5rem 1rem 3.5rem;
+      padding: 2.5rem 1rem 3.75rem;
     }
 
     .hero {
       text-align: center;
-      margin-bottom: 1.25rem;
+      margin-bottom: 1.35rem;
     }
 
     .hero h1 {
       margin: 0;
-      font-size: clamp(2rem, 4vw, 3rem);
+      font-size: clamp(2rem, 4.5vw, 3.2rem);
       letter-spacing: 0.01em;
     }
 
-    .hero p {
+    .subtitle {
+      margin: 0.9rem auto 0;
       max-width: 760px;
-      margin: 0.85rem auto 0;
       color: var(--muted);
-      font-size: 1rem;
+      font-size: 1.02rem;
     }
 
-    .section {
+    .footer-links {
       margin-top: 1rem;
-      padding: 1rem;
-      border: 1px solid var(--panel-border);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1rem;
+      justify-content: center;
+    }
+
+    .text-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .text-link:hover {
+      color: #d2eeff;
+    }
+
+    .panel {
+      margin-top: 1rem;
+      padding: 1.1rem;
+      border: 1px solid var(--card-border);
       border-radius: 18px;
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)), var(--panel);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)),
+        var(--card);
       box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
     }
 
-    .section h2 {
-      margin: 0 0 0.45rem;
-      font-size: 1.2rem;
-    }
-
-    .section-head {
-      margin-bottom: 0.75rem;
-    }
-
-    .section-head p {
-      margin: 0;
-      color: var(--muted);
-    }
-
-    .downloads-grid,
-    .gallery-grid {
+    .downloads {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       gap: 1rem;
     }
 
-    .download-card,
-    .shot {
-      border: 1px solid var(--panel-border);
-      border-radius: 14px;
-      padding: 1rem;
-      background: rgba(255, 255, 255, 0.02);
-    }
-
-    .download-card h3 {
-      margin: 0;
-      font-size: 1.05rem;
+    .dl-card h2,
+    .panel h2 {
+      margin-top: 0;
+      margin-bottom: 0.4rem;
     }
 
     .helper {
-      min-height: 3.1em;
+      margin-top: 0;
       color: var(--muted);
-      margin: 0.55rem 0 0;
-      font-size: 0.95rem;
+      font-size: 0.96rem;
+      min-height: 0;
     }
 
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 100%;
-      margin-top: 0.9rem;
-      padding: 0.78rem 0.95rem;
+      gap: 0.5rem;
+      margin-top: 0.85rem;
+      padding: 0.72rem 1rem;
+      border: 0;
       border-radius: 12px;
-      text-decoration: none;
-      color: #041224;
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      font-weight: 700;
+      color: #03111d;
+      text-decoration: none;
+      font-weight: 800;
       transition: transform 130ms ease, box-shadow 130ms ease;
-      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.25);
+      box-shadow: 0 8px 18px rgba(55, 182, 255, 0.16);
     }
 
     .btn:hover {
       transform: translateY(-1px);
-      box-shadow: 0 12px 26px rgba(0, 0, 0, 0.32);
+      box-shadow: 0 12px 24px rgba(55, 182, 255, 0.22);
     }
 
+    .btn:disabled,
     .btn[aria-disabled="true"] {
       opacity: 0.55;
       pointer-events: none;
     }
 
     .status {
-      margin: 0.7rem 0 0;
+      margin: 0.6rem 0 0;
       color: var(--muted);
       font-size: 0.92rem;
-      word-break: break-word;
     }
 
     .status.error {
       color: var(--danger);
     }
 
+    ul,
+    ol {
+      margin: 0.7rem 0 0;
+      padding-left: 1.2rem;
+    }
+
+    li + li {
+      margin-top: 0.35rem;
+    }
+
     .release-list {
       list-style: none;
-      margin: 0.75rem 0 0;
       padding: 0;
+      margin: 0.8rem 0 0;
       display: grid;
       gap: 0.55rem;
     }
 
     .release-item {
       display: flex;
-      justify-content: space-between;
-      gap: 0.75rem;
       align-items: center;
-      padding: 0.65rem 0.8rem;
+      justify-content: space-between;
+      gap: 0.8rem;
+      padding: 0.7rem 0.85rem;
+      border: 1px solid var(--card-border);
       border-radius: 12px;
-      border: 1px solid var(--panel-border);
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .release-meta {
+      color: var(--muted);
+      font-size: 0.9rem;
+      white-space: nowrap;
+    }
+
+    .feature-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.9rem;
+      margin-top: 0.95rem;
+    }
+
+    .feature-card {
+      padding: 0.95rem;
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
       background: rgba(255, 255, 255, 0.02);
     }
 
-    .release-item a,
-    .footer-links a {
-      color: var(--accent);
-      text-decoration: none;
-      font-weight: 600;
+    .feature-card h3 {
+      margin: 0 0 0.45rem;
+      font-size: 1rem;
     }
 
-    .release-meta,
-    .footer-links,
-    .shot figcaption {
+    .feature-card p {
+      margin: 0;
       color: var(--muted);
-      font-size: 0.92rem;
+      font-size: 0.95rem;
     }
 
-    .footer-links {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.8rem;
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
       margin-top: 1rem;
     }
 
-    ul.feature-list {
-      margin: 0.6rem 0 0;
-      padding-left: 1.15rem;
+    .shot,
+    .guide-card {
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 0.7rem;
+      background: rgba(255, 255, 255, 0.02);
     }
 
     .shot {
       margin: 0;
     }
 
-    .shot img {
-      width: 100%;
+    .shot img,
+    .step-media img {
       display: block;
-      border-radius: 10px;
+      width: 100%;
       height: auto;
+      border-radius: 10px;
     }
 
-    .shot figcaption {
+    .shot figcaption,
+    .step-media figcaption {
       margin-top: 0.55rem;
+      color: var(--muted);
+      font-size: 0.9rem;
     }
 
-    .support-link {
+    .guide-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .guide-head {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      margin-bottom: 0.8rem;
+    }
+
+    .guide-head h3 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .step-badge {
+      width: 2rem;
+      height: 2rem;
+      border-radius: 999px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      padding: 0.8rem 1rem;
-      border-radius: 999px;
-      text-decoration: none;
-      font-weight: 700;
-      color: var(--text);
-      background: linear-gradient(135deg, #f59e0b, #fb7185);
-      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+      flex: 0 0 auto;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #03111d;
+      font-weight: 900;
     }
 
-    @media (max-width: 640px) {
-      main {
-        padding-top: 1.5rem;
-      }
+    .step-list {
+      margin-top: 0;
+    }
 
-      .section {
-        padding: 0.9rem;
+    .step-media {
+      margin: 0.95rem 0 0;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 0.55rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .guide-note {
+      margin-top: 1rem;
+      padding: 0.95rem 1rem;
+      border: 1px solid rgba(143, 210, 255, 0.3);
+      border-radius: 14px;
+      background: rgba(143, 210, 255, 0.08);
+      color: var(--muted);
+    }
+
+    .support-wrap {
+      text-align: center;
+    }
+
+    .coffee-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      padding: 0.7rem 1.05rem;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 221, 130, 0.36);
+      background: linear-gradient(135deg, #ffd36b, #ffb347);
+      color: #1f1200;
+      text-decoration: none;
+      font-weight: 800;
+      transition: transform 130ms ease, box-shadow 130ms ease;
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.24);
+    }
+
+    .coffee-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 12px 26px rgba(0, 0, 0, 0.3);
+    }
+
+    @media (max-width: 700px) {
+      main {
+        padding-top: 1.7rem;
       }
 
       .release-item {
@@ -282,98 +383,240 @@
   <main>
     <header class="hero">
       <h1>Grok Video Studio</h1>
-      <p>
-        Generate AI videos, stitch clips, preview output, and publish to social platforms.
-        This page always points to the latest Windows, macOS, and Android builds from GitHub Releases.
+      <p class="subtitle">
+        A desktop app for generating AI videos, stitching clips, previewing output, and publishing to social platforms.
+        This page now includes the latest Windows, macOS, and Android downloads, app screenshots, and a first-run guide for the desktop workflow.
       </p>
+      <div class="footer-links">
+        <a class="text-link" href="#downloads">Latest downloads</a>
+        <a class="text-link" href="#screenshots">Screenshots</a>
+        <a class="text-link" href="#guide">Quick guide</a>
+        <a id="hero-guide-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">Full user guide</a>
+      </div>
     </header>
 
-    <section class="section" aria-label="Latest downloads">
-      <div class="section-head">
-        <h2>Latest downloads</h2>
-        <p>Pick the newest build for your platform.</p>
-      </div>
+    <section id="downloads" class="panel downloads" aria-label="Latest downloads">
+      <article class="panel dl-card">
+        <h2>Windows downloads</h2>
+        <p class="helper">Choose MSI for managed installs or EXE for guided setup.</p>
+        <a
+          id="windows-msi-link"
+          class="btn"
+          aria-disabled="true"
+          href="#"
+          title="Latest Windows MSI installer from the newest GitHub release"
+        >
+          Download Windows MSI
+        </a>
+        <a
+          id="windows-exe-link"
+          class="btn"
+          aria-disabled="true"
+          href="#"
+          title="Latest Windows EXE installer from the newest GitHub release"
+        >
+          Download Windows EXE
+        </a>
+        <p id="windows-msi-meta" class="status">Loading latest release...</p>
+        <p id="windows-exe-meta" class="status">Loading latest release...</p>
+      </article>
 
-      <div class="downloads-grid">
-        <article class="download-card">
-          <h3>Windows MSI</h3>
-          <p class="helper">Best for managed installs and enterprise deployment.</p>
-          <a id="windows-msi-link" class="btn" aria-disabled="true" href="#">Download Windows MSI</a>
-          <p id="windows-msi-meta" class="status">Loading latest release...</p>
-        </article>
+      <article class="panel dl-card">
+        <h2>macOS installer</h2>
+        <p class="helper">Download the latest macOS package. Current builds may be distributed as a zip containing the app bundle.</p>
+        <a
+          id="mac-link"
+          class="btn"
+          aria-disabled="true"
+          href="#"
+          title="Fetches the newest macOS asset from the latest GitHub release"
+        >
+          Download for macOS
+        </a>
+        <p id="mac-meta" class="status">Loading latest release...</p>
+      </article>
 
-        <article class="download-card">
-          <h3>Windows EXE</h3>
-          <p class="helper">Guided setup for standard Windows desktop installs.</p>
-          <a id="windows-exe-link" class="btn" aria-disabled="true" href="#">Download Windows EXE</a>
-          <p id="windows-exe-meta" class="status">Loading latest release...</p>
-        </article>
-
-        <article class="download-card">
-          <h3>macOS</h3>
-          <p class="helper">Current macOS builds are distributed as a zip containing the app bundle.</p>
-          <a id="mac-link" class="btn" aria-disabled="true" href="#">Download for macOS</a>
-          <p id="mac-meta" class="status">Loading latest release...</p>
-        </article>
-
-        <article class="download-card">
-          <h3>Android APK</h3>
-          <p class="helper">Direct Android install for testing or distribution outside Google Play.</p>
-          <a id="android-link" class="btn" aria-disabled="true" href="#">Download Android APK</a>
-          <p id="android-meta" class="status">Loading latest release...</p>
-        </article>
-      </div>
+      <article class="panel dl-card">
+        <h2>Android APK</h2>
+        <p class="helper">Direct Android install for testing or distribution outside Google Play.</p>
+        <a
+          id="android-link"
+          class="btn"
+          aria-disabled="true"
+          href="#"
+          title="Fetches the newest Android APK from the latest GitHub release"
+        >
+          Download Android APK
+        </a>
+        <p id="android-meta" class="status">Loading latest release...</p>
+      </article>
     </section>
 
-    <section class="section" aria-label="Recent releases">
-      <div class="section-head">
-        <h2>Recent releases</h2>
-        <p id="recent-releases-meta">Loading release history...</p>
-      </div>
+    <section class="panel" aria-label="Recent releases">
+      <h2>Recent versions</h2>
+      <p class="helper">Quick links to the most recent tagged releases and how many downloadable artifacts each one includes.</p>
+      <p id="recent-releases-meta" class="status">Loading release history...</p>
       <ul id="recent-releases-list" class="release-list" aria-live="polite"></ul>
     </section>
 
-    <section class="section" aria-label="About the app">
-      <div class="section-head">
-        <h2>What it does</h2>
-        <p>Desktop and mobile entry points for the same release stream.</p>
+    <section class="panel" aria-label="About the app">
+      <h2>What it does</h2>
+      <div class="feature-list">
+        <article class="feature-card">
+          <h3>Generate video</h3>
+          <p>Create clips from prompts with Grok, Sora, or Seedance providers and queue multiple variants.</p>
+        </article>
+        <article class="feature-card">
+          <h3>Edit and stitch</h3>
+          <p>Preview clips, then combine them with crossfade, interpolation, upscale, GPU encode, and music tools.</p>
+        </article>
+        <article class="feature-card">
+          <h3>Publish faster</h3>
+          <p>Upload to YouTube, TikTok, Facebook, and Instagram by API or browser automation.</p>
+        </article>
+        <article class="feature-card">
+          <h3>Automate workflows</h3>
+          <p>Use Automation Chrome, CDP, UDP mode, and AI Flow Trainer to build repeatable publishing flows.</p>
+        </article>
+        <article class="feature-card">
+          <h3>Android companion app</h3>
+          <p>Use the native Android client for mobile prompt drafting, generation requests, playback, and lightweight stitch export.</p>
+        </article>
       </div>
-      <ul class="feature-list">
-        <li>Generate videos from prompts using Grok, Sora, and Seedance providers.</li>
-        <li>Stitch clips with crossfade, interpolation, upscale, and music tools.</li>
-        <li>Upload to YouTube, TikTok, Facebook, and Instagram via API or browser automation.</li>
-        <li>Train and replay browser workflows with the built-in AI Flow Trainer.</li>
-      </ul>
       <div class="footer-links">
-        <a id="repo-link" href="#" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
-        <a id="user-guide-link" href="#" target="_blank" rel="noopener noreferrer">User Guide</a>
-        <a id="release-link" href="#" target="_blank" rel="noopener noreferrer">Latest Release</a>
+        <a id="repo-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">GitHub repository</a>
+        <a id="user-guide-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">User guide</a>
+        <a id="release-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">Latest release</a>
       </div>
     </section>
 
-    <section class="section" aria-label="Application screenshots">
-      <div class="section-head">
-        <h2>App screenshots</h2>
-        <p>Recent UI captures shared from the desktop app.</p>
-      </div>
+    <section id="screenshots" class="panel" aria-label="Application screenshots">
+      <h2>App screenshots</h2>
+      <p class="helper">These screenshots show the main workspace, editing flow, and publishing controls you will use in the guide below.</p>
       <div class="gallery-grid">
         <figure class="shot">
-          <img data-image-name="snap1.jpg" alt="Grok Video Studio workspace and publishing controls" loading="lazy" />
-          <figcaption>Main workspace and publishing controls.</figcaption>
+          <img
+            data-image-name="snap1.jpg"
+            alt="Grok Video Studio main workspace with prompt setup, generation tools, and upload controls"
+            loading="lazy"
+          />
+          <figcaption>Main workspace with prompt setup, generation actions, and upload access.</figcaption>
         </figure>
         <figure class="shot">
-          <img data-image-name="snap2.jpg" alt="Grok Video Studio workflow tools and social delivery options" loading="lazy" />
-          <figcaption>Workflow tools for editing and social delivery.</figcaption>
+          <img
+            data-image-name="snap2.jpg"
+            alt="Grok Video Studio workflow view showing clip editing and social publishing options"
+            loading="lazy"
+          />
+          <figcaption>Workflow view with clip review, editing tools, and social publishing tabs.</figcaption>
         </figure>
       </div>
     </section>
 
-    <section class="section" aria-label="Support the project">
-      <div class="section-head">
-        <h2>Support the project</h2>
-        <p>Funding helps keep releases and updates moving.</p>
+    <section id="guide" class="panel" aria-label="Help and quick guide">
+      <h2>Help and quick guide</h2>
+      <p class="helper">
+        Follow these four steps the first time you open Grok Video Studio. They cover the shortest path from install to publish and pair each stage with the relevant app view.
+      </p>
+
+      <div class="guide-grid">
+        <article class="guide-card">
+          <div class="guide-head">
+            <span class="step-badge">1</span>
+            <h3>Install and launch</h3>
+          </div>
+          <ol class="step-list">
+            <li>Download the latest Windows or macOS build from the section above.</li>
+            <li>If you run from source, install Python 3.11+, add <code>ffmpeg</code> to PATH, then install <code>requirements.txt</code>.</li>
+            <li>Start the app and keep the main dashboard open for the rest of the workflow.</li>
+          </ol>
+          <figure class="step-media">
+            <img
+              data-image-name="snap1.jpg"
+              alt="Main dashboard for Grok Video Studio showing prompt setup and generation controls"
+              loading="lazy"
+            />
+            <figcaption>The dashboard is where every workflow begins.</figcaption>
+          </figure>
+        </article>
+
+        <article class="guide-card">
+          <div class="guide-head">
+            <span class="step-badge">2</span>
+            <h3>Add your keys and defaults</h3>
+          </div>
+          <ol class="step-list">
+            <li>Open the Model/API Settings area.</li>
+            <li>Add the services you plan to use: <code>GROK_API_KEY</code>, <code>OPENAI_API_KEY</code>, <code>SEEDANCE_API_KEY</code>, and optional Ollama settings.</li>
+            <li>Save social upload credentials for YouTube, TikTok, Facebook, or Instagram before publishing.</li>
+          </ol>
+          <figure class="step-media">
+            <img
+              data-image-name="snap1.jpg"
+              alt="Grok Video Studio workspace showing settings, model selection, and upload controls"
+              loading="lazy"
+            />
+            <figcaption>The main workspace keeps model, generation, and upload controls close together so setup is easy to verify.</figcaption>
+          </figure>
+        </article>
+
+        <article class="guide-card">
+          <div class="guide-head">
+            <span class="step-badge">3</span>
+            <h3>Generate and polish your clips</h3>
+          </div>
+          <ol class="step-list">
+            <li>Enter your concept, style, and duration in the left panel.</li>
+            <li>Choose a prompt source such as Grok, OpenAI, or Ollama and pick a video provider.</li>
+            <li>Generate variants, review them in Generated Videos, then stitch clips with crossfade, interpolation, upscale, GPU encode, or music mix as needed.</li>
+          </ol>
+          <figure class="step-media">
+            <img
+              data-image-name="snap2.jpg"
+              alt="Workflow view showing clip review, editing tools, and export workflow in Grok Video Studio"
+              loading="lazy"
+            />
+            <figcaption>Clip review, stitching tools, and export controls live in the same workflow view.</figcaption>
+          </figure>
+        </article>
+
+        <article class="guide-card">
+          <div class="guide-head">
+            <span class="step-badge">4</span>
+            <h3>Publish to social platforms</h3>
+          </div>
+          <ol class="step-list">
+            <li>Select your final clip or exported video.</li>
+            <li>Open the upload tab for YouTube, TikTok, Facebook, or Instagram.</li>
+            <li>Choose <code>Upload via API</code> for direct integrations or <code>Automate in Browser</code> for the browser workflow.</li>
+            <li>For Automation Chrome, click Start Automation Chrome, then Connect CDP before running the posting flow.</li>
+          </ol>
+          <figure class="step-media">
+            <img
+              data-image-name="snap2.jpg"
+              alt="Social publishing workflow in Grok Video Studio with upload tabs and automation controls"
+              loading="lazy"
+            />
+            <figcaption>The upload tabs support both API-based publishing and browser automation workflows.</figcaption>
+          </figure>
+        </article>
       </div>
-      <a class="support-link" href="https://buymeacoffee.com/dhooksterm" target="_blank" rel="noopener noreferrer">
+
+      <div class="guide-note">
+        Need the longer version? Open the <a id="guide-note-link" class="text-link" href="#" target="_blank" rel="noopener noreferrer">full user guide</a> for setup details, troubleshooting notes, and the complete workflow checklist.
+      </div>
+    </section>
+
+    <section class="panel support-wrap" aria-label="Support the project">
+      <h2>Support Grok Video Studio</h2>
+      <p class="helper">Enjoying the app? You can help fund continued updates and faster feature delivery.</p>
+      <a
+        class="coffee-btn"
+        href="https://buymeacoffee.com/dhooksterm"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Support development on Buy Me a Coffee"
+      >
         Buy Me a Coffee
       </a>
     </section>
@@ -395,6 +638,8 @@
     const androidLink = document.getElementById("android-link");
     const repoLink = document.getElementById("repo-link");
     const userGuideLink = document.getElementById("user-guide-link");
+    const heroGuideLink = document.getElementById("hero-guide-link");
+    const guideNoteLink = document.getElementById("guide-note-link");
     const releaseLink = document.getElementById("release-link");
     const windowsMsiMeta = document.getElementById("windows-msi-meta");
     const windowsExeMeta = document.getElementById("windows-exe-meta");
@@ -402,6 +647,21 @@
     const androidMeta = document.getElementById("android-meta");
     const recentReleasesMeta = document.getElementById("recent-releases-meta");
     const recentReleasesList = document.getElementById("recent-releases-list");
+
+    const setDownload = (linkEl, metaEl, asset, releaseTag) => {
+      if (!asset) {
+        linkEl.setAttribute("aria-disabled", "true");
+        linkEl.removeAttribute("href");
+        metaEl.textContent = `No compatible asset found in ${releaseTag}.`;
+        metaEl.classList.add("error");
+        return;
+      }
+
+      linkEl.href = asset.browser_download_url;
+      linkEl.removeAttribute("aria-disabled");
+      metaEl.textContent = `${asset.name} - ${releaseTag}`;
+      metaEl.classList.remove("error");
+    };
 
     const pickFirstMatch = (assets, patterns) => {
       for (const pattern of patterns) {
@@ -411,6 +671,26 @@
       return null;
     };
 
+    const hydrateStaticLinks = () => {
+      const guideUrl = `https://github.com/${owner}/${repo}/blob/main/docs/USER_GUIDE.md`;
+
+      repoLink.href = `https://github.com/${owner}/${repo}`;
+      userGuideLink.href = guideUrl;
+      heroGuideLink.href = guideUrl;
+      guideNoteLink.href = guideUrl;
+      releaseLink.href = `https://github.com/${owner}/${repo}/releases/latest`;
+    };
+
+    const hydrateScreenshotLinks = () => {
+      const screenshotBase = `https://raw.githubusercontent.com/${owner}/${repo}/main/images/`;
+      document.querySelectorAll("img[data-image-name]").forEach((imgEl) => {
+        const fileName = imgEl.getAttribute("data-image-name");
+        if (fileName) {
+          imgEl.src = `${screenshotBase}${fileName}`;
+        }
+      });
+    };
+
     const findLatestAssetAcrossReleases = (releases, patterns) => {
       for (const release of releases) {
         const assets = Array.isArray(release.assets) ? release.assets : [];
@@ -418,26 +698,12 @@
         if (found) {
           return {
             ...found,
-            _release_tag: release.tag_name || "latest",
+            _release_tag: release.tag_name || "latest"
           };
         }
       }
+
       return null;
-    };
-
-    const setDownload = (linkEl, metaEl, asset, fallbackReleaseTag) => {
-      if (!asset) {
-        linkEl.setAttribute("aria-disabled", "true");
-        linkEl.removeAttribute("href");
-        metaEl.textContent = `No compatible asset found in ${fallbackReleaseTag}.`;
-        metaEl.classList.add("error");
-        return;
-      }
-
-      linkEl.href = asset.browser_download_url;
-      linkEl.removeAttribute("aria-disabled");
-      metaEl.textContent = `${asset.name} - ${asset._release_tag || fallbackReleaseTag}`;
-      metaEl.classList.remove("error");
     };
 
     const renderRecentReleases = (releases) => {
@@ -457,6 +723,7 @@
         item.className = "release-item";
 
         const link = document.createElement("a");
+        link.className = "text-link";
         link.href = release.html_url;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
@@ -466,28 +733,14 @@
         meta.className = "release-meta";
         const assetCount = Number.isFinite(release.asset_count)
           ? release.asset_count
-          : (Array.isArray(release.assets) ? release.assets.length : 0);
+          : Array.isArray(release.assets)
+            ? release.assets.length
+            : 0;
         meta.textContent = `${assetCount} assets`;
 
         item.append(link, meta);
         recentReleasesList.appendChild(item);
       }
-    };
-
-    const hydrateStaticLinks = () => {
-      repoLink.href = `https://github.com/${owner}/${repo}`;
-      userGuideLink.href = `https://github.com/${owner}/${repo}/blob/main/docs/USER_GUIDE.md`;
-      releaseLink.href = `https://github.com/${owner}/${repo}/releases/latest`;
-    };
-
-    const hydrateScreenshotLinks = () => {
-      const screenshotBase = `https://raw.githubusercontent.com/${owner}/${repo}/main/images/`;
-      document.querySelectorAll("img[data-image-name]").forEach((imgEl) => {
-        const fileName = imgEl.getAttribute("data-image-name");
-        if (fileName) {
-          imgEl.src = `${screenshotBase}${fileName}`;
-        }
-      });
     };
 
     const loadLatest = async () => {
@@ -538,12 +791,12 @@
           release = releases[0];
           windowsMsiAsset = findLatestAssetAcrossReleases(releases, [
             /setup-windows-x64\.msi$/i,
-            /windows.*\.msi$/i,
+            /windows.*\.msi$/i
           ]);
           windowsExeAsset = findLatestAssetAcrossReleases(releases, [
             /setup-windows-x64\.exe$/i,
             /windows-x64\.exe$/i,
-            /windows.*\.exe$/i,
+            /windows.*\.exe$/i
           ]);
           macAsset = findLatestAssetAcrossReleases(releases, [
             /macos.*\.dmg$/i,
@@ -551,27 +804,34 @@
             /macos.*\.zip$/i,
             /\.dmg$/i,
             /\.pkg$/i,
-            /\.zip$/i,
+            /\.zip$/i
           ]);
           androidAsset = findLatestAssetAcrossReleases(releases, [
             /android-release.*\.apk$/i,
             /android.*\.apk$/i,
-            /\.apk$/i,
+            /\.apk$/i
           ]);
         }
 
         const fallbackReleaseTag = release?.tag_name || "latest";
-        setDownload(windowsMsiLink, windowsMsiMeta, windowsMsiAsset, fallbackReleaseTag);
-        setDownload(windowsExeLink, windowsExeMeta, windowsExeAsset, fallbackReleaseTag);
-        setDownload(macLink, macMeta, macAsset, fallbackReleaseTag);
-        setDownload(androidLink, androidMeta, androidAsset, fallbackReleaseTag);
+        setDownload(windowsMsiLink, windowsMsiMeta, windowsMsiAsset, windowsMsiAsset?._release_tag || fallbackReleaseTag);
+        setDownload(windowsExeLink, windowsExeMeta, windowsExeAsset, windowsExeAsset?._release_tag || fallbackReleaseTag);
+        setDownload(macLink, macMeta, macAsset, macAsset?._release_tag || fallbackReleaseTag);
+        setDownload(androidLink, androidMeta, androidAsset, androidAsset?._release_tag || fallbackReleaseTag);
         renderRecentReleases((releases || []).slice(0, 6));
       } catch (error) {
         const message = `Could not load release info (${error.message}).`;
-        [windowsMsiMeta, windowsExeMeta, macMeta, androidMeta, recentReleasesMeta].forEach((node) => {
-          node.textContent = message;
-          node.classList.add("error");
-        });
+
+        windowsMsiMeta.textContent = message;
+        windowsExeMeta.textContent = message;
+        macMeta.textContent = message;
+        androidMeta.textContent = message;
+        windowsMsiMeta.classList.add("error");
+        windowsExeMeta.classList.add("error");
+        macMeta.classList.add("error");
+        androidMeta.classList.add("error");
+        recentReleasesMeta.textContent = message;
+        recentReleasesMeta.classList.add("error");
       }
     };
 
