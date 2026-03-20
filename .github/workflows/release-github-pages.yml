@@ -38,6 +38,7 @@ jobs:
             const windowsMsiPatterns = [/setup-windows-x64\.msi$/i, /windows.*\.msi$/i];
             const windowsExePatterns = [/setup-windows-x64\.exe$/i, /windows-x64\.exe$/i, /windows.*\.exe$/i];
             const macosPatterns = [/macos.*\.(zip|dmg|pkg)$/i, /\.(dmg|pkg|zip)$/i];
+            const androidApkPatterns = [/android-release.*\.apk$/i, /android.*\.apk$/i, /\.apk$/i];
 
             const pickFirst = (assets, patterns) => {
               for (const pattern of patterns) {
@@ -100,6 +101,7 @@ jobs:
                 windows_msi: findAssetAcrossReleases(windowsMsiPatterns),
                 windows_exe: findAssetAcrossReleases(windowsExePatterns),
                 macos: findAssetAcrossReleases(macosPatterns),
+                android_apk: findAssetAcrossReleases(androidApkPatterns),
               },
             };
 

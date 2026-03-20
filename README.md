@@ -152,17 +152,44 @@ This is a good fit for automation control because Chrome supports it natively an
 
 ## 🤖 Android (Google Play)
 
-An Android project is included at `android/` so CI can generate a distributable **.aab** bundle for Google Play.
+An Android project is included at `android/` so CI can generate both:
+
+- a Play-ready **.aab** bundle for Google Play
+- a release **.apk** for direct installs/testing
+
+The Android app is now a native Kotlin/Compose client, not a webpage container. Current Android-native flows include:
+
+- prompt drafting and prompt/metadata generation
+- direct video generation requests for **Grok Imagine**, **OpenAI Sora**, and **Seedance**
+- on-device video library with playback and import
+- basic on-device stitch export for saved clips
+- mobile publish draft editing plus Android share-target hand-off
+
+Still desktop-only for now:
+
+- browser automation uploaders
+- advanced stitch/export controls like crossfade, interpolation, upscale, and music mixing
+- AI Flow Trainer and the larger desktop browser/tooling stack
 
 ### Build locally
 
 ```bash
-gradle -p android bundleRelease
+gradle -p android assembleDebug
+gradle -p android bundleRelease assembleRelease
 ```
 
-Release bundle output:
+Release outputs:
 
+- `android/app/build/outputs/apk/debug/app-debug.apk`
 - `android/app/build/outputs/bundle/release/app-release.aab`
+- `android/app/build/outputs/apk/release/app-release.apk`
+- `android/app/build/outputs/apk/release/app-release-unsigned.apk` when signing is not configured
+
+### Versioning
+
+- `versionName` defaults to the repository `VERSION` file.
+- `versionCode` is derived from `VERSION` for local builds.
+- GitHub Actions overrides both values for CI releases so Play uploads always get a monotonically increasing `versionCode`.
 
 ### Optional release signing
 
@@ -175,12 +202,29 @@ keyAlias=your_key_alias
 keyPassword=your_key_password
 ```
 
-In GitHub Actions, the workflow decodes the keystore and writes `android/release-keystore.properties` before running `gradle -p android bundleRelease` when these repository secrets are set:
+In GitHub Actions, the workflow decodes the keystore and writes `android/release-keystore.properties` before running the Android release build when these repository secrets are set:
 
 - `ANDROID_SIGNING_KEY_BASE64`
 - `ANDROID_KEYSTORE_PASSWORD`
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
+
+### Optional Google Play publishing
+
+When `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` is configured, the Android release workflow can upload the signed `.aab` to Google Play automatically.
+
+Recommended repository configuration:
+
+- Secret: `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`
+- Variable: `GOOGLE_PLAY_PACKAGE_NAME` (defaults to `com.grokvideostudio.app`)
+- Variable: `GOOGLE_PLAY_TRACK` (defaults to `internal`)
+- Variable: `GOOGLE_PLAY_RELEASE_STATUS` (defaults to `completed`)
+
+Notes:
+
+- Google Play publishing requires the Android signing secrets above.
+- The package must already exist in Play Console, so the first manual upload/setup still needs to be done once.
+- The workflow still uploads the `.apk` and `.aab` as GitHub artifacts/release assets even when Play publishing is not configured.
 
 The CI build also validates the final `.aab` with `bundletool validate` and fails fast if `BundleConfig.pb` is missing.
 

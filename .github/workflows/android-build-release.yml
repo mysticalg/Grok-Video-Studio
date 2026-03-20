@@ -1,4 +1,4 @@
-name: Build Android Play Bundle
+name: Build Android Release
 
 on:
   workflow_dispatch:
@@ -52,6 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HAS_ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 != '' }}
+      HAS_GOOGLE_PLAY_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' }}
 
     steps:
       - name: Checkout
@@ -98,6 +99,56 @@ jobs:
             echo "has_android_project=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Skipping Android bundle build because ./android is missing or incomplete."
           fi
+
+      - name: Resolve Android version metadata
+        if: steps.android.outputs.has_android_project == 'true'
+        id: version
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          VERSION_NAME=""
+          if [ -f VERSION ]; then
+            VERSION_NAME="$(tr -d '[:space:]' < VERSION)"
+          fi
+
+          if [ -z "$VERSION_NAME" ] && [ -n "$RELEASE_TAG" ]; then
+            VERSION_NAME="${RELEASE_TAG#v}"
+          fi
+
+          if [ -z "$VERSION_NAME" ]; then
+            VERSION_NAME="0.0.0-dev"
+          fi
+
+          VERSION_CODE=$((GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
+          RELEASE_NAME="v$VERSION_NAME"
+
+          {
+            echo "version_name=$VERSION_NAME"
+            echo "version_code=$VERSION_CODE"
+            echo "release_name=$RELEASE_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Google Play publish config
+        if: steps.android.outputs.has_android_project == 'true'
+        id: play
+        env:
+          GOOGLE_PLAY_PACKAGE_NAME: ${{ vars.GOOGLE_PLAY_PACKAGE_NAME }}
+          GOOGLE_PLAY_TRACK: ${{ vars.GOOGLE_PLAY_TRACK }}
+          GOOGLE_PLAY_RELEASE_STATUS: ${{ vars.GOOGLE_PLAY_RELEASE_STATUS }}
+        run: |
+          set -euo pipefail
+
+          PACKAGE_NAME="${GOOGLE_PLAY_PACKAGE_NAME:-com.grokvideostudio.app}"
+          TRACK="${GOOGLE_PLAY_TRACK:-internal}"
+          STATUS="${GOOGLE_PLAY_RELEASE_STATUS:-completed}"
+
+          {
+            echo "package_name=$PACKAGE_NAME"
+            echo "track=$TRACK"
+            echo "status=$STATUS"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Java
         if: steps.android.outputs.has_android_project == 'true'
@@ -157,25 +208,48 @@ jobs:
           keyPassword=$KEY_PASSWORD
           PROPS
 
-      - name: Build release bundle
+      - name: Build release bundle and APK
         if: steps.android.outputs.has_android_project == 'true'
-        run: gradle -p android bundleRelease
+        env:
+          ANDROID_VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          ANDROID_VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: |
+          gradle -p android \
+            bundleRelease \
+            assembleRelease \
+            "-PandroidVersionName=$ANDROID_VERSION_NAME" \
+            "-PandroidVersionCode=$ANDROID_VERSION_CODE"
 
-      - name: Resolve Play bundle paths
+      - name: Resolve Android artifact paths
         if: steps.android.outputs.has_android_project == 'true'
-        id: bundle
+        id: artifacts
         run: |
           set -euo pipefail
           SOURCE_BUNDLE="android/app/build/outputs/bundle/release/app-release.aab"
           RELEASE_BUNDLE="android/app/build/outputs/bundle/release/GrokVideoDesktopStudio-android-play.aab"
+          SIGNED_APK="android/app/build/outputs/apk/release/app-release.apk"
+          UNSIGNED_APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
 
           if [ ! -f "$SOURCE_BUNDLE" ]; then
             echo "::error::Expected bundle not found at $SOURCE_BUNDLE"
             exit 1
           fi
 
+          if [ -f "$SIGNED_APK" ]; then
+            SOURCE_APK="$SIGNED_APK"
+            RELEASE_APK="android/app/build/outputs/apk/release/GrokVideoDesktopStudio-android-release.apk"
+          elif [ -f "$UNSIGNED_APK" ]; then
+            SOURCE_APK="$UNSIGNED_APK"
+            RELEASE_APK="android/app/build/outputs/apk/release/GrokVideoDesktopStudio-android-release-unsigned.apk"
+          else
+            echo "::error::Expected release APK not found at $SIGNED_APK or $UNSIGNED_APK"
+            exit 1
+          fi
+
           cp "$SOURCE_BUNDLE" "$RELEASE_BUNDLE"
+          cp "$SOURCE_APK" "$RELEASE_APK"
           echo "release_bundle=$RELEASE_BUNDLE" >> "$GITHUB_OUTPUT"
+          echo "release_apk=$RELEASE_APK" >> "$GITHUB_OUTPUT"
 
       - name: Validate bundle structure
         if: steps.android.outputs.has_android_project == 'true'
@@ -197,11 +271,11 @@ jobs:
 
           # Keep this preflight lightweight and non-opinionated: verify the artifact is a readable
           # zip before we run bundletool's canonical validation.
-          unzip -t "${{ steps.bundle.outputs.release_bundle }}"
-          unzip -Z1 "${{ steps.bundle.outputs.release_bundle }}" | tr -d '\r' | tee /tmp/aab-contents.txt >/dev/null
+          unzip -t "${{ steps.artifacts.outputs.release_bundle }}"
+          unzip -Z1 "${{ steps.artifacts.outputs.release_bundle }}" | tr -d '\r' | tee /tmp/aab-contents.txt >/dev/null
 
           # Bundletool/Play requires a root-level BundleConfig.pb. If it is missing, recover deterministically.
-          if ! has_bundle_config "${{ steps.bundle.outputs.release_bundle }}"; then
+          if ! has_bundle_config "${{ steps.artifacts.outputs.release_bundle }}"; then
             echo "BundleConfig.pb missing in release bundle; attempting deterministic recovery from Gradle outputs..."
 
             RECOVERY_CONFIG=""
@@ -225,7 +299,7 @@ jobs:
               (
                 cd "$tmp_dir"
                 # Reinsert as a root-level entry so Google Play and bundletool recognize it.
-                zip -q "$GITHUB_WORKSPACE/${{ steps.bundle.outputs.release_bundle }}" BundleConfig.pb
+                zip -q "$GITHUB_WORKSPACE/${{ steps.artifacts.outputs.release_bundle }}" BundleConfig.pb
               )
               rm -rf "$tmp_dir"
             else
@@ -235,11 +309,11 @@ jobs:
                 echo "Detected module archive layout; rebuilding canonical .aab with bundletool build-bundle..."
                 ensure_bundletool
                 java -jar /tmp/bundletool.jar build-bundle \
-                  --modules="${{ steps.bundle.outputs.release_bundle }}" \
-                  --output="${{ steps.bundle.outputs.release_bundle }}.repacked"
-                mv "${{ steps.bundle.outputs.release_bundle }}.repacked" "${{ steps.bundle.outputs.release_bundle }}"
+                  --modules="${{ steps.artifacts.outputs.release_bundle }}" \
+                  --output="${{ steps.artifacts.outputs.release_bundle }}.repacked"
+                mv "${{ steps.artifacts.outputs.release_bundle }}.repacked" "${{ steps.artifacts.outputs.release_bundle }}"
               else
-                echo "::error::BundleConfig.pb is missing from ${{ steps.bundle.outputs.release_bundle }} and no recovery source was found"
+                echo "::error::BundleConfig.pb is missing from ${{ steps.artifacts.outputs.release_bundle }} and no recovery source was found"
                 echo "::group::AAB entries"
                 cat /tmp/aab-contents.txt
                 echo "::endgroup::"
@@ -247,8 +321,8 @@ jobs:
               fi
             fi
 
-            if ! has_bundle_config "${{ steps.bundle.outputs.release_bundle }}"; then
-              echo "::error::BundleConfig.pb recovery ran but the entry is still missing from ${{ steps.bundle.outputs.release_bundle }}"
+            if ! has_bundle_config "${{ steps.artifacts.outputs.release_bundle }}"; then
+              echo "::error::BundleConfig.pb recovery ran but the entry is still missing from ${{ steps.artifacts.outputs.release_bundle }}"
               echo "::group::AAB entries"
               cat /tmp/aab-contents.txt
               echo "::endgroup::"
@@ -262,23 +336,54 @@ jobs:
           set -euo pipefail
           BUNDLETOOL_VERSION="1.17.2"
           curl -fsSL "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar" -o /tmp/bundletool.jar
-          java -jar /tmp/bundletool.jar validate --bundle="${{ steps.bundle.outputs.release_bundle }}"
+          java -jar /tmp/bundletool.jar validate --bundle="${{ steps.artifacts.outputs.release_bundle }}"
 
-      - name: Upload artifact
+      - name: Upload AAB artifact
         if: steps.android.outputs.has_android_project == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: GrokVideoDesktopStudio-android-play-aab
-          path: ${{ steps.bundle.outputs.release_bundle }}
+          path: ${{ steps.artifacts.outputs.release_bundle }}
+
+      - name: Upload APK artifact
+        if: steps.android.outputs.has_android_project == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GrokVideoDesktopStudio-android-apk
+          path: ${{ steps.artifacts.outputs.release_apk }}
 
       - name: Publish release asset
         if: steps.android.outputs.has_android_project == 'true' && steps.meta.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.release_tag }}
-          files: ${{ steps.bundle.outputs.release_bundle }}
+          files: |
+            ${{ steps.artifacts.outputs.release_bundle }}
+            ${{ steps.artifacts.outputs.release_apk }}
+
+      - name: Publish to Google Play
+        if: steps.android.outputs.has_android_project == 'true' && steps.meta.outputs.should_release == 'true' && env.HAS_ANDROID_SIGNING_KEY == 'true' && env.HAS_GOOGLE_PLAY_SERVICE_ACCOUNT == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ steps.play.outputs.package_name }}
+          releaseFiles: ${{ steps.artifacts.outputs.release_bundle }}
+          tracks: ${{ steps.play.outputs.track }}
+          status: ${{ steps.play.outputs.status }}
+          releaseName: ${{ steps.version.outputs.release_name }}
 
       - name: Explain unsigned build
         if: steps.android.outputs.has_android_project == 'true' && env.HAS_ANDROID_SIGNING_KEY != 'true'
         run: |
-          echo "ANDROID_SIGNING_KEY_BASE64 is not configured. Uploaded an unsigned Gradle-produced .aab artifact and attached it to the release when applicable."
+          echo "ANDROID_SIGNING_KEY_BASE64 is not configured. Uploaded an unsigned Gradle-produced .aab and APK artifact, and attached them to the release when applicable."
+
+      - name: Explain skipped Google Play publish
+        if: steps.android.outputs.has_android_project == 'true' && steps.meta.outputs.should_release == 'true' && (env.HAS_ANDROID_SIGNING_KEY != 'true' || env.HAS_GOOGLE_PLAY_SERVICE_ACCOUNT != 'true')
+        run: |
+          if [ "${HAS_ANDROID_SIGNING_KEY}" != "true" ]; then
+            echo "Skipping Google Play publish because a signed Android release build is required."
+          fi
+
+          if [ "${HAS_GOOGLE_PLAY_SERVICE_ACCOUNT}" != "true" ]; then
+            echo "Skipping Google Play publish because GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not configured."
+          fi
