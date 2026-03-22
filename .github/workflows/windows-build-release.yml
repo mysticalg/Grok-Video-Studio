@@ -74,11 +74,25 @@ jobs:
             $appVersion = $releaseTag.TrimStart('v')
             $shouldRelease = "true"
           } elseif ("${{ github.event_name }}" -eq "workflow_run") {
-            $version = (Get-Content VERSION).Trim()
-            if ($version) {
-              $releaseTag = "v$version"
-              $appVersion = $version
-              $shouldRelease = "true"
+            try {
+              $headers = @{
+                Authorization = "Bearer $env:GITHUB_TOKEN"
+                Accept = "application/vnd.github+json"
+              }
+              $latestRelease = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/${{ github.repository }}/releases/latest"
+              $latestTag = "$($latestRelease.tag_name)".Trim()
+              if ($latestTag -like "v*") {
+                $releaseTag = $latestTag
+                $appVersion = $latestTag.TrimStart('v')
+                $shouldRelease = "true"
+              }
+            } catch {
+              $version = (Get-Content VERSION).Trim()
+              if ($version) {
+                $releaseTag = "v$version"
+                $appVersion = $version
+                $shouldRelease = "true"
+              }
             }
           } elseif ("${{ github.event_name }}" -eq "schedule") {
             $version = (Get-Content VERSION).Trim()
