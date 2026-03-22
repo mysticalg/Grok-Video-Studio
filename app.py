@@ -3695,6 +3695,18 @@ QTabWidget::pane, QGroupBox, QListWidget, QTreeWidget, QTextBrowser, QPlainTextE
     color: {theme['text']};
     border: 1px solid {theme['border']};
 }}
+QGroupBox {{
+    margin-top: 14px;
+    padding-top: 10px;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    background-color: {theme['window_bg']};
+    color: {theme['text']};
+}}
 QLabel {{
     color: {theme['text']};
 }}
