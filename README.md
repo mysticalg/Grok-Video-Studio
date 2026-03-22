@@ -24,6 +24,7 @@ Follow this path the first time you open the app:
 
 1. **Install and launch**
    - Download the latest build from the GitHub Pages site below, or run from source with Python 3.11+ and `ffmpeg` installed.
+   - Windows packaged builds include a bundled FFmpeg runtime for stitch, interpolate, upscale, and audio mix features.
    - Start the app with `python app.py` if you are running locally from source.
 2. **Configure your keys and models**
    - Open **Model/API Settings**.
@@ -104,6 +105,7 @@ For the longer walkthrough with troubleshooting notes, open [`docs/USER_GUIDE.md
 
 - Python 3.11+ (native OS Python is fine, including 3.14)
 - `ffmpeg` in PATH (required for stitch, interpolate, upscale, and audio mix)
+  - Windows packaged releases bundle FFmpeg automatically; source runs still expect `ffmpeg` in PATH.
 
 ### 2. Create env and install deps
 

@@ -98,6 +98,36 @@ IS_PACKAGED_BUILD = bool(getattr(sys, "frozen", False))
 LEGACY_APP_DOWNLOADS_DIR = BASE_DIR / "downloads"
 
 
+def _resolve_bundled_dir(dir_name: str) -> Path:
+    normalized_name = str(dir_name or "").strip()
+    if not normalized_name:
+        return BASE_DIR
+
+    candidates = [BASE_DIR / normalized_name]
+    if IS_PACKAGED_BUILD:
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates.extend(
+            [
+                executable_dir / normalized_name,
+                executable_dir / "_internal" / normalized_name,
+            ]
+        )
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.exists():
+            return resolved
+
+    return (BASE_DIR / normalized_name).resolve()
+
+
+EXTENSION_DIR = _resolve_bundled_dir("extension")
+
+
 def _path_supports_rw(path: Path) -> bool:
     try:
         path.mkdir(parents=True, exist_ok=True)
@@ -467,6 +497,30 @@ def _default_user_download_dir() -> Path:
     return Path.home() / "Downloads"
 
 
+def _bundled_media_tool_path(tool_name: str) -> str | None:
+    normalized = str(tool_name or "").strip().lower()
+    if not normalized:
+        return None
+
+    extension = ".exe" if os.name == "nt" else ""
+    executable_name = normalized if normalized.endswith(extension) else f"{normalized}{extension}"
+    candidate_roots = [
+        _resolve_bundled_dir("ffmpeg") / "bin",
+        _resolve_bundled_dir("tools") / "ffmpeg" / "bin",
+    ]
+
+    seen: set[Path] = set()
+    for root in candidate_roots:
+        resolved_root = root.resolve()
+        if resolved_root in seen:
+            continue
+        seen.add(resolved_root)
+        candidate = resolved_root / executable_name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def _resolve_media_tool(tool_name: str) -> str:
     normalized = str(tool_name or "").strip().lower()
     if not normalized:
@@ -475,7 +529,7 @@ def _resolve_media_tool(tool_name: str) -> str:
     if cached:
         return cached
 
-    discovered = shutil.which(normalized)
+    discovered = _bundled_media_tool_path(normalized) or shutil.which(normalized)
     if not discovered and os.name == "nt":
         local_app_data = Path(os.getenv("LOCALAPPDATA", "")).expanduser()
         winget_packages = local_app_data / "Microsoft" / "WinGet" / "Packages"
@@ -6840,7 +6894,7 @@ QTextBrowser, QTextEdit, QPlainTextEdit {{
             self._maybe_run_update_installation(release_payload)
 
     def open_extension_directory(self) -> None:
-        extension_dir = (BASE_DIR / "extension").resolve()
+        extension_dir = EXTENSION_DIR
         QMessageBox.information(
             self,
             "Chrome Extension Directory",
@@ -7848,7 +7902,7 @@ QTextBrowser, QTextEdit, QPlainTextEdit {{
 
     def _ensure_automation_runtime(self) -> AutomationRuntimeWorker:
         if self.automation_runtime is None:
-            runtime = AutomationRuntimeWorker(BASE_DIR / "extension", self.download_dir)
+            runtime = AutomationRuntimeWorker(EXTENSION_DIR, self.download_dir)
             runtime.log.connect(self._append_automation_log)
             runtime.status.connect(lambda k, v: self._append_automation_log(f"{k}: {v}"))
             runtime.start()

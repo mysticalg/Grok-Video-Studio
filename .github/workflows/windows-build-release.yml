@@ -120,7 +120,34 @@ jobs:
       - name: Build executable
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --windowed --name GrokVideoDesktopStudio --collect-all PySide6 app.py
+          pyinstaller --noconfirm --clean --windowed --name GrokVideoDesktopStudio --collect-all PySide6 --add-data "extension;extension" app.py
+
+      - name: Bundle FFmpeg runtime
+        shell: pwsh
+        run: |
+          $ffmpegZip = Join-Path $env:RUNNER_TEMP "ffmpeg-release-essentials.zip"
+          $extractDir = Join-Path $env:RUNNER_TEMP "ffmpeg-extract"
+          $targetDir = "dist/GrokVideoDesktopStudio/ffmpeg"
+
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffmpegZip
+
+          if (Test-Path $extractDir) {
+            Remove-Item -Path $extractDir -Recurse -Force
+          }
+          Expand-Archive -Path $ffmpegZip -DestinationPath $extractDir -Force
+
+          $sourceBin = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1 | ForEach-Object {
+            Join-Path $_.FullName "bin"
+          }
+          if (-not $sourceBin -or -not (Test-Path (Join-Path $sourceBin "ffmpeg.exe"))) {
+            throw "Could not locate ffmpeg.exe in downloaded archive."
+          }
+
+          if (Test-Path $targetDir) {
+            Remove-Item -Path $targetDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+          Copy-Item -Path $sourceBin -Destination $targetDir -Recurse -Force
 
       - name: Package zip
         shell: pwsh

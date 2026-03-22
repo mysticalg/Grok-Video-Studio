@@ -6,6 +6,7 @@ This guide walks through the full setup, generation, editing, and publishing flo
 
 1. Install Python 3.11+ (native OS Python is fine, including 3.14).
 2. Install `ffmpeg` and make sure it is available in your PATH.
+   - Windows packaged builds already include a bundled FFmpeg runtime.
 3. Create a virtual environment and install dependencies:
    - `python -m venv .venv` (Linux/macOS) or `py -m venv .venv` (Windows)
    - `source .venv/bin/activate` (Linux/macOS) or `.\.venv\Scripts\Activate.ps1` (Windows)
