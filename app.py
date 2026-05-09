@@ -2987,6 +2987,193 @@ class AutomationRuntimeWorker(QThread):
 
         return self._run_coro(_run_script())
 
+    def upload_file_to_automation_chrome(
+        self,
+        url: str,
+        file_path: str | Path,
+        *,
+        selectors: Iterable[str] | None = None,
+        flow_scope: str | None = None,
+        timeout_s: float = 45.0,
+    ) -> dict[str, Any]:
+        target_url = str(url or "").strip()
+        if not target_url:
+            raise ValueError("URL is required")
+
+        resolved_file = Path(file_path).expanduser().resolve()
+        if not resolved_file.is_file():
+            raise FileNotFoundError(f"Upload file not found: {resolved_file}")
+
+        selector_list = [
+            str(selector or "").strip()
+            for selector in (selectors or ("input[type='file']",))
+            if str(selector or "").strip()
+        ]
+        if not selector_list:
+            selector_list = ["input[type='file']"]
+
+        if self.chrome_instance is None:
+            self.start_chrome()
+
+        scope_key = str(flow_scope or "").strip().lower()
+
+        async def _verify_grok_attachment(page) -> dict[str, Any]:
+            script = r"""
+                (() => {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const removeImageVisible = !![...document.querySelectorAll("button,[role='button']")]
+                        .find((el) => isVisible(el) && /remove\s+image/i.test(`${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`));
+                    const currentFileCards = [...document.querySelectorAll("[class*='current-files'], [aria-label*='Remove image' i]")]
+                        .filter((el) => isVisible(el)).length;
+                    const fileInputs = [...document.querySelectorAll("input[type='file']")]
+                        .map((el) => ({ accept: el.getAttribute("accept") || "", files: el.files ? el.files.length : 0 }));
+                    return {
+                        attachedImage: removeImageVisible || currentFileCards > 0,
+                        removeImageVisible,
+                        currentFileCards,
+                        fileInputs,
+                    };
+                })()
+            """
+            last_result: dict[str, Any] = {}
+            for _ in range(12):
+                try:
+                    result = await page.evaluate(script)
+                    if isinstance(result, dict):
+                        last_result = result
+                        if result.get("attachedImage"):
+                            return result
+                except Exception:
+                    pass
+                await page.wait_for_timeout(500)
+            return last_result
+
+        async def _focus_grok_prompt(page) -> None:
+            script = r"""
+                (() => {
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    const selectors = [
+                        "div.tiptap.ProseMirror[contenteditable='true']",
+                        "[contenteditable='true'][data-placeholder*='Type to imagine' i]",
+                        "[contenteditable='true'][aria-label*='Type to imagine' i]",
+                        "[contenteditable='true']",
+                        "textarea[placeholder*='Type to imagine' i]",
+                        "input[placeholder*='Type to imagine' i]"
+                    ];
+                    const target = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]).find(isVisible);
+                    if (!target) return false;
+                    try { target.scrollIntoView({ block: "center", inline: "center" }); } catch (_) {}
+                    try { target.focus({ preventScroll: true }); } catch (_) { try { target.focus(); } catch (_) {} }
+                    return true;
+                })()
+            """
+            try:
+                await page.evaluate(script)
+            except Exception:
+                pass
+
+        async def _upload() -> dict[str, Any]:
+            if self.cdp_controller is None:
+                self.cdp_controller = await CDPController.connect(self.chrome_instance.ws_endpoint)
+
+            page = await self._resolve_scoped_page(
+                scope_key=scope_key,
+                target_url=target_url,
+                reuse_tab=True,
+                allow_new_tab=True,
+            )
+            await page.bring_to_front()
+            errors: list[str] = []
+            requires_attachment_verification = scope_key == "grok" or "grok.com" in target_url.lower()
+            if requires_attachment_verification:
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                except Exception:
+                    pass
+                file_input_ready = False
+                try:
+                    await page.locator("input[type='file']").first.wait_for(state="attached", timeout=15_000)
+                    file_input_ready = True
+                except Exception as exc:
+                    errors.append(f"input[type='file']: not attached after waiting: {exc}")
+                if not file_input_ready:
+                    try:
+                        await page.goto(target_url, wait_until="domcontentloaded", timeout=15_000)
+                        await page.locator("input[type='file']").first.wait_for(state="attached", timeout=15_000)
+                        file_input_ready = True
+                    except Exception as exc:
+                        errors.append(f"{target_url}: file input still unavailable after navigation: {exc}")
+                await _focus_grok_prompt(page)
+
+            for selector in selector_list:
+                try:
+                    locator = page.locator(selector)
+                    count = await locator.count()
+                except Exception as exc:
+                    errors.append(f"{selector}: count failed: {exc}")
+                    continue
+                if count <= 0:
+                    errors.append(f"{selector}: no matches")
+                    continue
+
+                for index in range(min(count, 8)):
+                    try:
+                        await locator.nth(index).set_input_files(str(resolved_file), timeout=10_000)
+                        verification = (
+                            await _verify_grok_attachment(page)
+                            if requires_attachment_verification
+                            else {}
+                        )
+                        if requires_attachment_verification and not verification.get("attachedImage"):
+                            errors.append(
+                                f"{selector}[{index}]: set_input_files completed but Grok did not show an attached image"
+                            )
+                            continue
+                        return {
+                            "ok": True,
+                            "mode": "playwright_set_input_files",
+                            "selector": selector,
+                            "index": index,
+                            "filePath": str(resolved_file),
+                            "verification": verification,
+                        }
+                    except Exception as exc:
+                        errors.append(f"{selector}[{index}]: {exc}")
+
+            if self.cdp_controller is not None:
+                for selector in selector_list:
+                    try:
+                        if await self.cdp_controller.set_file_input_files_via_dom(page, selector, str(resolved_file)):
+                            verification = (
+                                await _verify_grok_attachment(page)
+                                if requires_attachment_verification
+                                else {}
+                            )
+                            if requires_attachment_verification and not verification.get("attachedImage"):
+                                errors.append(
+                                    f"{selector}: CDP DOM.setFileInputFiles completed but Grok did not show an attached image"
+                                )
+                                continue
+                            return {
+                                "ok": True,
+                                "mode": "cdp_dom_set_file_input_files",
+                                "selector": selector,
+                                "index": 0,
+                                "filePath": str(resolved_file),
+                                "verification": verification,
+                            }
+                    except Exception as exc:
+                        errors.append(f"{selector}: CDP DOM.setFileInputFiles failed: {exc}")
+
+            return {
+                "ok": False,
+                "mode": "file_input_upload_failed",
+                "filePath": str(resolved_file),
+                "errors": errors[-8:],
+            }
+
+        return dict(self._run_coro(_upload(), timeout_s=timeout_s) or {})
+
     def find_automation_page_url(self, *, flow_scope: str | None = None, url_regex: str | None = None) -> str:
         if self.chrome_instance is None:
             self.start_chrome()
@@ -17302,6 +17489,45 @@ QTextBrowser, QTextEdit, QPlainTextEdit {{
             "Continue-from-last-frame: attempting file-input upload first (path-style), then paste/drop fallback only if needed."
         )
 
+        if self._active_ai_browser_external_control_enabled() and self._active_ai_browser_provider() == "grok":
+            try:
+                runtime = self._ensure_automation_runtime()
+                if runtime.chrome_instance is None:
+                    runtime.start_chrome()
+                runtime.ensure_cdp_connected()
+                cdp_upload = runtime.upload_file_to_automation_chrome(
+                    GROK_IMAGINE_URL,
+                    upload_file_path,
+                    selectors=(
+                        "input[type='file'][accept*='image']",
+                        "input[type='file'][accept='image/*']",
+                        "form input[type='file'][name='files']",
+                        "input[type='file']",
+                    ),
+                    flow_scope="grok",
+                    timeout_s=45.0,
+                )
+                if cdp_upload.get("ok"):
+                    verification = cdp_upload.get("verification") if isinstance(cdp_upload, dict) else {}
+                    attached = bool(isinstance(verification, dict) and verification.get("attachedImage"))
+                    self._append_log(
+                        "Continue-from-last-frame: uploaded seed image through Automation Chrome CDP "
+                        f"({cdp_upload.get('mode')}, selector={cdp_upload.get('selector')}, attached={attached})."
+                    )
+                    self._remove_temp_last_frame_image(upload_file_path, context="browser upload prepared")
+                    if callable(on_uploaded):
+                        on_uploaded()
+                    return
+                self._append_log(
+                    "WARNING: Automation Chrome CDP image upload did not attach the seed image; "
+                    f"falling back to in-page paste/drop upload. Details: {cdp_upload!r}"
+                )
+            except Exception as exc:
+                self._append_log(
+                    "WARNING: Automation Chrome CDP image upload failed; "
+                    f"falling back to in-page paste/drop upload: {exc}"
+                )
+
         frame_base64 = base64.b64encode(upload_file_path.read_bytes()).decode("ascii")
         self._remove_temp_last_frame_image(upload_file_path, context="browser upload prepared")
         upload_script = r"""
@@ -17404,14 +17630,17 @@ QTextBrowser, QTextEdit, QPlainTextEdit {{
                             } catch (_) {}
                         }
 
+                        let fallbackDispatched = false;
                         if (!populatedInputs) {
                             dispatchFileEvents(node, dt, true);
+                            fallbackDispatched = true;
                         }
 
                         return {
-                            ok: populatedInputs > 0,
+                            ok: populatedInputs > 0 || fallbackDispatched,
                             fileInputs: fileInputs.length,
                             populatedInputs,
+                            fallbackDispatched,
                             selector,
                         };
                     }
@@ -17426,9 +17655,24 @@ QTextBrowser, QTextEdit, QPlainTextEdit {{
             .replace("__FRAME_MIME__", repr(upload_mime))
         )
 
-        def after_focus(_result):
-            if callable(on_uploaded):
-                on_uploaded()
+        def after_focus(result):
+            if isinstance(result, dict) and result.get("ok"):
+                self._append_log(
+                    "Continue-from-last-frame: in-page fallback image upload dispatched "
+                    f"(selector={result.get('selector')}, fileInputs={result.get('fileInputs')}, "
+                    f"populatedInputs={result.get('populatedInputs')}, pasteDrop={result.get('fallbackDispatched')})."
+                )
+                if callable(on_uploaded):
+                    on_uploaded()
+                return
+
+            self._append_log(
+                f"ERROR: Continue-from-last-frame image upload failed; not submitting the continuation prompt. result={result!r}"
+            )
+            self.continue_from_frame_active = False
+            self.continue_from_frame_waiting_for_reload = False
+            self.continue_from_frame_submission_started = False
+            self.continue_from_frame_reload_timeout_timer.stop()
 
         self._run_active_browser_javascript(upload_script, after_focus)
 
